@@ -108,8 +108,22 @@ def authenticate(request: Request, auth: HTTPAuthorizationCredentials | None = D
     permissions = effective_permissions(token.user)
     if token.kind == 'api':
         permissions &= set(token.scopes)
+    source = request.headers.get('X-Portal-Source', 'API')[:32]
+    if source == 'CloudPortal':
+        service_plain = request.headers.get('X-Portal-Token', '')
+        service = db.scalar(select(Token).where(Token.token_hash == digest(service_plain))) if service_plain else None
+        service_permissions = effective_permissions(service.user) & set(service.scopes) if service and service.kind == 'api' else set()
+        if (not service or service.revoked_at is not None or (service.expires_at and service.expires_at <= now())
+                or not service.user.is_active
+                or not (service.user.is_service_account or service.name == 'Initial Administrator Token')
+                or 'portal.connect' not in service_permissions):
+            raise HTTPException(401, 'Valid CloudPortal service authentication required')
+        service.last_used_at = now()
+    elif source not in {'API', 'Cloudportal-backed'}:
+        source = 'API'
     request.state.actor = token
     request.state.permissions = permissions
+    request.state.source = source
     if (token.kind == 'session' and token.user.must_change_password
             and request.url.path not in {'/api/v1/auth/me', '/api/v1/auth/logout', '/api/v1/auth/change-password'}):
         raise HTTPException(403, 'Password change required')
@@ -130,5 +144,6 @@ def audit(db, request, action, resource='', resource_id=None, result='success', 
     actor = getattr(request.state, 'actor', None)
     db.add(Audit(user_id=user_id if user_id is not None else actor.user_id if actor else None,
                  token_id=actor.id if actor else None, ip=request.client.host if request.client else '',
+                 source=getattr(request.state, 'source', 'API'),
                  action=action, resource=resource, resource_id=str(resource_id) if resource_id is not None else None,
                  result=result, request_id=request.state.request_id))

@@ -256,5 +256,5 @@ def revoke_token(id: int, request: Request, actor=Depends(require('tokens.revoke
 
 @router.get('/audit', response_model=Items[AuditOutput])
 def audit_list(limit: Limit = 100, offset: Offset = 0, request_id: str | None = None, actor=Depends(require('audit.read')), db=Depends(get_db, scope='function')):
-    return {'items': [public(a, 'id timestamp user_id token_id ip action resource resource_id result request_id')
+    return {'items': [public(a, 'id timestamp user_id token_id ip source action resource resource_id result request_id')
                       for a in paginate(db, Audit, offset, limit, Audit.request_id == request_id if request_id else None)]}

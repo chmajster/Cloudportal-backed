@@ -60,7 +60,7 @@ W powiązanej wersji Cloud Portal:
 4. Wprowadź adres HTTPS, token konta serwisowego i klucz konfiguracji, jeśli to nowa instalacja. `Testuj połączenie` sprawdza `/health` i `/auth/me`.
 5. Zapisz konfigurację, zaloguj się administratorem backendu i unieważnij niepotrzebny Initial Administrator Token.
 
-Operacje interaktywne używają tokena zalogowanego użytkownika, a nie tokena serwisowego. PHP przechowuje tylko własną sesję i konfigurację połączenia. Nie tworzy kopii backendowych kont ani ról. Uprawnienia są odczytywane z `/auth/me` na każdym żądaniu, a API sprawdza je ponownie. Przeglądarka wysyła akcje do proxy `/backend-api` w PHP, które przekazuje JSON, `X-Request-ID`, `Idempotency-Key` i status API. Wyłącznie backend otwiera połączenia z infrastrukturą i wykonuje Terraform/Ansible. Brak backendu oznacza 503; nie uruchamia lokalnego wykonawcy PHP.
+Operacje interaktywne są autoryzowane tokenem zalogowanego użytkownika; token serwisowy potwierdza wyłącznie, że żądanie pochodzi z zaufanej instancji CloudPortal i nie rozszerza permissions użytkownika. PHP przechowuje własną sesję i chronioną konfigurację połączenia. Nie tworzy kopii backendowych kont ani ról. Uprawnienia są odczytywane z `/auth/me` na każdym żądaniu, a API sprawdza je ponownie. Przeglądarka wysyła akcje do proxy `/backend-api` w PHP, które przekazuje JSON, `X-Request-ID`, `Idempotency-Key` i status API. Wyłącznie backend otwiera połączenia z infrastrukturą i wykonuje Terraform/Ansible. Brak backendu oznacza 503; nie uruchamia lokalnego wykonawcy PHP.
 
 Istniejąca baza starego portalu nie jest automatycznie importowana ani kasowana. W trybie centralnym jej konta, RBAC i credentiale są nieaktywne; starsze funkcje projektu (m.in. lokalne projekty/IPAM/konsole) nie są udostępniane przez nowy interfejs. Przed przełączeniem istniejącej instalacji przygotuj konta/role i połączenia w backendzie oraz archiwizuj stare dane zgodnie z polityką retencji. Nowy backend nie przejmuje zarządzania dawnymi VM/state automatycznie.
 
@@ -118,6 +118,21 @@ TEST_REDIS_URL=redis://localhost:6379/15 .venv/bin/pytest -q
 Testy używają domyślnie tymczasowego SQLite oraz dedykowanej bazy Redis 15. **Nie podawaj produkcyjnego URL**: testy czyszczą bazę testową. CI definiuje PostgreSQL, Terraform validate, budowę kontenera oraz test instalacji i reinstalacji systemd. Wynik tych zadań zależy od dostępności runnerów GitHub Actions. `TEST_DATABASE_URL` wskazuje wyłącznie pustą testową bazę PostgreSQL. `REDIS_SERVER_BINARY=/path/to/redis-server` uruchamia lokalny Redis na 16389 na czas testów.
 
 E2E na prawdziwym PVE: `scripts/e2e-proxmox.py` używa istniejącego credentiala i providera w backendzie; wymaga jawnego `--allow-create-and-destroy` i odpowiednich parametrów. Test tworzy VM, czeka na wynik workflow, pobiera logi i niszczy VM. Nie uruchamia się automatycznie na produkcji.
+
+## Blueprinty i Hostname Manager
+
+Backend jest źródłem prawdy dla Blueprintów oraz rezerwacji hostname. Blueprint przechowuje wersjonowany schemat formularza, definicję deploymentu, widoczność (`backend`, `cloudportal`, `api`), ograniczenia ról/użytkowników i workflow będący walidowanym DAG-em. Niedozwolone typy kroków, brakujące zależności, cykle i nieznane zmienne są odrzucane przed utworzeniem zadania.
+
+Najważniejsze endpointy:
+
+- `GET/POST /api/v1/blueprints`, `PUT/DELETE /api/v1/blueprints/{id}`;
+- `POST /api/v1/blueprints/{id}/execute` — waliduje formularz, rezerwuje hostname, tworzy deployment i trwały job;
+- `GET/POST /api/v1/hostname-schemes`;
+- `GET /api/v1/hostnames`, `POST /api/v1/hostnames/generate` oraz operacje `assign`/`release`.
+
+Wzorce hostname obsługują: `{location}`, `{environment}`, `{env}`, `{application}`, `{service}`, `{role}`, `{os}`, `{cluster}`, `{site}`, `{year}`, `{number}` i `{random}`. Sekwencja jest blokowana transakcyjnie, nazwa ma unikalny indeks, a historia nie jest usuwana przy zwolnieniu rezerwacji.
+
+Żądania z CloudPortal wysyłają jednocześnie token zalogowanego użytkownika i osobny `X-Portal-Token` konta serwisowego z `portal.connect`. Backend zapisuje źródło w zadaniu i audycie. Sam nagłówek `X-Portal-Source: CloudPortal` bez poprawnego uwierzytelnienia usługi jest odrzucany.
 
 Usługi: `cloudportal-api`, `cloudportal-dispatcher`, `cloudportal-worker@1`, `cloudportal-redis`. Sekrety konfiguracyjne: `/etc/cloudportal-backed/backend.env`. Dane: `/var/lib/cloudportal-backed`. Sprawdzenie: `systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1` i `journalctl -u cloudportal-api`.
 

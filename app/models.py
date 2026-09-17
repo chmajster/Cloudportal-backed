@@ -136,6 +136,7 @@ class Job(Timestamp, Base):
     token_id: Mapped[int | None] = mapped_column(ForeignKey("tokens.id"))
     request_id: Mapped[str] = mapped_column(String(36))
     ip: Mapped[str] = mapped_column(String(64), default="")
+    source: Mapped[str] = mapped_column(String(32), default="API")
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -157,6 +158,7 @@ class Audit(Base):
     user_id: Mapped[int | None] = mapped_column(Integer)
     token_id: Mapped[int | None] = mapped_column(Integer)
     ip: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(32), default="API")
     action: Mapped[str] = mapped_column(String(100))
     resource: Mapped[str] = mapped_column(String(100))
     resource_id: Mapped[str | None] = mapped_column(String(100))
@@ -180,3 +182,43 @@ class Setting(Base):
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class HostnameScheme(Timestamp, Base):
+    __tablename__ = "hostname_schemes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    pattern: Mapped[str] = mapped_column(String(255))
+    next_number: Mapped[int] = mapped_column(Integer, default=1)
+    padding: Mapped[int] = mapped_column(Integer, default=3)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class HostnameReservation(Timestamp, Base):
+    __tablename__ = "hostname_reservations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    scheme_id: Mapped[int] = mapped_column(ForeignKey("hostname_schemes.id"), index=True)
+    hostname: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    values: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="reserved", index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(100))
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    released_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Blueprint(Timestamp, Base):
+    __tablename__ = "blueprints"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(63), unique=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    visibility: Mapped[dict] = mapped_column(JSON, default=dict)
+    allowed_role_ids: Mapped[list] = mapped_column(JSON, default=list)
+    allowed_user_ids: Mapped[list] = mapped_column(JSON, default=list)
+    variables_schema: Mapped[dict] = mapped_column(JSON, default=dict)
+    deployment: Mapped[dict] = mapped_column(JSON, default=dict)
+    workflow: Mapped[list] = mapped_column(JSON, default=list)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))

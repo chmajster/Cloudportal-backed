@@ -9,6 +9,8 @@ PERMISSIONS = {
         'credentials': 'read create update delete test', 'providers': 'read create update delete',
         'deployments': 'read create destroy', 'jobs': 'read execute cancel',
         'terraform': 'read execute', 'ansible': 'read execute', 'audit': 'read',
+        'blueprints': 'read create update delete execute',
+        'hostnames': 'read create update delete reserve release',
         'tokens': 'read create revoke', 'settings': 'read update', 'portal': 'connect',
     }.items()}
 }
@@ -17,7 +19,8 @@ ALL_PERMISSIONS = {f'{area}.{action}' for area, actions in PERMISSIONS.items() f
 
 def seed(db):
     existing = {p.name: p for p in db.scalars(select(Permission))}
-    for name in sorted(ALL_PERMISSIONS - existing.keys()):
+    new_permission_names = ALL_PERMISSIONS - existing.keys()
+    for name in sorted(new_permission_names):
         p = Permission(name=name)
         db.add(p)
         existing[name] = p
@@ -25,14 +28,20 @@ def seed(db):
     defaults = {
         'Administrator': ALL_PERMISSIONS,
         'Infrastructure Administrator': {p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings'}},
-        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.create', 'jobs.read', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute'},
-        'Viewer': {'providers.read', 'deployments.read', 'jobs.read', 'terraform.read', 'ansible.read'},
-        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'deployments.read'},
+        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.create', 'jobs.read', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release'},
+        'Viewer': {'providers.read', 'deployments.read', 'jobs.read', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read'},
+        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'deployments.read', 'blueprints.read', 'hostnames.read'},
         'Portal Service': {'portal.connect'},
     }
     for name, permissions in defaults.items():
-        if not db.scalar(select(Role).where(Role.name == name)):
+        role = db.scalar(select(Role).where(Role.name == name))
+        if not role:
             db.add(Role(name=name, permissions=[existing[p] for p in sorted(permissions)]))
+        else:
+            # Existing installations receive only newly introduced built-in permissions.
+            current = {p.name for p in role.permissions}
+            additions = permissions & new_permission_names - current
+            role.permissions.extend(existing[p] for p in sorted(additions))
     if not db.get(Setting, 'governance'):
         db.add(Setting(key='governance', value={}))
     db.flush()

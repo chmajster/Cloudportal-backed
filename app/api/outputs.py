@@ -111,6 +111,7 @@ class JobOutput(Output):
     status: Literal['queued', 'running', 'successful', 'failed', 'cancelled']
     created_by: int
     request_id: str
+    source: str
     created_at: datetime
     updated_at: datetime
     cancel_requested: bool
@@ -158,6 +159,7 @@ class AuditOutput(Output):
     user_id: int | None
     token_id: int | None
     ip: str
+    source: str
     action: str
     resource: str
     resource_id: str | None
@@ -232,3 +234,51 @@ class ResetOutput(Output):
 class PasswordChangedOutput(Output):
     changed: bool
     login_required: bool
+
+
+class HostnameSchemeOutput(Output):
+    id: int
+    name: str
+    pattern: str
+    next_number: int
+    padding: int
+    is_active: bool
+    created_by: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class HostnameReservationOutput(Output):
+    id: str
+    scheme_id: int
+    hostname: str
+    values: dict[str, Any]
+    status: Literal['reserved', 'assigned', 'released']
+    resource_id: str | None
+    created_by: int
+    created_at: datetime
+    updated_at: datetime
+    released_at: datetime | None
+
+
+class GeneratedHostnameOutput(Output):
+    hostname: str
+    reservation: HostnameReservationOutput | None
+
+
+class BlueprintOutput(Output):
+    id: int
+    slug: str
+    name: str
+    description: str
+    version: int
+    is_active: bool
+    visibility: dict[str, bool]
+    allowed_role_ids: list[int]
+    allowed_user_ids: list[int]
+    variables_schema: dict[str, Any]
+    deployment: dict[str, Any]
+    workflow: list[dict[str, Any]]
+    created_by: int
+    created_at: datetime
+    updated_at: datetime

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
@@ -193,3 +193,136 @@ class JobInput(Input):
         elif not self.deployment_id or self.ansible:
             raise ValueError('Terraform requires a deployment ID')
         return self
+
+
+HOSTNAME_TOKENS = {'location', 'environment', 'env', 'application', 'service', 'role', 'os', 'cluster', 'site', 'year', 'number', 'random'}
+
+
+class HostnameSchemeInput(Input):
+    name: Name
+    pattern: Annotated[str, Field(min_length=3, max_length=255)]
+    next_number: int = Field(default=1, ge=1, le=999999999)
+    padding: int = Field(default=3, ge=1, le=9)
+    is_active: bool = True
+
+    @field_validator('pattern')
+    @classmethod
+    def safe_pattern(cls, value):
+        import re
+        tokens = re.findall(r'{([a-z]+)}', value)
+        residue = re.sub(r'{[a-z]+}', '', value)
+        if not tokens or not set(tokens) <= HOSTNAME_TOKENS or not re.fullmatch(r'[A-Za-z0-9.-]*', residue):
+            raise ValueError('Pattern contains an unsupported token or character')
+        if 'number' not in tokens and 'random' not in tokens:
+            raise ValueError('Pattern must contain {number} or {random}')
+        return value.lower()
+
+
+class HostnameGenerateInput(Input):
+    scheme_id: int = Field(gt=0)
+    values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
+    reserve: bool = True
+
+    @field_validator('values')
+    @classmethod
+    def safe_values(cls, value):
+        import re
+        if not set(value) <= HOSTNAME_TOKENS - {'number', 'random', 'year'}:
+            raise ValueError('Unsupported hostname value')
+        if any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,62}', v) for v in value.values()):
+            raise ValueError('Hostname values must contain letters, digits or hyphens')
+        return {k: v.lower() for k, v in value.items()}
+
+
+class BlueprintVariable(Input):
+    type: Literal['string', 'integer', 'select', 'boolean']
+    label: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    required: bool = False
+    default: Any = None
+    min: int | None = None
+    max: int | None = None
+    options: Annotated[list[str], Field(max_length=100)] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def coherent(self):
+        if self.type == 'select' and not self.options:
+            raise ValueError('Select variable requires options')
+        if self.type != 'select' and self.options:
+            raise ValueError('Options are only valid for select variables')
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError('Variable min cannot exceed max')
+        return self
+
+
+class BlueprintVisibility(Input):
+    backend: bool = True
+    cloudportal: bool = False
+    api: bool = True
+
+
+class BlueprintStep(Input):
+    id: Slug
+    type: Literal['generate_hostname', 'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
+                  'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
+                  'run_ansible_playbook', 'terraform_plan', 'terraform_apply', 'create_snapshot',
+                  'health_check', 'condition', 'approval', 'delay', 'notification']
+    depends_on: Annotated[list[Slug], Field(max_length=50)] = Field(default_factory=list)
+    conditions: dict[str, Any] = Field(default_factory=dict)
+    retry: int = Field(default=0, ge=0, le=10)
+    timeout: int = Field(default=600, ge=1, le=86400)
+    rollback: str | None = Field(default=None, max_length=63)
+
+
+class BlueprintDeployment(Input):
+    name: Annotated[str, Field(min_length=1, max_length=100)]
+    provider_id: int = Field(gt=0)
+    credentials_id: int = Field(gt=0)
+    template: Literal['proxmox-vm'] = 'proxmox-vm'
+    variables: dict[str, Any]
+    executor: Literal['terraform', 'opentofu'] = 'terraform'
+    ansible: dict[str, Any] | None = None
+    hostname_scheme_id: int | None = Field(default=None, gt=0)
+
+
+class BlueprintInput(Input):
+    slug: Slug
+    name: Name
+    description: Annotated[str, Field(max_length=4000)] = ''
+    is_active: bool = True
+    visibility: BlueprintVisibility = Field(default_factory=BlueprintVisibility)
+    allowed_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
+    allowed_user_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
+    variables_schema: Annotated[dict[Slug, BlueprintVariable], Field(max_length=100)] = Field(default_factory=dict)
+    deployment: BlueprintDeployment
+    workflow: Annotated[list[BlueprintStep], Field(min_length=1, max_length=100)]
+
+    @model_validator(mode='after')
+    def dag(self):
+        ids = [step.id for step in self.workflow]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Workflow step IDs must be unique')
+        known = set(ids)
+        if any(set(step.depends_on) - known or step.id in step.depends_on for step in self.workflow):
+            raise ValueError('Workflow dependency is missing or self-referencing')
+        graph = {step.id: step.depends_on for step in self.workflow}
+        visiting, visited = set(), set()
+        def visit(node):
+            if node in visiting:
+                raise ValueError('Workflow must be an acyclic graph')
+            if node in visited:
+                return
+            visiting.add(node)
+            for parent in graph[node]:
+                visit(parent)
+            visiting.remove(node)
+            visited.add(node)
+        for node in graph:
+            visit(node)
+        if not any(step.type in {'create_vm', 'clone_vm', 'terraform_apply'} for step in self.workflow):
+            raise ValueError('Workflow must provision a VM')
+        return self
+
+
+class BlueprintExecuteInput(Input):
+    variables: Annotated[dict[str, Any], Field(max_length=100)] = Field(default_factory=dict)
+    hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)

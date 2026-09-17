@@ -16,7 +16,7 @@ from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
 DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
-JOB_FIELDS = 'id deployment_id operation status created_by request_id created_at updated_at cancel_requested error'
+JOB_FIELDS = 'id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error'
 
 
 def deployment_public(d):
@@ -233,7 +233,8 @@ def new_job(db, request, actor, operation, deployment=None, payload=None):
         job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
               payload=job_payload, created_by=actor.user_id, token_id=actor.id,
-              request_id=request.state.request_id, ip=request.client.host if request.client else '')
+              request_id=request.state.request_id, ip=request.client.host if request.client else '',
+              source=getattr(request.state, 'source', 'API'))
     db.add(job)
     db.flush()
     if deployment:

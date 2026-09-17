@@ -31,6 +31,8 @@ const routes = [
   { id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read' },
   { id: 'credentials', label: 'Credentiale', icon: 'K', permission: 'credentials.read' },
   { id: 'providers', label: 'Providery', icon: 'P', permission: 'providers.read' },
+  { id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read' },
+  { id: 'hostnames', label: 'Hostname Manager', icon: 'H', permission: 'hostnames.read' },
   { id: 'deployments', label: 'Deploymenty', icon: 'D', permission: 'deployments.read' },
   { id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read' },
   { id: 'audit', label: 'Audyt', icon: 'A', permission: 'audit.read' },
@@ -104,7 +106,7 @@ async function refreshSession() {
 
 async function api(path, options = {}, canRefresh = true) {
   const method = options.method || 'GET';
-  const headers = { 'X-Request-ID': crypto.randomUUID(), ...(options.headers || {}) };
+  const headers = { 'X-Request-ID': crypto.randomUUID(), 'X-Portal-Source': 'Cloudportal-backed', ...(options.headers || {}) };
   if (options.auth !== false && state.session?.access_token) headers.Authorization = `Bearer ${state.session.access_token}`;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.idempotent) headers['Idempotency-Key'] = crypto.randomUUID();
@@ -589,7 +591,7 @@ async function jobsView() {
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.'),
     table([
       { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => item.operation },
-      { label: 'Status', value: item => badge(item.status, statusKind(item.status)) }, { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 14) },
+      { label: 'Status', value: item => badge(item.status, statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 14) },
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
       const actions = [button('Logi', () => showJobLogs(item))];
@@ -617,9 +619,114 @@ async function auditView(requestId = '') {
   dom.content.replaceChildren(heading('Niezmienna historia operacji bezpieczeństwa i infrastruktury.', [search]),
     table([
       { label: 'Czas', value: item => formatDate(item.timestamp) }, { label: 'Akcja', value: item => node('strong', { text: item.action }) },
-      { label: 'Zasób', value: item => `${item.resource || '—'} ${item.resource_id || ''}` }, { label: 'Wynik', value: item => badge(item.result, item.result === 'success' ? 'ok' : 'danger') },
+      { label: 'Zasób', value: item => `${item.resource || '—'} ${item.resource_id || ''}` }, { label: 'Źródło', value: item => item.source }, { label: 'Wynik', value: item => badge(item.result, item.result === 'success' ? 'ok' : 'danger') },
       { label: 'Użytkownik', value: item => item.user_id ?? '—' }, { label: 'Request ID', class: 'mono', value: item => short(item.request_id, 18) },
     ], result.items));
+}
+
+async function blueprintsView() {
+  const blueprints = (await api('/blueprints?limit=200')).items;
+  const actions = allowed('blueprints.create') ? [button('Nowy Blueprint', () => blueprintForm(), 'primary')] : [];
+  dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
+    table([
+      { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
+      { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
+      { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => key).join(', ') || '—' },
+      { label: 'Kroki', value: item => item.workflow.length }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+    ], blueprints, item => {
+      const result = [];
+      if (allowed('blueprints.execute') && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
+      if (allowed('blueprints.update')) result.push(button('Edytuj', () => blueprintForm(item)));
+      if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące deploymenty zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
+      return result;
+    }));
+}
+
+function jsonValue(value) { return JSON.stringify(value, null, 2); }
+function parseObject(value, label) {
+  try { const parsed = JSON.parse(value); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(); return parsed; }
+  catch { throw new Error(`${label} musi zawierać poprawny obiekt JSON.`); }
+}
+function parseArray(value, label) {
+  try { const parsed = JSON.parse(value); if (!Array.isArray(parsed)) throw new Error(); return parsed; }
+  catch { throw new Error(`${label} musi zawierać poprawną tablicę JSON.`); }
+}
+
+function blueprintForm(item = null) {
+  const exampleVariables = { environment: { type: 'select', required: true, options: ['dev', 'test', 'prod'] }, cpu: { type: 'integer', default: 2, min: 1, max: 8 } };
+  const exampleDeployment = { name: '{{ hostname }}', provider_id: 1, credentials_id: 1, hostname_scheme_id: 1, template: 'proxmox-vm', executor: 'terraform', variables: { name: '{{ hostname }}', node: 'pve', template_id: 9000, cpu: '{{ cpu }}', memory: 4096, disk: 40, network: 'vmbr0', storage: 'local-lvm', ssh_username: 'clouduser' } };
+  const exampleWorkflow = [{ id: 'hostname', type: 'generate_hostname' }, { id: 'clone', type: 'clone_vm', depends_on: ['hostname'] }, { id: 'apply', type: 'terraform_apply', depends_on: ['clone'] }];
+  const fields = node('div', { class: 'form-grid' },
+    field('Slug', 'slug', { required: true, value: item?.slug || '' }), field('Nazwa', 'name', { required: true, value: item?.name || '' }),
+    field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
+    checkboxField('Aktywny', 'is_active', item?.is_active ?? true), checkboxField('Dostępny w panelu backendu', 'visibility_backend', item?.visibility.backend ?? true),
+    checkboxField('Dostępny w CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false), checkboxField('Dostępny przez API', 'visibility_api', item?.visibility.api ?? true),
+    field('Dozwolone role ID (przecinki, puste = wszyscy)', 'role_ids', { value: (item?.allowed_role_ids || []).join(',') }),
+    field('Dozwoleni użytkownicy ID (przecinki)', 'user_ids', { value: (item?.allowed_user_ids || []).join(',') }),
+    field('Schemat zmiennych JSON', 'variables_schema', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.variables_schema || exampleVariables) }),
+    field('Definicja deploymentu JSON', 'deployment', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.deployment || exampleDeployment) }),
+    field('Workflow DAG JSON', 'workflow', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.workflow || exampleWorkflow) }));
+  openModal({ title: item ? `Edytuj ${item.name}` : 'Nowy Blueprint', eyebrow: 'Automation Designer', body: fields, submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz', onSubmit: async data => {
+    const ids = value => value.split(',').map(part => part.trim()).filter(Boolean).map(Number);
+    const payload = { slug: data.get('slug'), name: data.get('name'), description: data.get('description'), is_active: data.has('is_active'),
+      visibility: { backend: data.has('visibility_backend'), cloudportal: data.has('visibility_cloudportal'), api: data.has('visibility_api') },
+      allowed_role_ids: ids(data.get('role_ids')), allowed_user_ids: ids(data.get('user_ids')),
+      variables_schema: parseObject(data.get('variables_schema'), 'Schemat zmiennych'), deployment: parseObject(data.get('deployment'), 'Deployment'), workflow: parseArray(data.get('workflow'), 'Workflow') };
+    await api(item ? `/blueprints/${item.id}` : '/blueprints', { method: item ? 'PUT' : 'POST', body: payload });
+    toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint utworzony.'); navigate('blueprints');
+  }});
+}
+
+function executeBlueprint(item) {
+  const fields = node('div', { class: 'form-grid' });
+  for (const [name, definition] of Object.entries(item.variables_schema)) {
+    if (definition.type === 'select') fields.append(selectField(definition.label || name, name, definition.options.map(value => ({ value, label: value })), definition.default, { required: definition.required }));
+    else if (definition.type === 'boolean') fields.append(checkboxField(definition.label || name, name, Boolean(definition.default)));
+    else fields.append(field(definition.label || name, name, { type: definition.type === 'integer' ? 'number' : 'text', value: definition.default ?? '', min: definition.min, max: definition.max, required: definition.required }));
+  }
+  fields.append(field('Wartości hostname JSON', 'hostname_values', { tag: 'textarea', wide: true, value: '{}', help: 'Np. {"location":"wro","env":"prod","role":"web"}' }));
+  openModal({ title: `Uruchom ${item.name}`, eyebrow: `Blueprint v${item.version}`, body: fields, submitLabel: 'Utwórz serwer', onSubmit: async (data, form) => {
+    const variables = {};
+    for (const [name, definition] of Object.entries(item.variables_schema)) {
+      const control = form.elements[name];
+      if (definition.type === 'boolean') variables[name] = control.checked;
+      else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
+    }
+    const result = await api(`/blueprints/${item.id}/execute`, { method: 'POST', idempotent: true, body: { variables, hostname_values: parseObject(data.get('hostname_values') || '{}', 'Wartości hostname') } });
+    toast(`Deployment ${result.name} utworzony. Zadanie ${short(result.job.id)}.`); navigate('jobs');
+  }});
+}
+
+async function hostnamesView() {
+  const [schemes, reservations] = await Promise.all([api('/hostname-schemes?limit=200'), api('/hostnames?limit=200')]);
+  const actions = [];
+  if (allowed('hostnames.create')) actions.push(button('Nowy schemat', hostnameSchemeForm, 'primary'));
+  if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => generateHostname(schemes.items)));
+  dom.content.replaceChildren(heading('Centralne generowanie nazw z blokadą sekwencji, wykrywaniem kolizji i historią rezerwacji.', actions),
+    node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Schematy' })), table([
+      { label: 'Nazwa', value: item => item.name }, { label: 'Wzorzec', value: item => node('span', { class: 'mono', text: item.pattern }) },
+      { label: 'Następny numer', value: item => item.next_number }, { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
+    ], schemes.items, item => allowed('hostnames.update') ? [button('Edytuj', () => hostnameSchemeForm(item))] : [])),
+    node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Rezerwacje' })), table([
+      { label: 'Hostname', value: item => node('strong', { class: 'mono', text: item.hostname }) }, { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
+      { label: 'Zasób', value: item => short(item.resource_id, 18) }, { label: 'Utworzono', value: item => formatDate(item.created_at) },
+    ], reservations.items, item => allowed('hostnames.release') && item.status !== 'released' ? [button('Zwolnij', () => confirmAction('Zwolnij hostname', `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`, async () => { await api(`/hostnames/${item.id}/release`, { method: 'POST' }); navigate('hostnames'); }), 'danger')] : [])));
+}
+
+function hostnameSchemeForm(item = null) {
+  const fields = node('div', { class: 'form-grid' }, field('Nazwa', 'name', { required: true, value: item?.name || '' }), field('Wzorzec', 'pattern', { required: true, value: item?.pattern || '{location}-{env}-{role}-{number}', wide: true }), field('Następny numer', 'next_number', { type: 'number', min: 1, value: item?.next_number || 1 }), field('Dopełnienie', 'padding', { type: 'number', min: 1, max: 9, value: item?.padding || 3 }), checkboxField('Aktywny', 'is_active', item?.is_active ?? true));
+  openModal({ title: item ? 'Edytuj schemat hostname' : 'Nowy schemat hostname', eyebrow: 'Hostname Manager', body: fields, onSubmit: async data => {
+    await api(item ? `/hostname-schemes/${item.id}` : '/hostname-schemes', { method: item ? 'PUT' : 'POST', body: { name: data.get('name'), pattern: data.get('pattern'), next_number: Number(data.get('next_number')), padding: Number(data.get('padding')), is_active: data.has('is_active') } });
+    toast('Schemat hostname zapisany.'); navigate('hostnames');
+  }});
+}
+
+function generateHostname(schemes) {
+  const fields = node('div', { class: 'form-grid' }, selectField('Schemat', 'scheme_id', schemes.filter(item => item.is_active).map(item => ({ value: item.id, label: `${item.name} — ${item.pattern}` })), '', { required: true, placeholder: 'Wybierz schemat' }), field('Wartości JSON', 'values', { tag: 'textarea', wide: true, required: true, value: '{"location":"wro","env":"prod","role":"web"}' }), checkboxField('Zarezerwuj nazwę', 'reserve', true));
+  openModal({ title: 'Generuj hostname', eyebrow: 'Hostname Manager', body: fields, submitLabel: 'Generuj', onSubmit: async data => {
+    const result = await api('/hostnames/generate', { method: 'POST', body: { scheme_id: Number(data.get('scheme_id')), values: parseObject(data.get('values'), 'Wartości'), reserve: data.has('reserve') } });
+    toast(`Wygenerowano ${result.hostname}.`); navigate('hostnames');
+  }});
 }
 
 async function accountView() {
@@ -649,7 +756,7 @@ function changePassword(required = false) {
 const views = {
   dashboard: dashboardView, users: usersView, roles: rolesView, tokens: tokensView,
   credentials: credentialsView, providers: providersView, deployments: deploymentsView,
-  jobs: jobsView, audit: auditView, account: accountView,
+  blueprints: blueprintsView, hostnames: hostnamesView, jobs: jobsView, audit: auditView, account: accountView,
 };
 
 function setApiStatus(ok) {

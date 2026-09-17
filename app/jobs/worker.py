@@ -47,6 +47,7 @@ class Context:
         self.log(action)
         with session() as db:
             db.add(Audit(user_id=self.job.created_by, token_id=self.job.token_id, ip=self.job.ip,
+                         source=self.job.source,
                          action=action, resource='jobs', resource_id=self.job.id, request_id=self.job.request_id))
             db.commit()
 
@@ -155,5 +156,6 @@ def execute(job_id):
                 deployment.destroyed_at = now()
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))
         db.add(Audit(user_id=job.created_by, token_id=job.token_id, ip=job.ip, action='job.' + status,
+                     source=job.source,
                      resource='jobs', resource_id=job.id, result=status, request_id=job.request_id))
         db.commit()
