@@ -75,7 +75,7 @@ jobs:
           set -euo pipefail
           umask 077
           token_file=$(mktemp)
-          trap 'sudo rm -f "$token_file" /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output /tmp/cloudportal-install-fixture.json /tmp/master-key-before' EXIT
+          trap 'sudo rm -f "$token_file" /tmp/cloudportal-install-fixture.json /tmp/master-key-before' EXIT
           printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
           unset REPOSITORY_READ_TOKEN
           sudo ./install.sh --non-interactive --host localhost --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-install-output 2>&1
@@ -88,5 +88,17 @@ jobs:
       - name: Sanitized service diagnostics
         if: failure()
         run: |
+          for output in /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output; do
+            if sudo test -f "$output"; then
+              echo "Installer diagnostics: $output"
+              sudo sed -E \
+                -e 's/(Initial (API Token|password):).*/\1 [REDACTED]/I' \
+                -e 's/(Authorization: (Bearer|token) )[A-Za-z0-9_.-]+/\1[REDACTED]/Ig' \
+                "$output" | tail -n 120
+            fi
+          done
           sudo systemctl --no-pager status cloudportal-api cloudportal-dispatcher cloudportal-worker@1 || true
           sudo journalctl --no-pager -u cloudportal-api -u cloudportal-worker@1 -n 50 || true
+      - name: Remove installer diagnostics
+        if: always()
+        run: sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output
