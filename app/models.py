@@ -1,0 +1,181 @@
+from datetime import datetime, timezone
+import uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.database import Base
+
+
+def now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def uid():
+    return str(uuid.uuid4())
+
+
+class Timestamp:
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
+
+
+class User(Timestamp, Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    first_name: Mapped[str] = mapped_column(String(100), default="")
+    last_name: Mapped[str] = mapped_column(String(100), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_service_account: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime)
+    roles: Mapped[list["Role"]] = relationship(secondary="user_roles", lazy="selectin")
+
+
+class Role(Timestamp, Base):
+    __tablename__ = "roles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    permissions: Mapped[list["Permission"]] = relationship(secondary="role_permissions", lazy="selectin")
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+
+
+class Token(Base):
+    __tablename__ = "tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(16))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    kind: Mapped[str] = mapped_column(String(16), default="api")
+    family: Mapped[str] = mapped_column(String(36), default=uid, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    user: Mapped[User] = relationship(lazy="joined")
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Credential(Timestamp, Base):
+    __tablename__ = "credentials"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    type: Mapped[str] = mapped_column(String(32))
+    endpoint: Mapped[str] = mapped_column(String(2048), default="")
+    username: Mapped[str] = mapped_column(String(254), default="")
+    verify_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
+    encrypted_secret: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class Provider(Timestamp, Base):
+    __tablename__ = "providers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    type: Mapped[str] = mapped_column(String(32))
+    credentials_id: Mapped[int] = mapped_column(ForeignKey("credentials.id"))
+
+
+class Deployment(Timestamp, Base):
+    __tablename__ = "deployments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100))
+    provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"))
+    provider: Mapped[str] = mapped_column(String(32), default="proxmox")
+    template: Mapped[str] = mapped_column(String(100))
+    credentials_id: Mapped[int] = mapped_column(ForeignKey("credentials.id"))
+    workspace: Mapped[str] = mapped_column(String(36), default=uid, unique=True)
+    variables: Mapped[dict] = mapped_column(JSON)
+    workflow: Mapped[dict] = mapped_column(JSON, default=dict)
+    state_location: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    destroyed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    active_job_id: Mapped[str | None] = mapped_column(String(36))
+    executor: Mapped[str] = mapped_column(String(20), default="terraform")
+
+
+class Job(Timestamp, Base):
+    __tablename__ = "jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    deployment_id: Mapped[str | None] = mapped_column(ForeignKey("deployments.id"))
+    operation: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    token_id: Mapped[int | None] = mapped_column(ForeignKey("tokens.id"))
+    request_id: Mapped[str] = mapped_column(String(36))
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class JobLog(Base):
+    __tablename__ = "job_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=now)
+    message: Mapped[str] = mapped_column(Text)
+
+
+class Audit(Base):
+    __tablename__ = "audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    token_id: Mapped[int | None] = mapped_column(Integer)
+    ip: Mapped[str] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(100))
+    resource: Mapped[str] = mapped_column(String(100))
+    resource_id: Mapped[str | None] = mapped_column(String(100))
+    result: Mapped[str] = mapped_column(String(32), default="success")
+    request_id: Mapped[str] = mapped_column(String(36), index=True)
+
+
+class Idempotency(Base):
+    __tablename__ = "idempotency"
+    __table_args__ = (UniqueConstraint("user_id", "path", "key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String(255))
+    key: Mapped[str] = mapped_column(String(36))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    response: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)

@@ -1,0 +1,16 @@
+fastapi>=0.121,<1
+uvicorn[standard]>=0.30,<1
+pydantic-settings>=2.6,<3
+SQLAlchemy>=2.0.36,<3
+alembic>=1.14,<2
+psycopg[binary]>=3.2,<4
+redis>=5.2,<7
+rq>=2.6,<3
+argon2-cffi>=23.1,<26
+cryptography>=44,<47
+httpx>=0.28,<1
+email-validator>=2.2,<3
+paramiko>=3.5,<5
+pywinrm>=0.5,<1
+boto3>=1.35,<2
+PyYAML>=6.0,<7

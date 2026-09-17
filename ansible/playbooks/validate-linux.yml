@@ -1,0 +1,6 @@
+- name: Validate Linux VM
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Verify Python and authenticated SSH
+      ansible.builtin.ping:

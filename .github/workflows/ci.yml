@@ -1,0 +1,76 @@
+name: Backend CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cloudportal
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: cloudportal_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U cloudportal -d cloudportal_test"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://cloudportal:test-password@localhost:5432/cloudportal_test
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements-dev.txt
+      - run: python -m compileall -q app migrations
+      - run: bash -n install.sh scripts/install.sh
+      - run: pytest -q --tb=short
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: {terraform_version: '1.13.5'}
+      - run: terraform fmt -check -recursive terraform
+      - run: terraform -chdir=terraform/templates/proxmox-vm init -backend=false -input=false
+      - run: terraform -chdir=terraform/templates/proxmox-vm validate
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t cloudportal-backed:ci .
+  installer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native installation and idempotent reinstall
+        env:
+          REPOSITORY_READ_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          token_file=$(mktemp)
+          printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
+          unset REPOSITORY_READ_TOKEN
+          sudo ./install.sh --non-interactive --host localhost --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-install-output 2>&1
+          sudo python3 scripts/installer-smoke.py
+          sudo sha256sum /etc/cloudportal-backed/master.key > /tmp/master-key-before
+          sudo ./install.sh --non-interactive --host localhost --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-reinstall-output 2>&1
+          ! sudo grep -q 'Initial API Token:' /tmp/cloudportal-reinstall-output
+          sudo sha256sum -c /tmp/master-key-before
+          sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output "$token_file"
+      - name: Sanitized service diagnostics
+        if: failure()
+        run: |
+          sudo systemctl --no-pager status cloudportal-api cloudportal-dispatcher cloudportal-worker@1 || true
+          sudo journalctl --no-pager -u cloudportal-api -u cloudportal-worker@1 -n 50 || true

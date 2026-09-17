@@ -1,0 +1,73 @@
+import json
+import os
+import shutil
+import tempfile
+import yaml
+from pathlib import Path
+from app.config import settings
+from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
+from app.security.core import decrypt_secret
+
+APPROVED_PLAYBOOKS = {'bootstrap-linux': 'bootstrap-linux.yml', 'validate-linux': 'validate-linux.yml', 'validate-windows': 'validate-windows.yml'}
+
+
+class UnsafeString(str):
+    pass
+
+
+class InventoryDumper(yaml.SafeDumper):
+    pass
+
+
+InventoryDumper.add_representer(UnsafeString, lambda dumper, value: dumper.represent_scalar('!unsafe', value))
+
+
+class AnsibleExecutor(Executor):
+    def execute(self, operation, context):
+        spec = context.ansible
+        filename = APPROVED_PLAYBOOKS.get(spec.playbook)
+        if not filename:
+            raise ExecutionFailed('Unapproved playbook')
+        secret = decrypt_secret(context.ansible_credential)
+        root = settings().data_dir / 'runs'
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with tempfile.TemporaryDirectory(prefix='ansible-', dir=root) as folder:
+            workspace = Path(folder)
+            env = execution_environment(workspace)
+            env.update(ANSIBLE_HOST_KEY_CHECKING='True', ANSIBLE_RETRY_FILES_ENABLED='False', ANSIBLE_NOCOLOR='1',
+                       ANSIBLE_LOCAL_TEMP=str(workspace / 'tmp'), ANSIBLE_CONFIG=str(settings().source_dir / 'ansible' / 'ansible.cfg'))
+            variables = {'ansible_user': context.ansible_credential.username}
+            if context.ansible_credential.type == 'ssh':
+                known_hosts = workspace / 'known_hosts'
+                known_hosts.write_text(secret['known_hosts'])
+                os.chmod(known_hosts, 0o600)
+                variables['ansible_ssh_common_args'] = '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=' + str(known_hosts)
+                if 'private_key' in secret:
+                    key = workspace / 'id_key'
+                    key.write_text(secret['private_key'])
+                    os.chmod(key, 0o600)
+                    variables['ansible_ssh_private_key_file'] = str(key)
+                if 'password' in secret:
+                    variables['ansible_password'] = secret['password']
+            elif context.ansible_credential.type == 'winrm':
+                variables.update(ansible_connection='winrm', ansible_port=5986, ansible_winrm_scheme='https',
+                                 ansible_winrm_transport='ntlm', ansible_winrm_server_cert_validation='validate',
+                                 ansible_password=secret['password'])
+            else:
+                raise ExecutionFailed('Invalid Ansible credential type')
+            variables.update(spec.variables)
+            inventory = {'all': {'hosts': {host: {} for host in spec.inventory.hosts}}}
+            inventory_path = workspace / 'inventory.json'
+            inventory_path.write_text(json.dumps(inventory))
+            os.chmod(inventory_path, 0o600)
+            variables_path = workspace / 'variables.yml'
+            # Values from credentials are data, never Jinja expressions/lookup plugins.
+            variables_path.write_text(yaml.dump({key: UnsafeString(v) if isinstance(v, str) else v for key, v in variables.items()}, Dumper=InventoryDumper))
+            os.chmod(variables_path, 0o600)
+            context.stage('ansible.wait_for_connection')
+            wait = 'wait-windows.yml' if context.ansible_credential.type == 'winrm' else 'wait-linux.yml'
+            for playbook in (wait, filename, 'validate-windows.yml' if context.ansible_credential.type == 'winrm' else 'validate-linux.yml'):
+                context.stage('ansible.execution:' + playbook)
+                run_process(['ansible-playbook', '-i', str(workspace / 'inventory.json'),
+                             str(settings().source_dir / 'ansible' / 'playbooks' / playbook),
+                             '--extra-vars', '@' + str(workspace / 'variables.yml')], workspace, env, context, secret.values())

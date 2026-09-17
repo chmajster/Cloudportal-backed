@@ -1,0 +1,22 @@
+- name: Bootstrap Linux VM
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ hostname }}"
+      when: hostname is defined
+    - name: Set timezone
+      community.general.timezone:
+        name: "{{ timezone }}"
+      when: timezone is defined
+    - name: Install guest agent
+      ansible.builtin.package:
+        name: qemu-guest-agent
+        state: present
+    - name: Start guest agent
+      ansible.builtin.service:
+        name: qemu-guest-agent
+        state: started
+        enabled: true
