@@ -12,6 +12,7 @@ github_config=''
 cert_file=''
 cert_key=''
 non_interactive=0
+check_platform=0
 while (($#)); do
   case "$1" in
     --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key)
@@ -22,18 +23,46 @@ while (($#)); do
       esac
       shift 2;;
     --non-interactive) non_interactive=1; shift;;
-    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--non-interactive] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
+    --check-platform) check_platform=1; shift;;
+    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--non-interactive] [--check-platform] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
-[[ $EUID -eq 0 ]] || { echo 'Run as root (sudo bash).' >&2; exit 1; }
-[[ -r /etc/os-release ]] || { echo 'Unsupported operating system.' >&2; exit 1; }
-. /etc/os-release
+os_release_file=/etc/os-release
+if ((check_platform)) && [[ -n ${CLOUDPORTAL_OS_RELEASE_FILE:-} ]]; then
+  os_release_file=$CLOUDPORTAL_OS_RELEASE_FILE
+fi
+[[ -r "$os_release_file" ]] || { echo 'Unsupported operating system.' >&2; exit 1; }
+. "$os_release_file"
 case "$ID:$VERSION_ID" in
-  ubuntu:24.04|debian:12|debian:13) ;;
-  *) echo 'Supported: Ubuntu 24.04, Debian 12/13 with systemd.' >&2; exit 1;;
+  ubuntu:24.04|ubuntu:26.04|debian:12|debian:13)
+    os_family=debian
+    python_command=python3
+    key_value_package=redis-server
+    key_value_command=redis-server
+    ;;
+  rhel:9|rhel:9.*)
+    os_family=rhel
+    rhel_major=9
+    python_command=python3.12
+    key_value_package=redis
+    key_value_command=redis-server
+    ;;
+  rhel:10|rhel:10.*)
+    os_family=rhel
+    rhel_major=10
+    python_command=python3
+    key_value_package=valkey
+    key_value_command=valkey-server
+    ;;
+  *) echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2; exit 1;;
 esac
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo 'Unsupported architecture.' >&2; exit 1;; esac
+if ((check_platform)); then
+  printf 'Supported platform: %s %s (%s, %s, %s, %s).\n' "$NAME" "$VERSION_ID" "$os_family" "$arch" "$key_value_package" "$python_command"
+  exit 0
+fi
+[[ $EUID -eq 0 ]] || { echo 'Run as root (sudo bash).' >&2; exit 1; }
 command -v systemctl >/dev/null || { echo 'systemd is required.' >&2; exit 1; }
 [[ -d /run/systemd/system ]] || { echo 'A running systemd host is required; use Docker Compose for a container.' >&2; exit 1; }
 config=/etc/cloudportal-backed
@@ -54,15 +83,32 @@ workers=${workers:-${previous_workers:-1}}
 [[ "$workers" =~ ^[0-9]{1,2}$ ]] && ((10#$workers >= 1 && 10#$workers <= 64)) || { echo 'Invalid workers count.' >&2; exit 2; }
 backend_port=$((10#$backend_port))
 workers=$((10#$workers))
+((backend_port != 6389)) || { echo 'Port 6389 is reserved for the internal Redis/Valkey instance.' >&2; exit 2; }
 [[ -z "$github_token_file" || -z "$github_config" ]] || { echo 'Use either --github-token-file or --github-config.' >&2; exit 2; }
 [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || { echo 'Invalid git ref.' >&2; exit 2; }
 [[ -z "$cert_file" && -z "$cert_key" || -r "$cert_file" && -r "$cert_key" ]] || { echo 'Both certificate files are required.' >&2; exit 2; }
 exec 9>/run/cloudportal-install.lock
 flock -n 9 || { echo 'Another installation is running.' >&2; exit 1; }
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y ca-certificates curl unzip python3 python3-venv python3-dev build-essential libpq-dev postgresql redis-server nginx openssl sshpass openssh-client
-getent passwd cloudportal >/dev/null || useradd --system --home-dir "$data" --create-home --shell /usr/sbin/nologin cloudportal
+case "$os_family" in
+  debian)
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y ca-certificates curl unzip python3 python3-venv python3-dev build-essential libpq-dev postgresql redis-server nginx openssl sshpass openssh-client
+    ;;
+  rhel)
+    if ((rhel_major == 9)); then
+      python_packages=(python3.12 python3.12-pip python3.12-devel)
+    else
+      python_packages=(python3 python3-pip python3-devel)
+    fi
+    dnf install -y ca-certificates curl unzip "${python_packages[@]}" gcc gcc-c++ make redhat-rpm-config libpq-devel postgresql-server "$key_value_package" nginx openssl sshpass openssh-clients policycoreutils-python-utils
+    [[ -s /var/lib/pgsql/data/PG_VERSION ]] || postgresql-setup --initdb
+    ;;
+esac
+python_binary=$(command -v "$python_command") || { echo "Missing Python command: $python_command" >&2; exit 1; }
+key_value_binary=$(command -v "$key_value_command") || { echo "Missing Redis-compatible server command: $key_value_command" >&2; exit 1; }
+nologin_shell=$(command -v nologin) || { echo 'Missing nologin shell.' >&2; exit 1; }
+getent passwd cloudportal >/dev/null || useradd --system --home-dir "$data" --create-home --shell "$nologin_shell" cloudportal
 install -d -m 0755 "$app_root" "$app_root/releases"
 install -d -m 0700 -o cloudportal -g cloudportal "$config" "$data" "$data/workspaces" "$data/runs"
 install -d -m 0700 "$config/tls"
@@ -92,7 +138,7 @@ cp -a "$tmp/source/." "$release/"
 chmod -R go-w "$release"
 find "$release" -type d -exec chmod 0755 {} +
 find "$release" -type f -exec chmod 0644 {} +
-python3 -m venv "$release/.venv"
+"$python_binary" -m venv "$release/.venv"
 "$release/.venv/bin/pip" install --disable-pip-version-check -r "$release/requirements.txt" 'ansible>=10,<13' 'pywinrm>=0.5,<1'
 chmod -R a+rX "$release/.venv"
 # Ansible and Terraform are executable by the runtime user, never run as root.
@@ -146,7 +192,7 @@ After=network.target
 [Service]
 User=cloudportal
 Group=cloudportal
-ExecStart=/usr/bin/redis-server $config/redis.conf
+ExecStart=$key_value_binary $config/redis.conf
 Restart=on-failure
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -157,6 +203,39 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 EOF
+if [[ "$os_family" == rhel ]] && command -v selinuxenabled >/dev/null && selinuxenabled; then
+  # Keep SELinux enforcing: label the dedicated Redis/Valkey files and ports,
+  # and permit Nginx to reach the loopback API reverse-proxy target.
+  ensure_selinux_port() {
+    local type=$1 protocol=$2 port=$3
+    if semanage port -a -t "$type" -p "$protocol" "$port" 2>/dev/null; then
+      return
+    fi
+    if LC_ALL=C semanage port -l | awk -v type="$type" -v protocol="$protocol" -v port="$port" '
+      $1 == type && $2 == protocol {
+        for (i = 3; i <= NF; i++) {
+          gsub(/,/, "", $i)
+          split($i, range, "-")
+          end = range[2] ? range[2] : range[1]
+          if (port >= range[1] && port <= end) found = 1
+        }
+      }
+      END { exit !found }
+    '; then
+      return
+    fi
+    echo "SELinux port $protocol/$port is assigned to a conflicting type." >&2
+    exit 1
+  }
+  semanage fcontext -a -t redis_conf_t "$config/redis.conf" 2>/dev/null || semanage fcontext -m -t redis_conf_t "$config/redis.conf"
+  semanage fcontext -a -t redis_var_lib_t "$data/redis(/.*)?" 2>/dev/null || semanage fcontext -m -t redis_var_lib_t "$data/redis(/.*)?"
+  semanage fcontext -a -t cert_t "$config/tls(/.*)?" 2>/dev/null || semanage fcontext -m -t cert_t "$config/tls(/.*)?"
+  ensure_selinux_port redis_port_t tcp 6389
+  ensure_selinux_port http_port_t tcp "$backend_port"
+  restorecon -R "$config/tls" "$data/redis"
+  restorecon "$config/redis.conf"
+  setsebool -P httpd_can_network_connect 1
+fi
 # No sourcing of secret env files as shell code.
 run_backend() {
   runuser -u cloudportal -- "$release/.venv/bin/python" - "$config/backend.env" "$release" "$@" <<'PY'
@@ -219,6 +298,9 @@ elif [[ ! -f "$config/tls/server.crt" ]]; then
   openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 -keyout "$config/tls/server.key" -out "$config/tls/server.crt" -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
   echo 'A self-signed TLS certificate was generated. Trust server.crt on the PHP server, or install a CA-issued certificate.'
 fi
+if [[ "$os_family" == rhel ]] && command -v selinuxenabled >/dev/null && selinuxenabled; then
+  restorecon -R "$config/tls"
+fi
 cat > /etc/nginx/conf.d/cloudportal-backed.conf <<EOF
 server {
     listen $backend_port ssl;
@@ -249,6 +331,10 @@ systemctl restart cloudportal-api cloudportal-dispatcher
 for ((i=1;i<=workers;i++)); do systemctl enable "cloudportal-worker@$i"; systemctl restart "cloudportal-worker@$i"; done
 systemctl enable --now nginx
 systemctl reload nginx
+if [[ "$os_family" == rhel ]] && systemctl is-active --quiet firewalld; then
+  firewall-cmd --permanent --add-port="$backend_port/tcp"
+  firewall-cmd --reload
+fi
 ready=0
 for ((attempt=0;attempt<60;attempt++)); do
   if curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:8765/api/v1/health > "$tmp/health.json"; then ready=1; break; fi

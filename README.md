@@ -4,12 +4,18 @@ Centralny backend dla [Cloud Portal](https://github.com/chmajster/HomeLAB-Proxmo
 
 ## Instalacja przez jeden one-liner
 
-Wspierane systemy: **Ubuntu 24.04, Debian 12 i 13**, amd64/arm64, systemd. Minimum praktyczne: 2 vCPU, 4 GiB RAM, 10 GiB wolnego dysku. Instalator instaluje PostgreSQL, osobny Redis, Python/venv, Terraform, Ansible, Nginx/TLS, API, dispatcher i workery. Terraform i Ansible działają jako `cloudportal`, bez roota.
+Wspierane systemy: **Ubuntu 24.04 i 26.04 LTS, Debian 12 i 13 oraz Red Hat Enterprise Linux 9 i 10**, amd64/arm64, systemd. RHEL musi być zarejestrowany i mieć dostęp do repozytoriów BaseOS oraz AppStream. Minimum praktyczne: 2 vCPU, 4 GiB RAM, 10 GiB wolnego dysku. Instalator instaluje PostgreSQL, osobny Redis (Valkey na RHEL 10), Python/venv, Terraform, Ansible, Nginx/TLS, API, dispatcher i workery. Terraform i Ansible działają jako `cloudportal`, bez roota. Na RHEL instalator zachowuje SELinux w trybie enforcing, dodaje wymagane etykiety/porty i otwiera port HTTPS, jeżeli `firewalld` jest aktywny.
 
 Po udostępnieniu repozytorium publicznie:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chmajster/Cloudportal-backed/main/install.sh | sudo bash
+```
+
+Obsługę bieżącego systemu można sprawdzić bez zmian w systemie i bez uprawnień roota:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chmajster/Cloudportal-backed/main/install.sh | bash -s -- --check-platform
 ```
 
 Instalacja unattended / własny host i port:

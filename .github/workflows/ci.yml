@@ -46,6 +46,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m compileall -q app migrations
       - run: bash -n install.sh scripts/install.sh
+      - run: scripts/test-installer-platforms.sh
       - run: pytest -q --tb=short
   terraform:
     runs-on: ubuntu-latest
