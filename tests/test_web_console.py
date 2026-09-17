@@ -1,0 +1,37 @@
+def test_root_redirects_to_local_web_console(client):
+    response = client.get('/', follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers['location'] == '/ui/'
+
+
+def test_web_console_and_assets_are_served_with_security_headers(client):
+    page = client.get('/ui/')
+
+    assert page.status_code == 200
+    assert page.headers['content-type'].startswith('text/html')
+    assert 'id="login-form"' in page.text
+    assert 'src="./app.js"' in page.text
+    assert page.headers['cache-control'] == 'no-store'
+    assert page.headers['x-frame-options'] == 'DENY'
+    assert page.headers['content-security-policy'] == (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+        "form-action 'self'; frame-ancestors 'none'"
+    )
+
+    script = client.get('/ui/app.js')
+    stylesheet = client.get('/ui/styles.css')
+
+    assert script.status_code == 200
+    assert script.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
+    assert "const API = '/api/v1';" in script.text
+    assert stylesheet.status_code == 200
+    assert stylesheet.headers['content-type'].startswith('text/css')
+
+
+def test_web_console_is_not_added_to_openapi_contract(client):
+    paths = client.get('/openapi.json').json()['paths']
+
+    assert '/' not in paths
+    assert '/ui/' not in paths

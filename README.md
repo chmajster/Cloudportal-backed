@@ -44,6 +44,12 @@ Dopiero po udanym healthchecku instalator tworzy administratora `admin`, losowe 
 
 Ponowne uruchomienie zachowuje bazę, konta, tokeny, klucz szyfrujący, Redis i Terraform state. Brak istniejącego master key zatrzymuje reinstalację zamiast tworzyć niezgodny klucz. Kod jest instalowany w wersjonowanych katalogach `/opt/cloudportal-backed/releases`; dane pozostają w `/var/lib/cloudportal-backed`. Kopia zapasowa musi obejmować **bazę, master key i workspaces**; klucz przechowuj oddzielnie od kopii bazy.
 
+## Lokalny panel administracyjny
+
+Backend udostępnia własny panel pod `https://HOST:PORT/ui/`; wejście na `/` przekierowuje do panelu. Zaloguj się kontem `admin` i hasłem wyświetlonym przez instalator. Panel umożliwia zarządzanie użytkownikami, rolami i permissions, tokenami API, credentialami, providerami, deploymentami, zadaniami i audytem oraz zmianę własnego hasła.
+
+Panel korzysta z tego samego API i tego samego RBAC co pozostali klienci — nie omija autoryzacji backendu. Elementy nawigacji i akcje są ukrywane zgodnie z efektywnymi permissions, ale każdą operację ponownie weryfikuje API. Access i refresh token są przechowywane wyłącznie w `sessionStorage`, więc zamknięcie karty usuwa lokalną sesję przeglądarki. Panel oraz jego zasoby są serwowane lokalnie przez backend, bez zewnętrznych skryptów i fontów.
+
 ## Podłączenie PHP
 
 W powiązanej wersji Cloud Portal:

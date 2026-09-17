@@ -1,7 +1,9 @@
 import uuid
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 from app.api import administration, health, infrastructure
@@ -48,6 +50,13 @@ async def boundary(request: Request, call_next):
         response = JSONResponse({'detail': 'Internal service error', 'request_id': request_id}, status_code=500)
     response.headers.update({'X-Request-ID': request_id, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
                              'Referrer-Policy': 'no-referrer', 'Strict-Transport-Security': 'max-age=31536000'})
+    if request.url.path == '/' or request.url.path.startswith('/ui'):
+        response.headers.update({
+            'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+            'Cross-Origin-Opener-Policy': 'same-origin',
+            'X-Frame-Options': 'DENY',
+        })
     return response
 
 
@@ -82,3 +91,11 @@ for router in (auth.router, administration.router, infrastructure.router, health
                                'description': 'Reuse the same UUID only when retrying the same operation and payload.'})
         route.openapi_extra = {**(route.openapi_extra or {}), 'parameters': parameters}
     app.include_router(router, prefix='/api/v1')
+
+
+@app.get('/', include_in_schema=False)
+def web_console():
+    return RedirectResponse('/ui/', status_code=307)
+
+
+app.mount('/ui', StaticFiles(directory=Path(__file__).with_name('web'), html=True), name='web-console')
