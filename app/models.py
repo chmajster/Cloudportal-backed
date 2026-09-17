@@ -41,6 +41,7 @@ class User(Timestamp, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     is_service_account: Mapped[bool] = mapped_column(Boolean, default=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
     failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime)

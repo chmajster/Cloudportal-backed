@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from sqlalchemy import select
 from app.database import session
-from app.models import Credential, Deployment, Idempotency, Job
+from app.models import Credential, Deployment, Idempotency, Job, User
 from app.security.core import decrypt_secret
 from app.executors.base import ExecutionFailed
 from app.executors.terraform import TerraformExecutor, workspace_lock
@@ -259,6 +259,9 @@ def test_pending_standalone_ansible_job_preserves_credential(client, headers):
 def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch):
     client, headers, admin = system
     _, _, payload = resources(client, headers)
+    with session() as db:
+        db.get(User, 1).must_change_password = False
+        db.commit()
     pair = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': admin['password']}).json()
     actor = {'Authorization': 'Bearer ' + pair['access_token'], 'Idempotency-Key': str(uuid.uuid4())}
     d = client.post('/api/v1/deployments', headers=actor, json=payload).json()

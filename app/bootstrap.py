@@ -2,7 +2,6 @@
 import argparse
 import base64
 import os
-import secrets
 from pathlib import Path
 from sqlalchemy import select, text, inspect
 from app.config import settings
@@ -40,8 +39,9 @@ def bootstrap(db):
     seed(db)
     if db.scalar(select(User.id).limit(1)):
         raise RuntimeError('Existing users without bootstrap marker; refusing automatic privilege changes')
-    password = secrets.token_urlsafe(24)
+    password = 'admin'
     user = User(username='admin', email='admin@localhost.example', password_hash=password_hasher.hash(password),
+                must_change_password=True,
                 roles=[db.scalar(select(Role).where(Role.name == 'Administrator'))])
     db.add(user)
     db.flush()
@@ -69,7 +69,8 @@ def main():
     print('Administrator: ' + result['username'])
     print('Initial password: ' + result['password'])
     print('Initial API Token: ' + result['token'])
-    print('These secrets are displayed ONLY ONCE. Save them now.')
+    print('The Initial API Token is displayed ONLY ONCE. Save it now.')
+    print('The default admin/admin password must be changed at the first login.')
     print('Create a dedicated Portal Service account/token; retire the bootstrap token after setup.')
     print('Health: ' + args.url + '/api/v1/health\nSwagger: ' + args.url + '/docs')
     print('====================================================')

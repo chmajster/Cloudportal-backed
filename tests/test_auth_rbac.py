@@ -1,7 +1,8 @@
 from datetime import timedelta
 from sqlalchemy import select
 from app.database import session
-from app.models import Token, now
+from app.models import Token, User, now
+from app.security.core import verify_password
 from conftest import new_user
 
 
@@ -10,12 +11,38 @@ def test_bootstrap_is_once_and_hashes(system):
     client, headers, admin = system
     with session() as db:
         token = db.scalar(select(Token).where(Token.kind == 'api'))
+        user = db.scalar(select(User).where(User.username == 'admin'))
+        assert admin['username'] == 'admin' and admin['password'] == 'admin'
+        assert user.must_change_password is True
+        assert user.password_hash != 'admin' and verify_password('admin', user.password_hash)
         assert token.token_hash != admin['token'] and len(token.token_hash) == 64
         assert bootstrap(db) is None
     response = client.get('/api/v1/auth/me', headers=headers)
     assert response.status_code == 200
     assert 'users.delete' in response.json()['permissions']
     assert 'password_hash' not in response.text and admin['token'] not in response.text
+
+
+def test_default_admin_session_requires_password_change(system):
+    client, bootstrap_headers, admin = system
+    login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'admin'})
+    assert login.status_code == 200, login.text
+    assert login.json()['user']['must_change_password'] is True
+    session_headers = {'Authorization': 'Bearer ' + login.json()['access_token']}
+
+    blocked = client.get('/api/v1/users', headers=session_headers)
+    assert blocked.status_code == 403
+    assert blocked.json()['detail'] == 'Password change required'
+    assert client.get('/api/v1/users', headers=bootstrap_headers).status_code == 200
+
+    changed = client.post('/api/v1/auth/change-password', headers=session_headers,
+                          json={'current_password': 'admin', 'password': 'secure-admin-password-1234'})
+    assert changed.status_code == 200, changed.text
+    assert client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'admin'}).status_code == 401
+    replacement = client.post('/api/v1/auth/login', json={
+        'username': 'admin', 'password': 'secure-admin-password-1234'})
+    assert replacement.status_code == 200, replacement.text
+    assert replacement.json()['user']['must_change_password'] is False
 
 
 def test_login_refresh_logout_and_reuse(system):

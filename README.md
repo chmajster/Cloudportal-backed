@@ -40,13 +40,13 @@ Można też uruchomić pobrany instalator: `sudo ./install.sh --host backend.exa
 
 Instalator generuje certyfikat self-signed, jeżeli nie podano `--cert-file` i `--cert-key`. Zaufaj certyfikatowi `/etc/cloudportal-backed/tls/server.crt` na serwerze PHP lub użyj certyfikatu własnego/publicznego CA. Weryfikacja TLS w portalu jest domyślnie włączona. Port API na loopback `8765` pozostaje niewystawiony przez Nginx; dostęp sieciowy zapewnia port HTTPS `8443`.
 
-Dopiero po udanym healthchecku instalator tworzy administratora `admin`, losowe hasło i **Initial Administrator Token**. Hasło i token wyświetla raz na standardowym wyjściu. W bazie zostają wyłącznie hash Argon2id hasła i SHA-256 losowego tokena. Instalator nie zapisuje ich do plików ani logów.
+Dopiero po udanym healthchecku instalator tworzy administratora z początkowymi danymi **`admin` / `admin`** oraz losowy **Initial Administrator Token**. Token jest wyświetlany tylko raz na standardowym wyjściu. Hasło jest przechowywane wyłącznie jako hash Argon2id, a token jako SHA-256; instalator nie zapisuje ich jawnie do plików ani logów. Sesja utworzona początkowym hasłem może wejść tylko do widoku konta i zmienić hasło. Initial Administrator Token nadal umożliwia jednorazową konfigurację połączenia PHP.
 
 Ponowne uruchomienie zachowuje bazę, konta, tokeny, klucz szyfrujący, Redis i Terraform state. Brak istniejącego master key zatrzymuje reinstalację zamiast tworzyć niezgodny klucz. Kod jest instalowany w wersjonowanych katalogach `/opt/cloudportal-backed/releases`; dane pozostają w `/var/lib/cloudportal-backed`. Kopia zapasowa musi obejmować **bazę, master key i workspaces**; klucz przechowuj oddzielnie od kopii bazy.
 
 ## Lokalny panel administracyjny
 
-Backend udostępnia własny panel pod `https://HOST:PORT/ui/`; wejście na `/` przekierowuje do panelu. Zaloguj się kontem `admin` i hasłem wyświetlonym przez instalator. Panel umożliwia zarządzanie użytkownikami, rolami i permissions, tokenami API, credentialami, providerami, deploymentami, zadaniami i audytem oraz zmianę własnego hasła.
+Backend udostępnia własny panel pod `https://HOST:PORT/ui/`; wejście na `/` przekierowuje do panelu. Przy pierwszym logowaniu użyj `admin` / `admin` i ustaw nowe hasło o długości co najmniej 12 znaków. Do czasu zmiany hasła pozostałe operacje sesji administratora są blokowane przez API. Panel umożliwia zarządzanie użytkownikami, rolami i permissions, tokenami API, credentialami, providerami, deploymentami, zadaniami i audytem oraz zmianę własnego hasła.
 
 Panel korzysta z tego samego API i tego samego RBAC co pozostali klienci — nie omija autoryzacji backendu. Elementy nawigacji i akcje są ukrywane zgodnie z efektywnymi permissions, ale każdą operację ponownie weryfikuje API. Access i refresh token są przechowywane wyłącznie w `sessionStorage`, więc zamknięcie karty usuwa lokalną sesję przeglądarki. Panel oraz jego zasoby są serwowane lokalnie przez backend, bez zewnętrznych skryptów i fontów.
 
@@ -54,11 +54,11 @@ Panel korzysta z tego samego API i tego samego RBAC co pozostali klienci — nie
 
 W powiązanej wersji Cloud Portal:
 
-1. Nowa instalacja PHP: uruchom lokalnie `php bin/backend-setup.php` jako użytkownik PHP i otwórz `/settings/infrastructure/backend`. W istniejącej instalacji stronę może otworzyć lokalny administrator.
-2. Wprowadź adres HTTPS, początkowy token i klucz konfiguracji, jeśli to nowa instalacja. `Testuj połączenie` sprawdza `/health` i `/auth/me`.
-3. Zapisz konfigurację i zaloguj się administratorem backendu.
-4. W Administracja → Tokeny API wybierz **Utwórz konto i token serwisowy portalu**. Wklej nowy token w ustawienia backendu. Konto dostaje wyłącznie `portal.connect`.
-5. Unieważnij bootstrap token i zmień początkowe hasło administratora.
+1. Na świeżym backendzie otwórz `/ui/`, zaloguj się jako `admin` / `admin` i ustaw nowe hasło. Nie wystawiaj instalacji do niezaufanej sieci przed wykonaniem tego kroku.
+2. W panelu backendu utwórz konto serwisowe, przypisz mu rolę `Portal Service`, a następnie utwórz dla niego token o scope `portal.connect`. Zachowaj wyświetlony jednorazowo token.
+3. W nowej instalacji PHP uruchom lokalnie `php bin/backend-setup.php` jako użytkownik PHP i otwórz `/settings/infrastructure/backend`. W istniejącej instalacji stronę może otworzyć lokalny administrator.
+4. Wprowadź adres HTTPS, token konta serwisowego i klucz konfiguracji, jeśli to nowa instalacja. `Testuj połączenie` sprawdza `/health` i `/auth/me`.
+5. Zapisz konfigurację, zaloguj się administratorem backendu i unieważnij niepotrzebny Initial Administrator Token.
 
 Operacje interaktywne używają tokena zalogowanego użytkownika, a nie tokena serwisowego. PHP przechowuje tylko własną sesję i konfigurację połączenia. Nie tworzy kopii backendowych kont ani ról. Uprawnienia są odczytywane z `/auth/me` na każdym żądaniu, a API sprawdza je ponownie. Przeglądarka wysyła akcje do proxy `/backend-api` w PHP, które przekazuje JSON, `X-Request-ID`, `Idempotency-Key` i status API. Wyłącznie backend otwiera połączenia z infrastrukturą i wykonuje Terraform/Ansible. Brak backendu oznacza 503; nie uruchamia lokalnego wykonawcy PHP.
 
@@ -68,7 +68,7 @@ Istniejąca baza starego portalu nie jest automatycznie importowana ani kasowana
 
 Kontrakt: `/openapi.json` (OpenAPI 3.x), Swagger `/docs`. Prefix `/api/v1`. Modele odpowiedzi obejmują publiczne pola users, RBAC, tokens, credentials, providers, deployments, jobs/logs, audit i health; nie zawierają hashy ani zaszyfrowanych sekretów. OpenAPI opisuje również wymagane nagłówki idempotencji. Publiczne są logowanie, odświeżenie sesji, realizacja tokena resetu i healthcheck. Endpointy zasobów wymagają Bearer token i granularnego permission. Nie ma endpointu wykonującego shell.
 
-- Hasła: 12–256 znaków, Argon2id. Domyślny lockout po 5 błędach na 15 minut, dodatkowe limity na tożsamość i IP w Redis. Niedostępny limiter blokuje ruch (503).
+- Hasła użytkowników: 12–256 znaków, Argon2id. Jedynym wyjątkiem jest tymczasowe hasło `admin` świeżej instalacji, które przed udostępnieniem operacji administracyjnych musi zostać zmienione na hasło zgodne z polityką. Domyślny lockout po 5 błędach na 15 minut, dodatkowe limity na tożsamość i IP w Redis. Niedostępny limiter blokuje ruch (503).
 - Sesje: opaque access token 15 minut, rotowany refresh token 8 godzin. Ponowne użycie refresh tokena unieważnia całą rodzinę. Logout, reset i zmiana hasła odwołują odpowiednie tokeny. Konta serwisowe nie logują się hasłem.
 - Tokeny API: zakres jest przecięciem zapisanych scopes i **aktualnych** permissions konta. Osoba nadająca role/tokeny nie może nadać uprawnień spoza własnego zakresu. Nie można usunąć ostatniego aktywnego administratora.
 - Reset hasła: administrator wydaje token ważny 15 minut, wyświetlany raz; użytkownik podaje go formularzem POST `/password-reset` w portalu. Token nie jest umieszczany w URL. Wydanie tokena unieważnia sesje, a realizacja jest atomowa i jednorazowa. Nie ma automatycznej wysyłki e-mail.

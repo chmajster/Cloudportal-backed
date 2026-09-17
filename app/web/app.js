@@ -267,12 +267,14 @@ function showApp() {
   dom.currentUser.textContent = state.identity.user.username;
   dom.currentRoles.textContent = state.identity.roles.map(role => role.name).join(', ') || 'Brak roli';
   renderNavigation();
-  navigate(location.hash.slice(1) || 'dashboard');
+  const mustChangePassword = state.identity.user.must_change_password;
+  navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'dashboard');
+  if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
 }
 
 function renderNavigation() {
   dom.navigation.replaceChildren();
-  routes.filter(route => allowed(route.permission)).forEach(route => {
+  routes.filter(route => allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account')).forEach(route => {
     const item = node('button', { class: `nav-link ${state.view === route.id ? 'active' : ''}`, type: 'button', onClick: () => navigate(route.id) },
       node('span', { class: 'nav-icon', text: route.icon }), route.label);
     item.dataset.route = route.id;
@@ -281,7 +283,8 @@ function renderNavigation() {
 }
 
 async function navigate(view) {
-  const route = routes.find(item => item.id === view && allowed(item.permission)) || routes[0];
+  const available = routes.filter(item => allowed(item.permission) && (!state.identity.user.must_change_password || item.id === 'account'));
+  const route = available.find(item => item.id === view) || available[0];
   state.view = route.id;
   location.hash = route.id;
   dom.pageTitle.textContent = route.label;
@@ -625,15 +628,18 @@ async function accountView() {
     node('div', { class: 'checks' },
       info('Login', user.username), info('E-mail', user.email), info('Role', state.identity.roles.map(role => role.name).join(', ') || 'Brak'), info('Ostatnie logowanie', formatDate(user.last_login_at)),
     ));
-  const security = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Bezpieczeństwo konta' })), node('p', { class: 'muted', text: 'Zmiana hasła unieważnia wszystkie sesje i tokeny resetu. Po zapisaniu wymagane jest ponowne logowanie.' }), button('Zmień hasło', changePassword, 'primary'));
+  const passwordMessage = user.must_change_password
+    ? 'Konto używa początkowego hasła admin. Zmień je, aby odblokować panel administracyjny.'
+    : 'Zmiana hasła unieważnia wszystkie sesje i tokeny resetu. Po zapisaniu wymagane jest ponowne logowanie.';
+  const security = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Bezpieczeństwo konta' }), user.must_change_password ? badge('wymagana zmiana', 'warning') : ''), node('p', { class: user.must_change_password ? 'form-error' : 'muted', text: passwordMessage }), button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary'));
   dom.content.replaceChildren(heading('Twoja sesja i skuteczne uprawnienia.'), node('div', { class: 'panels' }, details, security), node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Permissions' })), node('p', { class: 'mono muted', text: state.identity.permissions.join(' · ') || 'Brak uprawnień' })));
 }
 
 function info(label, value) { return node('div', { class: 'check' }, node('span', { text: label }), node('strong', { text: value })); }
 
-function changePassword() {
+function changePassword(required = false) {
   const fields = node('div', { class: 'form-grid' }, field('Obecne hasło', 'current_password', { type: 'password', autocomplete: 'current-password', required: true, wide: true }), field('Nowe hasło', 'password', { type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }), field('Powtórz nowe hasło', 'confirm', { type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }));
-  openModal({ title: 'Zmień hasło', eyebrow: 'Moje konto', body: fields, submitLabel: 'Zmień hasło', onSubmit: async data => {
+  openModal({ title: required ? 'Zmień hasło początkowe' : 'Zmień hasło', eyebrow: 'Moje konto', body: fields, submitLabel: 'Zmień hasło', onSubmit: async data => {
     if (data.get('password') !== data.get('confirm')) throw new Error('Nowe hasła nie są identyczne.');
     await api('/auth/change-password', { method: 'POST', body: { current_password: data.get('current_password'), password: data.get('password') } });
     showLogin('Hasło zmienione. Zaloguj się ponownie.');

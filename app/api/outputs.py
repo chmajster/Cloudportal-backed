@@ -24,6 +24,7 @@ class UserOutput(Output):
     is_active: bool
     is_locked: bool
     is_service_account: bool
+    must_change_password: bool
     created_at: datetime
     updated_at: datetime
     last_login_at: datetime | None

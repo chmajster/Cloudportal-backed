@@ -16,7 +16,7 @@ USER_FIELDS = 'id username email first_name last_name is_active is_locked is_ser
 
 def user_public(user):
     from app.api.common import public
-    return public(user, USER_FIELDS)
+    return public(user, USER_FIELDS + ' must_change_password')
 
 
 def session_pair(db, user, family=None):
@@ -96,6 +96,7 @@ def reset_password(data: ResetPassword, request: Request, db=Depends(get_db, sco
     if not user.is_active or user.is_service_account:
         raise HTTPException(400, 'Account unavailable')
     user.password_hash = password_hasher.hash(data.password)
+    user.must_change_password = False
     reset.consumed_at = now()
     db.execute(update(PasswordReset).where(PasswordReset.user_id == user.id, PasswordReset.consumed_at.is_(None)).values(consumed_at=now()))
     revoke_user(db, user.id)
@@ -108,6 +109,7 @@ def change_password(data: ChangePassword, request: Request, actor=Depends(authen
     if actor.kind != 'session' or not verify_password(data.current_password, actor.user.password_hash):
         raise HTTPException(403, 'Current password required')
     actor.user.password_hash = password_hasher.hash(data.password)
+    actor.user.must_change_password = False
     db.execute(update(PasswordReset).where(PasswordReset.user_id == actor.user_id, PasswordReset.consumed_at.is_(None)).values(consumed_at=now()))
     revoke_user(db, actor.user_id)
     audit(db, request, 'auth.password_changed', 'users', actor.user_id)

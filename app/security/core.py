@@ -110,6 +110,9 @@ def authenticate(request: Request, auth: HTTPAuthorizationCredentials | None = D
         permissions &= set(token.scopes)
     request.state.actor = token
     request.state.permissions = permissions
+    if (token.kind == 'session' and token.user.must_change_password
+            and request.url.path not in {'/api/v1/auth/me', '/api/v1/auth/logout', '/api/v1/auth/change-password'}):
+        raise HTTPException(403, 'Password change required')
     return token
 
 
