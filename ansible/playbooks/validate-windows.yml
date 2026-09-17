@@ -1,0 +1,6 @@
+- name: Validate Windows VM
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Verify authenticated WinRM
+      ansible.windows.win_ping:
