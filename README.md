@@ -6,25 +6,25 @@ Centralny backend dla [Cloud Portal](https://github.com/chmajster/HomeLAB-Proxmo
 
 Wspierane systemy: **Ubuntu 24.04 i 26.04 LTS, Debian 12 i 13 oraz Red Hat Enterprise Linux 9 i 10**, amd64/arm64, systemd. RHEL musi być zarejestrowany i mieć dostęp do repozytoriów BaseOS oraz AppStream. Minimum praktyczne: 2 vCPU, 4 GiB RAM, 10 GiB wolnego dysku. Instalator instaluje PostgreSQL, osobny Redis (Valkey na RHEL 10), Python/venv, Terraform, Ansible, Nginx/TLS, API, dispatcher i workery. Terraform i Ansible działają jako `cloudportal`, bez roota. Na RHEL instalator zachowuje SELinux w trybie enforcing, dodaje wymagane etykiety/porty i otwiera port HTTPS, jeżeli `firewalld` jest aktywny.
 
-Po udostępnieniu repozytorium publicznie:
+Dla publicznego repozytorium użyj GitHub Contents API, aby zawsze pobrać aktualną wersję z gałęzi `main` (bez nieaktualnej kopii z cache GitHub Raw):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chmajster/Cloudportal-backed/main/install.sh | sudo bash
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash
 ```
 
 Obsługę bieżącego systemu można sprawdzić bez zmian w systemie i bez uprawnień roota:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chmajster/Cloudportal-backed/main/install.sh | bash -s -- --check-platform
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | bash -s -- --check-platform
 ```
 
 Instalacja unattended / własny host i port:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chmajster/Cloudportal-backed/main/install.sh | sudo bash -s -- --non-interactive --host backend.example.com --port 8443 --workers 3
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --non-interactive --host backend.example.com --port 8443 --workers 3
 ```
 
-**Repozytorium jest prywatne.** Anonimowe pobranie powyżej zwróci 404, dopóki pozostaje prywatne. Dla repozytorium prywatnego zapisz w `/root/cloudportal-github.conf` (właściciel root, tryb 600) konfigurację curl z tokenem GitHub mającym wyłącznie dostęp Contents: read do tego repozytorium:
+Jeżeli repozytorium zostanie przełączone na prywatne, anonimowe pobranie zwróci 404. Wtedy zapisz w `/root/cloudportal-github.conf` (właściciel root, tryb 600) konfigurację curl z tokenem GitHub mającym wyłącznie dostęp Contents: read do tego repozytorium:
 
 ```text
 header = "Authorization: Bearer YOUR_GITHUB_READ_TOKEN"

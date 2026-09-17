@@ -28,6 +28,9 @@ while (($#)); do
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
+drain_script_input() {
+  [[ -t 0 ]] || cat >/dev/null || true
+}
 os_release_file=/etc/os-release
 if ((check_platform)) && [[ -n ${CLOUDPORTAL_OS_RELEASE_FILE:-} ]]; then
   os_release_file=$CLOUDPORTAL_OS_RELEASE_FILE
@@ -55,11 +58,16 @@ case "$ID:$VERSION_ID" in
     key_value_package=valkey
     key_value_command=valkey-server
     ;;
-  *) echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2; exit 1;;
+  *)
+    echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2
+    drain_script_input
+    exit 1
+    ;;
 esac
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo 'Unsupported architecture.' >&2; exit 1;; esac
 if ((check_platform)); then
   printf 'Supported platform: %s %s (%s, %s, %s, %s).\n' "$NAME" "$VERSION_ID" "$os_family" "$arch" "$key_value_package" "$python_command"
+  drain_script_input
   exit 0
 fi
 [[ $EUID -eq 0 ]] || { echo 'Run as root (sudo bash).' >&2; exit 1; }
