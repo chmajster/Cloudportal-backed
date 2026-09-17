@@ -130,7 +130,7 @@ fi
 if [[ -n "$github_token_file" ]]; then
   [[ -r "$github_token_file" && "$(stat -c %a "$github_token_file")" == 600 ]] || { echo 'GitHub token file must be readable with mode 600.' >&2; exit 1; }
   github_token=$(tr -d '\r\n' < "$github_token_file")
-  [[ "$github_token" =~ ^[A-Za-z0-9_]+$ ]] || { echo 'Invalid GitHub token format.' >&2; exit 1; }
+  [[ "$github_token" =~ ^[A-Za-z0-9._-]{20,512}$ ]] || { echo 'Invalid GitHub token format.' >&2; exit 1; }
   printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$tmp/curl.conf"
   unset github_token
   curl_args+=(--config "$tmp/curl.conf")
