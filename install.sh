@@ -6,7 +6,7 @@ repo='chmajster/Cloudportal-backed'
 ref='main'
 backend_host=''
 backend_port=''
-workers='1'
+workers=''
 github_token_file=''
 github_config=''
 cert_file=''
@@ -35,6 +35,7 @@ case "$ID:$VERSION_ID" in
 esac
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo 'Unsupported architecture.' >&2; exit 1;; esac
 command -v systemctl >/dev/null || { echo 'systemd is required.' >&2; exit 1; }
+[[ -d /run/systemd/system ]] || { echo 'A running systemd host is required; use Docker Compose for a container.' >&2; exit 1; }
 config=/etc/cloudportal-backed
 app_root=/opt/cloudportal-backed
 data=/var/lib/cloudportal-backed
@@ -44,9 +45,16 @@ if [[ -r "$config/public.conf" ]]; then
 fi
 backend_host=${backend_host:-${previous_host:-$(hostname -f)}}
 backend_port=${backend_port:-${previous_port:-8443}}
+if [[ -r "$config/backend.env" ]]; then
+  previous_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$config/backend.env")
+fi
+workers=${workers:-${previous_workers:-1}}
 [[ "$backend_host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]] || { echo 'Invalid host.' >&2; exit 2; }
 [[ "$backend_port" =~ ^[0-9]{1,5}$ ]] && ((10#$backend_port >= 1 && 10#$backend_port <= 65535)) || { echo 'Invalid port.' >&2; exit 2; }
 [[ "$workers" =~ ^[0-9]{1,2}$ ]] && ((10#$workers >= 1 && 10#$workers <= 64)) || { echo 'Invalid workers count.' >&2; exit 2; }
+backend_port=$((10#$backend_port))
+workers=$((10#$workers))
+[[ -z "$github_token_file" || -z "$github_config" ]] || { echo 'Use either --github-token-file or --github-config.' >&2; exit 2; }
 [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || { echo 'Invalid git ref.' >&2; exit 2; }
 [[ -z "$cert_file" && -z "$cert_key" || -r "$cert_file" && -r "$cert_key" ]] || { echo 'Both certificate files are required.' >&2; exit 2; }
 exec 9>/run/cloudportal-install.lock
@@ -79,8 +87,8 @@ curl "${curl_args[@]}" "https://api.github.com/repos/$repo/tarball/$ref" -o "$tm
 mkdir "$tmp/source"
 tar -xzf "$tmp/source.tar.gz" -C "$tmp/source" --strip-components=1 --no-same-owner
 [[ -f "$tmp/source/app/main.py" && -f "$tmp/source/requirements.txt" ]] || { echo 'Invalid release archive.' >&2; exit 1; }
-release="$app_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-$(sha256sum "$tmp/source.tar.gz" | cut -c1-12)"
-mv "$tmp/source" "$release"
+release=$(mktemp -d "$app_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-$(sha256sum "$tmp/source.tar.gz" | cut -c1-12)-XXXXXX")
+cp -a "$tmp/source/." "$release/"
 chmod -R go-w "$release"
 find "$release" -type d -exec chmod 0755 {} +
 find "$release" -type f -exec chmod 0644 {} +
@@ -206,7 +214,9 @@ if [[ -n "$cert_file" ]]; then
   install -m 0600 "$cert_file" "$config/tls/server.crt"
   install -m 0600 "$cert_key" "$config/tls/server.key"
 elif [[ ! -f "$config/tls/server.crt" ]]; then
-  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 -keyout "$config/tls/server.key" -out "$config/tls/server.crt" -subj "/CN=$backend_host" -addext "subjectAltName=DNS:$backend_host" >/dev/null 2>&1
+  san="DNS:$backend_host"
+  [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
+  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 -keyout "$config/tls/server.key" -out "$config/tls/server.crt" -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
   echo 'A self-signed TLS certificate was generated. Trust server.crt on the PHP server, or install a CA-issued certificate.'
 fi
 cat > /etc/nginx/conf.d/cloudportal-backed.conf <<EOF
@@ -245,5 +255,10 @@ for ((attempt=0;attempt<60;attempt++)); do
   sleep 2
 done
 ((ready == 1)) || { echo 'Healthcheck failed. Inspect systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1. Bootstrap token has not been generated.' >&2; exit 1; }
+curl -fsS --noproxy '*' --connect-timeout 5 --max-time 15 \
+  --cacert "$config/tls/server.crt" --resolve "$backend_host:$backend_port:127.0.0.1" \
+  "https://$backend_host:$backend_port/api/v1/health" > "$tmp/tls-health.json" || {
+  echo 'HTTPS healthcheck failed. Check the certificate hostname/expiry and Nginx. Bootstrap token has not been generated.' >&2; exit 1;
+}
 # Secrets are created only after services are healthy, printed only here and never written to logs/files.
 run_backend "$release/.venv/bin/python" -m app.bootstrap --url "https://$backend_host:$backend_port"

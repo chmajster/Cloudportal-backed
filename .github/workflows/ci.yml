@@ -1,6 +1,7 @@
 name: Backend CI
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches: [main]
 permissions:
@@ -25,8 +26,21 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+psycopg://cloudportal:test-password@localhost:5432/cloudportal_test
       TEST_REDIS_URL: redis://localhost:6379/15
+      PORTAL_PATH: ${{ github.workspace }}/.integration/portal
+      PHP_BINARY: php
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: chmajster/HomeLAB-Proxmox-CloudPortal
+          ref: 4bd1d74d5436bbebdeaadfa8af678139d52100bb
+          path: .integration/portal
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, json, mbstring, pdo_mysql, sodium
+          coverage: none
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: pip install -r requirements-dev.txt
@@ -60,6 +74,7 @@ jobs:
           set -euo pipefail
           umask 077
           token_file=$(mktemp)
+          trap 'sudo rm -f "$token_file" /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output /tmp/cloudportal-install-fixture.json /tmp/master-key-before' EXIT
           printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
           unset REPOSITORY_READ_TOKEN
           sudo ./install.sh --non-interactive --host localhost --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-install-output 2>&1
@@ -68,7 +83,7 @@ jobs:
           sudo ./install.sh --non-interactive --host localhost --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-reinstall-output 2>&1
           ! sudo grep -q 'Initial API Token:' /tmp/cloudportal-reinstall-output
           sudo sha256sum -c /tmp/master-key-before
-          sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output "$token_file"
+          sudo python3 scripts/installer-smoke.py --verify-only
       - name: Sanitized service diagnostics
         if: failure()
         run: |

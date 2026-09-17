@@ -4,6 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, update
 from app.api.common import find, idempotent, paginate, public
+from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
+                             IssuedResetOutput, DeletedOutput, AuditOutput)
 from app.api.schemas import AssignRoles, RoleInput, TokenInput, UserCreate, UserUpdate
 from app.auth.routes import user_public
 from app.database import get_db
@@ -29,17 +31,17 @@ def can_grant(request, permissions):
         raise HTTPException(403, 'Cannot grant permissions outside your effective permissions')
 
 
-@router.get('/users')
+@router.get('/users', response_model=Items[UserOutput])
 def users(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('users.read')), db=Depends(get_db, scope='function')):
     return {'items': [user_public(u) for u in paginate(db, User, offset, limit)]}
 
 
-@router.get('/users/{id}')
+@router.get('/users/{id}', response_model=UserOutput)
 def user(id: int, actor=Depends(require('users.read')), db=Depends(get_db, scope='function')):
     return user_public(find(db, User, id))
 
 
-@router.post('/users', status_code=201)
+@router.post('/users', status_code=201, response_model=UserOutput)
 def user_create(data: UserCreate, request: Request, actor=Depends(require('users.create')), db=Depends(get_db, scope='function')):
     def create():
         values = data.model_dump(exclude={'password'})
@@ -51,7 +53,7 @@ def user_create(data: UserCreate, request: Request, actor=Depends(require('users
     return idempotent(db, request, actor, data.model_dump(), create)
 
 
-@router.put('/users/{id}')
+@router.put('/users/{id}', response_model=UserOutput)
 def user_update(id: int, data: UserUpdate, request: Request, actor=Depends(require('users.update')), db=Depends(get_db, scope='function')):
     u = find(db, User, id)
     can_grant(request, effective_permissions(u))
@@ -82,22 +84,22 @@ def user_action(db, request, id, action):
     return user_public(u)
 
 
-@router.post('/users/{id}/enable')
+@router.post('/users/{id}/enable', response_model=UserOutput)
 def enable(id: int, request: Request, actor=Depends(require('users.update')), db=Depends(get_db, scope='function')):
     return user_action(db, request, id, 'enable')
 
 
-@router.post('/users/{id}/disable')
+@router.post('/users/{id}/disable', response_model=UserOutput)
 def disable(id: int, request: Request, actor=Depends(require('users.update')), db=Depends(get_db, scope='function')):
     return user_action(db, request, id, 'disable')
 
 
-@router.post('/users/{id}/unlock')
+@router.post('/users/{id}/unlock', response_model=UserOutput)
 def unlock(id: int, request: Request, actor=Depends(require('users.update')), db=Depends(get_db, scope='function')):
     return user_action(db, request, id, 'unlock')
 
 
-@router.delete('/users/{id}')
+@router.delete('/users/{id}', response_model=DeletedOutput)
 def delete_user(id: int, request: Request, actor=Depends(require('users.delete')), db=Depends(get_db, scope='function')):
     # Keep the immutable user ID for deployments and audit; remove identity and access.
     governance_lock(db)
@@ -116,7 +118,7 @@ def delete_user(id: int, request: Request, actor=Depends(require('users.delete')
     return {'deleted': True}
 
 
-@router.post('/users/{id}/reset-password')
+@router.post('/users/{id}/reset-password', response_model=IssuedResetOutput, response_model_exclude_unset=True)
 def reset_user(id: int, request: Request, actor=Depends(require('users.update')), db=Depends(get_db, scope='function')):
     u = find(db, User, id)
     can_grant(request, effective_permissions(u))
@@ -133,22 +135,22 @@ def reset_user(id: int, request: Request, actor=Depends(require('users.update'))
     return idempotent(db, request, actor, {'id': id}, create)
 
 
-@router.get('/permissions')
+@router.get('/permissions', response_model=Items[str])
 def permissions(actor=Depends(require('roles.read'))):
     return {'items': sorted(ALL_PERMISSIONS)}
 
 
-@router.get('/roles')
+@router.get('/roles', response_model=Items[RoleOutput])
 def roles(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('roles.read')), db=Depends(get_db, scope='function')):
     return {'items': [role_public(r) for r in paginate(db, Role, offset, limit)]}
 
 
-@router.get('/roles/{id}')
+@router.get('/roles/{id}', response_model=RoleOutput)
 def role(id: int, actor=Depends(require('roles.read')), db=Depends(get_db, scope='function')):
     return role_public(find(db, Role, id))
 
 
-@router.post('/roles', status_code=201)
+@router.post('/roles', status_code=201, response_model=RoleOutput)
 def create_role(data: RoleInput, request: Request, actor=Depends(require('roles.create')), db=Depends(get_db, scope='function')):
     can_grant(request, data.permissions)
     def create():
@@ -160,7 +162,7 @@ def create_role(data: RoleInput, request: Request, actor=Depends(require('roles.
     return idempotent(db, request, actor, data.model_dump(), create)
 
 
-@router.put('/roles/{id}')
+@router.put('/roles/{id}', response_model=RoleOutput)
 def update_role(id: int, data: RoleInput, request: Request, actor=Depends(require('roles.update')), db=Depends(get_db, scope='function')):
     governance_lock(db)
     r = find(db, Role, id)
@@ -173,7 +175,7 @@ def update_role(id: int, data: RoleInput, request: Request, actor=Depends(requir
     return role_public(r)
 
 
-@router.delete('/roles/{id}')
+@router.delete('/roles/{id}', response_model=DeletedOutput)
 def delete_role(id: int, request: Request, actor=Depends(require('roles.delete')), db=Depends(get_db, scope='function')):
     governance_lock(db)
     r = find(db, Role, id)
@@ -186,12 +188,12 @@ def delete_role(id: int, request: Request, actor=Depends(require('roles.delete')
     return {'deleted': True}
 
 
-@router.get('/users/{id}/roles')
+@router.get('/users/{id}/roles', response_model=Items[RoleOutput])
 def user_roles(id: int, actor=Depends(require('roles.read')), db=Depends(get_db, scope='function')):
     return {'items': [role_public(r) for r in find(db, User, id).roles]}
 
 
-@router.put('/users/{id}/roles')
+@router.put('/users/{id}/roles', response_model=Items[RoleOutput])
 def assign_roles(id: int, data: AssignRoles, request: Request, actor=Depends(require('roles.assign')), db=Depends(get_db, scope='function')):
     governance_lock(db)
     u = find(db, User, id)
@@ -204,12 +206,12 @@ def assign_roles(id: int, data: AssignRoles, request: Request, actor=Depends(req
     return {'items': [role_public(r) for r in roles]}
 
 
-@router.get('/tokens')
+@router.get('/tokens', response_model=Items[TokenOutput])
 def tokens(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('tokens.read')), db=Depends(get_db, scope='function')):
     return {'items': [token_public(t) for t in paginate(db, Token, offset, limit, Token.kind == 'api')]}
 
 
-@router.get('/tokens/{id}')
+@router.get('/tokens/{id}', response_model=TokenOutput)
 def token(id: int, actor=Depends(require('tokens.read')), db=Depends(get_db, scope='function')):
     t = find(db, Token, id)
     if t.kind != 'api':
@@ -217,7 +219,7 @@ def token(id: int, actor=Depends(require('tokens.read')), db=Depends(get_db, sco
     return token_public(t)
 
 
-@router.post('/tokens', status_code=201)
+@router.post('/tokens', status_code=201, response_model=IssuedTokenOutput, response_model_exclude_unset=True)
 def create_token(data: TokenInput, request: Request, actor=Depends(require('tokens.create')), db=Depends(get_db, scope='function')):
     user_id = data.user_id or actor.user_id
     if user_id != actor.user_id and 'users.update' not in request.state.permissions:
@@ -241,8 +243,8 @@ def create_token(data: TokenInput, request: Request, actor=Depends(require('toke
     return idempotent(db, request, actor, data.model_dump(mode='json'), create)
 
 
-@router.post('/tokens/{id}/revoke')
-@router.delete('/tokens/{id}')
+@router.post('/tokens/{id}/revoke', response_model=TokenOutput)
+@router.delete('/tokens/{id}', response_model=TokenOutput)
 def revoke_token(id: int, request: Request, actor=Depends(require('tokens.revoke')), db=Depends(get_db, scope='function')):
     t = find(db, Token, id)
     if t.kind != 'api':
@@ -252,7 +254,7 @@ def revoke_token(id: int, request: Request, actor=Depends(require('tokens.revoke
     return token_public(t)
 
 
-@router.get('/audit')
+@router.get('/audit', response_model=Items[AuditOutput])
 def audit_list(limit: Limit = 100, offset: Offset = 0, request_id: str | None = None, actor=Depends(require('audit.read')), db=Depends(get_db, scope='function')):
     return {'items': [public(a, 'id timestamp user_id token_id ip action resource resource_id result request_id')
                       for a in paginate(db, Audit, offset, limit, Audit.request_id == request_id if request_id else None)]}

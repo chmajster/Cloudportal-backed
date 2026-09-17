@@ -50,15 +50,39 @@ def test_portal_setup_login_rbac_and_crud(system, tmp_path):
                 auth={'X-CSRF-Token':boot['csrf'],'Accept':'application/json','Idempotency-Key':str(uuid.uuid4())}
                 assert system[2]['token'] not in dashboard.text
                 user=browser.post('/backend-api/users',headers=auth,json={'username':'php-user','email':'php-user@example.com','password':'test-password-1234'})
-                assert user.status_code==200,user.text
+                assert user.status_code==201,user.text
                 role=browser.post('/backend-api/roles',headers={**auth,'Idempotency-Key':str(uuid.uuid4())},json={'name':'PHP Reader','permissions':['users.read']})
-                assert role.status_code==200,role.text
+                assert role.status_code==201,role.text
                 assert browser.put(f'/backend-api/users/{user.json()["id"]}/roles',headers=auth,json={'role_ids':[role.json()['id']]}).status_code==200
                 assert browser.get('/api/v1/admin/users',headers={'Accept':'application/json'}).status_code==404
                 assert browser.post('/backend-api/users',headers={'Accept':'application/json','Authorization':'Bearer forged'},json={}).status_code==419
                 credential=browser.post('/backend-api/credentials',headers={**auth,'Idempotency-Key':str(uuid.uuid4())},json={'name':'PHP PVE','type':'proxmox','endpoint':'https://pve.example.com:8006','username':'root@pam','secrets':{'token_id':'root@pam!test','token_secret':'do-not-expose-this-secret'}})
-                assert credential.status_code==200,credential.text
+                assert credential.status_code==201,credential.text
                 assert 'do-not-expose-this-secret' not in browser.get('/backend-api/credentials',headers=auth).text
+                # The PHP layer forwards jobs, JSON object types, statuses and request IDs.
+                ssh=browser.post('/backend-api/credentials',headers={**auth,'Idempotency-Key':str(uuid.uuid4())},json={
+                    'name':'PHP SSH','type':'ssh','username':'clouduser',
+                    'secrets':{'password':'private-ssh-password','known_hosts':'host ssh-ed25519 test'}})
+                assert ssh.status_code==201,ssh.text
+                request_id=str(uuid.uuid4())
+                job_headers={**auth,'Idempotency-Key':str(uuid.uuid4()),'X-Request-ID':request_id}
+                payload={'operation':'ansible.execute','ansible':{'playbook':'validate-linux','credentials_id':ssh.json()['id'],
+                         'inventory':{'hosts':['192.0.2.1']},'variables':{}}}
+                job=browser.post('/backend-api/jobs',headers=job_headers,json=payload)
+                assert job.status_code==202,job.text
+                assert job.json()['request_id']==request_id and job.headers['X-Request-ID']==request_id
+                repeated=browser.post('/backend-api/jobs',headers=job_headers,json=payload)
+                assert repeated.status_code==202 and repeated.json()['id']==job.json()['id']
+                assert browser.post('/backend-api/jobs/'+job.json()['id']+'/cancel',headers=auth,json={}).status_code==200
+                assert browser.get('/backend-api/jobs/'+job.json()['id'],headers=auth).json()['status']=='cancelled'
+                audit=browser.get('/backend-api/audit?request_id='+request_id,headers=auth).json()['items']
+                assert any(row['action']=='job.created' for row in audit)
+                for path in ['/api/v1/admin/users','/api/v1/vms','/api/v1/jobs','/api/v1/ansible/run']:
+                    assert browser.post(path,headers=auth,json={}).status_code==404
+                # Existing local executors cannot provide a fallback if the backend is offline.
+                for script in ('worker.php','console-gateway.php'):
+                    stopped=subprocess.run(php+[str(portal/'bin'/script)],env=env,cwd=portal,capture_output=True,text=True,timeout=10)
+                    assert stopped.returncode==1 and 'Cloudportal-backed' in stopped.stderr
                 assert browser.get('/settings/infrastructure/backend').status_code==200
                 assert system[2]['token'] not in browser.get('/settings/infrastructure/backend').text
                 assert browser.post('/logout',data={'_csrf':boot['csrf']}).status_code==302

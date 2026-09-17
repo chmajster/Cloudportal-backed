@@ -101,3 +101,14 @@ def test_validation_never_echoes_secrets(client,headers):
     response=client.post('/api/v1/users',headers=headers,json={'username':'x','email':'bad-email','password':secret,'extra_secret':secret})
     assert response.status_code==422
     assert secret not in response.text
+
+
+def test_password_change_invalidates_outstanding_reset_token(client, headers):
+    user, _ = new_user(client, headers)
+    reset = client.post(f'/api/v1/users/{user["id"]}/reset-password', headers=headers).json()['reset_token']
+    pair = client.post('/api/v1/auth/login', json={'username': 'viewer', 'password': 'strong-password-1234'}).json()
+    response = client.post('/api/v1/auth/change-password', headers={'Authorization': 'Bearer ' + pair['access_token']},
+                           json={'current_password': 'strong-password-1234', 'password': 'changed-password-1234'})
+    assert response.status_code == 200, response.text
+    assert client.post('/api/v1/auth/reset-password', json={'token': reset, 'password': 'reset-password-5678'}).status_code == 400
+    assert client.post('/api/v1/auth/login', json={'username': 'viewer', 'password': 'changed-password-1234'}).status_code == 200

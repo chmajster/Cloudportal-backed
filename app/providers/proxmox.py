@@ -48,7 +48,8 @@ class ProxmoxProvider(InfrastructureProvider):
             return self._get('/pools')
         if resource in {'templates', 'vms'}:
             rows = self._get('/cluster/resources?type=vm')
-            return [v for v in rows if v.get('type') == 'qemu' and bool(v.get('template')) == (resource == 'templates')]
+            return [v for v in rows if v.get('type') == 'qemu' and bool(v.get('template')) == (resource == 'templates')
+                    and (node is None or v.get('node') == node)]
         if resource == 'networks':
             nodes = [{'node': node}] if node else self._get('/nodes')
             return [dict(network, node=n['node']) for n in nodes

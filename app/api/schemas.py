@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 Name = Annotated[str, Field(min_length=1, max_length=100)]
-Password = Annotated[str, Field(min_length=12, max_length=256)]
+Password = Annotated[str, Field(min_length=12, max_length=256, json_schema_extra={'writeOnly': True})]
 Slug = Annotated[str, Field(pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$')]
 CredentialType = Literal['proxmox', 'vmware', 'ssh', 'winrm', 'aws', 'azure', 'openstack', 'other']
 
@@ -74,7 +74,7 @@ class CredentialInput(Input):
     endpoint: Annotated[str, Field(max_length=2048)] = ''
     username: Annotated[str, Field(max_length=254)] = ''
     verify_ssl: bool = True
-    secrets: dict[str, Annotated[str, Field(max_length=32768)]] | None = None
+    secrets: dict[str, Annotated[str, Field(max_length=32768)]] | None = Field(default=None, json_schema_extra={'writeOnly': True})
 
     @field_validator('endpoint')
     @classmethod

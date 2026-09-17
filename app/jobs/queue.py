@@ -1,5 +1,7 @@
 import time
 from datetime import timedelta
+from functools import lru_cache
+from redis import Redis
 from redis.exceptions import RedisError
 from rq import Queue, Worker
 from rq.job import Job as RQJob
@@ -12,8 +14,15 @@ from app.models import Deployment, Job, JobLog, now
 from app.security.core import redis_client
 
 
+@lru_cache
+def queue_connection():
+    # RQ blocks waiting for work for up to worker_ttl - 15 seconds. The API's
+    # short Redis timeout must not interrupt this blocking dequeue operation.
+    return Redis.from_url(settings().redis_url, socket_connect_timeout=2, socket_timeout=100)
+
+
 def queue():
-    return Queue('cloudportal', connection=redis_client(), serializer=JSONSerializer)
+    return Queue('cloudportal', connection=queue_connection(), serializer=JSONSerializer)
 
 
 def dispatch_once():
@@ -43,6 +52,7 @@ def dispatch_once():
                 d.active_job_id, d.status = None, 'failed'
             db.add(JobLog(job_id=job.id, message=job.error))
         db.commit()
+    redis_client().set('cp:dispatcher:heartbeat', 'alive', ex=30)
 
 
 def dispatch_forever():
@@ -56,7 +66,8 @@ def dispatch_forever():
 
 
 def work():
-    Worker([queue()], connection=redis_client(), serializer=JSONSerializer).work()
+    Worker([queue()], connection=queue_connection(), serializer=JSONSerializer,
+           worker_ttl=90, job_monitoring_interval=15).work()
 
 
 if __name__ == '__main__':

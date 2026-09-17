@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from rq import Worker
 from sqlalchemy import text
 from app.config import settings
+from app.api.outputs import HealthOutput, InfoOutput
 from app.database import session
 from app.security.core import encryption_key, redis_client, require
 
@@ -11,7 +12,7 @@ router = APIRouter(tags=['health'])
 
 
 def health_status():
-    checks = {'api': True, 'database': False, 'queue': False, 'workers': {'online': 0, 'expected': settings().worker_count},
+    checks = {'api': True, 'database': False, 'queue': False, 'dispatcher': False, 'workers': {'online': 0, 'expected': settings().worker_count},
               'terraform': bool(shutil.which('terraform')), 'ansible': bool(shutil.which('ansible-playbook')),
               'disk': False, 'encryption': False}
     try:
@@ -23,6 +24,7 @@ def health_status():
         pass
     try:
         checks['queue'] = bool(redis_client().ping())
+        checks['dispatcher'] = bool(redis_client().get('cp:dispatcher:heartbeat'))
         workers = Worker.all(connection=redis_client())
         from datetime import datetime, timezone, timedelta
         checks['workers']['online'] = sum(1 for w in workers if 'cloudportal' in w.queue_names()
@@ -39,13 +41,13 @@ def health_status():
     return {'status': 'ok' if ready else 'degraded', 'checks': checks}
 
 
-@router.get('/health')
+@router.get('/health', response_model=HealthOutput, responses={503: {'model': HealthOutput, 'description': 'A required component is unavailable'}})
 def health():
     status = health_status()
     return JSONResponse(status, status_code=200 if status['status'] == 'ok' else 503)
 
 
-@router.get('/info')
+@router.get('/info', response_model=InfoOutput)
 def info(actor=Depends(require('portal.connect'))):
     return {'name': 'Cloudportal-backed', 'version': '1.0.0', 'api_version': 'v1',
             'providers': ['proxmox'], 'credential_types': ['proxmox', 'vmware', 'ssh', 'winrm', 'aws', 'azure', 'openstack', 'other'],

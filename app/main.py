@@ -61,5 +61,24 @@ async def conflict(request, error):
     return JSONResponse({'detail': 'Resource already exists or is still referenced'}, status_code=409)
 
 
+# Document headers on the source routers before inclusion. This works with both
+# eager and lazy router inclusion in supported FastAPI versions.
+from fastapi.routing import APIRoute
+
 for router in (auth.router, administration.router, infrastructure.router, health.router):
+    for route in router.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        parameters = [{'name': 'X-Request-ID', 'in': 'header', 'required': False,
+                       'schema': {'type': 'string', 'format': 'uuid'},
+                       'description': 'Correlation ID returned in the response and recorded in jobs and audit.'}]
+        is_creation = 'POST' in route.methods and (route.path.rsplit('/', 1)[-1] in
+                      {'users', 'roles', 'tokens', 'credentials', 'providers', 'deployments', 'jobs', 'reset-password', 'destroy'})
+        is_destroy = 'DELETE' in route.methods and route.path == '/deployments/{id}'
+        if (is_creation or is_destroy) and route.path != '/auth/reset-password':
+            required = route.path in {'/deployments', '/jobs', '/deployments/{id}/destroy'} or is_destroy
+            parameters.append({'name': 'Idempotency-Key', 'in': 'header', 'required': required,
+                               'schema': {'type': 'string', 'format': 'uuid'},
+                               'description': 'Reuse the same UUID only when retrying the same operation and payload.'})
+        route.openapi_extra = {**(route.openapi_extra or {}), 'parameters': parameters}
     app.include_router(router, prefix='/api/v1')

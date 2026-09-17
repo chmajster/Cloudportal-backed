@@ -225,3 +225,109 @@ def test_successful_plan_does_not_mark_failed_deployment_as_provisioned(client,h
     execute(job['id'])
     assert client.get('/api/v1/jobs/'+job['id'],headers=headers).json()['status']=='successful'
     assert client.get('/api/v1/deployments/'+d['id'],headers=headers).json()['status']=='failed'
+
+
+def test_workflow_preserves_ssh_credential_and_pending_job_identity(client, headers):
+    c, p, payload = resources(client, headers)
+    ssh_data = {'name': 'Workflow SSH', 'type': 'ssh', 'username': 'clouduser',
+                'secrets': {'password': 'ssh-private-password', 'known_hosts': 'host ssh-ed25519 test'}}
+    ssh = client.post('/api/v1/credentials', headers=headers, json=ssh_data).json()
+    payload['ansible'] = {'playbook': 'bootstrap-linux', 'credentials_id': ssh['id'],
+                          'variables': {'hostname': 'vm-one', 'timezone': 'Europe/Warsaw'}}
+    d = client.post('/api/v1/deployments', headers={**headers, 'Idempotency-Key': str(uuid.uuid4())}, json=payload).json()
+    assert d['workflow']['ansible']['variables']['timezone'] == 'Europe/Warsaw'
+    assert client.delete(f'/api/v1/credentials/{ssh["id"]}', headers=headers).status_code == 409
+    assert client.put(f'/api/v1/credentials/{ssh["id"]}', headers=headers, json=ssh_data).status_code == 409
+    assert client.post(f'/api/v1/jobs/{d["job"]["id"]}/cancel', headers=headers).status_code == 200
+    # Cancelling the first apply does not discard the workflow; a later apply can retry it.
+    assert client.delete(f'/api/v1/credentials/{ssh["id"]}', headers=headers).status_code == 409
+    assert client.put(f'/api/v1/credentials/{ssh["id"]}', headers=headers, json=ssh_data).status_code == 200
+
+
+def test_pending_standalone_ansible_job_preserves_credential(client, headers):
+    ssh = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Standalone SSH', 'type': 'ssh', 'username': 'clouduser',
+        'secrets': {'password': 'ssh-password', 'known_hosts': 'host ssh-ed25519 test'}}).json()
+    j = client.post('/api/v1/jobs', headers={**headers, 'Idempotency-Key': str(uuid.uuid4())}, json={
+        'operation': 'ansible.execute', 'ansible': {'playbook': 'validate-linux', 'credentials_id': ssh['id'],
+                                                  'inventory': {'hosts': ['192.0.2.1']}}}).json()
+    assert client.delete(f'/api/v1/credentials/{ssh["id"]}', headers=headers).status_code == 409
+    assert client.post(f'/api/v1/jobs/{j["id"]}/cancel', headers=headers).status_code == 200
+    assert client.delete(f'/api/v1/credentials/{ssh["id"]}', headers=headers).status_code == 200
+
+
+def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch):
+    client, headers, admin = system
+    _, _, payload = resources(client, headers)
+    pair = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': admin['password']}).json()
+    actor = {'Authorization': 'Bearer ' + pair['access_token'], 'Idempotency-Key': str(uuid.uuid4())}
+    d = client.post('/api/v1/deployments', headers=actor, json=payload).json()
+    rotated = client.post('/api/v1/auth/refresh', json={'refresh_token': pair['refresh_token']}).json()
+    calls = []
+    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: calls.append(1))
+    execute(d['job']['id'])
+    assert client.get(f'/api/v1/jobs/{d["job"]["id"]}', headers=headers).json()['status'] == 'successful'
+    actor = {'Authorization': 'Bearer ' + rotated['access_token'], 'Idempotency-Key': str(uuid.uuid4())}
+    d2 = client.post('/api/v1/deployments', headers=actor, json={**payload, 'name': 'after-refresh'}).json()
+    assert client.post('/api/v1/auth/logout', headers=actor).status_code == 200
+    execute(d2['job']['id'])
+    assert client.get(f'/api/v1/jobs/{d2["job"]["id"]}', headers=headers).json()['status'] == 'failed'
+    assert calls == [1]
+
+
+def test_node_discovery_filters_resources_and_never_leaks_provider_secrets(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+    _, provider, _ = resources(client, headers)
+    observed = []
+    def get(self, path):
+        observed.append(path)
+        if path == '/cluster/resources?type=vm':
+            return [{'vmid': 100, 'node': 'pve01', 'type': 'qemu'}, {'vmid': 101, 'node': 'pve02', 'type': 'qemu'}]
+        return [{'storage': 'local', 'password': 'never-publish', 'content': 'images'}]
+    monkeypatch.setattr(ProxmoxProvider, '_get', get)
+    response = client.get(f'/api/v1/providers/{provider["id"]}/storages?node=pve02', headers=headers)
+    assert observed[-1] == '/nodes/pve02/storage' and 'never-publish' not in response.text
+    response = client.get(f'/api/v1/providers/{provider["id"]}/vms?node=pve02', headers=headers)
+    assert [r['vmid'] for r in response.json()['items']] == [101]
+
+
+def test_openapi_describes_public_response_contract(client):
+    schema = client.get('/openapi.json').json()
+    assert schema['openapi'].startswith('3.')
+    for path, method, status in [('/users', 'post', '201'), ('/auth/login', 'post', '200'),
+                                 ('/credentials/{id}', 'get', '200'), ('/deployments', 'post', '202'),
+                                 ('/jobs/{id}/logs', 'get', '200')]:
+        response = schema['paths']['/api/v1' + path][method]['responses'][status]['content']['application/json']['schema']
+        assert response.get('$ref'), (path, response)
+    for model, forbidden in [('UserOutput', 'password_hash'), ('CredentialOutput', 'encrypted_secret'), ('TokenOutput', 'token_hash')]:
+        assert forbidden not in schema['components']['schemas'][model]['properties']
+    parameters = schema['paths']['/api/v1/deployments']['post']['parameters']
+    assert any(p['name'] == 'Idempotency-Key' and p['required'] for p in parameters)
+
+
+def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
+    import os, subprocess, time
+    from app.jobs.queue import dispatch_once
+    from app.security.core import redis_client
+    worker = subprocess.Popen([os.sys.executable, '-m', 'app.jobs.queue'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            checks = client.get('/api/v1/health').json()['checks']
+            if checks['workers']['online'] == 1:
+                break
+            time.sleep(.1)
+        assert checks['workers']['online'] == 1
+        assert not checks['dispatcher']
+        dispatch_once()
+        assert client.get('/api/v1/health').json()['checks']['dispatcher']
+        # Exceed the API Redis socket timeout: an idle RQ worker must stay connected.
+        time.sleep(4)
+        assert worker.poll() is None
+        assert client.get('/api/v1/health').json()['checks']['workers']['online'] == 1
+        redis_client().delete('cp:dispatcher:heartbeat')
+        assert not client.get('/api/v1/health').json()['checks']['dispatcher']
+    finally:
+        worker.terminate()
+        output, _ = worker.communicate(timeout=15)
+    assert 'TimeoutError' not in output and 'Error connecting' not in output

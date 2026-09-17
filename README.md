@@ -48,13 +48,13 @@ W powiązanej wersji Cloud Portal:
 4. W Administracja → Tokeny API wybierz **Utwórz konto i token serwisowy portalu**. Wklej nowy token w ustawienia backendu. Konto dostaje wyłącznie `portal.connect`.
 5. Unieważnij bootstrap token i zmień początkowe hasło administratora.
 
-Operacje interaktywne używają tokena zalogowanego użytkownika, a nie tokena serwisowego. PHP przechowuje tylko własną sesję i konfigurację połączenia. Nie tworzy kopii backendowych kont ani ról. Uprawnienia są odczytywane z `/auth/me` na każdym żądaniu, a API sprawdza je ponownie.
+Operacje interaktywne używają tokena zalogowanego użytkownika, a nie tokena serwisowego. PHP przechowuje tylko własną sesję i konfigurację połączenia. Nie tworzy kopii backendowych kont ani ról. Uprawnienia są odczytywane z `/auth/me` na każdym żądaniu, a API sprawdza je ponownie. Przeglądarka wysyła akcje do proxy `/backend-api` w PHP, które przekazuje JSON, `X-Request-ID`, `Idempotency-Key` i status API. Wyłącznie backend otwiera połączenia z infrastrukturą i wykonuje Terraform/Ansible. Brak backendu oznacza 503; nie uruchamia lokalnego wykonawcy PHP.
 
 Istniejąca baza starego portalu nie jest automatycznie importowana ani kasowana. W trybie centralnym jej konta, RBAC i credentiale są nieaktywne; starsze funkcje projektu (m.in. lokalne projekty/IPAM/konsole) nie są udostępniane przez nowy interfejs. Przed przełączeniem istniejącej instalacji przygotuj konta/role i połączenia w backendzie oraz archiwizuj stare dane zgodnie z polityką retencji. Nowy backend nie przejmuje zarządzania dawnymi VM/state automatycznie.
 
 ## API i bezpieczeństwo
 
-Kontrakt: `/openapi.json` (OpenAPI 3.1), Swagger `/docs`. Prefix `/api/v1`. Publiczne są logowanie, odświeżenie sesji, realizacja tokena resetu i healthcheck. Endpointy zasobów wymagają Bearer token i granularnego permission. Nie ma endpointu wykonującego shell.
+Kontrakt: `/openapi.json` (OpenAPI 3.x), Swagger `/docs`. Prefix `/api/v1`. Modele odpowiedzi obejmują publiczne pola users, RBAC, tokens, credentials, providers, deployments, jobs/logs, audit i health; nie zawierają hashy ani zaszyfrowanych sekretów. OpenAPI opisuje również wymagane nagłówki idempotencji. Publiczne są logowanie, odświeżenie sesji, realizacja tokena resetu i healthcheck. Endpointy zasobów wymagają Bearer token i granularnego permission. Nie ma endpointu wykonującego shell.
 
 - Hasła: 12–256 znaków, Argon2id. Domyślny lockout po 5 błędach na 15 minut, dodatkowe limity na tożsamość i IP w Redis. Niedostępny limiter blokuje ruch (503).
 - Sesje: opaque access token 15 minut, rotowany refresh token 8 godzin. Ponowne użycie refresh tokena unieważnia całą rodzinę. Logout, reset i zmiana hasła odwołują odpowiednie tokeny. Konta serwisowe nie logują się hasłem.
@@ -65,6 +65,7 @@ Kontrakt: `/openapi.json` (OpenAPI 3.1), Swagger `/docs`. Prefix `/api/v1`. Publ
 - Idempotency-Key UUID: obowiązkowy przy tworzeniu deploymentu, tworzeniu joba i niszczeniu VM, opcjonalny dla innych operacji tworzących. PostgreSQL przechowuje atomowy wynik i HMAC requestu; konflikt payloadu daje 409. Sekrety jednorazowe nie są odtwarzane przy powtórzeniu.
 - X-Request-ID UUID łączy request, job, worker, logi i audit. Audit nie zawiera payloadów ani sekretów. Logi wykonawców są redagowane i limitowane.
 - Usunięcie użytkownika usuwa dane tożsamości i dostęp, zachowując techniczny ID dla historii deploymentów/audytu.
+- Credentiala używanego przez oczekujące lub wykonywane zadanie nie można edytować ani usunąć. Credential SSH/WinRM pozostaje chroniony także jako część workflow niedestroyowanego deploymentu. Zmiana hasła unieważnia również niewykorzystane tokeny resetu.
 
 Domyślne role to Administrator, Infrastructure Administrator, Operator, Viewer, Auditor i Portal Service. Permissions definiuje `app/rbac/service.py`; nazwy ról nie są używane do autoryzacji.
 
@@ -74,7 +75,7 @@ Pierwszy adapter infrastruktury: Proxmox. `InfrastructureProvider` i registry po
 
 Zatwierdzony szablon `proxmox-vm` klonuje **istniejący szablon QEMU cloud-init** przez bpg/proxmox 0.111.x. Wymaga storage, bridge, template_id, węzła i działającego DHCP. Template musi mieć działający qemu-guest-agent oraz cloud-init. Rozmiar dysku docelowego nie może być mniejszy niż dysk szablonu. Token PVE musi mieć uprawnienia do klonowania, VM, storage i odczytu guest agent. Sekrety providera przekazywane są w środowisku procesu.
 
-`POST /deployments` tworzy deployment i trwały job w jednej transakcji. Dispatcher przenosi zadania z PostgreSQL do Redis/RQ; awaria Redis nie usuwa jobów. Worker atomowo przejmuje job i ponownie sprawdza uprawnienia. Jeden deployment ma jedno aktywne zadanie; dodatkowo obowiązuje flock workspace oraz blokada stanu Terraform. Workery korzystają ze wspólnego lokalnego katalogu danych na tym samym serwerze. Instalacja wieloserwerowa workerów wymaga współdzielonego state i rozproszonego mechanizmu blokowania.
+`POST /deployments` tworzy deployment i trwały job w jednej transakcji. Dispatcher przenosi zadania z PostgreSQL do Redis/RQ; awaria Redis nie usuwa jobów. Worker atomowo przejmuje job i ponownie sprawdza uprawnienia. Odświeżenie sesji użytkownika nie unieważnia oczekującego joba; wylogowanie, odwołanie rodziny sesji lub utrata uprawnień blokują jego rozpoczęcie. Jeden deployment ma jedno aktywne zadanie; dodatkowo obowiązuje flock workspace oraz blokada stanu Terraform. Workery korzystają ze wspólnego lokalnego katalogu danych na tym samym serwerze. Instalacja wieloserwerowa workerów wymaga współdzielonego state i rozproszonego mechanizmu blokowania. Healthcheck odrębnie monitoruje Redis, heartbeat dispatchera i heartbeat workerów, również gdy kolejka jest pusta.
 
 Przepływ z opcją Ansible: init → plan → apply → adres VM z guest agent → wait_for_connection SSH/WinRM → zatwierdzony playbook → walidacja → successful. Bez Ansible kończy się po apply. Host SSH jest sprawdzany względem known_hosts z credentiala (również wpisy SSH CA); WinRM używa HTTPS i weryfikacji certyfikatu. Szablon musi zawierać przygotowane zaufanie kluczy/certyfikatów i konto odpowiednie dla playbooka. Bootstrap Linux wymaga bezhasłowego sudo tego konta.
 
@@ -110,7 +111,7 @@ Usługi: `cloudportal-api`, `cloudportal-dispatcher`, `cloudportal-worker@1`, `c
 
 ### Test wspólny z PHP
 
-Test `tests/test_portal_http_e2e.py` uruchamia prawdziwe FastAPI przez TLS oraz PHP built-in server, konfiguruje portal, loguje administratora, tworzy użytkownika/rolę/credential, sprawdza RBAC i niedostępność backendu. Nie używa atrap HTTP. Wymaga osobnego checkoutu PHP bez `config/backend.json` oraz PHP z rozszerzeniami aplikacji:
+Test `tests/test_portal_http_e2e.py` uruchamia prawdziwe FastAPI przez TLS oraz PHP built-in server, konfiguruje portal, loguje administratora, tworzy użytkownika/rolę/credential oraz przekazuje zadanie Ansible do backendu i je anuluje. Sprawdza zachowanie JSON, idempotencję, request ID/audit, RBAC, blokadę lokalnych executorów i niedostępność backendu. Nie używa atrap HTTP. Wymaga osobnego checkoutu PHP bez `config/backend.json` oraz PHP z rozszerzeniami aplikacji. Zadanie `api` w CI pobiera powiązany commit portalu i uruchamia ten test wraz z PostgreSQL:
 
 ```bash
 PORTAL_PATH=/path/to/HomeLAB-Proxmox-CloudPortal PHP_BINARY=php TEST_REDIS_URL=redis://localhost:6379/15 .venv/bin/pytest -q tests/test_portal_http_e2e.py

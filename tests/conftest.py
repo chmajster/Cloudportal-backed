@@ -40,6 +40,8 @@ def system(tmp_path, monkeypatch):
     settings.cache_clear()
     engine.cache_clear()
     redis_client.cache_clear()
+    from app.jobs.queue import queue_connection
+    queue_connection.cache_clear()
     redis_client().flushdb()
     settings().data_dir.mkdir()
     if os.environ.get('TEST_DATABASE_URL'):

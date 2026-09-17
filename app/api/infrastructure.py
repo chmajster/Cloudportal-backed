@@ -1,9 +1,11 @@
 import uuid
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from app.api.administration import Limit, Offset
 from app.api.common import find, idempotent, paginate, public
+from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
+                             JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput)
 from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
@@ -13,7 +15,7 @@ from app.providers.registry import provider_for
 from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
-DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace variables status created_by created_at updated_at destroyed_at active_job_id executor'
+DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
 JOB_FIELDS = 'id deployment_id operation status created_by request_id created_at updated_at cancel_requested error'
 
 
@@ -29,17 +31,35 @@ def provider_public(p):
     return public(p, 'id name type credentials_id created_at updated_at')
 
 
-@router.get('/credentials')
+def locked_credential(db, id):
+    credential = db.scalar(select(Credential).where(Credential.id == id).with_for_update())
+    if credential is None:
+        raise HTTPException(404, 'Credential not found')
+    return credential
+
+
+def credential_in_use(db, id, *, pending_only=False):
+    deployments = select(Deployment.id).where(
+        or_(Deployment.credentials_id == id, Deployment.workflow['ansible']['credentials_id'].as_integer() == id))
+    if pending_only:
+        deployments = deployments.where(Deployment.active_job_id.is_not(None))
+    else:
+        deployments = deployments.where(Deployment.status != 'destroyed')
+    return bool(db.scalar(deployments.limit(1)) or db.scalar(select(Job.id).where(
+        Job.status.in_(['queued', 'running']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)))
+
+
+@router.get('/credentials', response_model=Items[CredentialOutput])
 def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
     return {'items': [credential_public(c) for c in paginate(db, Credential, offset, limit)]}
 
 
-@router.get('/credentials/{id}')
+@router.get('/credentials/{id}', response_model=CredentialOutput)
 def credential(id: int, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
     return credential_public(find(db, Credential, id))
 
 
-@router.post('/credentials', status_code=201)
+@router.post('/credentials', status_code=201, response_model=CredentialOutput)
 def create_credential(data: CredentialInput, request: Request, actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
     def create():
         c = Credential(**data.model_dump(exclude={'secrets'}), encrypted_secret=b'')
@@ -51,14 +71,18 @@ def create_credential(data: CredentialInput, request: Request, actor=Depends(req
     return idempotent(db, request, actor, data.model_dump(), create)
 
 
-@router.put('/credentials/{id}')
+@router.put('/credentials/{id}', response_model=CredentialOutput)
 def update_credential(id: int, data: CredentialInput, request: Request, actor=Depends(require('credentials.update')), db=Depends(get_db, scope='function')):
-    c = find(db, Credential, id)
+    c = locked_credential(db, id)
+    if credential_in_use(db, id, pending_only=True):
+        raise HTTPException(409, 'Credential is used by a queued or running job; finish or cancel the job first')
     # A credential's destination/identity cannot be redirected while reusing a stored secret.
     changed_identity = any(getattr(c, k) != getattr(data, k) for k in ('type', 'endpoint', 'username', 'verify_ssl'))
     if changed_identity and data.secrets is None:
         raise HTTPException(422, 'Changing endpoint, identity or TLS requires submitting a new secret')
-    if (c.type != data.type or c.endpoint != data.endpoint) and db.scalar(select(Deployment.id).where(Deployment.credentials_id == id, Deployment.status != 'destroyed')):
+    if c.type != data.type and db.scalar(select(Provider.id).where(Provider.credentials_id == id)):
+        raise HTTPException(409, 'Credential type is referenced by a provider')
+    if changed_identity and credential_in_use(db, id):
         raise HTTPException(409, 'Credential destination is used by active deployments; create another credential')
     for key, value in data.model_dump(exclude={'secrets'}).items():
         setattr(c, key, value)
@@ -68,17 +92,17 @@ def update_credential(id: int, data: CredentialInput, request: Request, actor=De
     return credential_public(c)
 
 
-@router.delete('/credentials/{id}')
+@router.delete('/credentials/{id}', response_model=DeletedOutput)
 def delete_credential(id: int, request: Request, actor=Depends(require('credentials.delete')), db=Depends(get_db, scope='function')):
-    c = find(db, Credential, id)
-    if db.scalar(select(Provider.id).where(Provider.credentials_id == id)) or db.scalar(select(Deployment.id).where(Deployment.credentials_id == id)):
-        raise HTTPException(409, 'Credential is referenced by a provider or deployment')
+    c = locked_credential(db, id)
+    if credential_in_use(db, id) or db.scalar(select(Provider.id).where(Provider.credentials_id == id)) or db.scalar(select(Deployment.id).where(Deployment.credentials_id == id)):
+        raise HTTPException(409, 'Credential is referenced by a provider, deployment workflow or pending job')
     db.delete(c)
     audit(db, request, 'credential.deleted', 'credentials', id)
     return {'deleted': True}
 
 
-@router.post('/credentials/{id}/test')
+@router.post('/credentials/{id}/test', response_model=CredentialTestOutput, response_model_exclude_unset=True)
 def test_credential(id: int, request: Request, actor=Depends(require('credentials.test')), db=Depends(get_db, scope='function')):
     c = find(db, Credential, id)
     try:
@@ -91,23 +115,23 @@ def test_credential(id: int, request: Request, actor=Depends(require('credential
     return result
 
 
-@router.get('/providers')
+@router.get('/providers', response_model=Items[ProviderOutput])
 def providers(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
     return {'items': [provider_public(p) for p in paginate(db, Provider, offset, limit)]}
 
 
-@router.get('/providers/{id}')
+@router.get('/providers/{id}', response_model=ProviderOutput)
 def provider(id: int, actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
     return provider_public(find(db, Provider, id))
 
 
 def check_provider_credential(db, data):
-    c = find(db, Credential, data.credentials_id)
+    c = locked_credential(db, data.credentials_id)
     if c.type != data.type:
         raise HTTPException(422, 'Provider and credential types must match')
 
 
-@router.post('/providers', status_code=201)
+@router.post('/providers', status_code=201, response_model=ProviderOutput)
 def create_provider(data: ProviderInput, request: Request, actor=Depends(require('providers.create')), db=Depends(get_db, scope='function')):
     check_provider_credential(db, data)
     def create():
@@ -119,7 +143,7 @@ def create_provider(data: ProviderInput, request: Request, actor=Depends(require
     return idempotent(db, request, actor, data.model_dump(), create)
 
 
-@router.put('/providers/{id}')
+@router.put('/providers/{id}', response_model=ProviderOutput)
 def update_provider(id: int, data: ProviderInput, request: Request, actor=Depends(require('providers.update')), db=Depends(get_db, scope='function')):
     p = find(db, Provider, id)
     check_provider_credential(db, data)
@@ -132,7 +156,7 @@ def update_provider(id: int, data: ProviderInput, request: Request, actor=Depend
     return provider_public(p)
 
 
-@router.delete('/providers/{id}')
+@router.delete('/providers/{id}', response_model=DeletedOutput)
 def delete_provider(id: int, request: Request, actor=Depends(require('providers.delete')), db=Depends(get_db, scope='function')):
     p = find(db, Provider, id)
     if db.scalar(select(Deployment.id).where(Deployment.provider_id == id)):
@@ -142,7 +166,7 @@ def delete_provider(id: int, request: Request, actor=Depends(require('providers.
     return {'deleted': True}
 
 
-@router.get('/providers/{id}/{resource}')
+@router.get('/providers/{id}/{resource}', response_model=Items[dict])
 def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templates', 'vms', 'pools'],
              node: Annotated[str | None, Query(pattern=r'^[A-Za-z0-9_.-]{1,63}$')] = None,
              actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
@@ -160,21 +184,21 @@ def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templa
     return {'items': [{k: v for k, v in row.items() if k in safe_fields} for row in rows]}
 
 
-@router.get('/templates')
-@router.get('/terraform/templates')
+@router.get('/templates', response_model=Items[TemplateOutput])
+@router.get('/terraform/templates', response_model=Items[TemplateOutput])
 def templates(actor=Depends(require('terraform.read'))):
     from app.api.schemas import VMVariables
     return {'items': [{'id': 'proxmox-vm', 'name': 'Proxmox VM clone', 'provider': 'proxmox', 'variables_schema': VMVariables.model_json_schema()}]}
 
 
-@router.get('/templates/{id}')
+@router.get('/templates/{id}', response_model=TemplateOutput)
 def template(id: str, actor=Depends(require('terraform.read'))):
     if id != 'proxmox-vm':
         raise HTTPException(404, 'Template not found')
     return templates(actor)['items'][0]
 
 
-@router.get('/ansible/playbooks')
+@router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
 def playbooks(actor=Depends(require('ansible.read'))):
     return {'items': [{'id': 'bootstrap-linux', 'name': 'Configure hostname/timezone and guest agent', 'variables': ['hostname', 'timezone'], 'transport': 'ssh'},
                       {'id': 'validate-linux', 'name': 'Validate Linux connectivity', 'variables': [], 'transport': 'ssh'},
@@ -192,7 +216,7 @@ def check_job_permissions(request, operation):
 
 
 def validate_ansible(db, data):
-    c = find(db, Credential, data.credentials_id)
+    c = locked_credential(db, data.credentials_id)
     expected = 'winrm' if data.playbook == 'validate-windows' else 'ssh'
     if c.type != expected:
         raise HTTPException(422, f'Playbook requires {expected} credential')
@@ -219,12 +243,15 @@ def new_job(db, request, actor, operation, deployment=None, payload=None):
     return job
 
 
-@router.post('/deployments', status_code=202)
+@router.post('/deployments', status_code=202, response_model=CreatedDeploymentOutput)
 def create_deployment(data: DeploymentInput, request: Request, actor=Depends(require('deployments.create')), db=Depends(get_db, scope='function')):
     check_job_permissions(request, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
     if p.credentials_id != data.credentials_id:
         raise HTTPException(422, 'Credential does not belong to the selected provider')
+    # Share the same row locks with credential mutation/deletion to preserve references.
+    for credential_id in sorted({data.credentials_id} | ({data.ansible.credentials_id} if data.ansible else set())):
+        locked_credential(db, credential_id)
     if data.ansible:
         if 'ansible.execute' not in request.state.permissions:
             raise HTTPException(403, 'ansible.execute required')
@@ -241,18 +268,18 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
     return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 
-@router.get('/deployments')
+@router.get('/deployments', response_model=Items[DeploymentOutput])
 def deployments(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
     return {'items': [deployment_public(d) for d in paginate(db, Deployment, offset, limit)]}
 
 
-@router.get('/deployments/{id}')
+@router.get('/deployments/{id}', response_model=DeploymentOutput)
 def deployment(id: str, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
     return deployment_public(find(db, Deployment, id))
 
 
-@router.post('/deployments/{id}/destroy', status_code=202)
-@router.delete('/deployments/{id}', status_code=202)
+@router.post('/deployments/{id}/destroy', status_code=202, response_model=JobOutput)
+@router.delete('/deployments/{id}', status_code=202, response_model=JobOutput)
 def destroy_deployment(id: str, request: Request, actor=Depends(require('deployments.destroy')), db=Depends(get_db, scope='function')):
     def create():
         d = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
@@ -262,7 +289,7 @@ def destroy_deployment(id: str, request: Request, actor=Depends(require('deploym
     return idempotent(db, request, actor, {'id': id}, create, required=True)
 
 
-@router.post('/jobs', status_code=202)
+@router.post('/jobs', status_code=202, response_model=JobOutput)
 def create_job(data: JobInput, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
     check_job_permissions(request, data.operation)
     if data.ansible:
@@ -277,17 +304,17 @@ def create_job(data: JobInput, request: Request, actor=Depends(require('jobs.exe
     return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 
-@router.get('/jobs')
+@router.get('/jobs', response_model=Items[JobOutput])
 def jobs(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
     return {'items': [job_public(j) for j in paginate(db, Job, offset, limit)]}
 
 
-@router.get('/jobs/{id}')
+@router.get('/jobs/{id}', response_model=JobOutput)
 def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
     return job_public(find(db, Job, id))
 
 
-@router.get('/jobs/{id}/logs')
+@router.get('/jobs/{id}/logs', response_model=JobLogsOutput)
 def logs(id: str, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
          actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
     j = find(db, Job, id)
@@ -295,7 +322,7 @@ def logs(id: str, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
     return {'request_id': j.request_id, 'status': j.status, 'items': [public(r, 'id timestamp message') for r in rows], 'next_after': rows[-1].id if rows else after}
 
 
-@router.post('/jobs/{id}/cancel')
+@router.post('/jobs/{id}/cancel', response_model=JobOutput)
 def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')), db=Depends(get_db, scope='function')):
     j = db.scalar(select(Job).where(Job.id == id).with_for_update())
     if j is None:

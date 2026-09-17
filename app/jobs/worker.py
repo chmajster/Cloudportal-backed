@@ -53,7 +53,17 @@ class Context:
 
 def validate_authorization(db, job):
     token = db.get(Token, job.token_id)
-    if not token or token.revoked_at or not token.user.is_active or token.user.is_locked:
+    if not token or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
+        raise ExecutionFailed('Job authorization has been revoked')
+    if token.kind == 'session':
+        # Normal refresh rotates the access token. Authorize the surviving session family,
+        # while logout, replay detection and password changes revoke the whole family.
+        active_family = db.scalar(select(Token.id).where(
+            Token.family == token.family, Token.kind == 'refresh', Token.revoked_at.is_(None),
+            Token.expires_at > now()).limit(1))
+        if not active_family:
+            raise ExecutionFailed('Job session has ended')
+    elif token.kind != 'api' or token.revoked_at:
         raise ExecutionFailed('Job authorization has been revoked')
     permissions = effective_permissions(token.user)
     if token.kind == 'api':
