@@ -213,3 +213,15 @@ def test_ansible_secrets_are_unsafe_data(client,headers,monkeypatch,tmp_path):
     context=SimpleNamespace(ansible=AnsibleInput(playbook='validate-linux',credentials_id=c.id,inventory={'hosts':['192.0.2.1']}),ansible_credential=c,stage=lambda _:None)
     AnsibleExecutor().execute('ansible.execute',context)
     assert len(observed)==3
+
+
+def test_successful_plan_does_not_mark_failed_deployment_as_provisioned(client,headers,monkeypatch):
+    d=deployment(client,headers)
+    with session() as db:
+        old=db.get(Job,d['job']['id']);old.status='failed'
+        dep=db.get(Deployment,d['id']);dep.status='failed';dep.active_job_id=None;db.commit()
+    job=client.post('/api/v1/jobs',headers={**headers,'Idempotency-Key':str(uuid.uuid4())},json={'operation':'terraform.plan','deployment_id':d['id']}).json()
+    monkeypatch.setattr(TerraformExecutor,'execute',lambda *a:None)
+    execute(job['id'])
+    assert client.get('/api/v1/jobs/'+job['id'],headers=headers).json()['status']=='successful'
+    assert client.get('/api/v1/deployments/'+d['id'],headers=headers).json()['status']=='failed'

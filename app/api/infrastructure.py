@@ -147,7 +147,17 @@ def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templa
              node: Annotated[str | None, Query(pattern=r'^[A-Za-z0-9_.-]{1,63}$')] = None,
              actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
     p = find(db, Provider, id)
-    return {'items': provider_for(find(db, Credential, p.credentials_id)).discover(resource, node)}
+    rows = provider_for(find(db, Credential, p.credentials_id)).discover(resource, node)
+    # Providers can expose storage passwords or plugin configuration; publish only discovery metadata.
+    safe_fields = {
+        'nodes': 'node status cpu maxcpu mem maxmem disk maxdisk uptime',
+        'storages': 'storage type content nodes shared disable enabled active total used avail',
+        'networks': 'node iface type bridge_ports vlan-id address cidr gateway active autostart comments',
+        'templates': 'vmid name node status template type tags mem maxmem cpu maxcpu disk maxdisk uptime id',
+        'vms': 'vmid name node status template type tags mem maxmem cpu maxcpu disk maxdisk uptime id',
+        'pools': 'poolid comment',
+    }[resource].split()
+    return {'items': [{k: v for k, v in row.items() if k in safe_fields} for row in rows]}
 
 
 @router.get('/templates')
@@ -194,8 +204,11 @@ def new_job(db, request, actor, operation, deployment=None, payload=None):
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
     if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
         raise HTTPException(409, 'Deployment is busy or destroyed')
+    job_payload = dict(payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}))
+    if deployment:
+        job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
-              payload=payload or (deployment.workflow if deployment else {}), created_by=actor.user_id, token_id=actor.id,
+              payload=job_payload, created_by=actor.user_id, token_id=actor.id,
               request_id=request.state.request_id, ip=request.client.host if request.client else '')
     db.add(job)
     db.flush()

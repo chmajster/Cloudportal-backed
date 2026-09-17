@@ -14,9 +14,10 @@ resource "proxmox_virtual_environment_vm" "vm" {
   node_name = var.node
   started   = true
   clone {
-    vm_id     = var.template_id
-    node_name = coalesce(var.template_node, var.node)
-    full      = true
+    vm_id        = var.template_id
+    datastore_id = var.storage
+    node_name    = coalesce(var.template_node, var.node)
+    full         = true
   }
   cpu { cores = var.cpu }
   memory { dedicated = var.memory }

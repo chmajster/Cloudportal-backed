@@ -131,12 +131,16 @@ def execute(job_id):
         # Raw exceptions can contain secrets; detailed process output is separately redacted.
         status, error = 'failed', 'Executor failure; inspect the sanitized job log and backend configuration'
     with session() as db:
-        current = db.get(Job, job_id)
+        current = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+        if current.cancel_requested and status == 'successful':
+            status, error = 'cancelled', 'Cancellation requested at completion; inspect deployment state'
         current.status, current.error = status, error
         if current.deployment_id:
             deployment = db.get(Deployment, current.deployment_id)
             deployment.active_job_id = None
             deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
+            if current.operation == 'terraform.plan' and status == 'successful':
+                deployment.status = current.payload.get('previous_status', 'failed')
             if deployment.status == 'destroyed':
                 deployment.destroyed_at = now()
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))

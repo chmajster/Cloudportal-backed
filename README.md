@@ -102,8 +102,18 @@ python3 -m venv .venv
 TEST_REDIS_URL=redis://localhost:6379/15 .venv/bin/pytest -q
 ```
 
-Testy używają domyślnie tymczasowego SQLite oraz dedykowanej bazy Redis 15. **Nie podawaj produkcyjnego URL**: testy czyszczą bazę testową. CI uruchamia również PostgreSQL, Terraform validate i budowę kontenera. `TEST_DATABASE_URL` wskazuje wyłącznie pustą testową bazę PostgreSQL. `REDIS_SERVER_BINARY=/path/to/redis-server` uruchamia lokalny Redis na 16389 na czas testów.
+Testy używają domyślnie tymczasowego SQLite oraz dedykowanej bazy Redis 15. **Nie podawaj produkcyjnego URL**: testy czyszczą bazę testową. CI definiuje PostgreSQL, Terraform validate, budowę kontenera oraz test instalacji i reinstalacji systemd. Wynik tych zadań zależy od dostępności runnerów GitHub Actions. `TEST_DATABASE_URL` wskazuje wyłącznie pustą testową bazę PostgreSQL. `REDIS_SERVER_BINARY=/path/to/redis-server` uruchamia lokalny Redis na 16389 na czas testów.
 
 E2E na prawdziwym PVE: `scripts/e2e-proxmox.py` używa istniejącego credentiala i providera w backendzie; wymaga jawnego `--allow-create-and-destroy` i odpowiednich parametrów. Test tworzy VM, czeka na wynik workflow, pobiera logi i niszczy VM. Nie uruchamia się automatycznie na produkcji.
 
 Usługi: `cloudportal-api`, `cloudportal-dispatcher`, `cloudportal-worker@1`, `cloudportal-redis`. Sekrety konfiguracyjne: `/etc/cloudportal-backed/backend.env`. Dane: `/var/lib/cloudportal-backed`. Sprawdzenie: `systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1` i `journalctl -u cloudportal-api`.
+
+### Test wspólny z PHP
+
+Test `tests/test_portal_http_e2e.py` uruchamia prawdziwe FastAPI przez TLS oraz PHP built-in server, konfiguruje portal, loguje administratora, tworzy użytkownika/rolę/credential, sprawdza RBAC i niedostępność backendu. Nie używa atrap HTTP. Wymaga osobnego checkoutu PHP bez `config/backend.json` oraz PHP z rozszerzeniami aplikacji:
+
+```bash
+PORTAL_PATH=/path/to/HomeLAB-Proxmox-CloudPortal PHP_BINARY=php TEST_REDIS_URL=redis://localhost:6379/15 .venv/bin/pytest -q tests/test_portal_http_e2e.py
+```
+
+Status weryfikacji przy przygotowaniu: lokalne testy API/RBAC/workerów/klienta PHP i integracji HTTPS przeszły. Faktyczna instalacja systemd, kontener oraz współbieżność PostgreSQL wymagają uruchomienia zadań CI (pierwszy run prywatnego repozytorium zakończył się przed przydzieleniem runnerów). Pełnego provisioning E2E na rzeczywistym Proxmoxie nie wykonano bez dostępu do infrastruktury.
