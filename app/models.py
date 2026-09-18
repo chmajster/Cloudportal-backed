@@ -295,3 +295,44 @@ class ManagedResource(Timestamp, Base):
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     destroyed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+
+class ScheduledOperation(Timestamp, Base):
+    __tablename__ = "scheduled_operations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100))
+    deployment_id: Mapped[str] = mapped_column(ForeignKey("deployments.id", ondelete="CASCADE"), index=True)
+    operation: Mapped[str] = mapped_column(String(32))
+    next_run_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    interval_seconds: Mapped[int | None] = mapped_column(Integer)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    token_id: Mapped[int] = mapped_column(ForeignKey("tokens.id"))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class WebhookEndpoint(Timestamp, Base):
+    __tablename__ = "webhook_endpoints"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    url: Mapped[str] = mapped_column(String(2048))
+    events: Mapped[list] = mapped_column(JSON, default=list)
+    encrypted_secret: Mapped[bytes] = mapped_column(LargeBinary)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class WebhookDelivery(Timestamp, Base):
+    __tablename__ = "webhook_deliveries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    endpoint_id: Mapped[str] = mapped_column(ForeignKey("webhook_endpoints.id", ondelete="CASCADE"), index=True)
+    event: Mapped[str] = mapped_column(String(64), index=True)
+    resource_id: Mapped[str] = mapped_column(String(100), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(String(500))
