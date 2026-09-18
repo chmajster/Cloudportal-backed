@@ -751,37 +751,99 @@ function credentialForm(item = null) {
 async function providersView() {
   const providers = (await api('/providers?limit=200')).items;
   const actions = allowed('providers.create') ? [button('Dodaj provider', () => providerForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Providery wiążą adapter infrastruktury z konkretnym, zaszyfrowanym credentialem.', actions),
-    table([{ label: 'Nazwa', value: item => node('strong', { text: item.name }) }, { label: 'Typ', value: item => badge(item.type, 'info') }, { label: 'Credential ID', value: item => item.credentials_id }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) }], providers, item => {
-      const actions = [button('Zasoby', () => discoverProvider(item))];
+  dom.content.replaceChildren(heading('Providery wiążą zatwierdzony typ infrastruktury z konkretnym zaszyfrowanym credentialem.', actions),
+    table([
+      { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
+      { label: 'Typ', value: item => badge(item.type, 'info') },
+      { label: 'Credential ID', value: item => item.credentials_id },
+      { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+    ], providers, item => {
+      const actions = [];
+      if (item.type === 'proxmox') actions.push(button('Discovery', () => discoverProvider(item)));
       if (allowed('providers.update')) actions.push(button('Edytuj', () => providerForm(item)));
-      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń provider', `Provider ${item.name} zostanie usunięty.`, async () => { await api(`/providers/${item.id}`, { method: 'DELETE' }); toast('Provider usunięty.'); navigate('providers'); }), 'danger'));
+      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń provider', 'Provider ' + item.name + ' zostanie usunięty.', async () => {
+        await api('/providers/' + item.id, { method: 'DELETE' });
+        toast('Provider usunięty.');
+        navigate('providers');
+      }), 'danger'));
       return actions;
     }));
 }
 
 async function providerForm(item = null) {
   try {
-    const credentials = (await api('/credentials?limit=200')).items.filter(value => value.type === 'proxmox');
-    const fields = node('div', { class: 'form-grid' }, field('Nazwa', 'name', { required: true, value: item?.name || '' }), selectField('Credential Proxmox', 'credentials_id', credentials.map(value => ({ value: value.id, label: `${value.name} (#${value.id})` })), item?.credentials_id, { required: true, placeholder: 'Wybierz credential' }));
-    openModal({ title: item ? 'Edytuj provider' : 'Nowy provider', eyebrow: 'Infrastruktura', body: fields, onSubmit: async data => {
-      await api(item ? `/providers/${item.id}` : '/providers', { method: item ? 'PUT' : 'POST', body: { name: data.get('name'), type: 'proxmox', credentials_id: Number(data.get('credentials_id')) } }); toast('Provider zapisany.'); navigate('providers');
-    }});
+    const credentials = (await api('/credentials?limit=200')).items;
+    const providerTypes = ['proxmox', 'vmware', 'aws', 'azure', 'openstack'];
+    const typeField = selectField('Typ providera', 'type', providerTypes.map(value => ({
+      value, label: CREDENTIAL_TYPE_CONFIG[value]?.label || value,
+    })), item?.type || 'proxmox', { required: true });
+    const credentialField = selectField('Credential', 'credentials_id', [], item?.credentials_id || '', {
+      required: true, placeholder: 'Wybierz credential tego samego typu',
+    });
+    const credentialSelect = credentialField.querySelector('select');
+    const typeSelect = typeField.querySelector('select');
+
+    const refreshCredentials = () => {
+      const selectedType = typeSelect.value;
+      const matching = credentials.filter(value => value.type === selectedType);
+      const previous = String(item?.credentials_id || credentialSelect.value || '');
+      credentialSelect.replaceChildren(node('option', { value: '', text: 'Wybierz credential' }));
+      matching.forEach(value => credentialSelect.append(node('option', {
+        value: value.id,
+        text: value.name + ' (#' + value.id + ')',
+        selected: String(value.id) === previous,
+      })));
+      if (!matching.length) credentialSelect.append(node('option', { value: '', text: 'Brak credentiali tego typu', disabled: true }));
+    };
+    typeSelect.addEventListener('change', refreshCredentials);
+    refreshCredentials();
+
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa', 'name', { required: true, value: item?.name || '' }),
+      typeField,
+      credentialField,
+      node('div', { class: 'wide field-help', text: 'Provider i credential muszą mieć ten sam typ. Proxmox ma dodatkowe discovery i operacje lifecycle; pozostałe providery są wykonywane przez zatwierdzony katalog Terraform.' })
+    );
+
+    openModal({
+      title: item ? 'Edytuj provider' : 'Nowy provider',
+      eyebrow: 'Infrastruktura',
+      body: fields,
+      onSubmit: async data => {
+        if (!data.get('credentials_id')) throw new Error('Wybierz credential zgodny z typem providera.');
+        await api(item ? '/providers/' + item.id : '/providers', {
+          method: item ? 'PUT' : 'POST',
+          body: {
+            name: data.get('name'),
+            type: data.get('type'),
+            credentials_id: Number(data.get('credentials_id')),
+          },
+        });
+        toast('Provider zapisany.');
+        navigate('providers');
+      },
+    });
   } catch (error) { toast(error.message, 'error'); }
 }
 
 async function discoverProvider(provider) {
-  dom.modalTitle.textContent = `Zasoby: ${provider.name}`;
+  if (provider.type !== 'proxmox') {
+    toast('Discovery zasobów jest obecnie dostępne bezpośrednio tylko dla Proxmox; chmurowe zasoby są widoczne w Inventory po Terraform apply.', 'error');
+    return;
+  }
+  dom.modalTitle.textContent = 'Zasoby: ' + provider.name;
   dom.modalEyebrow.textContent = 'Discovery Proxmox';
   dom.modalBody.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner' })));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   dom.modal.showModal();
   try {
-    const nodes = (await api(`/providers/${provider.id}/nodes`)).items;
-    dom.modalBody.replaceChildren(table(Object.keys(nodes[0] || { node: '' }).slice(0, 6).map(key => ({ label: key, value: row => String(row[key] ?? '—') })), nodes));
+    const nodes = (await api('/providers/' + provider.id + '/nodes')).items;
+    dom.modalBody.replaceChildren(table(
+      Object.keys(nodes[0] || { node: '' }).slice(0, 6).map(key => ({ label: key, value: row => String(row[key] ?? '—') })),
+      nodes
+    ));
   } catch (error) { dom.modalBody.replaceChildren(node('p', { class: 'form-error', text: error.message })); }
 }
-
 async function deploymentsView() {
   const deployments = (await api('/deployments?limit=200')).items;
   const actions = allowed('deployments.create') ? [button('Nowy deployment', createDeployment, 'primary')] : [];
