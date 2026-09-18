@@ -886,17 +886,35 @@ async function tokensView() {
 
 async function createToken() {
   try {
-    let permissions = state.identity.permissions;
-    if (allowed('roles.read')) permissions = (await api('/permissions')).items.filter(permission => allowed(permission));
+    const [permissionResult, userResult] = await Promise.all([
+      allowed('roles.read') ? api('/permissions') : Promise.resolve({ items: state.identity.permissions }),
+      allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
+    ]);
+    const permissions = permissionResult.items.filter(permission => allowed(permission));
     const grid = node('div', { class: 'permission-grid wide' });
-    permissions.forEach(permission => grid.append(node('label', {}, node('input', { type: 'checkbox', name: 'scope', value: permission }), permission)));
-    const fields = node('div', { class: 'form-grid' }, field('Nazwa', 'name', { required: true }), field('Użytkownik ID (opcjonalnie)', 'user_id', { type: 'number', min: 1 }), field('Wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', wide: true }), grid);
-    openModal({ title: 'Nowy token API', eyebrow: 'Dostęp programowy', body: fields, submitLabel: 'Utwórz token', onSubmit: async (_data, form) => {
-      const payload = { name: form.elements.name.value, scopes: [...form.querySelectorAll('[name="scope"]:checked')].map(input => input.value) };
-      if (form.elements.user_id.value) payload.user_id = Number(form.elements.user_id.value);
+    permissions.forEach(permission => grid.append(node('label', {},
+      node('input', { type: 'checkbox', name: 'scope', value: permission }),
+      node('span', {}, permission, node('small', { class: 'muted', text: ' · zakres tokenu' })))));
+
+    const ownerChoices = [{ value: '', label: 'Moje konto' }].concat(userResult.items.map(user => ({
+      value: user.id,
+      label: `${user.username}${user.email ? ' · ' + user.email : ''}`,
+    })));
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa tokenu', 'name', { required: true, placeholder: 'np. Terraform CI' }),
+      selectField('Właściciel', 'user_id', ownerChoices, '', { required: false }),
+      field('Wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', wide: true }),
+      formSection('Zakres uprawnień', 'Zaznacz tylko uprawnienia potrzebne tej integracji.', grid));
+
+    openModal({ title: 'Nowy token API', eyebrow: 'Dostęp programowy', body: fields, submitLabel: 'Utwórz token', wide: true, onSubmit: async (_data, form) => {
+      const scopes = [...form.querySelectorAll('[name="scope"]:checked')].map(input => input.value);
+      if (!scopes.length) throw new Error('Wybierz co najmniej jedno uprawnienie dla tokenu.');
+      const payload = { name: form.elements.name.value, scopes };
+      if (form.elements.user_id?.value) payload.user_id = Number(form.elements.user_id.value);
       if (form.elements.expires_at.value) payload.expires_at = new Date(form.elements.expires_at.value).toISOString();
       const result = await api('/tokens', { method: 'POST', body: payload });
-      showSecret('Nowy token API', result.token); navigate('tokens');
+      navigate('tokens');
+      showSecret('Nowy token API', result.token);
       return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
@@ -1193,19 +1211,24 @@ function credentialForm(item = null) {
 }
 
 async function providersView() {
-  const providers = (await api('/providers?limit=200')).items;
+  const [providerResult, credentialResult] = await Promise.all([
+    api('/providers?limit=200'),
+    allowed('credentials.read') ? api('/credentials?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const providers = providerResult.items;
+  const credentialNames = new Map(credentialResult.items.map(item => [Number(item.id), item.name]));
   const actions = allowed('providers.create') ? [button('Dodaj provider', () => providerForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Providery wiążą zatwierdzony typ infrastruktury z konkretnym zaszyfrowanym credentialem.', actions),
+  dom.content.replaceChildren(heading('Połączenia z platformami infrastruktury. Każdy provider korzysta z przypisanego, zaszyfrowanego credentiala.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-      { label: 'Typ', value: item => badge(item.type, 'info') },
-      { label: 'Credential ID', value: item => item.credentials_id },
+      { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type, 'info') },
+      { label: 'Credential', value: item => credentialNames.get(Number(item.credentials_id)) || `#${item.credentials_id}` },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
       const actions = [];
-      actions.push(button('Discovery', () => discoverProvider(item)));
+      actions.push(button('Przeglądaj zasoby', () => discoverProvider(item)));
       if (allowed('providers.update')) actions.push(button('Edytuj', () => providerForm(item)));
-      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń provider', 'Provider ' + item.name + ' zostanie usunięty.', async () => {
+      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń provider', `Provider „${item.name}” zostanie usunięty. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
         toast('Provider usunięty.');
         navigate('providers');
@@ -1271,30 +1294,56 @@ async function providerForm(item = null) {
 }
 
 async function discoverProvider(provider) {
-  const resources = [
-    { value: 'vms', label: 'VM / instances' }, { value: 'templates', label: 'Templates / images' },
-    { value: 'networks', label: 'Networks' }, { value: 'storages', label: 'Storage / volumes' },
-    { value: 'nodes', label: 'Nodes / locations' }, { value: 'pools', label: 'Pools / groups' },
+  const allResources = [
+    { value: 'vms', label: 'Maszyny / instancje' },
+    { value: 'templates', label: 'Szablony / obrazy' },
+    { value: 'networks', label: 'Sieci' },
+    { value: 'storages', label: 'Storage / wolumeny' },
+    { value: 'nodes', label: 'Węzły / lokalizacje' },
+    { value: 'pools', label: 'Pule / grupy' },
   ];
+  const unsupported = provider.type === 'openstack' ? new Set(['nodes', 'pools']) : new Set();
+  const resources = allResources.filter(item => !unsupported.has(item.value));
   const fields = node('div', { class: 'form-grid' },
-    selectField('Zasób', 'resource', resources, provider.type === 'proxmox' ? 'nodes' : 'vms', { required: true }));
+    selectField('Typ zasobu', 'resource', resources, provider.type === 'proxmox' ? 'nodes' : 'vms', { required: true }));
   if (provider.type === 'aws') fields.append(field('Region AWS', 'node', { value: 'eu-central-1', required: true, placeholder: 'eu-central-1' }));
+
   openModal({
-    title: 'Discovery: ' + provider.name, eyebrow: provider.type, body: fields, submitLabel: 'Pobierz',
+    title: 'Zasoby: ' + provider.name,
+    eyebrow: CREDENTIAL_TYPE_CONFIG[provider.type]?.label || provider.type,
+    body: fields,
+    submitLabel: 'Pobierz zasoby',
+    wide: true,
     onSubmit: async data => {
       const resource = data.get('resource');
       const scope = data.get('node');
       const suffix = scope ? '?node=' + encodeURIComponent(scope) : '';
       const rows = (await api('/providers/' + provider.id + '/' + resource + suffix)).items;
-      const columns = Object.keys(rows[0] || { id: '' }).slice(0, 8).map(key => ({ label: key, value: row => String(row[key] ?? '—') }));
+      const preferred = ['name', 'id', 'vmid', 'node', 'status', 'type', 'cidr', 'storage', 'total', 'avail', 'active'];
+      const keys = [...new Set(rows.flatMap(row => Object.keys(row)))];
+      keys.sort((a, b) => {
+        const ai = preferred.indexOf(a), bi = preferred.indexOf(b);
+        return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
+      });
+      const columns = keys.slice(0, 8).map(key => ({
+        label: FIELD_LABELS[key] || key.replaceAll('_', ' '),
+        value: row => {
+          if (['total', 'avail', 'size'].includes(key) && Number.isFinite(Number(row[key]))) return formatBytes(row[key]);
+          if (key === 'status') return badge(statusLabel(row[key]), statusKind(row[key]));
+          return displayValue(row[key]);
+        },
+      }));
       dom.modalTitle.textContent = 'Zasoby: ' + provider.name;
-      dom.modalEyebrow.textContent = resource + (scope ? ' / ' + scope : '');
-      dom.modalBody.replaceChildren(rows.length ? table(columns, rows) : node('p', { class: 'muted', text: 'Brak zasobów.' }));
+      dom.modalEyebrow.textContent = resources.find(item => item.value === resource)?.label || resource;
+      dom.modalBody.replaceChildren(rows.length
+        ? table(columns, rows)
+        : node('div', { class: 'empty', text: 'Nie znaleziono zasobów tego typu.' }));
       dom.modalActions.replaceChildren(button('Zamknij', closeModal));
       return false;
     },
   });
 }
+
 async function deploymentsView() {
   const deployments = (await api('/deployments?limit=200')).items;
   const actions = allowed('deployments.create') ? [button('Nowy deployment', createDeployment, 'primary')] : [];
@@ -1323,32 +1372,88 @@ async function createTerraformJob(item, operation) {
 
 async function createDeployment() {
   try {
-    const [providers, credentials, templates] = await Promise.all([
+    const [providerResult, credentialResult, templateResult] = await Promise.all([
       api('/providers?limit=200'), api('/credentials?limit=200'), api('/templates'),
     ]);
-    const defaultVariables = {
-      name: 'vm01', node: 'pve01', template_id: 9000, cpu: 2, memory: 4096,
-      disk: 40, network: 'vmbr0', storage: 'local-lvm', ssh_username: 'clouduser',
-    };
+    const providers = providerResult.items;
+    const credentials = credentialResult.items;
+    const templates = templateResult.items;
+    if (!providers.length) throw new Error('Najpierw dodaj provider infrastruktury.');
+    if (!credentials.length) throw new Error('Najpierw dodaj credential infrastruktury.');
+    if (!templates.length) throw new Error('Katalog nie zawiera żadnego szablonu wdrożenia.');
+
+    const templateField = selectField('Szablon', 'template', templates.map(item => ({
+      value: item.id, label: `${item.name} · v${item.version} · ${CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider}`,
+    })), templates[0].id, { required: true });
+    const providerField = selectField('Provider', 'provider_id', [], '', { required: true });
+    const credentialField = selectField('Credential', 'credentials_id', [], '', { required: true });
+    const variableFields = node('div', { class: 'form-grid wide template-variable-grid' });
+
     const fields = node('div', { class: 'form-grid' },
-      field('Nazwa deploymentu', 'name', { required: true }),
-      selectField('Provider', 'provider_id', providers.items.map(item => ({ value: item.id, label: `${item.name} [${item.type}] (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
-      selectField('Credential', 'credentials_id', credentials.items.map(item => ({ value: item.id, label: `${item.name} [${item.type}] (#${item.id})` })), '', { required: true, placeholder: 'Wybierz credential' }),
-      selectField('Template', 'template', templates.items.map(item => ({ value: item.id, label: `${item.name} · v${item.version} [${item.provider}]` })), 'proxmox-vm', { required: true }),
-      selectField('Executor', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'),
-      field('Zmienne template JSON', 'variables', { tag: 'textarea', required: true, wide: true, value: jsonValue(defaultVariables), help: 'Schemat wymaganych pól sprawdzisz w zakładce Katalog IaC.' }));
-    openModal({ title: 'Nowy deployment', eyebrow: 'Terraform / OpenTofu', body: fields, submitLabel: 'Utwórz i uruchom', onSubmit: async data => {
-      await api('/deployments', { method: 'POST', idempotent: true, body: {
-        name: data.get('name'),
-        provider_id: Number(data.get('provider_id')),
-        template: data.get('template'),
-        credentials_id: Number(data.get('credentials_id')),
-        executor: data.get('executor'),
-        variables: parseObject(data.get('variables'), 'Zmienne template'),
-      } });
-      toast('Deployment i zadanie apply zostały utworzone.');
-      navigate('deployments');
-    }});
+      formSection('Podstawowe informacje', 'Wybierz szablon i miejsce wdrożenia.',
+        node('div', { class: 'form-grid' },
+          field('Nazwa wdrożenia', 'name', { required: true, placeholder: 'np. web-prod-01' }),
+          templateField,
+          providerField,
+          credentialField,
+          selectField('Silnik IaC', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'))),
+      formSection('Konfiguracja zasobu', 'Pola są generowane automatycznie ze schematu wybranego szablonu.', variableFields));
+
+    const templateSelect = templateField.querySelector('select');
+    const providerSelect = providerField.querySelector('select');
+    const credentialSelect = credentialField.querySelector('select');
+
+    const currentTemplate = () => templates.find(item => item.id === templateSelect.value);
+    const refill = (select, rows, placeholder) => {
+      const previous = select.value;
+      select.replaceChildren(node('option', { value: '', text: placeholder }));
+      rows.forEach(row => select.append(node('option', { value: row.id, text: row.label, selected: String(row.id) === String(previous) })));
+      if (!select.value && rows.length === 1) select.value = String(rows[0].id);
+    };
+
+    const refreshCredentials = () => {
+      const template = currentTemplate();
+      const provider = providers.find(item => String(item.id) === String(providerSelect.value));
+      const type = provider?.type || template?.provider;
+      const matching = credentials.filter(item => item.type === type).map(item => ({ id: item.id, label: item.name }));
+      refill(credentialSelect, matching, matching.length ? 'Wybierz credential' : 'Brak credentiala dla tej platformy');
+    };
+
+    const refreshTemplate = () => {
+      const template = currentTemplate();
+      if (!template) return;
+      const matchingProviders = providers.filter(item => item.type === template.provider).map(item => ({ id: item.id, label: item.name }));
+      refill(providerSelect, matchingProviders, matchingProviders.length ? 'Wybierz provider' : 'Brak providera dla tej platformy');
+      refreshCredentials();
+      renderTemplateVariables(variableFields, template);
+    };
+
+    templateSelect.addEventListener('change', refreshTemplate);
+    providerSelect.addEventListener('change', refreshCredentials);
+    refreshTemplate();
+
+    openModal({
+      title: 'Nowe wdrożenie',
+      eyebrow: 'Terraform / OpenTofu',
+      body: fields,
+      submitLabel: 'Utwórz i uruchom',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const template = currentTemplate();
+        if (!providerSelect.value) throw new Error('Brak providera zgodnego z wybranym szablonem.');
+        if (!credentialSelect.value) throw new Error('Brak credentiala zgodnego z wybraną platformą.');
+        await api('/deployments', { method: 'POST', idempotent: true, body: {
+          name: form.elements.name.value,
+          provider_id: Number(providerSelect.value),
+          template: template.id,
+          credentials_id: Number(credentialSelect.value),
+          executor: form.elements.executor.value,
+          variables: readTemplateVariables(form, template),
+        } });
+        toast('Wdrożenie zostało utworzone i uruchomiono zadanie apply.');
+        navigate('deployments');
+      },
+    });
   } catch (error) { toast(error.message, 'error'); }
 }
 
