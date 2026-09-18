@@ -6,8 +6,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
-from app.api import administration, automation, health, infrastructure, inventory, ipam, operations, proxmox_management
-from app.auth import routes as auth
+from app.modules import backend_modules
+from app.modules.openapi import decorate_router
 from app.config import settings
 from app.observability import configure_telemetry
 from app.security.core import throttle
@@ -71,28 +71,11 @@ async def conflict(request, error):
     return JSONResponse({'detail': 'Resource already exists or is still referenced'}, status_code=409)
 
 
-# Document headers on the source routers before inclusion. This works with both
-# eager and lazy router inclusion in supported FastAPI versions.
-from fastapi.routing import APIRoute
-
-for router in (auth.router, administration.router, infrastructure.router, automation.router, inventory.router, ipam.router, operations.router, proxmox_management.router, health.router):
-    for route in router.routes:
-        if not isinstance(route, APIRoute):
-            continue
-        parameters = [{'name': 'X-Request-ID', 'in': 'header', 'required': False,
-                       'schema': {'type': 'string', 'format': 'uuid'},
-                       'description': 'Correlation ID returned in the response and recorded in jobs and audit.'}]
-        is_creation = 'POST' in route.methods and (route.path.rsplit('/', 1)[-1] in
-                      {'users', 'roles', 'tokens', 'credentials', 'providers', 'deployments', 'jobs', 'blueprints',
-                       'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy'})
-        is_destroy = 'DELETE' in route.methods and route.path == '/deployments/{id}'
-        if (is_creation or is_destroy) and route.path != '/auth/reset-password':
-            required = route.path in {'/deployments', '/jobs', '/blueprints/{id}/execute', '/deployments/{id}/destroy'} or is_destroy
-            parameters.append({'name': 'Idempotency-Key', 'in': 'header', 'required': required,
-                               'schema': {'type': 'string', 'format': 'uuid'},
-                               'description': 'Reuse the same UUID only when retrying the same operation and payload.'})
-        route.openapi_extra = {**(route.openapi_extra or {}), 'parameters': parameters}
-    app.include_router(router, prefix='/api/v1')
+# Backend modules are discovered from app/modules/feature_*.py.
+# Adding a domain no longer requires editing this central application file.
+for module in backend_modules():
+    decorate_router(module.router)
+    app.include_router(module.router, prefix=module.prefix)
 
 
 @app.get('/', include_in_schema=False)
