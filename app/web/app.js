@@ -31,10 +31,16 @@ const routes = [
   { id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read' },
   { id: 'credentials', label: 'Credentiale', icon: 'K', permission: 'credentials.read' },
   { id: 'providers', label: 'Providery', icon: 'P', permission: 'providers.read' },
+  { id: 'catalog', label: 'Katalog IaC', icon: 'C', permission: 'terraform.read' },
   { id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read' },
   { id: 'hostnames', label: 'Hostname Manager', icon: 'H', permission: 'hostnames.read' },
+  { id: 'ipam', label: 'IPAM', icon: 'I', permission: 'ipam.read' },
+  { id: 'inventory', label: 'Inventory', icon: 'V', permission: 'inventory.read' },
   { id: 'deployments', label: 'Deploymenty', icon: 'D', permission: 'deployments.read' },
   { id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read' },
+  { id: 'schedules', label: 'Harmonogramy', icon: 'S', permission: 'schedules.read' },
+  { id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhooks.read' },
+  { id: 'observability', label: 'Monitoring', icon: 'O', permission: 'metrics.read' },
   { id: 'audit', label: 'Audyt', icon: 'A', permission: 'audit.read' },
   { id: 'account', label: 'Moje konto', icon: 'M' },
 ];
@@ -121,6 +127,21 @@ async function api(path, options = {}, canRefresh = true) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok && !(options.allow || []).includes(response.status)) throw new ApiError(response.status, data);
   return data;
+}
+
+async function apiText(path, canRefresh = true) {
+  const headers = { 'X-Request-ID': crypto.randomUUID(), 'X-Portal-Source': 'Cloudportal-backed' };
+  if (state.session?.access_token) headers.Authorization = `Bearer ${state.session.access_token}`;
+  const response = await fetch(`${API}${path}`, { headers });
+  if (response.status === 401 && canRefresh && state.session?.refresh_token) {
+    await refreshSession();
+    return apiText(path, false);
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, data);
+  }
+  return response.text();
 }
 
 function allowed(permission) {
@@ -566,22 +587,31 @@ async function createTerraformJob(item, operation) {
 
 async function createDeployment() {
   try {
-    const [providers, credentials] = await Promise.all([api('/providers?limit=200'), api('/credentials?limit=200')]);
+    const [providers, credentials, templates] = await Promise.all([
+      api('/providers?limit=200'), api('/credentials?limit=200'), api('/templates'),
+    ]);
+    const defaultVariables = {
+      name: 'vm01', node: 'pve01', template_id: 9000, cpu: 2, memory: 4096,
+      disk: 40, network: 'vmbr0', storage: 'local-lvm', ssh_username: 'clouduser',
+    };
     const fields = node('div', { class: 'form-grid' },
-      field('Nazwa deploymentu', 'name', { required: true }), selectField('Provider', 'provider_id', providers.items.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
-      selectField('Credential', 'credentials_id', credentials.items.filter(item => item.type === 'proxmox').map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz credential' }), selectField('Executor', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'),
-      field('Nazwa VM', 'vm_name', { required: true }), field('Węzeł', 'node', { required: true }), field('Template VMID', 'template_id', { type: 'number', min: 100, required: true }), field('Węzeł template (opcjonalnie)', 'template_node'),
-      field('CPU', 'cpu', { type: 'number', min: 1, max: 128, value: 2, required: true }), field('RAM MiB', 'memory', { type: 'number', min: 512, value: 4096, required: true }),
-      field('Dysk GiB', 'disk', { type: 'number', min: 1, value: 40, required: true }), field('Storage', 'storage', { required: true }),
-      field('Bridge', 'network', { value: 'vmbr0', required: true }), field('VLAN ID (opcjonalnie)', 'vlan_id', { type: 'number', min: 1, max: 4094 }),
-      field('Użytkownik SSH', 'ssh_username', { value: 'clouduser', required: true }), field('Klucz publiczny SSH (opcjonalnie)', 'ssh_public_key', { tag: 'textarea', wide: true }));
-    openModal({ title: 'Nowy deployment', eyebrow: 'Terraform', body: fields, submitLabel: 'Utwórz i uruchom', onSubmit: async data => {
-      const variables = { name: data.get('vm_name'), node: data.get('node'), template_id: Number(data.get('template_id')), cpu: Number(data.get('cpu')), memory: Number(data.get('memory')), disk: Number(data.get('disk')), network: data.get('network'), storage: data.get('storage'), ssh_username: data.get('ssh_username') };
-      if (data.get('template_node')) variables.template_node = data.get('template_node');
-      if (data.get('vlan_id')) variables.vlan_id = Number(data.get('vlan_id'));
-      if (data.get('ssh_public_key')) variables.ssh_public_key = data.get('ssh_public_key');
-      await api('/deployments', { method: 'POST', idempotent: true, body: { name: data.get('name'), provider_id: Number(data.get('provider_id')), template: 'proxmox-vm', credentials_id: Number(data.get('credentials_id')), executor: data.get('executor'), variables } });
-      toast('Deployment i zadanie apply zostały utworzone.'); navigate('deployments');
+      field('Nazwa deploymentu', 'name', { required: true }),
+      selectField('Provider', 'provider_id', providers.items.map(item => ({ value: item.id, label: `${item.name} [${item.type}] (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
+      selectField('Credential', 'credentials_id', credentials.items.map(item => ({ value: item.id, label: `${item.name} [${item.type}] (#${item.id})` })), '', { required: true, placeholder: 'Wybierz credential' }),
+      selectField('Template', 'template', templates.items.map(item => ({ value: item.id, label: `${item.name} · v${item.version} [${item.provider}]` })), 'proxmox-vm', { required: true }),
+      selectField('Executor', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'),
+      field('Zmienne template JSON', 'variables', { tag: 'textarea', required: true, wide: true, value: jsonValue(defaultVariables), help: 'Schemat wymaganych pól sprawdzisz w zakładce Katalog IaC.' }));
+    openModal({ title: 'Nowy deployment', eyebrow: 'Terraform / OpenTofu', body: fields, submitLabel: 'Utwórz i uruchom', onSubmit: async data => {
+      await api('/deployments', { method: 'POST', idempotent: true, body: {
+        name: data.get('name'),
+        provider_id: Number(data.get('provider_id')),
+        template: data.get('template'),
+        credentials_id: Number(data.get('credentials_id')),
+        executor: data.get('executor'),
+        variables: parseObject(data.get('variables'), 'Zmienne template'),
+      } });
+      toast('Deployment i zadanie apply zostały utworzone.');
+      navigate('deployments');
     }});
   } catch (error) { toast(error.message, 'error'); }
 }
@@ -632,10 +662,12 @@ async function blueprintsView() {
       { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
       { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
       { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => key).join(', ') || '—' },
-      { label: 'Kroki', value: item => item.workflow.length }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+      { label: 'Kroki', value: item => item.workflow.length },
+      { label: 'Governance', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('approval', 'warning') : badge('standard', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('auto-cleanup', 'danger') : badge('preserve', 'info')) },
+      { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
-      if (allowed('blueprints.execute') && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
+      if (allowed('blueprints.execute') && (!item.requires_approval || allowed('blueprints.approve')) && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
       if (allowed('blueprints.update')) result.push(button('Edytuj', () => blueprintForm(item)));
       if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące deploymenty zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
@@ -661,6 +693,8 @@ function blueprintForm(item = null) {
     field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
     checkboxField('Aktywny', 'is_active', item?.is_active ?? true), checkboxField('Dostępny w panelu backendu', 'visibility_backend', item?.visibility.backend ?? true),
     checkboxField('Dostępny w CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false), checkboxField('Dostępny przez API', 'visibility_api', item?.visibility.api ?? true),
+    checkboxField('Wymaga blueprints.approve przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
+    selectField('Recovery policy', 'recovery_policy', [{ value: 'preserve', label: 'Preserve state/resources' }, { value: 'destroy_on_failure', label: 'Destroy on failed apply' }], item?.recovery_policy || 'preserve'),
     field('Dozwolone role ID (przecinki, puste = wszyscy)', 'role_ids', { value: (item?.allowed_role_ids || []).join(',') }),
     field('Dozwoleni użytkownicy ID (przecinki)', 'user_ids', { value: (item?.allowed_user_ids || []).join(',') }),
     field('Schemat zmiennych JSON', 'variables_schema', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.variables_schema || exampleVariables) }),
@@ -671,7 +705,8 @@ function blueprintForm(item = null) {
     const payload = { slug: data.get('slug'), name: data.get('name'), description: data.get('description'), is_active: data.has('is_active'),
       visibility: { backend: data.has('visibility_backend'), cloudportal: data.has('visibility_cloudportal'), api: data.has('visibility_api') },
       allowed_role_ids: ids(data.get('role_ids')), allowed_user_ids: ids(data.get('user_ids')),
-      variables_schema: parseObject(data.get('variables_schema'), 'Schemat zmiennych'), deployment: parseObject(data.get('deployment'), 'Deployment'), workflow: parseArray(data.get('workflow'), 'Workflow') };
+      variables_schema: parseObject(data.get('variables_schema'), 'Schemat zmiennych'), deployment: parseObject(data.get('deployment'), 'Deployment'), workflow: parseArray(data.get('workflow'), 'Workflow'),
+      requires_approval: data.has('requires_approval'), recovery_policy: data.get('recovery_policy') };
     await api(item ? `/blueprints/${item.id}` : '/blueprints', { method: item ? 'PUT' : 'POST', body: payload });
     toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint utworzony.'); navigate('blueprints');
   }});
