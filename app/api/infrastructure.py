@@ -262,7 +262,7 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
                        variables=data.variables.model_dump(), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
         db.add(d)
         db.flush()
-        d.state_location = f'workspaces/{d.workspace}/terraform.tfstate'
+        d.state_location = f'database://terraform-states/{d.id}'
         job = new_job(db, request, actor, 'terraform.apply', d, {'ansible': data.ansible.model_dump() if data.ansible else None})
         audit(db, request, 'deployment.created', 'deployments', d.id)
         return {**deployment_public(d), 'job': job_public(job)}
