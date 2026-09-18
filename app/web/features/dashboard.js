@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function dashboardView() {
   const resources = [
     ['users', 'users.read', '/users'], ['credentials', 'credentials.read', '/credentials'],
@@ -96,3 +97,4 @@ async function observabilityView() {
 registerView({ id: 'dashboard', label: 'Dashboard', icon: '◫', order: 0 }, dashboardView);
 registerView({ id: 'observability', label: 'Monitoring', icon: 'O', permission: 'metrics.read', order: 150 }, observabilityView);
 registerView({ id: 'audit', label: 'Audyt', icon: 'A', permission: 'audit.read', order: 160 }, auditView);
+})();
