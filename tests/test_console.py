@@ -22,6 +22,7 @@ def test_console_session_is_ephemeral_and_rbac_protected(client, headers, monkey
         'cert': 'temporary-cert',
         'websocket_path': f'/api2/json/nodes/{node}/qemu/{vmid}/vncwebsocket',
         'origin': 'https://pve.example.com:8006',
+        'viewer_url': 'https://pve.example.com:8006/novnc/vnc_lite.html?encrypt=1&autoconnect=1&resize=scale&path=api',
     })
 
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101/console"
@@ -29,6 +30,7 @@ def test_console_session_is_ephemeral_and_rbac_protected(client, headers, monkey
     assert response.status_code == 200, response.text
     body = response.json()
     assert body['ticket'].startswith('PVEVNC:')
+    assert body['viewer_url'].startswith('https://pve.example.com:8006/novnc/vnc_lite.html?')
     assert response.headers['Cache-Control'] == 'no-store'
     assert credential['secret'] == '********'
 
