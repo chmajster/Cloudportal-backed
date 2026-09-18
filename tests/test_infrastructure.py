@@ -107,6 +107,44 @@ def test_worker_rechecks_revoked_permissions(client,headers,monkeypatch):
     assert not called
 
 
+
+def test_failed_job_can_be_retried_with_lineage(client, headers, monkeypatch, tmp_path):
+    d = deployment(client, headers)
+
+    def fail(*args):
+        raise ExecutionFailed('terraform exited with code 1')
+
+    monkeypatch.setattr(TerraformExecutor, 'execute', fail)
+    execute(d['job']['id'])
+    failed = client.get('/api/v1/jobs/' + d['job']['id'], headers=headers).json()
+    assert failed['status'] == 'failed'
+    assert failed['attempt'] == 1
+    assert failed['retry_of'] is None
+
+    retry = client.post(
+        '/api/v1/jobs/' + failed['id'] + '/retry',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    )
+    assert retry.status_code == 202, retry.text
+    retried = retry.json()
+    assert retried['retry_of'] == failed['id']
+    assert retried['attempt'] == 2
+    assert retried['status'] == 'queued'
+
+    workspace = terraform_state_workspace(tmp_path, vm_id=404)
+    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: workspace)
+    execute(retried['id'])
+    completed = client.get('/api/v1/jobs/' + retried['id'], headers=headers).json()
+    assert completed['status'] == 'successful'
+
+    inventory = client.get('/api/v1/inventory/vms?management_mode=terraform', headers=headers)
+    assert any(row['vm_id'] == 404 and row['deployment_id'] == d['id'] for row in inventory.json()['items'])
+
+    assert client.post(
+        '/api/v1/jobs/' + retried['id'] + '/retry',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    ).status_code == 409
+
 def test_workspace_lock_excludes_second_executor(tmp_path):
     import pytest
     with workspace_lock(tmp_path/'workspace'):
