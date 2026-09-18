@@ -1,3 +1,4 @@
+import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -8,6 +9,15 @@ from app.security.core import decrypt_secret
 from app.executors.base import ExecutionFailed
 from app.executors.terraform import TerraformExecutor, workspace_lock
 from app.jobs.worker import execute
+
+
+def terraform_state_workspace(tmp_path, vm_id=101):
+    workspace = tmp_path / 'terraform-workspace'
+    workspace.mkdir(exist_ok=True)
+    (workspace / 'terraform.tfstate').write_text(json.dumps({
+        'outputs': {'vm_id': {'value': vm_id}},
+    }))
+    return workspace
 
 
 def resources(client,headers):
@@ -142,13 +152,14 @@ def test_ansible_failure_is_reported(client,headers,monkeypatch):
     assert client.get('/api/v1/jobs/'+response.json()['id'],headers=headers).json()['status']=='failed'
 
 
-def test_dispatcher_and_rq_execute_durable_job(client,headers,monkeypatch):
+def test_dispatcher_and_rq_execute_durable_job(client,headers,monkeypatch,tmp_path):
     from app.jobs.queue import dispatch_once, queue
     from rq import SimpleWorker
     from rq.serializers import JSONSerializer
     from app.security.core import redis_client
     d=deployment(client,headers)
-    monkeypatch.setattr(TerraformExecutor,'execute',lambda *a:None)
+    workspace=terraform_state_workspace(tmp_path)
+    monkeypatch.setattr(TerraformExecutor,'execute',lambda *a:workspace)
     dispatch_once()
     SimpleWorker([queue()],connection=redis_client(),serializer=JSONSerializer).work(burst=True,logging_level='ERROR')
     assert client.get('/api/v1/jobs/'+d['job']['id'],headers=headers).json()['status']=='successful'
@@ -256,7 +267,7 @@ def test_pending_standalone_ansible_job_preserves_credential(client, headers):
     assert client.delete(f'/api/v1/credentials/{ssh["id"]}', headers=headers).status_code == 200
 
 
-def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch):
+def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch, tmp_path):
     client, headers, admin = system
     _, _, payload = resources(client, headers)
     with session() as db:
@@ -267,7 +278,11 @@ def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch):
     d = client.post('/api/v1/deployments', headers=actor, json=payload).json()
     rotated = client.post('/api/v1/auth/refresh', json={'refresh_token': pair['refresh_token']}).json()
     calls = []
-    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: calls.append(1))
+    workspace = terraform_state_workspace(tmp_path)
+    def successful_apply(*args):
+        calls.append(1)
+        return workspace
+    monkeypatch.setattr(TerraformExecutor, 'execute', successful_apply)
     execute(d['job']['id'])
     assert client.get(f'/api/v1/jobs/{d["job"]["id"]}', headers=headers).json()['status'] == 'successful'
     actor = {'Authorization': 'Bearer ' + rotated['access_token'], 'Idempotency-Key': str(uuid.uuid4())}
