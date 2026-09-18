@@ -109,9 +109,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Secrets JSON' not in script
     assert 'Zastąp zapisane sekrety' in script
     assert "['suspend', 'Resume']" not in script
-    assert "['suspend', 'Wstrzymaj']" in script
-    assert "['resume', 'Wznów']" in script
-    assert "['reset', 'Twardy reset']" in script
+    assert "'suspend', 'Wstrzymaj'" in script
+    assert "'resume', 'Wznów'" in script
+    assert "'reset', 'Twardy reset'" in script
     assert 'destroy_unreferenced_disks' in script
     assert 'credential-secret-panel' in script
     assert 'Akceptuj certyfikat self-signed / niezaufany' in script
@@ -137,6 +137,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function assignHostname(' in script
     assert 'function assignIpAllocation(' in script
     assert 'function showProxmoxTask(' in script
+    assert 'function showVmDetailsPage(' in script
+    assert 'function vmDetailActions(' in script
+    assert 'function vmSnapshotsContent(' in script
+    assert 'function vmBackupsContent(' in script
+    assert 'function vmAuditContent(' in script
+    assert "['overview', 'Przegląd']" in script
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
@@ -203,6 +209,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.global-search-trigger' in stylesheet
     assert '.global-search-dialog' in stylesheet
     assert '.global-search-result' in stylesheet
+    assert '.vm-detail-header' in stylesheet
+    assert '.vm-tabs' in stylesheet
+    assert '.vm-overview-grid' in stylesheet
 
 
 def test_web_console_is_not_added_to_openapi_contract(client):
