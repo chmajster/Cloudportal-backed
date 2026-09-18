@@ -154,7 +154,46 @@ def rollback_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSH
 
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/backups')
 def vm_backups(provider_id: int, node: NODE, vmid: VMID,
-               storage: Annotated[str, Query(pattern=r'^[A-Za-z0-9_.-]{1,63}
+               storage: Annotated[str, Query(min_length=1, max_length=63)],
+               actor=Depends(require('backups.read')), db=Depends(get_db, scope='function')):
+    if not all(ch.isalnum() or ch in '_.-' for ch in storage):
+        raise HTTPException(422, 'Invalid backup storage identifier')
+    rows = adapter(db, provider_id).backups(node, storage, vmid)
+    allowed = 'volid format size ctime vmid content notes protected'.split()
+    return {'items': [{key: value for key, value in row.items() if key in allowed} for row in rows]}
+
+
+@router.post('/providers/{provider_id}/vms/{node}/{vmid}/backups', status_code=202)
+def backup_vm(provider_id: int, node: NODE, vmid: VMID, data: BackupVMInput, request: Request,
+              actor=Depends(require('backups.create')), db=Depends(get_db, scope='function')):
+    def execute():
+        task = adapter(db, provider_id).backup_vm(
+            node, vmid, storage=data.storage, mode=data.mode, compress=data.compress, notes=data.notes
+        )
+        audit(db, request, 'vm.backup_started', 'vms', f'{provider_id}:{node}:{vmid}')
+        return task_result(task)
+    return idempotent(db, request, actor, data.model_dump(), execute, required=True)
+
+
+@router.post('/providers/{provider_id}/restore/{node}', status_code=202)
+def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Request,
+               actor=Depends(require('backups.restore')), db=Depends(get_db, scope='function')):
+    source_storage = data.archive.split(':', 1)[0]
+    provider = adapter(db, provider_id)
+    available = provider.backups(node, source_storage)
+    if not any(row.get('volid') == data.archive for row in available):
+        raise HTTPException(404, 'Backup archive was not found in the selected Proxmox storage')
+
+    def execute():
+        task = provider.restore_vm(
+            node, vm_id=data.vm_id, archive=data.archive, storage=data.storage, unique=data.unique
+        )
+        audit(db, request, 'vm.restore_started', 'vms', f'{provider_id}:{node}:{data.vm_id}')
+        return task_result(task)
+    return idempotent(db, request, actor, data.model_dump(), execute, required=True)
+
+
+@router.post('/providers/{provider_id}/vms/{node}/{vmid}/template', status_code=202)
 def convert_to_template(provider_id: int, node: NODE, vmid: VMID, request: Request,
                         actor=Depends(require('vms.template')), db=Depends(get_db, scope='function')):
     def execute():
