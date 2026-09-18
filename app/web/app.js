@@ -249,16 +249,44 @@ function table(columns, rows, actions) {
   columns.forEach(column => head.append(node('th', { text: column.label })));
   if (actions) head.append(node('th', { text: 'Akcje' }));
   const body = node('tbody');
+  const renderedRows = [];
   rows.forEach(row => {
     const tr = node('tr');
     columns.forEach(column => {
       const value = column.value(row);
-      tr.append(node('td', { class: column.class || '' }, value instanceof Node ? value : String(value ?? '—')));
+      const cell = node('td', { class: column.class || '' }, value instanceof Node ? value : String(value ?? '—'));
+      tr.append(cell);
     });
     if (actions) tr.append(node('td', {}, node('div', { class: 'row-actions' }, actions(row))));
+    tr.dataset.search = JSON.stringify(row).toLocaleLowerCase('pl-PL');
+    renderedRows.push(tr);
     body.append(tr);
   });
-  return node('div', { class: 'table-wrap' }, node('table', {}, node('thead', {}, head), body));
+  const tableElement = node('table', {}, node('thead', {}, head), body);
+  const scroll = node('div', { class: 'table-scroll' }, tableElement);
+  const wrapper = node('div', { class: 'table-wrap' }, scroll);
+  if (rows.length < 8) return wrapper;
+
+  wrapper.classList.add('searchable-table');
+  const count = node('span', { class: 'table-count', text: `${rows.length} pozycji` });
+  const search = node('input', {
+    class: 'table-search',
+    type: 'search',
+    placeholder: 'Szukaj w tabeli…',
+    'aria-label': 'Szukaj w tabeli',
+  });
+  search.addEventListener('input', () => {
+    const phrase = search.value.trim().toLocaleLowerCase('pl-PL');
+    let visible = 0;
+    renderedRows.forEach(row => {
+      const matches = !phrase || row.dataset.search.includes(phrase);
+      row.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    count.textContent = phrase ? `${visible} z ${rows.length} pozycji` : `${rows.length} pozycji`;
+  });
+  wrapper.prepend(node('div', { class: 'table-toolbar' }, search, count));
+  return wrapper;
 }
 
 function field(labelText, name, options = {}) {
@@ -285,6 +313,288 @@ function selectField(labelText, name, choices, value, options = {}) {
 
 function checkboxField(labelText, name, checked = false) {
   return node('label', { class: 'checkbox' }, node('input', { type: 'checkbox', name, checked }), labelText);
+}
+
+function multiSelectField(labelText, name, choices, selectedValues = [], options = {}) {
+  const selected = new Set((selectedValues || []).map(value => String(value)));
+  const select = node('select', { name, multiple: true, size: options.size || Math.min(8, Math.max(4, choices.length || 4)) });
+  choices.forEach(choice => select.append(node('option', {
+    value: choice.value,
+    text: choice.label,
+    selected: selected.has(String(choice.value)),
+  })));
+  const label = node('label', { class: options.wide ? 'wide' : '' }, labelText, select);
+  if (options.help) label.append(node('span', { class: 'field-help', text: options.help }));
+  return label;
+}
+
+function formSection(title, description, ...children) {
+  return node('section', { class: 'form-section wide' },
+    node('div', { class: 'form-section-header' },
+      node('h3', { text: title }),
+      description ? node('p', { text: description }) : null),
+    ...children);
+}
+
+const STATUS_LABELS = {
+  active: 'Aktywny', inactive: 'Nieaktywny', configured: 'Skonfigurowany', locked: 'Zablokowany',
+  revoked: 'Unieważniony', expired: 'Wygasły', queued: 'W kolejce', running: 'W trakcie',
+  successful: 'Zakończony', failed: 'Błąd', cancelled: 'Anulowany', destroyed: 'Usunięty',
+  degraded: 'Ograniczony', missing: 'Brak', present: 'Dostępny', defined: 'Zdefiniowany',
+  released: 'Zwolniony', reserved: 'Zarezerwowany', assigned: 'Przypisany', disabled: 'Wyłączony',
+  stopped: 'Zatrzymany', started: 'Uruchomiony', available: 'Dostępny',
+};
+
+const OPERATION_LABELS = {
+  'terraform.plan': 'Terraform: plan',
+  'terraform.apply': 'Terraform: zastosuj',
+  'terraform.destroy': 'Terraform: usuń',
+  'terraform.import': 'Terraform: import',
+  'ansible.execute': 'Ansible: wykonaj',
+};
+
+function statusLabel(value) {
+  const key = String(value || '').toLowerCase();
+  return STATUS_LABELS[key] || value || '—';
+}
+
+function operationLabel(value) {
+  return OPERATION_LABELS[value] || value || '—';
+}
+
+function displayValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'Tak' : 'Nie';
+  if (Array.isArray(value)) return value.map(displayValue).join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  let amount = bytes;
+  let unit = -1;
+  do { amount /= 1024; unit += 1; } while (amount >= 1024 && unit < units.length - 1);
+  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+const FIELD_LABELS = {
+  name: 'Nazwa',
+  node: 'Węzeł / lokalizacja',
+  template_id: 'VMID szablonu',
+  template_node: 'Węzeł szablonu',
+  cpu: 'CPU',
+  cores: 'Rdzenie CPU',
+  memory: 'RAM (MiB)',
+  disk: 'Dysk (GiB)',
+  network: 'Sieć / bridge',
+  storage: 'Storage',
+  vlan_id: 'VLAN ID',
+  ssh_username: 'Użytkownik SSH',
+  ssh_public_key: 'Klucz publiczny SSH',
+  ipv4_address: 'Adres IPv4 z maską',
+  ipv4_gateway: 'Brama IPv4',
+  region: 'Region',
+  ami: 'AMI',
+  instance_type: 'Typ instancji',
+  subnet_id: 'Subnet ID',
+  security_group_ids: 'Security Group IDs',
+  key_name: 'Nazwa klucza',
+  root_volume_size: 'Dysk systemowy (GiB)',
+  associate_public_ip: 'Publiczny adres IP',
+  location: 'Lokalizacja',
+  resource_group: 'Resource Group',
+  vm_size: 'Rozmiar VM',
+  admin_username: 'Administrator',
+  image_publisher: 'Wydawca obrazu',
+  image_offer: 'Oferta obrazu',
+  image_sku: 'SKU obrazu',
+  image_version: 'Wersja obrazu',
+  os_disk_size_gb: 'Dysk systemowy (GiB)',
+  image_name: 'Obraz',
+  flavor_name: 'Flavor',
+  network_name: 'Sieć',
+  key_pair: 'Key pair',
+  security_groups: 'Security groups',
+  datacenter: 'Datacenter',
+  datastore: 'Datastore',
+  cluster: 'Klaster',
+  template: 'Szablon',
+  folder: 'Folder',
+};
+
+function schemaVariant(spec = {}) {
+  if (spec.type) return spec;
+  if (Array.isArray(spec.anyOf)) return spec.anyOf.find(item => item.type && item.type !== 'null') || spec.anyOf[0] || spec;
+  return spec;
+}
+
+function schemaType(spec = {}) {
+  return schemaVariant(spec).type || 'string';
+}
+
+function schemaEnum(spec = {}) {
+  return spec.enum || schemaVariant(spec).enum || null;
+}
+
+function templateVariableField(name, spec, value, required = false, options = {}) {
+  const base = schemaVariant(spec);
+  const type = schemaType(spec);
+  const label = FIELD_LABELS[name] || spec.title || name;
+  const hasValue = value !== undefined && value !== null;
+  const current = hasValue ? value : spec.default;
+  const helpParts = [];
+  if (spec.description) helpParts.push(spec.description);
+  if (base.minimum !== undefined || base.maximum !== undefined) {
+    helpParts.push(`Zakres: ${base.minimum ?? '—'} – ${base.maximum ?? '—'}`);
+  }
+  const help = helpParts.join(' · ');
+  const choices = schemaEnum(spec);
+  let wrapper;
+  if (choices) {
+    wrapper = selectField(label, name, choices.map(item => ({ value: item, label: String(item) })), current ?? '', { required });
+  } else if (type === 'boolean') {
+    wrapper = checkboxField(label, name, Boolean(current));
+  } else if (type === 'array') {
+    const values = Array.isArray(current) ? current.join('\n') : (current || '');
+    wrapper = field(label, name, { tag: 'textarea', value: values, required, wide: true, help: help || 'Jedna wartość w wierszu lub wartości oddzielone przecinkami.' });
+  } else {
+    const isLong = ['ssh_public_key', 'subnet_id'].includes(name);
+    wrapper = field(label, name, {
+      type: type === 'integer' || type === 'number' ? 'number' : 'text',
+      value: current ?? '',
+      required,
+      min: base.minimum,
+      max: base.maximum,
+      step: type === 'number' ? 'any' : undefined,
+      wide: isLong,
+      help,
+      placeholder: options.placeholder,
+    });
+  }
+  wrapper.dataset.templateVariable = name;
+  return wrapper;
+}
+
+function renderTemplateVariables(container, template, values = {}) {
+  const schema = template?.variables_schema || {};
+  const properties = schema.properties || {};
+  const required = new Set(schema.required || []);
+  container.replaceChildren();
+  Object.entries(properties).forEach(([name, spec]) => {
+    container.append(templateVariableField(name, spec, values[name], required.has(name)));
+  });
+  if (!Object.keys(properties).length) {
+    container.append(node('p', { class: 'muted wide', text: 'Ten szablon nie definiuje zmiennych konfiguracyjnych.' }));
+  }
+}
+
+function readTemplateVariables(form, template) {
+  const result = {};
+  const schema = template?.variables_schema || {};
+  const properties = schema.properties || {};
+  const required = new Set(schema.required || []);
+  for (const [name, spec] of Object.entries(properties)) {
+    const control = form.elements[name];
+    if (!control) continue;
+    const type = schemaType(spec);
+    if (type === 'boolean') {
+      result[name] = control.checked;
+      continue;
+    }
+    const raw = String(control.value ?? '').trim();
+    if (!raw) {
+      if (required.has(name) && spec.default === undefined) throw new Error(`Uzupełnij pole „${FIELD_LABELS[name] || spec.title || name}”.`);
+      continue;
+    }
+    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
+    else if (type === 'number') result[name] = Number(raw);
+    else if (type === 'array') result[name] = splitValues(raw);
+    else result[name] = raw;
+  }
+  return result;
+}
+
+function blueprintTemplateVariableField(name, spec, value) {
+  const type = schemaType(spec);
+  const label = FIELD_LABELS[name] || spec.title || name;
+  const current = value ?? spec.default ?? '';
+  const help = `Typ: ${type}. Możesz użyć wartości lub placeholdera, np. {{ cpu }}.`;
+  const wrapper = field(label, `deployment_var_${name}`, {
+    tag: type === 'array' ? 'textarea' : 'input',
+    value: Array.isArray(current) ? current.join('\n') : String(current),
+    wide: type === 'array' || ['ssh_public_key', 'subnet_id'].includes(name),
+    help,
+  });
+  wrapper.dataset.blueprintTemplateVariable = name;
+  return wrapper;
+}
+
+function readBlueprintTemplateVariables(form, template) {
+  const result = {};
+  const properties = template?.variables_schema?.properties || {};
+  for (const [name, spec] of Object.entries(properties)) {
+    const control = form.elements[`deployment_var_${name}`];
+    if (!control) continue;
+    const raw = String(control.value ?? '').trim();
+    if (!raw) continue;
+    if (/{{\s*[^}]+\s*}}/.test(raw)) {
+      result[name] = raw;
+      continue;
+    }
+    const type = schemaType(spec);
+    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
+    else if (type === 'number') result[name] = Number(raw);
+    else if (type === 'boolean') result[name] = ['true', '1', 'tak', 'yes'].includes(raw.toLowerCase());
+    else if (type === 'array') result[name] = splitValues(raw);
+    else result[name] = raw;
+  }
+  return result;
+}
+
+const HOSTNAME_TOKEN_LABELS = {
+  location: 'Lokalizacja',
+  environment: 'Środowisko',
+  env: 'Środowisko (skrót)',
+  application: 'Aplikacja',
+  service: 'Usługa',
+  role: 'Rola serwera',
+  os: 'System operacyjny',
+  cluster: 'Klaster',
+  site: 'Site',
+};
+
+function hostnameTokens(pattern = '') {
+  return [...new Set([...String(pattern).matchAll(/{([a-z]+)}/g)].map(match => match[1]))]
+    .filter(token => !['number', 'random', 'year'].includes(token));
+}
+
+function hostnameValueFields(pattern, values = {}) {
+  const wrapper = node('div', { class: 'form-grid hostname-values wide' });
+  const tokens = hostnameTokens(pattern);
+  tokens.forEach(token => {
+    const item = field(HOSTNAME_TOKEN_LABELS[token] || token, `hostname_${token}`, {
+      value: values[token] || '',
+      required: true,
+    });
+    item.dataset.hostnameToken = token;
+    wrapper.append(item);
+  });
+  if (!tokens.length) wrapper.append(node('p', { class: 'muted wide', text: 'Ten wzorzec nie wymaga dodatkowych wartości.' }));
+  return wrapper;
+}
+
+function readHostnameValues(form) {
+  const result = {};
+  form.querySelectorAll('[data-hostname-token]').forEach(wrapper => {
+    const token = wrapper.dataset.hostnameToken;
+    const input = wrapper.querySelector('input,select,textarea');
+    if (input?.value) result[token] = input.value.trim();
+  });
+  return result;
 }
 
 function closeModal() {
