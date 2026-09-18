@@ -53,6 +53,8 @@ def main() -> int:
         text = path.read_text(encoding='utf-8')
         if not text.startswith("'use strict';"):
             fail(f'{path.relative_to(ROOT)} must start with use strict', errors)
+        if "(() => {" not in text or not text.rstrip().endswith("})();"):
+            fail(f'{path.relative_to(ROOT)} must be isolated in an IIFE', errors)
         if 'registerView({' not in text:
             fail(f'{path.relative_to(ROOT)} must register at least one view', errors)
         if len(text.splitlines()) > 1400:
