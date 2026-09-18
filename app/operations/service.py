@@ -30,6 +30,9 @@ def required_operation_permissions(operation, deployment=None):
         permissions.add('deployments.create')
         if deployment and (deployment.workflow or {}).get('ansible'):
             permissions.add('ansible.execute')
+        blueprint = (deployment.workflow or {}).get('blueprint', {}) if deployment else {}
+        if blueprint.get('recovery_policy') == 'destroy_on_failure':
+            permissions.add('deployments.destroy')
     if operation == 'terraform.destroy':
         permissions.add('deployments.destroy')
     return permissions
