@@ -1,10 +1,11 @@
 from fastapi import HTTPException
 from app.api.common import public
+from app.models import now
 from app.security.core import decrypt_secret, encrypt_secret
 
 
 def credential_public(c):
-    return {**public(c, 'id name type endpoint username verify_ssl created_at updated_at'),
+    return {**public(c, 'id name type endpoint username verify_ssl expires_at rotation_due_at secret_updated_at created_at updated_at'),
             'configured': bool(c.encrypted_secret), 'secret': '********'}
 
 
@@ -24,3 +25,4 @@ def save_secret(db, c, value):
     if c.type == 'winrm' and not value.get('password'):
         raise HTTPException(422, 'WinRM requires password')
     c.encrypted_secret = encrypt_secret(value, c.id)
+    c.secret_updated_at = now()
