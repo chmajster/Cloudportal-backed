@@ -116,6 +116,8 @@ class JobOutput(Output):
     updated_at: datetime
     cancel_requested: bool
     error: str | None
+    retry_of: str | None
+    attempt: int
 
 
 class DeploymentOutput(Output):
