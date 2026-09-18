@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import uuid
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -222,3 +222,31 @@ class Blueprint(Timestamp, Base):
     deployment: Mapped[dict] = mapped_column(JSON, default=dict)
     workflow: Mapped[list] = mapped_column(JSON, default=list)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+
+class IPPool(Timestamp, Base):
+    __tablename__ = "ip_pools"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    cidr: Mapped[str] = mapped_column(String(64), unique=True)
+    gateway: Mapped[str | None] = mapped_column(String(45))
+    dns_servers: Mapped[list] = mapped_column(JSON, default=list)
+    excluded_addresses: Mapped[list] = mapped_column(JSON, default=list)
+    next_offset: Mapped[int] = mapped_column(BigInteger, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class IPAllocation(Timestamp, Base):
+    __tablename__ = "ip_allocations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    pool_id: Mapped[int] = mapped_column(ForeignKey("ip_pools.id"), index=True)
+    address: Mapped[str] = mapped_column(String(45), index=True)
+    prefix_length: Mapped[int] = mapped_column(Integer)
+    gateway: Mapped[str | None] = mapped_column(String(45))
+    hostname: Mapped[str | None] = mapped_column(String(253))
+    status: Mapped[str] = mapped_column(String(16), default="reserved", index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    released_at: Mapped[datetime | None] = mapped_column(DateTime)
