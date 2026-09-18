@@ -106,6 +106,10 @@ jobs:
           done
           sudo systemctl --no-pager status cloudportal-api cloudportal-dispatcher cloudportal-worker@1 || true
           sudo journalctl --no-pager -u cloudportal-api -u cloudportal-worker@1 -n 50 || true
+          echo 'TLS diagnostics:'
+          sudo cat /etc/cloudportal-backed/public.conf 2>/dev/null || true
+          sudo cat /etc/cloudportal-backed/tls/certificate-source 2>/dev/null || true
+          sudo openssl x509 -in /etc/cloudportal-backed/tls/server.crt -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true
       - name: Remove installer diagnostics
         if: always()
         run: sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output
