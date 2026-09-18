@@ -1,4 +1,4 @@
-def test_console_session_is_ephemeral_and_rbac_protected(client, headers, monkeypatch):
+def test_console_session_is_ephemeral_proxied_and_rbac_protected(client, headers, monkeypatch):
     from app.providers.proxmox import ProxmoxProvider
     from conftest import new_user
 
@@ -18,22 +18,53 @@ def test_console_session_is_ephemeral_and_rbac_protected(client, headers, monkey
     monkeypatch.setattr(ProxmoxProvider, 'console_session', lambda self, node, vmid: {
         'ticket': 'PVEVNC:ephemeral-ticket',
         'port': 5900,
-        'user': 'root@pam',
-        'cert': 'temporary-cert',
-        'websocket_path': f'/api2/json/nodes/{node}/qemu/{vmid}/vncwebsocket',
-        'origin': 'https://pve.example.com:8006',
-        'viewer_url': 'https://pve.example.com:8006/novnc/vnc_lite.html?encrypt=1&autoconnect=1&resize=scale&path=api',
+        'password': 'ephemeral-rfb-password',
     })
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'novnc_asset',
+        lambda self, asset: (b'export default class RFB {}', 'text/javascript; charset=utf-8'),
+    )
 
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101/console"
     response = client.post(base, headers=headers)
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body['ticket'].startswith('PVEVNC:')
-    assert body['viewer_url'].startswith('https://pve.example.com:8006/novnc/vnc_lite.html?')
+    assert body['mode'] == 'novnc'
+    assert body['rfb_module'].startswith('/api/v1/console-sessions/')
+    assert body['rfb_module'].endswith('/novnc/core/rfb.js')
+    assert body['ws_path'].startswith('/api/v1/console-sessions/')
+    assert body['ws_path'].endswith('/websocket')
+    assert body['password'] == 'ephemeral-rfb-password'
+    assert body['expires_in'] > 0
+    assert 'ticket' not in body
+    assert 'port' not in body
+    assert 'pve.example.com' not in str(body)
     assert response.headers['Cache-Control'] == 'no-store'
     assert credential['secret'] == '********'
+
+    asset = client.get(body['rfb_module'])
+    assert asset.status_code == 200, asset.text
+    assert asset.content == b'export default class RFB {}'
+    assert asset.headers['content-type'].startswith('text/javascript')
+    assert asset.headers['Cache-Control'] == 'no-store'
 
     _, reader = new_user(client, headers, username='console-reader', permissions=['vms.read'])
     denied = client.post(base, headers=reader)
     assert denied.status_code == 403
+
+
+def test_novnc_asset_validation_blocks_traversal(system):
+    from app.providers.proxmox import ProxmoxProvider
+    from fastapi import HTTPException
+
+    provider = object.__new__(ProxmoxProvider)
+    provider.endpoint = 'https://pve.example.com:8006/api2/json'
+    provider.verify_ssl = True
+
+    try:
+        provider.novnc_asset('../etc/passwd')
+    except HTTPException as error:
+        assert error.status_code == 404
+    else:
+        raise AssertionError('Traversal asset path was accepted')
