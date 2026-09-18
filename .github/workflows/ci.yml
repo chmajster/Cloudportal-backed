@@ -55,8 +55,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with: {terraform_version: '1.13.5'}
       - run: terraform fmt -check -recursive terraform
-      - run: terraform -chdir=terraform/templates/proxmox-vm init -backend=false -input=false
-      - run: terraform -chdir=terraform/templates/proxmox-vm validate
+      - run: bash scripts/validate-terraform-templates.sh
   container:
     runs-on: ubuntu-latest
     steps:
