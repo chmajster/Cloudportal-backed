@@ -320,14 +320,79 @@ UMask=0077
 WantedBy=multi-user.target
 EOF
 done
+tls_source_file="$config/tls/certificate-source"
+
+certificate_is_self_signed() {
+  local subject issuer
+  subject=$(openssl x509 -in "$1" -noout -subject -nameopt RFC2253 2>/dev/null) || return 1
+  issuer=$(openssl x509 -in "$1" -noout -issuer -nameopt RFC2253 2>/dev/null) || return 1
+  [[ "${subject#subject=}" == "${issuer#issuer=}" ]]
+}
+
+certificate_matches_host() {
+  if [[ "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    openssl x509 -in "$1" -noout -checkip "$backend_host" >/dev/null 2>&1
+  else
+    openssl x509 -in "$1" -noout -checkhost "$backend_host" >/dev/null 2>&1
+  fi
+}
+
+certificate_key_matches() {
+  local cert_public key_public
+  cert_public=$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  key_public=$(openssl pkey -in "$2" -pubout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  [[ -n "$cert_public" && "$cert_public" == "$key_public" ]]
+}
+
+generate_managed_tls_certificate() {
+  local san="DNS:$backend_host"
+  [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
+  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
+    -keyout "$config/tls/server.key" -out "$config/tls/server.crt" \
+    -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
+  chmod 0600 "$config/tls/server.crt" "$config/tls/server.key"
+  printf '%s\n' 'managed-self-signed' > "$tls_source_file"
+  echo "A self-signed TLS certificate for $backend_host was generated. Trust server.crt on the PHP server, or install a CA-issued certificate."
+}
+
 if [[ -n "$cert_file" ]]; then
   install -m 0600 "$cert_file" "$config/tls/server.crt"
   install -m 0600 "$cert_key" "$config/tls/server.key"
-elif [[ ! -f "$config/tls/server.crt" ]]; then
-  san="DNS:$backend_host"
-  [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
-  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 -keyout "$config/tls/server.key" -out "$config/tls/server.crt" -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
-  echo 'A self-signed TLS certificate was generated. Trust server.crt on the PHP server, or install a CA-issued certificate.'
+  printf '%s\n' 'custom' > "$tls_source_file"
+elif [[ ! -f "$config/tls/server.crt" || ! -f "$config/tls/server.key" ]]; then
+  generate_managed_tls_certificate
+else
+  tls_source=''
+  [[ ! -r "$tls_source_file" ]] || tls_source=$(tr -d '\r\n' < "$tls_source_file")
+  if [[ -z "$tls_source" ]] && certificate_is_self_signed "$config/tls/server.crt"; then
+    # Installations created before certificate-source existed used the same self-signed path.
+    tls_source='managed-self-signed'
+    printf '%s\n' "$tls_source" > "$tls_source_file"
+  fi
+
+  if [[ "$tls_source" == 'managed-self-signed' ]]; then
+    regenerate_tls=0
+    openssl x509 -in "$config/tls/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate_tls=1
+    certificate_matches_host "$config/tls/server.crt" || regenerate_tls=1
+    certificate_key_matches "$config/tls/server.crt" "$config/tls/server.key" || regenerate_tls=1
+    if ((regenerate_tls)); then
+      echo "Existing installer-managed TLS certificate is expired, mismatched, or does not cover $backend_host; regenerating it."
+      generate_managed_tls_certificate
+    fi
+  else
+    certificate_key_matches "$config/tls/server.crt" "$config/tls/server.key" || {
+      echo 'Configured custom TLS certificate and key do not match. Pass a valid --cert-file/--cert-key pair.' >&2
+      exit 1
+    }
+    openssl x509 -in "$config/tls/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
+      echo 'Configured custom TLS certificate is expired or expires within 5 minutes.' >&2
+      exit 1
+    }
+    certificate_matches_host "$config/tls/server.crt" || {
+      echo "Configured custom TLS certificate does not cover host $backend_host. Use a matching --host or certificate." >&2
+      exit 1
+    }
+  fi
 fi
 if [[ "$os_family" == rhel ]] && command -v selinuxenabled >/dev/null && selinuxenabled; then
   restorecon -R "$config/tls"
