@@ -137,6 +137,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function multiCheckboxField(' in script
     assert 'function toDateTimeLocal(' in script
     assert 'table-search-empty' in script
+    assert 'function tablePreferenceKey(' in script
+    assert 'function readTablePreferences(' in script
+    assert 'table-sort-button' in script
+    assert 'table-column-picker' in script
+    assert 'table-page-size' in script
+    assert "density === 'compact'" in script
     assert 'function showDeploymentDetails(' in script
     assert 'function assignHostname(' in script
     assert 'function assignIpAllocation(' in script
@@ -206,6 +212,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.workflow-preview-visual' in stylesheet
     assert '.blueprint-run-summary' in stylesheet
     assert '.table-toolbar' in stylesheet
+    assert '.table-sort-button' in stylesheet
+    assert '.table-column-picker' in stylesheet
+    assert '.table-pagination' in stylesheet
+    assert '.advanced-table.compact' in stylesheet
     assert '.permission-group' in stylesheet
     assert '.modal-form-error' in stylesheet
     assert '.form-error.success' in stylesheet
