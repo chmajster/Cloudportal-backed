@@ -19,3 +19,11 @@ variable "ssh_public_key" {
   type    = string
   default = null
 }
+variable "ipv4_address" {
+  type    = string
+  default = null
+}
+variable "ipv4_gateway" {
+  type    = string
+  default = null
+}
