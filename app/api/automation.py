@@ -199,7 +199,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                 created_by=actor.user_id, executor=parsed.executor)
         db.add(deployment)
         db.flush()
-        deployment.state_location = f'workspaces/{deployment.workspace}/terraform.tfstate'
+        deployment.state_location = f'database://terraform-states/{deployment.id}'
         job = new_job(db, request, actor, 'terraform.apply', deployment,
                       {'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                        'blueprint': deployment.workflow['blueprint']})
