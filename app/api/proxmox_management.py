@@ -46,7 +46,14 @@ class BackupVMInput(Input):
 class RestoreVMInput(Input):
     vm_id: int = Field(ge=100, le=999999999)
     archive: Annotated[str, Field(
-        pattern=r'^[A-Za-z0-9_.-]+:backup/[A-Za-z0-9_.+-]{1,240}
+        pattern=r'^[A-Za-z0-9_.-]+:backup/[A-Za-z0-9_.+-]{1,240}$',
+        max_length=320,
+    )]
+    storage: Slug | None = None
+    unique: bool = True
+
+
+class ResizeDiskInput(Input):
     disk: Annotated[str, Field(pattern=r'^(?:scsi|virtio|sata|ide)\d{1,2}$')]
     grow_gib: int = Field(ge=1, le=65536)
 
