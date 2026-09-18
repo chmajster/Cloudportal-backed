@@ -320,14 +320,99 @@ UMask=0077
 WantedBy=multi-user.target
 EOF
 done
+tls_source_file="$config/tls/certificate-source"
+tls_source=''
+tls_certificate_changed=0
+
+certificate_is_self_signed() {
+  local subject issuer
+  subject=$(openssl x509 -in "$1" -noout -subject -nameopt RFC2253 2>/dev/null) || return 1
+  issuer=$(openssl x509 -in "$1" -noout -issuer -nameopt RFC2253 2>/dev/null) || return 1
+  [[ "${subject#subject=}" == "${issuer#issuer=}" ]]
+}
+
+certificate_matches_host() {
+  if [[ "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    openssl x509 -in "$1" -noout -checkip "$backend_host" >/dev/null 2>&1
+  else
+    openssl x509 -in "$1" -noout -checkhost "$backend_host" >/dev/null 2>&1
+  fi
+}
+
+managed_certificate_matches_host() {
+  local expected
+  if [[ "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    expected="IP Address:$backend_host"
+  else
+    expected="DNS:$backend_host"
+  fi
+  openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null \
+    | tail -n +2 \
+    | tr ',' '\n' \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+    | grep -Fxq "$expected"
+}
+
+certificate_key_matches() {
+  local cert_public key_public
+  cert_public=$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  key_public=$(openssl pkey -in "$2" -pubout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  [[ -n "$cert_public" && "$cert_public" == "$key_public" ]]
+}
+
+generate_managed_tls_certificate() {
+  local san="DNS:$backend_host"
+  [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
+  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
+    -keyout "$config/tls/server.key" -out "$config/tls/server.crt" \
+    -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
+  chmod 0600 "$config/tls/server.crt" "$config/tls/server.key"
+  tls_source='managed-self-signed'
+  tls_certificate_changed=1
+  printf '%s\n' "$tls_source" > "$tls_source_file"
+  echo "A self-signed TLS certificate for $backend_host was generated. Trust server.crt on the PHP server, or install a CA-issued certificate."
+}
+
 if [[ -n "$cert_file" ]]; then
   install -m 0600 "$cert_file" "$config/tls/server.crt"
   install -m 0600 "$cert_key" "$config/tls/server.key"
-elif [[ ! -f "$config/tls/server.crt" ]]; then
-  san="DNS:$backend_host"
-  [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
-  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 -keyout "$config/tls/server.key" -out "$config/tls/server.crt" -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
-  echo 'A self-signed TLS certificate was generated. Trust server.crt on the PHP server, or install a CA-issued certificate.'
+  tls_source='custom'
+  tls_certificate_changed=1
+  printf '%s\n' "$tls_source" > "$tls_source_file"
+elif [[ ! -f "$config/tls/server.crt" || ! -f "$config/tls/server.key" ]]; then
+  generate_managed_tls_certificate
+else
+  [[ ! -r "$tls_source_file" ]] || tls_source=$(tr -d '\r\n' < "$tls_source_file")
+  if [[ -z "$tls_source" ]] && certificate_is_self_signed "$config/tls/server.crt"; then
+    # Installations created before certificate-source existed used the same self-signed path.
+    tls_source='managed-self-signed'
+    printf '%s\n' "$tls_source" > "$tls_source_file"
+  fi
+
+  if [[ "$tls_source" == 'managed-self-signed' ]]; then
+    regenerate_tls=0
+    openssl x509 -in "$config/tls/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate_tls=1
+    managed_certificate_matches_host "$config/tls/server.crt" || regenerate_tls=1
+    [[ -z ${previous_host:-} || "$previous_host" == "$backend_host" ]] || regenerate_tls=1
+    certificate_key_matches "$config/tls/server.crt" "$config/tls/server.key" || regenerate_tls=1
+    if ((regenerate_tls)); then
+      echo "Existing installer-managed TLS certificate is expired, mismatched, or does not cover $backend_host; regenerating it."
+      generate_managed_tls_certificate
+    fi
+  else
+    certificate_key_matches "$config/tls/server.crt" "$config/tls/server.key" || {
+      echo 'Configured custom TLS certificate and key do not match. Pass a valid --cert-file/--cert-key pair.' >&2
+      exit 1
+    }
+    openssl x509 -in "$config/tls/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
+      echo 'Configured custom TLS certificate is expired or expires within 5 minutes.' >&2
+      exit 1
+    }
+    certificate_matches_host "$config/tls/server.crt" || {
+      echo "Configured custom TLS certificate does not cover host $backend_host. Use a matching --host or certificate." >&2
+      exit 1
+    }
+  fi
 fi
 if [[ "$os_family" == rhel ]] && command -v selinuxenabled >/dev/null && selinuxenabled; then
   restorecon -R "$config/tls"
@@ -402,7 +487,13 @@ else
   systemctl disable --now cloudportal-backup.timer >/dev/null 2>&1 || true
 fi
 systemctl enable --now nginx
-systemctl reload nginx
+if ((tls_certificate_changed)); then
+  # A graceful reload may briefly leave an old TLS worker serving the previous certificate.
+  # Restart only when certificate material changed; ordinary reinstalls keep a zero-downtime reload.
+  systemctl restart nginx
+else
+  systemctl reload nginx
+fi
 if [[ "$os_family" == rhel ]] && systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-port="$backend_port/tcp"
   firewall-cmd --reload
@@ -413,10 +504,27 @@ for ((attempt=0;attempt<60;attempt++)); do
   sleep 2
 done
 ((ready == 1)) || { echo 'Healthcheck failed. Inspect systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1. Bootstrap token has not been generated.' >&2; exit 1; }
-curl -fsS --noproxy '*' --connect-timeout 5 --max-time 15 \
-  --cacert "$config/tls/server.crt" --resolve "$backend_host:$backend_port:127.0.0.1" \
-  "https://$backend_host:$backend_port/api/v1/health" > "$tmp/tls-health.json" || {
-  echo 'HTTPS healthcheck failed. Check the certificate hostname/expiry and Nginx. Bootstrap token has not been generated.' >&2; exit 1;
-}
+tls_health_curl_args=(-fsS --noproxy '*' --connect-timeout 5 --max-time 15)
+if [[ "$tls_source" == 'managed-self-signed' ]] || certificate_is_self_signed "$config/tls/server.crt"; then
+  # Pin the exact local self-signed certificate. Do not disable TLS verification.
+  tls_health_curl_args+=(--cacert "$config/tls/server.crt")
+fi
+tls_ready=0
+for ((attempt=0;attempt<10;attempt++)); do
+  if curl "${tls_health_curl_args[@]}" --resolve "$backend_host:$backend_port:127.0.0.1" \
+    "https://$backend_host:$backend_port/api/v1/health" > "$tmp/tls-health.json" 2> "$tmp/tls-health.err"; then
+    tls_ready=1
+    break
+  fi
+  sleep 1
+done
+if ((tls_ready != 1)); then
+  cat "$tmp/tls-health.err" >&2
+  echo "HTTPS healthcheck failed for https://$backend_host:$backend_port. The local API is healthy, but Nginx/TLS is not valid for the configured host. Bootstrap token has not been generated." >&2
+  if [[ "$tls_source" == 'custom' ]] && ! certificate_is_self_signed "$config/tls/server.crt"; then
+    echo 'For a private-CA certificate, install the issuing CA in the operating-system trust store before rerunning the installer.' >&2
+  fi
+  exit 1
+fi
 # Secrets are created only after services are healthy, printed only here and never written to logs/files.
 run_backend "$release/.venv/bin/python" -m app.bootstrap --url "https://$backend_host:$backend_port"

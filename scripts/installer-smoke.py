@@ -11,9 +11,11 @@ output=Path('/tmp/cloudportal-install-output').read_text()
 token=re.search(r'^Initial API Token: (cp_\S+)$',output,re.M).group(1)
 password=re.search(r'^Initial password: (\S+)$',output,re.M).group(1)
 context=ssl.create_default_context(cafile='/etc/cloudportal-backed/tls/server.crt')
+public=dict(line.split('=',1) for line in Path('/etc/cloudportal-backed/public.conf').read_text().splitlines() if '=' in line)
+base_url=f'https://{public["host"]}:{public["port"]}/api/v1/'
 
 def request(path,body=None,method=None):
-    req=urllib.request.Request('https://localhost:8443/api/v1/'+path,data=json.dumps(body).encode() if body is not None else None,
+    req=urllib.request.Request(base_url+path,data=json.dumps(body).encode() if body is not None else None,
         headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},method=method)
     with urllib.request.urlopen(req,context=context,timeout=30) as r:return json.load(r)
 assert request('health')['status']=='ok'

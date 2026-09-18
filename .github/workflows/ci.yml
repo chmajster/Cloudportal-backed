@@ -84,9 +84,13 @@ jobs:
           sudo test -s "$(sudo find /var/backups/cloudportal-backed -mindepth 2 -maxdepth 2 -name database.dump -type f | head -n 1)"
           sudo systemctl is-enabled --quiet cloudportal-backup.timer
           sudo sha256sum /etc/cloudportal-backed/master.key > /tmp/master-key-before
-          sudo ./install.sh --non-interactive --host localhost --enable-backups --backup-retention-days 2 --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-reinstall-output 2>&1
+          tls_before=$(sudo sha256sum /etc/cloudportal-backed/tls/server.crt | awk '{print $1}')
+          sudo ./install.sh --non-interactive --host 127.0.0.1 --enable-backups --backup-retention-days 2 --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-reinstall-output 2>&1
           ! sudo grep -q 'Initial API Token:' /tmp/cloudportal-reinstall-output
           sudo sha256sum -c /tmp/master-key-before
+          tls_after=$(sudo sha256sum /etc/cloudportal-backed/tls/server.crt | awk '{print $1}')
+          test "$tls_before" != "$tls_after"
+          sudo openssl x509 -in /etc/cloudportal-backed/tls/server.crt -noout -checkip 127.0.0.1
           sudo python3 scripts/installer-smoke.py --verify-only
       - name: Sanitized service diagnostics
         if: failure()
@@ -102,6 +106,10 @@ jobs:
           done
           sudo systemctl --no-pager status cloudportal-api cloudportal-dispatcher cloudportal-worker@1 || true
           sudo journalctl --no-pager -u cloudportal-api -u cloudportal-worker@1 -n 50 || true
+          echo 'TLS diagnostics:'
+          sudo cat /etc/cloudportal-backed/public.conf 2>/dev/null || true
+          sudo cat /etc/cloudportal-backed/tls/certificate-source 2>/dev/null || true
+          sudo openssl x509 -in /etc/cloudportal-backed/tls/server.crt -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true
       - name: Remove installer diagnostics
         if: always()
         run: sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output
