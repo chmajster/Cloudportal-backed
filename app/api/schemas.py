@@ -304,7 +304,7 @@ class BlueprintVisibility(Input):
 
 class BlueprintStep(Input):
     id: Slug
-    type: Literal['generate_hostname', 'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
+    type: Literal['generate_hostname', 'allocate_ip', 'release_ip', 'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
                   'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
                   'run_ansible_playbook', 'terraform_plan', 'terraform_apply', 'create_snapshot',
                   'health_check', 'condition', 'approval', 'delay', 'notification']
@@ -341,6 +341,9 @@ class BlueprintInput(Input):
 
     @model_validator(mode='after')
     def dag(self):
+        reserved = {'hostname', 'ip_address', 'ip_address_cidr', 'ip_gateway', 'ip_prefix_length'}
+        if set(self.variables_schema) & reserved:
+            raise ValueError('Blueprint variables use names reserved for generated infrastructure values')
         ids = [step.id for step in self.workflow]
         if len(ids) != len(set(ids)):
             raise ValueError('Workflow step IDs must be unique')
