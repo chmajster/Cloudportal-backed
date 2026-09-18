@@ -76,9 +76,6 @@ def main():
     if args.retention_days < 1 or args.retention_days > 3650:
         raise SystemExit('--retention-days must be between 1 and 3650')
 
-    if os.geteuid() != 0:
-        raise SystemExit('Run the backup command as root')
-
     env_file = Path(args.env_file)
     config = read_env(env_file)
     master_key = Path(config.get('CP_MASTER_KEY_FILE', '/etc/cloudportal-backed/master.key'))
