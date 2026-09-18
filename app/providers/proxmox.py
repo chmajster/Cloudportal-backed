@@ -1,5 +1,6 @@
 import ipaddress
-from urllib.parse import quote
+import re
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import HTTPException
@@ -261,18 +262,78 @@ class ProxmoxProvider(InfrastructureProvider):
     def console_session(self, node, vm_id):
         data = self._post(
             f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncproxy',
-            {'websocket': 1},
+            {'websocket': 1, 'generate-password': 1},
         )
-        if not isinstance(data, dict) or not data.get('ticket') or not data.get('port'):
-            raise HTTPException(502, 'Proxmox did not return a console ticket')
+        if (
+            not isinstance(data, dict)
+            or not data.get('ticket')
+            or not data.get('port')
+            or not data.get('password')
+        ):
+            raise HTTPException(502, 'Proxmox did not return complete noVNC proxy credentials')
         return {
             'ticket': data['ticket'],
             'port': int(data['port']),
-            'user': data.get('user'),
-            'cert': data.get('cert'),
-            'websocket_path': f'/api2/json/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncwebsocket',
-            'origin': self.endpoint.removesuffix('/api2/json'),
+            'password': data['password'],
         }
+
+    def console_auth_headers(self):
+        if self.secret.get('token_id') and self.secret.get('token_secret'):
+            token_id = self.secret['token_id']
+            if '!' not in token_id:
+                token_id = self.username + '!' + token_id
+            return {'Authorization': 'PVEAPIToken=' + token_id + '=' + self.secret['token_secret']}
+        try:
+            with httpx.Client(
+                verify=self.verify_ssl,
+                timeout=httpx.Timeout(30, connect=5),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = client.post(
+                    self.endpoint + '/access/ticket',
+                    data={'username': self.username, 'password': self.secret.get('password', '')},
+                )
+                response.raise_for_status()
+                ticket = response.json()['data']['ticket']
+                return {'Cookie': 'PVEAuthCookie=' + ticket}
+        except (httpx.HTTPError, KeyError, ValueError):
+            raise HTTPException(502, 'Unable to authenticate Proxmox console proxy') from None
+
+    def console_websocket_url(self, node, vm_id, port, ticket):
+        origin = self.endpoint.removesuffix('/api2/json')
+        if not origin.startswith('https://'):
+            raise HTTPException(502, 'Proxmox console requires an HTTPS endpoint')
+        path = f'/api2/json/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncwebsocket'
+        query = urlencode({'port': int(port), 'vncticket': ticket})
+        return 'wss://' + origin[len('https://'):] + path + '?' + query
+
+    def novnc_asset(self, asset):
+        asset = asset.lstrip('/')
+        if (
+            not asset
+            or '..' in asset
+            or not re.fullmatch(r'[A-Za-z0-9._/-]+', asset)
+            or asset.rsplit('.', 1)[-1].lower() not in {
+                'js', 'css', 'html', 'svg', 'png', 'gif', 'jpg', 'jpeg', 'woff', 'woff2', 'ttf', 'map',
+            }
+        ):
+            raise HTTPException(404, 'noVNC asset not found')
+        try:
+            with httpx.Client(
+                verify=self.verify_ssl,
+                timeout=httpx.Timeout(30, connect=5),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = client.get(
+                    self.endpoint.removesuffix('/api2/json') + '/novnc/' + asset,
+                    headers=self.console_auth_headers(),
+                )
+                response.raise_for_status()
+                return response.content, response.headers.get('content-type', 'application/octet-stream')
+        except httpx.HTTPError:
+            raise HTTPException(502, 'Unable to proxy Proxmox noVNC asset') from None
 
     def task_status(self, node, upid):
         return self._get(

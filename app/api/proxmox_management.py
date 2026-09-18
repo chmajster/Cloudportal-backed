@@ -1,20 +1,65 @@
+import asyncio
+import json
+import re
+import secrets
+import ssl
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, WebSocket
+from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
+from websockets.asyncio.client import connect as websocket_connect
 from pydantic import Field, model_validator
 
 from app.api.common import find, idempotent
 from app.api.schemas import Input, Name, Slug
-from app.database import get_db
+from app.config import settings
+from app.database import get_db, session as db_session
 from app.models import Credential, Provider
 from app.providers.registry import provider_for
-from app.security.core import audit, require
+from app.security.core import audit, redis_client, require
 
 
 router = APIRouter(tags=['proxmox-vm-management'])
 VMID = Annotated[int, Path(ge=100, le=999999999)]
-NODE = Annotated[str, Path(pattern=r'^[A-Za-z0-9_.-]{1,63}$')]
-SNAPSHOT = Annotated[str, Path(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$')]
+NODE = Annotated[str, Path(pattern=r'^[A-Za-z0-9_.-]{1,63}\z')]
+SNAPSHOT = Annotated[str, Path(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\z')]
+CONSOLE_SESSION_TTL = 90
+CONSOLE_TOKEN = re.compile(r'^[A-Za-z0-9_-]{32,128}\Z')
+
+
+def console_key(session_id):
+    return 'cp:console:' + session_id
+
+
+def load_console_session(session_id):
+    if not CONSOLE_TOKEN.fullmatch(session_id):
+        return None
+    try:
+        raw = redis_client().get(console_key(session_id))
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    required = {'provider_id', 'node', 'vmid', 'port', 'ticket'}
+    if not isinstance(value, dict) or not required <= set(value):
+        return None
+    return value
+
+
+def console_adapter(provider_id):
+    with db_session() as db:
+        provider = db.get(Provider, int(provider_id))
+        if provider is None or provider.type != 'proxmox':
+            raise HTTPException(404, 'Console provider not found')
+        credential = db.get(Credential, provider.credentials_id)
+        if credential is None or credential.type != 'proxmox':
+            raise HTTPException(404, 'Console credential not found')
+        return provider_for(credential)
 
 
 class VMPowerInput(Input):
@@ -22,7 +67,7 @@ class VMPowerInput(Input):
 
 
 class SnapshotInput(Input):
-    snapname: Annotated[str, Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$')]
+    snapname: Annotated[str, Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\z')]
     description: Annotated[str, Field(max_length=1000)] = ''
     include_ram: bool = False
 
@@ -46,7 +91,7 @@ class BackupVMInput(Input):
 class RestoreVMInput(Input):
     vm_id: int = Field(ge=100, le=999999999)
     archive: Annotated[str, Field(
-        pattern=r'^[A-Za-z0-9_.-]+:backup/[A-Za-z0-9_.+-]{1,240}$',
+        pattern=r'^[A-Za-z0-9_.-]+:backup/[A-Za-z0-9_.+-]{1,240}\z',
         max_length=320,
     )]
     storage: Slug | None = None
@@ -54,7 +99,7 @@ class RestoreVMInput(Input):
 
 
 class ResizeDiskInput(Input):
-    disk: Annotated[str, Field(pattern=r'^(?:scsi|virtio|sata|ide)\d{1,2}$')]
+    disk: Annotated[str, Field(pattern=r'^(?:scsi|virtio|sata|ide)\d{1,2}\z')]
     grow_gib: int = Field(ge=1, le=65536)
 
 
@@ -62,7 +107,7 @@ class VMConfigInput(Input):
     name: Name | None = None
     cores: int | None = Field(default=None, ge=1, le=128)
     memory: int | None = Field(default=None, ge=512, le=1048576)
-    tags: Annotated[str | None, Field(max_length=512, pattern=r'^[A-Za-z0-9_.:;-]+$')] = None
+    tags: Annotated[str | None, Field(max_length=512, pattern=r'^[A-Za-z0-9_.:;-]+\z')] = None
     onboot: bool | None = None
 
     @model_validator(mode='after')
@@ -286,8 +331,118 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
 def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
                     actor=Depends(require('vms.console')), db=Depends(get_db, scope='function')):
     result = adapter(db, provider_id).console_session(node, vmid)
-    audit(db, request, 'vm.console_ticket_issued', 'vms', f'{provider_id}:{node}:{vmid}')
-    return result
+    session_id = secrets.token_urlsafe(32)
+    payload = {
+        'provider_id': provider_id,
+        'node': node,
+        'vmid': vmid,
+        'port': int(result['port']),
+        'ticket': result['ticket'],
+    }
+    try:
+        redis_client().setex(console_key(session_id), CONSOLE_SESSION_TTL, json.dumps(payload))
+    except Exception:
+        raise HTTPException(503, 'Console session store is unavailable') from None
+    audit(db, request, 'vm.console_session_issued', 'vms', f'{provider_id}:{node}:{vmid}')
+    return {
+        'mode': 'novnc',
+        'rfb_module': f'/api/v1/console-sessions/{session_id}/novnc/core/rfb.js',
+        'ws_path': f'/api/v1/console-sessions/{session_id}/websocket',
+        'password': result['password'],
+        'expires_in': CONSOLE_SESSION_TTL,
+    }
+
+
+@router.get('/console-sessions/{session_id}/novnc/{asset_path:path}', include_in_schema=False)
+def console_asset(session_id: str, asset_path: str):
+    record = load_console_session(session_id)
+    if record is None:
+        raise HTTPException(410, 'Console session expired')
+    body, content_type = console_adapter(record['provider_id']).novnc_asset(asset_path)
+    return Response(
+        content=body,
+        headers={
+            'Content-Type': content_type,
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'Referrer-Policy': 'no-referrer',
+        },
+    )
+
+
+@router.websocket('/console-sessions/{session_id}/websocket')
+async def console_websocket(websocket: WebSocket, session_id: str):
+    if websocket.url.scheme != 'wss' and not settings().allow_http:
+        await websocket.close(code=4400)
+        return
+    record = await run_in_threadpool(load_console_session, session_id)
+    if record is None:
+        await websocket.close(code=4404)
+        return
+
+    try:
+        proxmox = await run_in_threadpool(console_adapter, record['provider_id'])
+        headers = await run_in_threadpool(proxmox.console_auth_headers)
+        upstream_url = proxmox.console_websocket_url(
+            record['node'], record['vmid'], record['port'], record['ticket']
+        )
+        tls = ssl.create_default_context()
+        if not proxmox.verify_ssl:
+            tls.check_hostname = False
+            tls.verify_mode = ssl.CERT_NONE
+
+        requested = {
+            value.strip()
+            for value in websocket.headers.get('sec-websocket-protocol', '').split(',')
+            if value.strip()
+        }
+        browser_protocol = 'binary' if 'binary' in requested else None
+
+        async with websocket_connect(
+            upstream_url,
+            additional_headers=headers,
+            subprotocols=['binary'],
+            ssl=tls,
+            open_timeout=10,
+            close_timeout=5,
+            ping_interval=20,
+            max_size=None,
+        ) as upstream:
+            await websocket.accept(subprotocol=browser_protocol)
+
+            async def browser_to_proxmox():
+                while True:
+                    message = await websocket.receive()
+                    if message['type'] == 'websocket.disconnect':
+                        return
+                    if message.get('bytes') is not None:
+                        await upstream.send(message['bytes'])
+                    elif message.get('text') is not None:
+                        await upstream.send(message['text'])
+
+            async def proxmox_to_browser():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            tasks = {
+                asyncio.create_task(browser_to_proxmox()),
+                asyncio.create_task(proxmox_to_browser()),
+            }
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except RuntimeError:
+            pass
 
 
 @router.get('/providers/{provider_id}/tasks/{node}/{upid}')

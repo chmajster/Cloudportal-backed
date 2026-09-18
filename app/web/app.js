@@ -2,7 +2,7 @@
 
 const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
-const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null };
+const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null };
 
 const dom = {
   loginView: document.querySelector('#login-view'),
@@ -229,7 +229,14 @@ function checkboxField(labelText, name, checked = false) {
   return node('label', { class: 'checkbox' }, node('input', { type: 'checkbox', name, checked }), labelText);
 }
 
-function closeModal() { if (dom.modal.open) dom.modal.close(); }
+function closeModal() {
+  if (state.consoleRfb) {
+    try { state.consoleRfb.disconnect(); } catch { /* Session may already be disconnected. */ }
+    state.consoleRfb = null;
+  }
+  dom.modal.classList.remove('modal-console');
+  if (dom.modal.open) dom.modal.close();
+}
 
 function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit, danger = false, wide = false }) {
   dom.modalTitle.textContent = title;
@@ -1374,9 +1381,46 @@ function listVmBackups(item) {
 
 async function showVmConsole(item) {
   try {
+    closeModal();
     const result = await api(`${vmBase(item)}/console`, { method: 'POST' });
-    showSecret('Ephemeral VNC console', JSON.stringify(result, null, 2), 'To jest krótkotrwały bilet konsoli Proxmox. Credential providera nie jest ujawniany ani zapisywany.');
-  } catch (error) { toast(error.message, 'error'); }
+    if (result.mode !== 'novnc' || !result.rfb_module?.startsWith('/api/v1/') || !result.ws_path?.startsWith('/api/v1/')) {
+      throw new Error('Backend nie zwrócił poprawnej sesji noVNC.');
+    }
+
+    const screen = node('div', { class: 'novnc-screen' });
+    const status = node('p', { class: 'muted', text: 'Łączenie z konsolą przez Cloudportal-backed…' });
+    dom.modalTitle.textContent = 'Konsola noVNC';
+    dom.modalEyebrow.textContent = item.name || `${item.node} / ${item.vm_id}`;
+    dom.modalBody.replaceChildren(status, screen);
+    dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+    dom.modal.classList.add('modal-console');
+    dom.modal.showModal();
+
+    const module = await import(result.rfb_module);
+    const RFB = module.default;
+    if (typeof RFB !== 'function') throw new Error('Moduł noVNC nie udostępnia klienta RFB.');
+    const websocketScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const rfb = new RFB(
+      screen,
+      `${websocketScheme}//${window.location.host}${result.ws_path}`,
+      { credentials: { password: result.password } },
+    );
+    state.consoleRfb = rfb;
+    rfb.scaleViewport = true;
+    rfb.resizeSession = true;
+    rfb.addEventListener('connect', () => { status.textContent = 'Połączono przez backend proxy.'; });
+    rfb.addEventListener('disconnect', event => {
+      if (state.consoleRfb === rfb) state.consoleRfb = null;
+      status.textContent = event.detail?.clean ? 'Konsola rozłączona.' : 'Połączenie konsoli zostało przerwane.';
+    });
+    rfb.addEventListener('credentialsrequired', () => {
+      rfb.sendCredentials({ password: result.password });
+    });
+  } catch (error) {
+    state.consoleRfb = null;
+    if (dom.modal.open) closeModal();
+    toast(error.message, 'error');
+  }
 }
 
 function configureVm(item) {

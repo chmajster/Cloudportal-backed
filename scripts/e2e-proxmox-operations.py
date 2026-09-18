@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Explicit opt-in live Proxmox lifecycle acceptance test for console/backup/restore."""
 import argparse
+import ssl
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
+from websockets.sync.client import connect as websocket_connect
 
 
 parser = argparse.ArgumentParser()
@@ -79,9 +81,36 @@ if any(int(vm.get('vmid', -1)) == args.restore_vmid for vm in vms):
     raise RuntimeError('restore-vmid already exists; refusing destructive test')
 
 console = request('POST', f'providers/{args.provider_id}/vms/{args.node}/{args.vmid}/console')
-if not console.get('ticket') or not console.get('port'):
-    raise RuntimeError('Console endpoint did not return an ephemeral ticket and port')
-print('Console ticket issued successfully; secret value was not printed.')
+if (
+    console.get('mode') != 'novnc'
+    or not str(console.get('rfb_module', '')).startswith('/api/v1/console-sessions/')
+    or not str(console.get('ws_path', '')).startswith('/api/v1/console-sessions/')
+    or not console.get('password')
+):
+    raise RuntimeError('Console endpoint did not return a backend-proxied noVNC session')
+if 'pve' in str(console.get('rfb_module', '')).lower() or console.get('ticket') or console.get('port'):
+    raise RuntimeError('Console response exposed upstream Proxmox connection details')
+
+asset = client.get(args.url.rstrip('/') + console['rfb_module'])
+if not asset.is_success or b'RFB' not in asset.content:
+    raise RuntimeError('Backend noVNC asset proxy did not return the RFB module')
+
+backend = urlsplit(args.url)
+tls = ssl.create_default_context(cafile=args.ca_file) if args.ca_file else ssl.create_default_context()
+ws_url = urlunsplit(('wss', backend.netloc, console['ws_path'], '', ''))
+with websocket_connect(
+    ws_url,
+    ssl=tls,
+    subprotocols=['binary'],
+    open_timeout=10,
+    close_timeout=5,
+) as websocket:
+    greeting = websocket.recv(timeout=10)
+    if isinstance(greeting, str):
+        greeting = greeting.encode()
+    if not greeting.startswith(b'RFB '):
+        raise RuntimeError('Backend console WebSocket did not relay an RFB protocol greeting')
+print('Backend-only noVNC asset and WebSocket proxy accepted an RFB session.')
 
 before = {
     row['volid']

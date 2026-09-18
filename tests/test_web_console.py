@@ -30,6 +30,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Secrets JSON' not in script.text
     assert 'Zastąp zapisane sekrety' in script.text
     assert 'credential-secret-panel' in script.text
+    assert 'consoleRfb' in script.text
+    assert 'rfb_module' in script.text
+    assert 'ws_path' in script.text
+    assert "window.open('about:blank'" not in script.text
     assert stylesheet.status_code == 200
     assert '.credential-secret-panel' in stylesheet.text
     assert '.modal.modal-wide' in stylesheet.text
