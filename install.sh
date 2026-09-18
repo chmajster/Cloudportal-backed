@@ -321,6 +321,7 @@ WantedBy=multi-user.target
 EOF
 done
 tls_source_file="$config/tls/certificate-source"
+tls_source=''
 
 certificate_is_self_signed() {
   local subject issuer
@@ -351,18 +352,19 @@ generate_managed_tls_certificate() {
     -keyout "$config/tls/server.key" -out "$config/tls/server.crt" \
     -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
   chmod 0600 "$config/tls/server.crt" "$config/tls/server.key"
-  printf '%s\n' 'managed-self-signed' > "$tls_source_file"
+  tls_source='managed-self-signed'
+  printf '%s\n' "$tls_source" > "$tls_source_file"
   echo "A self-signed TLS certificate for $backend_host was generated. Trust server.crt on the PHP server, or install a CA-issued certificate."
 }
 
 if [[ -n "$cert_file" ]]; then
   install -m 0600 "$cert_file" "$config/tls/server.crt"
   install -m 0600 "$cert_key" "$config/tls/server.key"
-  printf '%s\n' 'custom' > "$tls_source_file"
+  tls_source='custom'
+  printf '%s\n' "$tls_source" > "$tls_source_file"
 elif [[ ! -f "$config/tls/server.crt" || ! -f "$config/tls/server.key" ]]; then
   generate_managed_tls_certificate
 else
-  tls_source=''
   [[ ! -r "$tls_source_file" ]] || tls_source=$(tr -d '\r\n' < "$tls_source_file")
   if [[ -z "$tls_source" ]] && certificate_is_self_signed "$config/tls/server.crt"; then
     # Installations created before certificate-source existed used the same self-signed path.
@@ -478,10 +480,19 @@ for ((attempt=0;attempt<60;attempt++)); do
   sleep 2
 done
 ((ready == 1)) || { echo 'Healthcheck failed. Inspect systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1. Bootstrap token has not been generated.' >&2; exit 1; }
-curl -fsS --noproxy '*' --connect-timeout 5 --max-time 15 \
-  --cacert "$config/tls/server.crt" --resolve "$backend_host:$backend_port:127.0.0.1" \
-  "https://$backend_host:$backend_port/api/v1/health" > "$tmp/tls-health.json" || {
-  echo 'HTTPS healthcheck failed. Check the certificate hostname/expiry and Nginx. Bootstrap token has not been generated.' >&2; exit 1;
-}
+tls_health_curl_args=(-fsS --noproxy '*' --connect-timeout 5 --max-time 15)
+if [[ "$tls_source" == 'managed-self-signed' ]] || certificate_is_self_signed "$config/tls/server.crt"; then
+  # Pin the exact local self-signed certificate. Do not disable TLS verification.
+  tls_health_curl_args+=(--cacert "$config/tls/server.crt")
+fi
+if ! curl "${tls_health_curl_args[@]}" --resolve "$backend_host:$backend_port:127.0.0.1" \
+  "https://$backend_host:$backend_port/api/v1/health" > "$tmp/tls-health.json" 2> "$tmp/tls-health.err"; then
+  cat "$tmp/tls-health.err" >&2
+  echo "HTTPS healthcheck failed for https://$backend_host:$backend_port. The local API is healthy, but Nginx/TLS is not valid for the configured host. Bootstrap token has not been generated." >&2
+  if [[ "$tls_source" == 'custom' ]] && ! certificate_is_self_signed "$config/tls/server.crt"; then
+    echo 'For a private-CA certificate, install the issuing CA in the operating-system trust store before rerunning the installer.' >&2
+  fi
+  exit 1
+fi
 # Secrets are created only after services are healthy, printed only here and never written to logs/files.
 run_backend "$release/.venv/bin/python" -m app.bootstrap --url "https://$backend_host:$backend_port"
