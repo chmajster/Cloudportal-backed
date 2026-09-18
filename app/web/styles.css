@@ -221,6 +221,7 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent-s
 .checks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .check { display: flex; justify-content: space-between; gap: 12px; padding: 11px 12px; background: var(--surface-2); border-radius: 9px; color: var(--muted); font-size: .8rem; }
 .check strong { color: var(--text); }
+.system-version { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); font-size: .74rem; }
 
 .table-wrap { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .table-scroll { overflow: auto; max-width: 100%; }
@@ -228,7 +229,7 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent-s
 .table-search { max-width: 360px; padding: 9px 11px; }
 .table-count { flex: 0 0 auto; color: var(--muted); font-size: .74rem; font-weight: 700; }
 table { width: 100%; border-collapse: collapse; font-size: .8rem; }
-th { padding: 13px 14px; color: var(--muted); text-align: left; text-transform: uppercase; letter-spacing: .075em; font-size: .68rem; background: var(--table-head); }
+th { position: sticky; top: 0; z-index: 1; padding: 13px 14px; color: var(--muted); text-align: left; text-transform: uppercase; letter-spacing: .075em; font-size: .68rem; background: var(--table-head); }
 td { padding: 14px; border-top: 1px solid var(--line); vertical-align: middle; }
 tbody tr:hover { background: var(--row-hover); }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .74rem; }
@@ -250,8 +251,17 @@ tbody tr:hover { background: var(--row-hover); }
 .modal h2 { margin: 0; font-size: 1.25rem; }
 .modal-body { padding: 22px; overflow-y: auto; max-height: calc(100vh - 190px); }
 .modal-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; padding: 16px 22px; border-top: 1px solid var(--line); }
+.permission-groups { display: grid; gap: 10px; }
+.permission-group { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.permission-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; cursor: pointer; background: var(--surface-2); font-size: .82rem; font-weight: 800; user-select: none; }
+.permission-group > summary:hover { background: var(--surface-3); }
+.permission-group > summary::marker { color: var(--accent); }
+.permission-group .permission-grid { padding: 10px; }
 .permission-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.permission-grid label { display: flex; align-items: center; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
+.permission-grid label { display: flex; align-items: flex-start; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.permission-grid label span { min-width: 0; }
+.permission-grid label strong, .permission-grid label small { display: block; }
+.permission-grid label small { margin-top: 3px; overflow-wrap: anywhere; }
 .secret-box { padding: 14px; background: var(--secret-bg); border: 1px solid var(--accent-border); color: var(--accent); border-radius: 9px; overflow-wrap: anywhere; user-select: all; }
 .log-output { max-height: 55vh; overflow: auto; background: var(--log-bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px; white-space: pre-wrap; color: var(--log-text); line-height: 1.65; }
 .toast-region { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 10px; z-index: 100; }
@@ -299,6 +309,7 @@ tbody tr:hover { background: var(--row-hover); }
   .metrics { grid-template-columns: 1fr 1fr; }
   .checks { grid-template-columns: 1fr; }
   .form-grid, .permission-grid { grid-template-columns: 1fr; }
+  .permission-group > summary { padding: 11px 12px; }
   .form-section { padding: 13px; }
   .editor-card { padding: 12px; }
   .editor-card-header { align-items: flex-start; }
