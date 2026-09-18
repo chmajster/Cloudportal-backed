@@ -9,7 +9,7 @@ from app.api.schemas import BlueprintExecuteInput, BlueprintInput, DeploymentInp
 from app.automation.service import (available_to, blueprint_public, compile_blueprint, generate_hostname,
                                     hostname_public)
 from app.database import get_db
-from app.models import Blueprint, Deployment, HostnameReservation, HostnameScheme, Provider, Role, User, now
+from app.models import Blueprint, Deployment, HostnameReservation, HostnameScheme, IPPool, Provider, Role, User, now
 from app.security.core import audit, require
 
 
@@ -104,6 +104,10 @@ def validate_blueprint_references(db, data):
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
     if data.deployment.hostname_scheme_id:
         find(db, HostnameScheme, data.deployment.hostname_scheme_id)
+    if data.deployment.ipam_pool_id:
+        pool = find(db, IPPool, data.deployment.ipam_pool_id)
+        if not pool.is_active:
+            raise HTTPException(422, 'Blueprint IPAM pool must be active')
     for role_id in set(data.allowed_role_ids):
         find(db, Role, role_id)
     for user_id in set(data.allowed_user_ids):
@@ -175,7 +179,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     if not available_to(row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
     def create():
-        rendered, reservation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id)
+        rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id)
         blueprint_variables = rendered.pop('blueprint_variables')
         parsed = DeploymentInput.model_validate(rendered)
         provider = find(db, Provider, parsed.provider_id)
@@ -201,6 +205,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                        'blueprint': deployment.workflow['blueprint']})
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
+        if ip_allocation:
+            ip_allocation.status, ip_allocation.resource_id = 'assigned', deployment.id
         audit(db, request, 'blueprint.executed', 'blueprints', row.id)
         audit(db, request, 'deployment.created', 'deployments', deployment.id)
         return {**deployment_public(deployment), 'job': job_public(job)}
