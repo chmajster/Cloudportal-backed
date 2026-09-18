@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function ipamView() {
   const [pools, allocations] = await Promise.all([
     api('/ipam/pools?limit=200'),
@@ -122,3 +123,4 @@ function allocateIp(pool) {
 }
 
 registerView({ id: 'ipam', label: 'IPAM', icon: 'I', permission: 'ipam.read', order: 90 }, ipamView);
+})();
