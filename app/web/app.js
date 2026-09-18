@@ -335,6 +335,12 @@ function table(columns, rows, actions) {
   return wrapper;
 }
 
+function formFieldLabel(labelText, required = false) {
+  return node('span', { class: 'field-label' },
+    labelText,
+    required ? node('span', { class: 'required-mark', 'aria-hidden': 'true', text: ' *' }) : null);
+}
+
 function field(labelText, name, options = {}) {
   const input = node(options.tag || 'input', {
     name, type: options.type || 'text', value: options.value ?? '', required: options.required,
@@ -342,7 +348,7 @@ function field(labelText, name, options = {}) {
     placeholder: options.placeholder, step: options.step,
   });
   if (options.tag === 'textarea') input.textContent = options.value ?? '';
-  const label = node('label', {}, labelText, input);
+  const label = node('label', {}, formFieldLabel(labelText, Boolean(options.required)), input);
   if (options.help) label.append(node('span', { class: 'field-help', text: options.help }));
   if (options.wide) label.classList.add('wide');
   return label;
@@ -352,7 +358,7 @@ function selectField(labelText, name, choices, value, options = {}) {
   const select = node('select', { name, required: options.required });
   if (options.placeholder) select.append(node('option', { value: '', text: options.placeholder }));
   choices.forEach(choice => select.append(node('option', { value: choice.value, text: choice.label, selected: String(choice.value) === String(value) })));
-  const label = node('label', {}, labelText, select);
+  const label = node('label', {}, formFieldLabel(labelText, Boolean(options.required)), select);
   if (options.wide) label.classList.add('wide');
   return label;
 }
