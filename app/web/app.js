@@ -416,6 +416,45 @@ function operationLabel(value) {
   return OPERATION_LABELS[value] || value || '—';
 }
 
+const WEBHOOK_EVENT_LABELS = {
+  'job.successful': 'Zadanie zakończone',
+  'job.failed': 'Zadanie zakończone błędem',
+  'job.cancelled': 'Zadanie anulowane',
+  'recovery.queued': 'Odzyskiwanie dodane do kolejki',
+  'recovery.successful': 'Odzyskiwanie zakończone',
+  'recovery.failed': 'Odzyskiwanie zakończone błędem',
+  'system.alert': 'Alert systemowy',
+};
+
+function webhookEventLabel(value) {
+  return WEBHOOK_EVENT_LABELS[value] || value || '—';
+}
+
+const AUDIT_RESOURCE_LABELS = {
+  users: 'Użytkownik', roles: 'Rola', tokens: 'Token', credentials: 'Dane dostępowe',
+  providers: 'Platforma', deployments: 'Wdrożenie', jobs: 'Zadanie', blueprints: 'Blueprint',
+  hostnames: 'Hostname', hostname_schemes: 'Schemat hostname', ip_pools: 'Pula IPAM',
+  ip_allocations: 'Adres IP', managed_vms: 'VM', schedules: 'Harmonogram', webhooks: 'Webhook',
+  vms: 'VM',
+};
+
+const AUDIT_VERB_LABELS = {
+  created: 'utworzono', updated: 'zaktualizowano', deleted: 'usunięto', revoked: 'unieważniono',
+  assigned: 'przypisano', released: 'zwolniono', reserved: 'zarezerwowano', disabled: 'wyłączono',
+  enabled: 'włączono', unlocked: 'odblokowano', tested: 'przetestowano', generated: 'wygenerowano',
+  executed: 'uruchomiono', cancelled: 'anulowano', retried: 'ponowiono', migrated: 'zmigrowano',
+  cloned: 'sklonowano', restored: 'przywrócono', started: 'uruchomiono', stopped: 'zatrzymano',
+};
+
+function auditActionLabel(value) {
+  const parts = String(value || '').split('.');
+  const verb = AUDIT_VERB_LABELS[parts.at(-1)];
+  if (!verb) return value || '—';
+  const resourceKey = parts.slice(0, -1).join('_') || parts[0];
+  const resource = AUDIT_RESOURCE_LABELS[resourceKey] || AUDIT_RESOURCE_LABELS[parts[0]] || parts[0];
+  return `${resource}: ${verb}`;
+}
+
 const PERMISSION_GROUP_LABELS = {
   users: 'Użytkownicy', roles: 'Role i RBAC', tokens: 'Tokeny API', credentials: 'Dane dostępowe',
   providers: 'Platformy', deployments: 'Wdrożenia', jobs: 'Zadania', terraform: 'Terraform / OpenTofu',
@@ -1531,13 +1570,18 @@ async function discoverProvider(provider) {
 }
 
 async function deploymentsView() {
-  const deployments = (await api('/deployments?limit=200')).items;
+  const [deploymentResult, providerResult] = await Promise.all([
+    api('/deployments?limit=200'),
+    allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const deployments = deploymentResult.items;
+  const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
   const actions = allowed('deployments.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')
     ? [button('Nowe wdrożenie', createDeployment, 'primary')] : [];
   dom.content.replaceChildren(heading('Kontrolowane wdrożenia Terraform/OpenTofu. Każda operacja tworzy audytowalne zadanie.', actions),
     table([
       { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
-      { label: 'Platforma', value: item => `${item.provider} #${item.provider_id}` }, { label: 'Executor', value: item => badge(item.executor, 'info') },
+      { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || `#${item.provider_id}` }, { label: 'Silnik IaC', value: item => badge(item.executor, 'info') },
       { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], deployments, item => deploymentActions(item)));
 }
@@ -1865,8 +1909,8 @@ async function auditView(requestId = '') {
   const search = node('form', { class: 'action-group', onSubmit: event => { event.preventDefault(); auditView(event.currentTarget.elements.request_id.value.trim()); } }, field('Request ID', 'request_id', { value: requestId, placeholder: 'UUID korelacji' }), node('button', { class: 'button primary', type: 'submit' }, 'Filtruj'));
   dom.content.replaceChildren(heading('Niezmienna historia operacji bezpieczeństwa i infrastruktury.', [search]),
     table([
-      { label: 'Czas', value: item => formatDate(item.timestamp) }, { label: 'Akcja', value: item => node('strong', { text: item.action }) },
-      { label: 'Zasób', value: item => `${item.resource || '—'} ${item.resource_id || ''}` }, { label: 'Źródło', value: item => item.source }, { label: 'Wynik', value: item => badge(item.result, item.result === 'success' ? 'ok' : 'danger') },
+      { label: 'Czas', value: item => formatDate(item.timestamp) }, { label: 'Akcja', value: item => node('strong', { text: auditActionLabel(item.action) }) },
+      { label: 'Zasób', value: item => `${AUDIT_RESOURCE_LABELS[item.resource] || item.resource || '—'} ${item.resource_id || ''}` }, { label: 'Źródło', value: item => item.source }, { label: 'Wynik', value: item => badge(item.result, item.result === 'success' ? 'ok' : 'danger') },
       { label: 'Użytkownik', value: item => item.user_id ?? '—' }, { label: 'Request ID', class: 'mono', value: item => short(item.request_id, 18) },
     ], result.items));
 }
@@ -2395,7 +2439,7 @@ async function hostnamesView() {
   const [schemes, reservations] = await Promise.all([api('/hostname-schemes?limit=200'), api('/hostnames?limit=200')]);
   const actions = [];
   if (allowed('hostnames.create')) actions.push(button('Nowy schemat', hostnameSchemeForm, 'primary'));
-  if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => generateHostname(schemes.items)));
+  if (allowed('hostnames.reserve')) actions.push(button('Generuj nazwę', () => generateHostname(schemes.items)));
   dom.content.replaceChildren(heading('Centralne generowanie nazw z blokadą sekwencji, wykrywaniem kolizji i historią rezerwacji.', actions),
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Schematy' })), table([
       { label: 'Nazwa', value: item => item.name }, { label: 'Wzorzec', value: item => node('span', { class: 'mono', text: item.pattern }) },
@@ -2415,14 +2459,14 @@ async function hostnamesView() {
       return result;
     })),
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Rezerwacje' })), table([
-      { label: 'Hostname', value: item => node('strong', { class: 'mono', text: item.hostname }) }, { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
+      { label: 'Nazwa hosta', value: item => node('strong', { class: 'mono', text: item.hostname }) }, { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
       { label: 'Zasób', value: item => short(item.resource_id, 18) }, { label: 'Utworzono', value: item => formatDate(item.created_at) },
     ], reservations.items, item => {
       const result = [];
       if (allowed('hostnames.reserve') && item.status === 'reserved') result.push(button('Przypisz', () => assignHostname(item), 'primary'));
-      if (allowed('hostnames.release') && item.status !== 'released') result.push(button('Zwolnij', () => confirmAction('Zwolnij hostname', `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`, async () => {
+      if (allowed('hostnames.release') && item.status !== 'released') result.push(button('Zwolnij', () => confirmAction('Zwolnij nazwę hosta', `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`, async () => {
         await api(`/hostnames/${item.id}/release`, { method: 'POST' });
-        toast('Hostname zwolniony.');
+        toast('Nazwa hosta zwolniona.');
         navigate('hostnames');
       }), 'danger'));
       return result;
@@ -2457,7 +2501,7 @@ async function assignHostname(item) {
         const resourceId = data.get('known_resource_id') || data.get('resource_id')?.trim();
         if (!resourceId) throw new Error('Wybierz lub podaj identyfikator zasobu.');
         await api(`/hostnames/${item.id}/assign?resource_id=${encodeURIComponent(resourceId)}`, { method: 'POST' });
-        toast('Hostname przypisany.');
+        toast('Nazwa hosta przypisana.');
         navigate('hostnames');
       },
     });
@@ -2626,7 +2670,7 @@ async function ipamView() {
       table([
         { label: 'Adres', class: 'mono', value: item => `${item.address}/${item.prefix_length}` },
         { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
-        { label: 'Hostname', value: item => item.hostname || '—' },
+        { label: 'Nazwa hosta', value: item => item.hostname || '—' },
         { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
         { label: 'Utworzono', value: item => formatDate(item.created_at) },
       ], allocations.items, item => {
@@ -3261,7 +3305,7 @@ async function schedulesView() {
       { label: 'Operacja', value: item => operationLabel(item.operation) },
       { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
       { label: 'Następne', value: item => formatDate(item.next_run_at) },
-      { label: 'Interwał', value: item => item.interval_seconds ? `${item.interval_seconds}s` : 'jednorazowo' },
+      { label: 'Interwał', value: item => item.interval_seconds ? formatDuration(item.interval_seconds) : 'Jednorazowo' },
       { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'disabled'), item.is_active ? 'ok' : 'info') },
       { label: 'Błąd', value: item => item.last_error || '—' },
     ], schedules, item => {
@@ -3308,7 +3352,7 @@ async function webhooksView() {
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
         { label: 'URL', class: 'mono', value: item => short(item.url, 48) },
-        { label: 'Zdarzenia', value: item => item.events.join(', ') },
+        { label: 'Zdarzenia', value: item => item.events.map(webhookEventLabel).join(', ') },
         { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
       ], hooks.items, item => {
         const result = [];
@@ -3328,7 +3372,7 @@ async function webhooksView() {
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Dostawy' })),
       table([
-        { label: 'Zdarzenie', value: item => item.event },
+        { label: 'Zdarzenie', value: item => webhookEventLabel(item.event) },
         { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
         { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
         { label: 'Próby', value: item => item.attempts },
@@ -3344,13 +3388,13 @@ function webhookForm(item = null) {
   const fields = node('div', { class: 'form-grid' },
     field('Nazwa', 'name', { required: true, value: item?.name || '' }),
     field('HTTPS URL', 'url', { required: true, value: item?.url || '', wide: true }),
-    checkboxField('job.successful', 'event_job_successful', events.includes('job.successful')),
-    checkboxField('job.failed', 'event_job_failed', events.includes('job.failed')),
-    checkboxField('job.cancelled', 'event_job_cancelled', events.includes('job.cancelled')),
-    checkboxField('recovery.queued', 'event_recovery_queued', events.includes('recovery.queued')),
-    checkboxField('recovery.successful', 'event_recovery_successful', events.includes('recovery.successful')),
-    checkboxField('recovery.failed', 'event_recovery_failed', events.includes('recovery.failed')),
-    checkboxField('system.alert', 'event_system_alert', events.includes('system.alert')),
+    checkboxField('Zadanie zakończone', 'event_job_successful', events.includes('job.successful')),
+    checkboxField('Zadanie zakończone błędem', 'event_job_failed', events.includes('job.failed')),
+    checkboxField('Zadanie anulowane', 'event_job_cancelled', events.includes('job.cancelled')),
+    checkboxField('Odzyskiwanie dodane do kolejki', 'event_recovery_queued', events.includes('recovery.queued')),
+    checkboxField('Odzyskiwanie zakończone', 'event_recovery_successful', events.includes('recovery.successful')),
+    checkboxField('Odzyskiwanie zakończone błędem', 'event_recovery_failed', events.includes('recovery.failed')),
+    checkboxField('Alert systemowy', 'event_system_alert', events.includes('system.alert')),
     checkboxField('Aktywny', 'is_active', item?.is_active ?? true));
   openModal({ title: item ? 'Edytuj webhook' : 'Nowy webhook', eyebrow: 'Signed HMAC', body: fields, onSubmit: async data => {
     const selected = [];
