@@ -174,6 +174,8 @@ class TemplateOutput(Output):
     id: str
     name: str
     provider: str
+    version: int
+    importable: bool
     variables_schema: dict[str, Any]
 
 
