@@ -8,20 +8,24 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import settings
 from app.database import session
 from app.models import (
     Audit,
+    HostnameReservation,
+    Idempotency,
+    IPAllocation,
     Deployment,
     Job,
+    JobLog,
     ScheduledOperation,
     WebhookDelivery,
     WebhookEndpoint,
     now,
 )
-from app.security.core import decrypt_blob, effective_permissions, encrypt_blob
+from app.security.core import decrypt_blob, effective_permissions, encrypt_blob, redis_client
 
 
 def required_operation_permissions(operation, deployment=None):
@@ -232,3 +236,55 @@ def scheduler_user_permissions(db, user_id):
     ):
         return None
     return effective_permissions(user)
+
+
+
+def cleanup_retention_once(force=False):
+    if not force:
+        try:
+            if not redis_client().set('cp:retention:lock', '1', nx=True, ex=3600):
+                return {'skipped': True}
+        except Exception:
+            return {'skipped': True}
+
+    current = now()
+    cutoffs = {
+        'job_logs': current - timedelta(days=settings().retention_job_logs_days),
+        'audit': current - timedelta(days=settings().retention_audit_days),
+        'webhooks': current - timedelta(days=settings().retention_webhook_deliveries_days),
+        'idempotency': current - timedelta(days=settings().retention_idempotency_days),
+        'released': current - timedelta(days=settings().retention_released_allocations_days),
+    }
+    counts = {}
+    with session() as db:
+        counts['job_logs'] = db.execute(
+            delete(JobLog).where(JobLog.timestamp < cutoffs['job_logs'])
+        ).rowcount or 0
+        counts['audit'] = db.execute(
+            delete(Audit).where(Audit.timestamp < cutoffs['audit'])
+        ).rowcount or 0
+        counts['webhook_deliveries'] = db.execute(
+            delete(WebhookDelivery).where(
+                WebhookDelivery.status.in_(['delivered', 'failed']),
+                WebhookDelivery.created_at < cutoffs['webhooks'],
+            )
+        ).rowcount or 0
+        counts['idempotency'] = db.execute(
+            delete(Idempotency).where(Idempotency.created_at < cutoffs['idempotency'])
+        ).rowcount or 0
+        counts['released_ip'] = db.execute(
+            delete(IPAllocation).where(
+                IPAllocation.status == 'released',
+                IPAllocation.released_at.is_not(None),
+                IPAllocation.released_at < cutoffs['released'],
+            )
+        ).rowcount or 0
+        counts['released_hostnames'] = db.execute(
+            delete(HostnameReservation).where(
+                HostnameReservation.status == 'released',
+                HostnameReservation.released_at.is_not(None),
+                HostnameReservation.released_at < cutoffs['released'],
+            )
+        ).rowcount or 0
+        db.commit()
+    return {'skipped': False, 'deleted': counts}
