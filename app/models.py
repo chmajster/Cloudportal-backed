@@ -250,3 +250,19 @@ class IPAllocation(Timestamp, Base):
     resource_id: Mapped[str | None] = mapped_column(String(100), index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     released_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+
+class ManagedVM(Timestamp, Base):
+    __tablename__ = "managed_vms"
+    __table_args__ = (UniqueConstraint("provider_id", "vm_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"), index=True)
+    deployment_id: Mapped[str | None] = mapped_column(ForeignKey("deployments.id"), unique=True)
+    node: Mapped[str] = mapped_column(String(63))
+    vm_id: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    management_mode: Mapped[str] = mapped_column(String(16), default="external")
+    lifecycle_status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    destroyed_at: Mapped[datetime | None] = mapped_column(DateTime)
