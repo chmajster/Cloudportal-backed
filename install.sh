@@ -485,8 +485,16 @@ if [[ "$tls_source" == 'managed-self-signed' ]] || certificate_is_self_signed "$
   # Pin the exact local self-signed certificate. Do not disable TLS verification.
   tls_health_curl_args+=(--cacert "$config/tls/server.crt")
 fi
-if ! curl "${tls_health_curl_args[@]}" --resolve "$backend_host:$backend_port:127.0.0.1" \
-  "https://$backend_host:$backend_port/api/v1/health" > "$tmp/tls-health.json" 2> "$tmp/tls-health.err"; then
+tls_ready=0
+for ((attempt=0;attempt<10;attempt++)); do
+  if curl "${tls_health_curl_args[@]}" --resolve "$backend_host:$backend_port:127.0.0.1" \
+    "https://$backend_host:$backend_port/api/v1/health" > "$tmp/tls-health.json" 2> "$tmp/tls-health.err"; then
+    tls_ready=1
+    break
+  fi
+  sleep 1
+done
+if ((tls_ready != 1)); then
   cat "$tmp/tls-health.err" >&2
   echo "HTTPS healthcheck failed for https://$backend_host:$backend_port. The local API is healthy, but Nginx/TLS is not valid for the configured host. Bootstrap token has not been generated." >&2
   if [[ "$tls_source" == 'custom' ]] && ! certificate_is_self_signed "$config/tls/server.crt"; then
