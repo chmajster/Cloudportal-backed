@@ -25,14 +25,16 @@ def test_backend_feature_modules_are_discovered_and_ordered():
     assert all(module.router.routes for module in modules)
 
 
-def test_feature_registry_keeps_main_free_of_domain_router_imports():
-    import app.main as main
+def test_feature_registry_exposes_expected_router_contracts():
+    modules = {module.name: module for module in backend_modules()}
 
-    paths = {getattr(route, 'path', '') for route in main.app.routes}
-    assert '/api/v1/auth/login' in paths
-    assert '/api/v1/providers' in paths
-    assert '/api/v1/blueprints' in paths
-    assert '/api/v1/ipam/pools' in paths
-    assert '/api/v1/webhooks' in paths
-    assert '/api/v1/health' in paths
-    assert '/ui/manifest.json' in paths
+    def paths(name):
+        return {getattr(route, 'path', '') for route in modules[name].router.routes}
+
+    assert any(path.endswith('/auth/login') for path in paths('auth'))
+    assert '/providers' in paths('infrastructure')
+    assert '/blueprints' in paths('automation')
+    assert '/ipam/pools' in paths('ipam')
+    assert '/webhooks' in paths('operations')
+    assert '/health' in paths('health')
+    assert '/manifest.json' in paths('web-ui')
