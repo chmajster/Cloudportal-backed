@@ -163,9 +163,9 @@ if ((gui)); then
   done
 
   if [[ "$backup_schedule" == true ]]; then
-    backup_default=(--defaultno)
-  else
     backup_default=()
+  else
+    backup_default=(--defaultno)
   fi
   if dialog "${backup_default[@]}" --title 'Cloudportal-backed installer' --yesno 'Włączyć codzienny backup PostgreSQL?' 9 68 </dev/tty 9>&-; then
     backup_schedule=true
