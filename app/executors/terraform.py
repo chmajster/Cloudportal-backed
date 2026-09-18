@@ -4,6 +4,7 @@ import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from app.catalog import resolve_template_source, template_definition
 from app.config import settings
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
 from app.security.core import decrypt_secret
@@ -30,9 +31,12 @@ class TerraformExecutor(Executor):
     def execute(self, operation, context):
         deployment, credential = context.deployment, context.credential
         workspace = settings().data_dir / 'workspaces' / deployment.workspace
-        source = settings().source_dir / 'terraform' / 'templates' / deployment.template
-        if deployment.template != 'proxmox-vm' or source.resolve().parent != (settings().source_dir / 'terraform/templates').resolve():
-            raise ExecutionFailed('Unapproved Terraform template')
+        try:
+            definition, source = template_definition(deployment.template)
+        except Exception:
+            raise ExecutionFailed('Unapproved Terraform template') from None
+        if definition['provider'] != 'proxmox':
+            raise ExecutionFailed('Terraform executor does not support this provider yet')
         secret = decrypt_secret(credential)
         env = execution_environment(workspace)
         env['PROXMOX_VE_ENDPOINT'] = credential.endpoint.rstrip('/') + '/'
