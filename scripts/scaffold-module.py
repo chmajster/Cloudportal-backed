@@ -41,6 +41,7 @@ def main() -> None:
         permission = f", permission: '{args.permission}'" if args.permission else ''
         js = f"""'use strict';
 
+(() => {{
 async function {function_name}() {{
   dom.content.replaceChildren(
     heading('{label}'),
@@ -50,6 +51,7 @@ async function {function_name}() {{
 }}
 
 registerView({{ id: '{route_id}', label: '{label}', icon: '•'{permission}, order: {args.order} }}, {function_name});
+}})();
 """
         css = f"""/* Styles owned by the {args.name} UI feature. */\n"""
         write_new(ROOT / 'app' / 'web' / 'features' / f'{args.name}.js', js)
