@@ -5,7 +5,7 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
-from app.catalog import resolve_template_source, template_definition
+from app.catalog import resolve_template_source, template_definition, template_import_target
 from app.config import settings
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
 from app.security.core import decrypt_secret
@@ -95,15 +95,32 @@ class TerraformExecutor(Executor):
                 os.chmod(variables_path, 0o600)
                 context.stage('terraform.init')
                 run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, secret.values())
-                context.stage('terraform.plan')
-                plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
-                if operation == 'terraform.destroy':
-                    plan.append('-destroy')
                 try:
-                    run_process(plan, workspace, env, context, secret.values())
-                    if operation != 'terraform.plan':
-                        context.stage(operation)
-                        run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
+                    if operation == 'terraform.import':
+                        import_values = (context.job.payload or {}).get('import_values') or {}
+                        try:
+                            resource_address, import_id = template_import_target(deployment.template, import_values)
+                        except Exception:
+                            raise ExecutionFailed('Approved Terraform import identity is invalid') from None
+                        context.stage('terraform.import')
+                        run_process(
+                            [self.binary, 'import', '-input=false', '-no-color', '-lock-timeout=30s', resource_address, import_id],
+                            workspace, env, context, secret.values(),
+                        )
+                        context.stage('terraform.plan')
+                        run_process(
+                            [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan'],
+                            workspace, env, context, secret.values(),
+                        )
+                    else:
+                        context.stage('terraform.plan')
+                        plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
+                        if operation == 'terraform.destroy':
+                            plan.append('-destroy')
+                        run_process(plan, workspace, env, context, secret.values())
+                        if operation != 'terraform.plan':
+                            context.stage(operation)
+                            run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
                 finally:
                     (workspace / 'execution.tfplan').unlink(missing_ok=True)
                     if (workspace / 'terraform.tfstate').exists():
