@@ -33,8 +33,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert manifest_response.status_code == 200
     manifest = manifest_response.json()
     assert manifest['version'] == 1
+    assert manifest['shared'] == sorted(manifest['shared'])
     assert manifest['scripts'] == sorted(manifest['scripts'])
     assert manifest['styles'] == sorted(manifest['styles'])
+    assert manifest['shared'] == ['shared/platforms.js']
     assert {
         'features/dashboard.js',
         'features/identity.js',
@@ -54,7 +56,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/inventory.css',
     } == set(manifest['styles'])
 
-    script_paths = ['core.js', 'loader.js', *manifest['scripts'], 'app.js']
+    script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
     style_paths = ['styles.css', *manifest['styles']]
 
     theme_script = client.get('/ui/theme-init.js')
@@ -80,6 +82,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
 
     assert "fetch('./manifest.json'" in loader
     assert "loadFeatureScript('app.js')" in loader
+    assert 'manifest.shared' in loader
     assert 'loadFeatureStyle' in loader
 
     assert "const API = '/api/v1';" in core
