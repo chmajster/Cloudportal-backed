@@ -55,5 +55,5 @@ def idempotent(db, request, actor, payload, create, *, required=False):
         return row.response
     result = create()
     # Never persist plaintext token/reset secrets in idempotency records.
-    row.response = jsonable_encoder({k: v for k, v in result.items() if k not in {'token', 'reset_token'}})
+    row.response = jsonable_encoder({k: v for k, v in result.items() if k not in {'token', 'reset_token', 'secret'}})
     return result
