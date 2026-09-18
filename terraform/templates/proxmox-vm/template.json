@@ -1,0 +1,6 @@
+{
+  "id": "proxmox-vm",
+  "name": "Proxmox VM clone",
+  "provider": "proxmox",
+  "schema_model": "app.api.schemas:VMVariables"
+}
