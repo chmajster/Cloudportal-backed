@@ -112,6 +112,9 @@ class ProxmoxProvider(InfrastructureProvider):
     def vm_status(self, node, vm_id):
         return self._get(f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/status/current')
 
+    def vm_config(self, node, vm_id):
+        return self._get(f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/config')
+
     def vm_power(self, node, vm_id, action):
         if action not in {'start', 'stop', 'shutdown', 'reboot', 'reset', 'suspend', 'resume'}:
             raise HTTPException(422, 'Unsupported VM power action')
