@@ -223,6 +223,8 @@ class Blueprint(Timestamp, Base):
     variables_schema: Mapped[dict] = mapped_column(JSON, default=dict)
     deployment: Mapped[dict] = mapped_column(JSON, default=dict)
     workflow: Mapped[list] = mapped_column(JSON, default=list)
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    recovery_policy: Mapped[str] = mapped_column(String(32), default="preserve")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
