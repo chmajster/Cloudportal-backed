@@ -13,7 +13,7 @@ from app.models import Blueprint, HostnameReservation, HostnameScheme, now
 
 HOSTNAME_FIELDS = 'id scheme_id hostname values status resource_id created_by created_at updated_at released_at'
 BLUEPRINT_FIELDS = ('id slug name description version is_active visibility allowed_role_ids allowed_user_ids '
-                    'variables_schema deployment workflow created_by created_at updated_at')
+                    'variables_schema deployment workflow requires_approval recovery_policy created_by created_at updated_at')
 
 
 def as_public(row, fields):
