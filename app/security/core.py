@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import stat
+from urllib.parse import quote, urlsplit
 from datetime import timedelta
 from functools import lru_cache
 from argon2 import PasswordHasher
@@ -66,15 +67,135 @@ def encryption_key():
     return key
 
 
+ENVELOPE_MAGIC = b'CP2\\x00'
+
+
+def _read_runtime_secret_file(path):
+    if path is None:
+        raise RuntimeError('Secret file is not configured')
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.geteuid():
+            raise RuntimeError('Secret file must be owned by the runtime user with mode 0600')
+        return os.read(descriptor, 65536).strip()
+    finally:
+        os.close(descriptor)
+
+
+def _wrap_data_key(data_key: bytes, aad: str) -> dict:
+    config = settings()
+    if config.secret_backend == 'aws-kms':
+        if not config.aws_kms_key_id:
+            raise RuntimeError('CP_AWS_KMS_KEY_ID is required for aws-kms')
+        import boto3
+        response = boto3.client('kms', region_name=config.aws_kms_region).encrypt(
+            KeyId=config.aws_kms_key_id,
+            Plaintext=data_key,
+            EncryptionContext={'cloudportal-aad': aad},
+        )
+        return {
+            'backend': 'aws-kms',
+            'region': config.aws_kms_region,
+            'wrapped': base64.b64encode(response['CiphertextBlob']).decode(),
+        }
+    if config.secret_backend == 'vault-transit':
+        parsed = urlsplit(config.vault_addr or '')
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+            raise RuntimeError('CP_VAULT_ADDR must be an HTTPS URL without credentials')
+        if not config.vault_transit_key:
+            raise RuntimeError('CP_VAULT_TRANSIT_KEY is required for vault-transit')
+        token = _read_runtime_secret_file(config.vault_token_file).decode()
+        mount = quote(config.vault_transit_mount, safe='')
+        key = quote(config.vault_transit_key, safe='')
+        import httpx
+        with httpx.Client(timeout=15, follow_redirects=False, trust_env=False) as client:
+            response = client.post(
+                config.vault_addr.rstrip('/') + f'/v1/{mount}/encrypt/{key}',
+                headers={'X-Vault-Token': token},
+                json={'plaintext': base64.b64encode(data_key).decode()},
+            )
+            response.raise_for_status()
+            wrapped = response.json()['data']['ciphertext']
+        return {
+            'backend': 'vault-transit',
+            'addr': config.vault_addr.rstrip('/'),
+            'mount': config.vault_transit_mount,
+            'key': config.vault_transit_key,
+            'wrapped': wrapped,
+        }
+    raise RuntimeError('External secret backend is not configured')
+
+
+def _unwrap_data_key(header: dict, aad: str) -> bytes:
+    backend = header.get('backend')
+    if backend == 'aws-kms':
+        import boto3
+        response = boto3.client('kms', region_name=header.get('region')).decrypt(
+            CiphertextBlob=base64.b64decode(header['wrapped'], validate=True),
+            EncryptionContext={'cloudportal-aad': aad},
+        )
+        key = response['Plaintext']
+    elif backend == 'vault-transit':
+        config = settings()
+        token = _read_runtime_secret_file(config.vault_token_file).decode()
+        addr = header.get('addr') or config.vault_addr
+        if not addr or urlsplit(addr).scheme != 'https':
+            raise RuntimeError('Vault address in encrypted envelope is invalid')
+        mount = quote(header['mount'], safe='')
+        key_name = quote(header['key'], safe='')
+        import httpx
+        with httpx.Client(timeout=15, follow_redirects=False, trust_env=False) as client:
+            response = client.post(
+                addr.rstrip('/') + f'/v1/{mount}/decrypt/{key_name}',
+                headers={'X-Vault-Token': token},
+                json={'ciphertext': header['wrapped']},
+            )
+            response.raise_for_status()
+            key = base64.b64decode(response.json()['data']['plaintext'], validate=True)
+    else:
+        raise RuntimeError('Encrypted envelope uses an unsupported key backend')
+    if len(key) != 32:
+        raise RuntimeError('External key backend returned an invalid data key')
+    return key
+
+
 def encrypt_blob(value: bytes, aad: str) -> bytes:
+    config = settings()
+    if config.secret_backend == 'local':
+        nonce = os.urandom(12)
+        return nonce + AESGCM(encryption_key()).encrypt(nonce, value, aad.encode())
+    data_key = os.urandom(32)
+    header = json.dumps(_wrap_data_key(data_key, aad), separators=(',', ':')).encode()
+    if len(header) > 65535:
+        raise RuntimeError('Encrypted envelope metadata is too large')
     nonce = os.urandom(12)
-    return nonce + AESGCM(encryption_key()).encrypt(nonce, value, aad.encode())
+    ciphertext = AESGCM(data_key).encrypt(nonce, value, aad.encode())
+    return ENVELOPE_MAGIC + len(header).to_bytes(2, 'big') + header + nonce + ciphertext
 
 
 def decrypt_blob(value: bytes, aad: str) -> bytes:
     if not value or len(value) < 29:
         raise RuntimeError('Encrypted value is invalid')
-    return AESGCM(encryption_key()).decrypt(value[:12], value[12:], aad.encode())
+    if not value.startswith(ENVELOPE_MAGIC):
+        # Backward compatibility: original local AES-GCM format.
+        return AESGCM(encryption_key()).decrypt(value[:12], value[12:], aad.encode())
+    if len(value) < len(ENVELOPE_MAGIC) + 2 + 12 + 16:
+        raise RuntimeError('Encrypted envelope is invalid')
+    offset = len(ENVELOPE_MAGIC)
+    header_length = int.from_bytes(value[offset:offset + 2], 'big')
+    offset += 2
+    header_end = offset + header_length
+    if header_end + 28 > len(value):
+        raise RuntimeError('Encrypted envelope is truncated')
+    try:
+        header = json.loads(value[offset:header_end].decode())
+    except Exception:
+        raise RuntimeError('Encrypted envelope metadata is invalid') from None
+    nonce = value[header_end:header_end + 12]
+    ciphertext = value[header_end + 12:]
+    data_key = _unwrap_data_key(header, aad)
+    return AESGCM(data_key).decrypt(nonce, ciphertext, aad.encode())
 
 
 def encrypt_secret(value, credential_id):

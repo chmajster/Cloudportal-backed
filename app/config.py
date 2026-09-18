@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,6 +10,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://cloudportal@localhost/cloudportal"
     redis_url: str = "redis://localhost:6379/0"
     master_key_file: Path = Path("/etc/cloudportal-backed/master.key")
+    secret_backend: Literal['local', 'aws-kms', 'vault-transit'] = 'local'
+    aws_kms_key_id: str | None = None
+    aws_kms_region: str | None = None
+    vault_addr: str | None = None
+    vault_token_file: Path | None = None
+    vault_transit_mount: str = 'transit'
+    vault_transit_key: str | None = None
     data_dir: Path = Path("/var/lib/cloudportal-backed")
     source_dir: Path = Path(__file__).resolve().parents[1]
     access_seconds: int = 900

@@ -158,3 +158,37 @@ Status weryfikacji przy przygotowaniu: lokalne testy API/RBAC/workerów/klienta 
 ## Operacyjność i retencja
 
 Dispatcher wykonuje trwałe harmonogramy Terraform, podpisane webhooki HMAC z retry, skan alertów systemowych oraz okresowe czyszczenie danych technicznych. Retencja obejmuje JobLog, Audit, zakończone WebhookDelivery, rekordy idempotency oraz zwolnione IP/hostname; czasy są konfigurowane przez `CP_RETENTION_*`. `/metrics` wystawia format Prometheus, `/alerts` agreguje m.in. stan DB/Redis/dispatcher/workers, stuck jobs, wyczerpane webhooki oraz credential expiry/rotation. Opcjonalne trace OTLP włącza `CP_OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+
+## Zewnętrzny Vault / KMS
+
+Domyślny tryb `CP_SECRET_BACKEND=local` zachowuje dotychczasowe AES-256-GCM z lokalnym `master.key`. Opcjonalnie nowe sekrety, Terraform state i webhook secrets mogą używać **envelope encryption**: losowy 256-bitowy DEK szyfruje payload AES-GCM, a sam DEK jest owijany przez AWS KMS albo HashiCorp Vault Transit. Backend nie wysyła całych credentiali do KMS/Vault.
+
+AWS KMS (uwierzytelnienie przez standardowy AWS credential chain/instance role):
+
+```text
+CP_SECRET_BACKEND=aws-kms
+CP_AWS_KMS_KEY_ID=arn:aws:kms:eu-central-1:123456789012:key/...
+CP_AWS_KMS_REGION=eu-central-1
+```
+
+HashiCorp Vault Transit:
+
+```text
+CP_SECRET_BACKEND=vault-transit
+CP_VAULT_ADDR=https://vault.example.com
+CP_VAULT_TOKEN_FILE=/etc/cloudportal-backed/vault.token
+CP_VAULT_TRANSIT_MOUNT=transit
+CP_VAULT_TRANSIT_KEY=cloudportal-backed
+```
+
+Plik tokenu Vault musi należeć do użytkownika procesu i mieć mode 0600. Dla produkcji preferuj krótko żyjący token/agent zamiast stałego root tokena. Envelope zawiera tylko identyfikatory backendu i owinięty DEK; plaintext DEK istnieje wyłącznie w pamięci procesu.
+
+Stary format lokalny pozostaje czytelny po zmianie backendu, dlatego migracja może być stopniowa. Aby jawnie przepakować istniejące Credential, TerraformState i WebhookEndpoint, najpierw skonfiguruj zewnętrzny backend, wykonaj dry-run, a następnie:
+
+```bash
+python scripts/rewrap-secrets.py
+python scripts/rewrap-secrets.py --apply
+```
+
+Nie usuwaj lokalnego `master.key` po przełączeniu, dopóki wszystkie stare ciphertexty nie zostaną przepakowane i backup/restore nie zostanie przetestowany. AWS KMS/Vault musi być osiągalny przez każdy worker, który odszyfrowuje dane.
