@@ -13,6 +13,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   name      = var.name
   node_name = var.node
   started   = true
+  tags      = sort(var.tags)
   clone {
     vm_id        = var.template_id
     datastore_id = var.storage
@@ -33,6 +34,13 @@ resource "proxmox_virtual_environment_vm" "vm" {
   agent { enabled = true }
   initialization {
     datastore_id = var.storage
+    dynamic "dns" {
+      for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
+      content {
+        domain  = var.dns_domain
+        servers = var.dns_servers
+      }
+    }
     ip_config {
       ipv4 {
         address = var.ipv4_address == null ? "dhcp" : var.ipv4_address
