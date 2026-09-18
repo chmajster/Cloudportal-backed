@@ -1647,7 +1647,9 @@ async function createDeployment() {
 
 async function jobsView() {
   const jobs = (await api('/jobs?limit=200')).items;
-  dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.'),
+  const actions = [];
+  if (allowed('jobs.execute') && allowed('ansible.execute')) actions.push(button('Uruchom Ansible', runStandaloneAnsible, 'primary'));
+  dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.', actions),
     table([
       { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => operationLabel(item.operation) },
       { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 14) },
@@ -1662,6 +1664,90 @@ async function jobsView() {
       }));
       return actions;
     }));
+}
+
+async function runStandaloneAnsible() {
+  try {
+    const [playbookResult, credentialResult] = await Promise.all([
+      api('/ansible/playbooks'),
+      api('/credentials?limit=200'),
+    ]);
+    const playbooks = playbookResult.items;
+    const credentials = credentialResult.items;
+    if (!playbooks.length) throw new Error('Katalog nie zawiera playbooków Ansible.');
+
+    const playbookField = selectField('Playbook', 'playbook', playbooks.map(playbook => ({
+      value: playbook.id,
+      label: `${playbook.name} · v${playbook.version}`,
+    })), playbooks[0].id, { required: true });
+    const credentialField = selectField('Dane dostępowe hosta', 'credentials_id', [], '', { required: true });
+    const variables = node('div', { class: 'form-grid wide' });
+    const fields = node('div', { class: 'form-grid' },
+      formSection('Cel', 'Podaj adresy IP hostów, na których ma zostać uruchomiony zatwierdzony playbook.',
+        node('div', { class: 'form-grid' },
+          playbookField,
+          credentialField,
+          field('Adresy IP hostów', 'hosts', {
+            tag: 'textarea',
+            required: true,
+            wide: true,
+            placeholder: '10.0.0.10\n10.0.0.11',
+            help: 'Jeden adres IPv4/IPv6 w wierszu lub adresy oddzielone przecinkami.',
+          }))),
+      formSection('Zmienne playbooka', 'Puste pola opcjonalne nie są wysyłane.', variables));
+
+    const refresh = () => {
+      const playbook = playbooks.find(value => value.id === playbookField.querySelector('select').value) || playbooks[0];
+      const matching = credentials.filter(value => value.type === playbook.transport);
+      const select = credentialField.querySelector('select');
+      select.replaceChildren(node('option', { value: '', text: matching.length ? 'Wybierz dane dostępowe' : `Brak danych typu ${playbook.transport}` }));
+      matching.forEach(value => select.append(node('option', { value: value.id, text: value.name })));
+      if (matching.length === 1) select.value = String(matching[0].id);
+      variables.replaceChildren();
+      (playbook.variables || []).forEach(name => variables.append(field(
+        FIELD_LABELS[name] || name.replaceAll('_', ' '),
+        `ansible_job_var_${name}`,
+        { help: 'Zmienna zatwierdzonego playbooka.' },
+      )));
+    };
+    playbookField.querySelector('select').addEventListener('change', refresh);
+    refresh();
+
+    openModal({
+      title: 'Uruchom Ansible',
+      eyebrow: 'Zadanie jednorazowe',
+      body: fields,
+      submitLabel: 'Dodaj do kolejki',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const playbook = playbooks.find(value => value.id === form.elements.playbook.value);
+        if (!playbook) throw new Error('Wybierz playbook.');
+        if (!form.elements.credentials_id.value) throw new Error('Wybierz dane dostępowe do hosta.');
+        const hosts = splitValues(form.elements.hosts.value);
+        if (!hosts.length) throw new Error('Podaj co najmniej jeden adres IP hosta.');
+        const jobVariables = {};
+        (playbook.variables || []).forEach(name => {
+          const value = form.elements[`ansible_job_var_${name}`]?.value?.trim();
+          if (value) jobVariables[name] = value;
+        });
+        await api('/jobs', {
+          method: 'POST',
+          idempotent: true,
+          body: {
+            operation: 'ansible.execute',
+            ansible: {
+              playbook: playbook.id,
+              credentials_id: Number(form.elements.credentials_id.value),
+              inventory: { hosts },
+              variables: jobVariables,
+            },
+          },
+        });
+        toast('Zadanie Ansible zostało dodane do kolejki.');
+        navigate('jobs');
+      },
+    });
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 async function showJobLogs(job) {
