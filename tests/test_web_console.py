@@ -11,6 +11,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert page.status_code == 200
     assert page.headers['content-type'].startswith('text/html')
     assert 'id="login-form"' in page.text
+    assert 'data-theme="light"' in page.text
+    assert page.text.count('data-theme-toggle') == 2
+    assert 'id="sidebar-backdrop"' in page.text
+    assert 'id="modal-close"' in page.text
     assert 'src="./app.js"' in page.text
     assert page.headers['cache-control'] == 'no-store'
     assert page.headers['x-frame-options'] == 'DENY'
@@ -37,6 +41,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'credential-secret-panel' in script.text
     assert 'Akceptuj certyfikat self-signed / niezaufany' in script.text
     assert 'modal-form-error' in script.text
+    assert "const THEME_KEY = 'cloudportal.console.theme';" in script.text
+    assert 'function setTheme(' in script.text
+    assert 'function setMobileMenu(' in script.text
+    assert "dom.modal.addEventListener('cancel'" in script.text
+    assert "setMobileMenu(false)" in script.text
     assert '192.168.1.10' in script.text
     assert 'restoreVmFromBackup' in script.text
     assert "backups.restore" in script.text
@@ -46,6 +55,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'ws_path' in script.text
     assert "window.open('about:blank'" not in script.text
     assert stylesheet.status_code == 200
+    assert ':root {' in stylesheet.text
+    assert 'html[data-theme="dark"]' in stylesheet.text
+    assert '--sidebar-bg:' in stylesheet.text
+    assert '.sidebar-backdrop' in stylesheet.text
     assert '.credential-secret-panel' in stylesheet.text
     assert '.credential-tls-control' in stylesheet.text
     assert '.modal-form-error' in stylesheet.text
