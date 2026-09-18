@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 function credentialSecretField(spec, enabled) {
   const wrapper = field(spec.label, 'secret_' + spec.key, {
     type: spec.type || 'text', tag: spec.tag, required: enabled && spec.required,
@@ -174,3 +175,4 @@ function credentialForm(item = null) {
 }
 
 registerView({ id: 'credentials', label: 'Dane dostępowe', icon: 'K', permission: 'credentials.read', order: 40 }, credentialsView);
+})();
