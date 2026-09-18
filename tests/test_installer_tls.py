@@ -8,7 +8,8 @@ def test_installer_tracks_and_refreshes_managed_self_signed_certificate():
     assert 'tls_source_file="$config/tls/certificate-source"' in INSTALLER
     assert "managed-self-signed" in INSTALLER
     assert 'openssl x509 -in "$config/tls/server.crt" -noout -checkend 86400' in INSTALLER
-    assert 'certificate_matches_host "$config/tls/server.crt" || regenerate_tls=1' in INSTALLER
+    assert 'managed_certificate_matches_host "$config/tls/server.crt" || regenerate_tls=1' in INSTALLER
+    assert '[[ -z ${previous_host:-} || "$previous_host" == "$backend_host" ]] || regenerate_tls=1' in INSTALLER
     assert 'certificate_key_matches "$config/tls/server.crt" "$config/tls/server.key" || regenerate_tls=1' in INSTALLER
     assert 'generate_managed_tls_certificate' in INSTALLER
 
