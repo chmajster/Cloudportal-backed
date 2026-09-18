@@ -20,6 +20,7 @@ def feature_manifest():
     """Return locally installed UI feature assets in deterministic order."""
     return {
         'version': 1,
+        'shared': _assets('shared/*.js'),
         'scripts': _assets('features/*.js'),
         'styles': _assets('styles/features/*.css'),
     }
