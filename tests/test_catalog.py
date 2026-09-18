@@ -5,6 +5,9 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert {'proxmox-vm', 'aws-ec2', 'azure-linux-vm', 'openstack-vm', 'vmware-vsphere-vm'} <= set(items)
     assert items['aws-ec2']['provider'] == 'aws'
     assert 'security_group_ids' in items['aws-ec2']['variables_schema']['properties']
+    assert items['proxmox-vm']['version'] == 2
+    proxmox_properties = items['proxmox-vm']['variables_schema']['properties']
+    assert {'tags', 'dns_servers', 'dns_domain'} <= set(proxmox_properties)
 
     playbooks = client.get('/api/v1/ansible/playbooks', headers=headers)
     assert playbooks.status_code == 200
