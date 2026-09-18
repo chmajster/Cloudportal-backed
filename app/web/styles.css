@@ -151,6 +151,15 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent-s
 .form-section-header { display: grid; gap: 4px; }
 .form-section-header h3 { margin: 0; color: var(--text); font-size: .95rem; }
 .form-section-header p { margin: 0; color: var(--muted); font-size: .75rem; line-height: 1.5; font-weight: 400; }
+.choice-fieldset { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.choice-fieldset legend { padding: 0 6px; color: var(--label); font-size: .82rem; font-weight: 800; }
+.choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.choice-option { display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); cursor: pointer; }
+.choice-option:hover { background: var(--surface-3); }
+.choice-option input { flex: 0 0 auto; margin-top: 1px; }
+.choice-option span { min-width: 0; overflow-wrap: anywhere; }
+.detail-section { display: grid; gap: 10px; padding-top: 4px; }
+.detail-section h3 { margin: 0; font-size: .92rem; }
 .editor-list { display: grid; gap: 12px; }
 .editor-card { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .editor-card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
@@ -311,7 +320,7 @@ tbody tr:hover { background: var(--row-hover); }
   .user-menu > div { display: none; }
   .metrics { grid-template-columns: 1fr 1fr; }
   .checks { grid-template-columns: 1fr; }
-  .form-grid, .permission-grid { grid-template-columns: 1fr; }
+  .form-grid, .permission-grid, .choice-grid { grid-template-columns: 1fr; }
   .permission-group > summary { padding: 11px 12px; }
   .form-section { padding: 13px; }
   .editor-card { padding: 12px; }
