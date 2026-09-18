@@ -1646,6 +1646,7 @@ async function blueprintForm(item = null) {
     const templateVariables = node('div', { class: 'form-grid wide template-variable-grid' });
     const variableState = new Map([[initialTemplate.id, { ...(deployment.variables || {}) }]]);
     let currentTemplateId = initialTemplate.id;
+    let deploymentVariablesReady = false;
 
     const currentTemplate = () => templates.find(template => template.id === templateField.querySelector('select').value) || templates[0];
     const refill = (select, values, placeholder, selectedValue) => {
@@ -1659,6 +1660,7 @@ async function blueprintForm(item = null) {
     };
 
     const saveDeploymentVariables = () => {
+      if (!deploymentVariablesReady) return;
       const previousTemplate = templates.find(template => template.id === currentTemplateId);
       if (previousTemplate) variableState.set(currentTemplateId, readBlueprintTemplateVariables(templateVariables, previousTemplate));
     };
@@ -1688,6 +1690,7 @@ async function blueprintForm(item = null) {
       Object.entries(template.variables_schema?.properties || {}).forEach(([name, spec]) => {
         templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
       });
+      deploymentVariablesReady = true;
     };
     templateField.querySelector('select').addEventListener('change', refreshDeploymentTemplate);
     providerField.querySelector('select').addEventListener('change', refreshCredentialChoices);
@@ -1717,9 +1720,9 @@ async function blueprintForm(item = null) {
           checkboxField('Aktywny', 'is_active', item?.is_active ?? true))),
       formSection('Widoczność i bezpieczeństwo', 'Określ gdzie Blueprint jest dostępny i co ma się stać po nieudanym wdrożeniu.',
         node('div', { class: 'form-grid' },
-          checkboxField('Panel backendu', 'visibility_backend', item?.visibility.backend ?? true),
-          checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false),
-          checkboxField('API', 'visibility_api', item?.visibility.api ?? true),
+          checkboxField('Panel backendu', 'visibility_backend', item?.visibility?.backend ?? true),
+          checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
+          checkboxField('API', 'visibility_api', item?.visibility?.api ?? true),
           checkboxField('Wymaga akceptacji przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
           selectField('Po błędzie wdrożenia', 'recovery_policy', [
             { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
