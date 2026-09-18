@@ -12,7 +12,7 @@ from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
 from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, Token, now
-from app.operations.service import queue_job_webhooks, scheduler_user_permissions
+from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
 
@@ -353,6 +353,14 @@ def execute(job_id):
                 db.flush()
                 deployment.active_job_id = recovery.id
                 deployment.status = 'recovery_queued'
+                queue_webhook_event(db, 'recovery.queued', recovery.id, {
+                    'recovery': {
+                        'job_id': recovery.id,
+                        'deployment_id': recovery.deployment_id,
+                        'status': 'queued',
+                        'recovery_of': current.id,
+                    }
+                })
                 db.add(Audit(
                     user_id=current.created_by,
                     token_id=current.token_id,
