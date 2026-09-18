@@ -16,7 +16,8 @@
           "required": false,
           "pattern": "[A-Za-z_]+(?:/[A-Za-z_+-]+){0,2}"
         }
-      }
+      },
+      "version": 1
     },
     {
       "id": "validate-linux",
@@ -25,7 +26,8 @@
       "transport": "ssh",
       "wait": "wait-linux.yml",
       "validate": null,
-      "variables": {}
+      "variables": {},
+      "version": 1
     },
     {
       "id": "validate-windows",
@@ -34,7 +36,9 @@
       "transport": "winrm",
       "wait": "wait-windows.yml",
       "validate": null,
-      "variables": {}
+      "variables": {},
+      "version": 1
     }
-  ]
+  ],
+  "version": 1
 }
