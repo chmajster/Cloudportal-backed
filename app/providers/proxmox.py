@@ -211,6 +211,22 @@ class ProxmoxProvider(InfrastructureProvider):
             data['storage'] = storage
         return self._post(f'/nodes/{quote(node, safe="")}/qemu', data)
 
+    def console_session(self, node, vm_id):
+        data = self._post(
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncproxy',
+            {'websocket': 1},
+        )
+        if not isinstance(data, dict) or not data.get('ticket') or not data.get('port'):
+            raise HTTPException(502, 'Proxmox did not return a console ticket')
+        return {
+            'ticket': data['ticket'],
+            'port': int(data['port']),
+            'user': data.get('user'),
+            'cert': data.get('cert'),
+            'websocket_path': f'/api2/json/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncwebsocket',
+            'origin': self.endpoint.removesuffix('/api2/json'),
+        }
+
     def task_status(self, node, upid):
         return self._get(
             f'/nodes/{quote(node, safe="")}/tasks/{quote(upid, safe="")}/status'
