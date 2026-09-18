@@ -1372,12 +1372,16 @@ async function createTerraformJob(item, operation) {
 
 async function createDeployment() {
   try {
-    const [providerResult, credentialResult, templateResult] = await Promise.all([
-      api('/providers?limit=200'), api('/credentials?limit=200'), api('/templates'),
+    const [providerResult, credentialResult, templateResult, playbookResult] = await Promise.all([
+      api('/providers?limit=200'),
+      api('/credentials?limit=200'),
+      api('/templates'),
+      allowed('ansible.execute') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items;
     const credentials = credentialResult.items;
     const templates = templateResult.items;
+    const playbooks = playbookResult.items;
     if (!providers.length) throw new Error('Najpierw dodaj provider infrastruktury.');
     if (!credentials.length) throw new Error('Najpierw dodaj credential infrastruktury.');
     if (!templates.length) throw new Error('Katalog nie zawiera żadnego szablonu wdrożenia.');
@@ -1388,6 +1392,9 @@ async function createDeployment() {
     const providerField = selectField('Provider', 'provider_id', [], '', { required: true });
     const credentialField = selectField('Credential', 'credentials_id', [], '', { required: true });
     const variableFields = node('div', { class: 'form-grid wide template-variable-grid' });
+    const ansibleFields = node('div', { class: 'form-grid wide ansible-fields' });
+    const ansibleToggle = checkboxField('Po utworzeniu skonfiguruj system przez Ansible', 'ansible_enabled', false);
+    const ansibleSection = formSection('Konfiguracja po wdrożeniu', 'Opcjonalny, zatwierdzony playbook uruchamiany po uzyskaniu adresu VM.', ansibleToggle, ansibleFields);
 
     const fields = node('div', { class: 'form-grid' },
       formSection('Podstawowe informacje', 'Wybierz szablon i miejsce wdrożenia.',
@@ -1397,7 +1404,8 @@ async function createDeployment() {
           providerField,
           credentialField,
           selectField('Silnik IaC', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'))),
-      formSection('Konfiguracja zasobu', 'Pola są generowane automatycznie ze schematu wybranego szablonu.', variableFields));
+      formSection('Konfiguracja zasobu', 'Pola są generowane automatycznie ze schematu wybranego szablonu.', variableFields),
+      ansibleSection);
 
     const templateSelect = templateField.querySelector('select');
     const providerSelect = providerField.querySelector('select');
@@ -1412,11 +1420,46 @@ async function createDeployment() {
     };
 
     const refreshCredentials = () => {
-      const template = currentTemplate();
       const provider = providers.find(item => String(item.id) === String(providerSelect.value));
-      const type = provider?.type || template?.provider;
-      const matching = credentials.filter(item => item.type === type).map(item => ({ id: item.id, label: item.name }));
-      refill(credentialSelect, matching, matching.length ? 'Wybierz credential' : 'Brak credentiala dla tej platformy');
+      const matching = provider
+        ? credentials.filter(item => Number(item.id) === Number(provider.credentials_id)).map(item => ({ id: item.id, label: item.name }))
+        : [];
+      refill(credentialSelect, matching, matching.length ? 'Credential providera' : 'Wybierz provider');
+    };
+
+    const renderAnsible = () => {
+      const template = currentTemplate();
+      const supported = template?.provider === 'proxmox' && playbooks.length > 0;
+      ansibleSection.hidden = !supported;
+      if (!supported) {
+        ansibleToggle.querySelector('input').checked = false;
+        ansibleFields.replaceChildren();
+        return;
+      }
+      const enabled = ansibleToggle.querySelector('input').checked;
+      const playbookField = selectField('Playbook', 'ansible_playbook', playbooks.map(playbook => ({
+        value: playbook.id,
+        label: `${playbook.name} · v${playbook.version}`,
+      })), playbooks[0]?.id || '', { required: enabled });
+      const credentialField = selectField('Credential systemowy', 'ansible_credentials_id', [], '', { required: enabled });
+      const variablesContainer = node('div', { class: 'form-grid wide' });
+      ansibleFields.replaceChildren(playbookField, credentialField, variablesContainer);
+      ansibleFields.querySelectorAll('input,select,textarea').forEach(control => { control.disabled = !enabled; });
+
+      const refreshPlaybook = () => {
+        const playbook = playbooks.find(value => value.id === playbookField.querySelector('select').value) || playbooks[0];
+        const matchingCredentials = credentials.filter(value => value.type === playbook?.transport);
+        const select = credentialField.querySelector('select');
+        refill(select, matchingCredentials.map(value => ({ id: value.id, label: `${value.name} · ${credentialTypeLabel(value.type)}` })),
+          matchingCredentials.length ? 'Wybierz credential systemowy' : `Brak credentiala typu ${playbook?.transport || ''}`);
+        variablesContainer.replaceChildren();
+        (playbook?.variables || []).forEach(name => variablesContainer.append(
+          field(FIELD_LABELS[name] || name.replaceAll('_', ' '), `ansible_var_${name}`, {
+            help: 'Opcjonalna zmienna zatwierdzonego playbooka.',
+          })));
+      };
+      playbookField.querySelector('select').addEventListener('change', refreshPlaybook);
+      refreshPlaybook();
     };
 
     const refreshTemplate = () => {
@@ -1426,10 +1469,12 @@ async function createDeployment() {
       refill(providerSelect, matchingProviders, matchingProviders.length ? 'Wybierz provider' : 'Brak providera dla tej platformy');
       refreshCredentials();
       renderTemplateVariables(variableFields, template);
+      renderAnsible();
     };
 
     templateSelect.addEventListener('change', refreshTemplate);
     providerSelect.addEventListener('change', refreshCredentials);
+    ansibleToggle.querySelector('input').addEventListener('change', renderAnsible);
     refreshTemplate();
 
     openModal({
@@ -1442,14 +1487,30 @@ async function createDeployment() {
         const template = currentTemplate();
         if (!providerSelect.value) throw new Error('Brak providera zgodnego z wybranym szablonem.');
         if (!credentialSelect.value) throw new Error('Brak credentiala zgodnego z wybraną platformą.');
-        await api('/deployments', { method: 'POST', idempotent: true, body: {
+        const body = {
           name: form.elements.name.value,
           provider_id: Number(providerSelect.value),
           template: template.id,
           credentials_id: Number(credentialSelect.value),
           executor: form.elements.executor.value,
           variables: readTemplateVariables(form, template),
-        } });
+        };
+        if (form.elements.ansible_enabled?.checked) {
+          const playbook = playbooks.find(value => value.id === form.elements.ansible_playbook?.value);
+          if (!playbook) throw new Error('Wybierz playbook Ansible.');
+          if (!form.elements.ansible_credentials_id?.value) throw new Error('Wybierz credential systemowy dla Ansible.');
+          const variables = {};
+          (playbook.variables || []).forEach(name => {
+            const value = form.elements[`ansible_var_${name}`]?.value?.trim();
+            if (value) variables[name] = value;
+          });
+          body.ansible = {
+            playbook: playbook.id,
+            credentials_id: Number(form.elements.ansible_credentials_id.value),
+            variables,
+          };
+        }
+        await api('/deployments', { method: 'POST', idempotent: true, body });
         toast('Wdrożenie zostało utworzone i uruchomiono zadanie apply.');
         navigate('deployments');
       },
