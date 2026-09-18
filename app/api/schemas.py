@@ -113,6 +113,42 @@ class CredentialInput(Input):
         return value
 
 
+class ProxmoxTokenBootstrapInput(Input):
+    name: Name
+    endpoint: Annotated[str, Field(max_length=2048)]
+    username: Annotated[str, Field(min_length=1, max_length=254)]
+    password: Annotated[str, Field(min_length=1, max_length=1024, json_schema_extra={'writeOnly': True})]
+    token_name: Annotated[str, Field(min_length=1, max_length=63)] = 'cloudportal'
+    verify_ssl: bool = True
+    privilege_separation: bool = False
+    expires_at: datetime | None = None
+    rotation_due_at: datetime | None = None
+
+    @field_validator('token_name')
+    @classmethod
+    def token_name_valid(cls, value):
+        if any(not (ch.isalnum() or ch in '_.-') for ch in value):
+            raise ValueError('Token name may contain only letters, digits, dot, underscore and dash')
+        return value
+
+    @field_validator('endpoint')
+    @classmethod
+    def proxmox_endpoint_valid(cls, value):
+        parsed = urlsplit(value)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('Proxmox endpoint must be HTTPS without credentials, query or fragment')
+        return value.rstrip('/')
+
+    @field_validator('expires_at', 'rotation_due_at')
+    @classmethod
+    def lifecycle_dates_utc(cls, value):
+        if value is None:
+            return value
+        from datetime import timezone
+        candidate = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 class ProviderInput(Input):
     name: Name
     type: Literal['proxmox', 'vmware', 'aws', 'azure', 'openstack'] = 'proxmox'

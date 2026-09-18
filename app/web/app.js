@@ -503,6 +503,10 @@ const CREDENTIAL_TYPE_CONFIG = {
         { key: 'token_id', label: 'Token ID', placeholder: 'root@pam!cloudportal', required: true },
         { key: 'token_secret', label: 'Token secret', type: 'password', required: true, autocomplete: 'new-password' },
       ]},
+      generate_token: { label: 'Login + hasło → wygeneruj token', createOnly: true, fields: [
+        { key: 'password', label: 'Hasło Proxmox (nie będzie zapisane)', type: 'password', required: true, autocomplete: 'current-password' },
+        { key: 'token_name', label: 'Nazwa nowego tokenu', value: 'cloudportal', placeholder: 'cloudportal', required: true },
+      ]},
       password: { label: 'Użytkownik i hasło', fields: [
         { key: 'password', label: 'Hasło', type: 'password', required: true, autocomplete: 'new-password' },
       ]},
@@ -646,7 +650,7 @@ function renderCredentialDynamic(container, type, item) {
     if (mustReplace) replaceInput.disabled = true;
     secretPanel.append(replace);
   }
-  const choices = Object.entries(config.authModes).map(([value, mode]) => ({ value, label: mode.label }));
+  const choices = Object.entries(config.authModes).filter(([, mode]) => !mode.createOnly || !item).map(([value, mode]) => ({ value, label: mode.label }));
   const authWrapper = selectField('Metoda uwierzytelnienia', 'auth_mode', choices, config.defaultAuth, { required: true, wide: true });
   const authSelect = authWrapper.querySelector('select');
   const secretGrid = node('div', { class: 'form-grid credential-secret-grid' });
@@ -728,6 +732,25 @@ function credentialForm(item = null) {
         expires_at: data.get('expires_at') ? new Date(data.get('expires_at')).toISOString() : null,
         rotation_due_at: data.get('rotation_due_at') ? new Date(data.get('rotation_due_at')).toISOString() : null,
       };
+      const authMode = form.elements.auth_mode?.value || config.defaultAuth;
+      if (!item && type === 'proxmox' && authMode === 'generate_token') {
+        const password = form.querySelector('[data-secret-key="password"]')?.value || '';
+        const tokenName = form.querySelector('[data-secret-key="token_name"]')?.value || '';
+        if (!password || !tokenName) throw new Error('Podaj hasło Proxmox i nazwę tokenu.');
+        const saved = await api('/credentials/proxmox/bootstrap', { method: 'POST', body: {
+          name: payload.name, endpoint, username, password, token_name: tokenName,
+          verify_ssl: verifySsl, privilege_separation: false,
+          expires_at: payload.expires_at, rotation_due_at: payload.rotation_due_at,
+        }});
+        if (data.has('test_after_save')) {
+          try {
+            const result = await api('/credentials/' + saved.id + '/test', { method: 'POST' });
+            toast('Token Proxmox wygenerowany i zapisany. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
+          } catch (error) { toast('Token wygenerowany i zapisany, ale test nie powiódł się: ' + error.message, 'error'); }
+        } else toast('Token Proxmox wygenerowany i zapisany. Hasło nie zostało zachowane.');
+        navigate('credentials');
+        return;
+      }
       if (replaceSecrets) {
         const secrets = {};
         form.querySelectorAll('[data-secret-key]').forEach(input => {
