@@ -132,7 +132,13 @@ button { color: inherit; }
 
 .stack { display: grid; gap: 18px; }
 label { display: grid; gap: 7px; color: var(--label); font-size: .83rem; font-weight: 650; }
+.field-label { display: inline-flex; align-items: baseline; gap: 2px; }
+.required-mark { color: var(--danger); font-weight: 900; }
 input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--input-bg); color: var(--text); padding: 12px 13px; outline: none; transition: border-color .15s, box-shadow .15s, background .15s; }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .78; }
+input:disabled, select:disabled, textarea:disabled { opacity: .68; cursor: not-allowed; background: var(--surface-2); }
+input[readonly], textarea[readonly] { background: var(--surface-2); color: var(--muted); }
+input:user-invalid, select:user-invalid, textarea:user-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px var(--danger-soft); }
 textarea { min-height: 112px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; }
 select[multiple] { min-height: 142px; padding: 8px; }
 select[multiple] option { padding: 7px 8px; border-radius: 6px; }
