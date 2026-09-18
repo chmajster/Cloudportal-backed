@@ -121,6 +121,8 @@ class VMVariables(Input):
     vlan_id: int | None = Field(default=None, ge=1, le=4094)
     ssh_username: Slug = 'clouduser'
     ssh_public_key: Annotated[str, Field(max_length=8192)] | None = None
+    ipv4_address: Annotated[str, Field(max_length=32)] | None = None
+    ipv4_gateway: Annotated[str, Field(max_length=15)] | None = None
 
     @field_validator('ssh_public_key')
     @classmethod
@@ -128,6 +130,46 @@ class VMVariables(Input):
         if value and (not value.startswith(('ssh-ed25519 ', 'ssh-rsa ', 'ecdsa-sha2-')) or '\n' in value):
             raise ValueError('Expected a single SSH public key')
         return value
+
+    @field_validator('ipv4_address')
+    @classmethod
+    def ipv4_interface(cls, value):
+        if value is None:
+            return value
+        import ipaddress
+        try:
+            interface = ipaddress.ip_interface(value)
+        except ValueError:
+            raise ValueError('ipv4_address must use CIDR notation, for example 192.0.2.10/24') from None
+        if interface.version != 4:
+            raise ValueError('ipv4_address must be IPv4')
+        return str(interface)
+
+    @field_validator('ipv4_gateway')
+    @classmethod
+    def ipv4_gateway_valid(cls, value):
+        if value is None:
+            return value
+        import ipaddress
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            raise ValueError('ipv4_gateway must be an IP address') from None
+        if address.version != 4:
+            raise ValueError('ipv4_gateway must be IPv4')
+        return str(address)
+
+    @model_validator(mode='after')
+    def static_ipv4_coherent(self):
+        import ipaddress
+        if self.ipv4_gateway and not self.ipv4_address:
+            raise ValueError('ipv4_gateway requires ipv4_address')
+        if self.ipv4_address and self.ipv4_gateway:
+            interface = ipaddress.ip_interface(self.ipv4_address)
+            gateway = ipaddress.ip_address(self.ipv4_gateway)
+            if gateway not in interface.network or gateway == interface.ip:
+                raise ValueError('ipv4_gateway must be in the same subnet as ipv4_address')
+        return self
 
 
 class Inventory(Input):
@@ -282,6 +324,7 @@ class BlueprintDeployment(Input):
     executor: Literal['terraform', 'opentofu'] = 'terraform'
     ansible: dict[str, Any] | None = None
     hostname_scheme_id: int | None = Field(default=None, gt=0)
+    ipam_pool_id: int | None = Field(default=None, gt=0)
 
 
 class BlueprintInput(Input):
