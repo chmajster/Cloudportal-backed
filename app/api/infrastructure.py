@@ -39,6 +39,12 @@ def locked_credential(db, id):
     return credential
 
 
+def ensure_credential_usable(credential):
+    if credential.expires_at is not None and credential.expires_at <= now():
+        raise HTTPException(409, 'Credential is expired and cannot be used for new infrastructure execution')
+    return credential
+
+
 def credential_in_use(db, id, *, pending_only=False):
     deployments = select(Deployment.id).where(
         or_(Deployment.credentials_id == id, Deployment.workflow['ansible']['credentials_id'].as_integer() == id))
@@ -214,7 +220,7 @@ def check_job_permissions(request, operation):
 
 
 def validate_ansible(db, data):
-    c = locked_credential(db, data.credentials_id)
+    c = ensure_credential_usable(locked_credential(db, data.credentials_id))
     expected = playbook_definition(data.playbook)['transport']
     if c.type != expected:
         raise HTTPException(422, f'Playbook requires {expected} credential')
@@ -246,6 +252,7 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
 def create_deployment(data: DeploymentInput, request: Request, actor=Depends(require('deployments.create')), db=Depends(get_db, scope='function')):
     check_job_permissions(request, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
+    ensure_credential_usable(find(db, Credential, p.credentials_id))
     template_meta, _ = template_definition(data.template)
     if p.type != template_meta['provider']:
         raise HTTPException(422, 'Selected infrastructure provider does not match the Terraform template')
