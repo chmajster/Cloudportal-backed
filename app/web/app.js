@@ -20,6 +20,7 @@ const dom = {
   sidebar: document.querySelector('#sidebar'),
   sidebarBackdrop: document.querySelector('#sidebar-backdrop'),
   menuToggle: document.querySelector('#menu-toggle'),
+  refreshView: document.querySelector('#refresh-view'),
   modal: document.querySelector('#modal'),
   modalTitle: document.querySelector('#modal-title'),
   modalEyebrow: document.querySelector('#modal-eyebrow'),
@@ -3429,6 +3430,15 @@ document.querySelector('#logout').addEventListener('click', async () => {
   showLogin('Wylogowano.', 'success');
 });
 document.querySelectorAll('[data-theme-toggle]').forEach(control => control.addEventListener('click', toggleTheme));
+dom.refreshView.addEventListener('click', async () => {
+  dom.refreshView.disabled = true;
+  dom.refreshView.classList.add('is-refreshing');
+  try { await navigate(state.view); }
+  finally {
+    dom.refreshView.disabled = false;
+    dom.refreshView.classList.remove('is-refreshing');
+  }
+});
 dom.menuToggle.addEventListener('click', () => setMobileMenu(!dom.appView.classList.contains('menu-open')));
 dom.sidebarBackdrop.addEventListener('click', () => setMobileMenu(false));
 document.querySelector('#modal-close').addEventListener('click', closeModal);
