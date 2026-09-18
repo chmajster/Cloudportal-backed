@@ -362,6 +362,55 @@ function operationLabel(value) {
   return OPERATION_LABELS[value] || value || '—';
 }
 
+const PERMISSION_GROUP_LABELS = {
+  users: 'Użytkownicy', roles: 'Role i RBAC', tokens: 'Tokeny API', credentials: 'Credentiale',
+  providers: 'Providery', deployments: 'Wdrożenia', jobs: 'Zadania', terraform: 'Terraform / OpenTofu',
+  ansible: 'Ansible', blueprints: 'Blueprinty', hostnames: 'Hostname Manager', ipam: 'IPAM',
+  inventory: 'Inventory', vms: 'Maszyny wirtualne', snapshots: 'Snapshoty', backups: 'Backupy',
+  schedules: 'Harmonogramy', webhooks: 'Webhooki', metrics: 'Monitoring', audit: 'Audyt',
+  portal: 'Portal', catalog: 'Katalog',
+};
+
+const PERMISSION_ACTION_LABELS = {
+  read: 'Odczyt', create: 'Tworzenie', update: 'Edycja', delete: 'Usuwanie', execute: 'Wykonywanie',
+  assign: 'Przypisywanie', revoke: 'Unieważnianie', test: 'Testowanie połączenia', rotate: 'Rotacja',
+  destroy: 'Usuwanie zasobów', adopt: 'Przejmowanie zasobów', approve: 'Akceptowanie',
+  allocate: 'Przydzielanie', release: 'Zwalnianie', console: 'Konsola', power: 'Zasilanie',
+  configure: 'Konfiguracja', snapshot: 'Snapshot', restore: 'Przywracanie', clone: 'Klonowanie',
+  migrate: 'Migracja', resize: 'Zmiana rozmiaru', backup: 'Backup',
+};
+
+function permissionLabel(permission) {
+  const [group, action, ...rest] = String(permission).split('.');
+  const readableAction = PERMISSION_ACTION_LABELS[action] || action || permission;
+  return rest.length ? `${readableAction} · ${rest.join('.')}` : readableAction;
+}
+
+function permissionPicker(permissions, selectedValues = [], name = 'permission') {
+  const selected = new Set((selectedValues || []).map(String));
+  const grouped = new Map();
+  permissions.forEach(permission => {
+    const group = String(permission).split('.')[0] || 'other';
+    if (!grouped.has(group)) grouped.set(group, []);
+    grouped.get(group).push(permission);
+  });
+  const wrapper = node('div', { class: 'permission-groups wide' });
+  [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, 'pl')).forEach(([group, values]) => {
+    const grid = node('div', { class: 'permission-grid' });
+    values.sort((a, b) => a.localeCompare(b, 'pl')).forEach(permission => {
+      grid.append(node('label', {},
+        node('input', { type: 'checkbox', name, value: permission, checked: selected.has(permission) }),
+        node('span', {}, node('strong', { text: permissionLabel(permission) }), node('small', { class: 'muted mono', text: permission }))));
+    });
+    wrapper.append(node('details', { class: 'permission-group', open: true },
+      node('summary', {},
+        node('span', { text: PERMISSION_GROUP_LABELS[group] || group }),
+        badge(String(values.length), 'info')),
+      grid));
+  });
+  return wrapper;
+}
+
 function displayValue(value) {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'Tak' : 'Nie';
@@ -861,12 +910,15 @@ async function rolesView() {
 async function roleForm(role = null) {
   try {
     const permissions = (await api('/permissions')).items;
-    const grid = node('div', { class: 'permission-grid wide' });
-    permissions.forEach(permission => grid.append(node('label', {}, node('input', { type: 'checkbox', name: 'permission', value: permission, checked: role?.permissions.includes(permission) }), permission)));
-    const fields = node('div', { class: 'form-grid' }, field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true }), grid);
-    openModal({ title: role ? 'Edytuj rolę' : 'Nowa rola', eyebrow: 'RBAC', body: fields, submitLabel: role ? 'Zapisz' : 'Utwórz', onSubmit: async (_data, form) => {
+    const picker = permissionPicker(permissions, role?.permissions || [], 'permission');
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true }),
+      formSection('Uprawnienia', 'Uprawnienia są pogrupowane według modułów. Zaznacz tylko zakres potrzebny tej roli.', picker));
+    openModal({ title: role ? 'Edytuj rolę' : 'Nowa rola', eyebrow: 'RBAC', body: fields, submitLabel: role ? 'Zapisz' : 'Utwórz', wide: true, onSubmit: async (_data, form) => {
       const payload = { name: form.elements.name.value, permissions: [...form.querySelectorAll('[name="permission"]:checked')].map(input => input.value) };
-      await api(role ? `/roles/${role.id}` : '/roles', { method: role ? 'PUT' : 'POST', body: payload }); toast('Rola zapisana.'); navigate('roles');
+      await api(role ? `/roles/${role.id}` : '/roles', { method: role ? 'PUT' : 'POST', body: payload });
+      toast('Rola zapisana.');
+      navigate('roles');
     }});
   } catch (error) { toast(error.message, 'error'); }
 }
@@ -891,10 +943,7 @@ async function createToken() {
       allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
     ]);
     const permissions = permissionResult.items.filter(permission => allowed(permission));
-    const grid = node('div', { class: 'permission-grid wide' });
-    permissions.forEach(permission => grid.append(node('label', {},
-      node('input', { type: 'checkbox', name: 'scope', value: permission }),
-      node('span', {}, permission, node('small', { class: 'muted', text: ' · zakres tokenu' })))));
+    const picker = permissionPicker(permissions, [], 'scope');
 
     const ownerChoices = [{ value: '', label: 'Moje konto' }].concat(userResult.items.map(user => ({
       value: user.id,
@@ -904,7 +953,7 @@ async function createToken() {
       field('Nazwa tokenu', 'name', { required: true, placeholder: 'np. Terraform CI' }),
       selectField('Właściciel', 'user_id', ownerChoices, '', { required: false }),
       field('Wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', wide: true }),
-      formSection('Zakres uprawnień', 'Zaznacz tylko uprawnienia potrzebne tej integracji.', grid));
+      formSection('Zakres uprawnień', 'Zaznacz tylko uprawnienia potrzebne tej integracji.', picker));
 
     openModal({ title: 'Nowy token API', eyebrow: 'Dostęp programowy', body: fields, submitLabel: 'Utwórz token', wide: true, onSubmit: async (_data, form) => {
       const scopes = [...form.querySelectorAll('[name="scope"]:checked')].map(input => input.value);
