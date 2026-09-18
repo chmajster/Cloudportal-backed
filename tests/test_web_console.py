@@ -76,6 +76,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "dom.refreshView.addEventListener('click'" in script.text
     assert 'function copyText(' in script.text
     assert 'function setLoginMessage(' in script.text
+    assert 'function formFieldLabel(' in script.text
     assert 'function friendlyApiText(' in script.text
     assert 'VALIDATION_FIELD_LABELS' in script.text
     assert "replace(/^Value error" in script.text
@@ -97,6 +98,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-secret-panel' in stylesheet.text
     assert '.credential-tls-control' in stylesheet.text
     assert '.form-section' in stylesheet.text
+    assert '.required-mark' in stylesheet.text
+    assert 'input:user-invalid' in stylesheet.text
     assert '.choice-fieldset' in stylesheet.text
     assert '.choice-grid' in stylesheet.text
     assert '.detail-section' in stylesheet.text
