@@ -6,13 +6,14 @@ from app.api.administration import Limit, Offset
 from app.api.common import find, idempotent, paginate, public
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput)
-from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput
+from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput, ProxmoxTokenBootstrapInput
 from app.catalog import list_playbooks, list_templates, playbook_definition, template_definition, template_public, validate_template_variables
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.database import get_db
 from app.models import Credential, Deployment, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
+from app.providers.proxmox import create_api_token
 from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
@@ -59,6 +60,34 @@ def credential_in_use(db, id, *, pending_only=False):
 @router.get('/credentials', response_model=Items[CredentialOutput])
 def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
     return {'items': [credential_public(c) for c in paginate(db, Credential, offset, limit)]}
+
+
+@router.post('/credentials/proxmox/bootstrap', status_code=201, response_model=CredentialOutput)
+def bootstrap_proxmox_credential(data: ProxmoxTokenBootstrapInput, request: Request,
+                                 actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
+    secret = create_api_token(
+        data.endpoint,
+        data.username,
+        data.password,
+        data.token_name,
+        verify_ssl=data.verify_ssl,
+        privilege_separation=data.privilege_separation,
+    )
+    credential = Credential(
+        name=data.name,
+        type='proxmox',
+        endpoint=data.endpoint,
+        username=data.username,
+        verify_ssl=data.verify_ssl,
+        expires_at=data.expires_at,
+        rotation_due_at=data.rotation_due_at,
+        encrypted_secret=b'',
+    )
+    db.add(credential)
+    db.flush()
+    save_secret(db, credential, secret)
+    audit(db, request, 'credential.proxmox_token_bootstrapped', 'credentials', credential.id)
+    return credential_public(credential)
 
 
 @router.get('/credentials/{id}', response_model=CredentialOutput)
