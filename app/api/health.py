@@ -5,6 +5,7 @@ from rq import Worker
 from sqlalchemy import text
 from app.config import settings
 from app.api.outputs import HealthOutput, InfoOutput
+from app.catalog import list_templates
 from app.database import session
 from app.security.core import encryption_key, redis_client, require
 
@@ -50,5 +51,5 @@ def health():
 @router.get('/info', response_model=InfoOutput)
 def info(actor=Depends(require('portal.connect'))):
     return {'name': 'Cloudportal-backed', 'version': '1.0.0', 'api_version': 'v1',
-            'providers': ['proxmox'], 'credential_types': ['proxmox', 'vmware', 'ssh', 'winrm', 'aws', 'azure', 'openstack', 'other'],
+            'providers': sorted({item['provider'] for item in list_templates()}), 'credential_types': ['proxmox', 'vmware', 'ssh', 'winrm', 'aws', 'azure', 'openstack', 'other'],
             'executors': ['terraform', 'ansible', 'opentofu'], 'openapi': '/openapi.json'}
