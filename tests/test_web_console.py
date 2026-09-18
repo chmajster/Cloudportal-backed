@@ -16,6 +16,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="sidebar-backdrop"' in page.text
     assert 'id="modal-close"' in page.text
     assert 'id="refresh-view"' in page.text
+    assert 'id="global-search-open"' in page.text
+    assert 'id="global-search-dialog"' in page.text
+    assert 'id="global-search-input"' in page.text
     assert 'src="./theme-init.js"' in page.text
     assert 'src="./app.js"' in page.text
     assert page.headers['cache-control'] == 'no-store'
@@ -84,6 +87,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function setTheme(' in script.text
     assert 'function setMobileMenu(' in script.text
     assert "dom.refreshView.addEventListener('click'" in script.text
+    assert 'function loadGlobalSearchIndex(' in script.text
+    assert 'function renderGlobalSearch(' in script.text
+    assert 'globalSearchSources' in script.text
+    assert "event.key.toLocaleLowerCase() === 'k'" in script.text
     assert 'function copyText(' in script.text
     assert 'function setLoginMessage(' in script.text
     assert 'function formFieldLabel(' in script.text
@@ -129,6 +136,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.toast.error' in stylesheet.text
     assert '.toast-close' in stylesheet.text
     assert '.modal.modal-wide' in stylesheet.text
+    assert '.global-search-trigger' in stylesheet.text
+    assert '.global-search-dialog' in stylesheet.text
+    assert '.global-search-result' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
 
 
