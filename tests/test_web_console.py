@@ -74,6 +74,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function multiCheckboxField(' in script.text
     assert 'function toDateTimeLocal(' in script.text
     assert 'table-search-empty' in script.text
+    assert 'function tablePreferenceKey(' in script.text
+    assert 'function readTablePreferences(' in script.text
+    assert 'table-sort-button' in script.text
+    assert 'table-column-picker' in script.text
+    assert 'table-page-size' in script.text
+    assert "density === 'compact'" in script.text
     assert 'function showDeploymentDetails(' in script.text
     assert 'function assignHostname(' in script.text
     assert 'function assignIpAllocation(' in script.text
@@ -155,6 +161,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.workflow-dag' in stylesheet.text
     assert '.workflow-dag-columns' in stylesheet.text
     assert '.workflow-preview-visual' in stylesheet.text
+    assert '.table-sort-button' in stylesheet.text
+    assert '.table-column-picker' in stylesheet.text
+    assert '.table-pagination' in stylesheet.text
+    assert '.advanced-table.compact' in stylesheet.text
     assert '.global-search-result' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
 
