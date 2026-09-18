@@ -3,7 +3,11 @@
 const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
 const THEME_KEY = 'cloudportal.console.theme';
-const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
+const state = {
+  session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null,
+  taskPollTimer: null, taskPollNonce: 0, globalSearchCache: null, globalSearchLoadedAt: 0,
+  globalSearchActiveIndex: -1,
+};
 
 const dom = {
   loginView: document.querySelector('#login-view'),
@@ -21,6 +25,11 @@ const dom = {
   sidebarBackdrop: document.querySelector('#sidebar-backdrop'),
   menuToggle: document.querySelector('#menu-toggle'),
   refreshView: document.querySelector('#refresh-view'),
+  globalSearchOpen: document.querySelector('#global-search-open'),
+  globalSearchDialog: document.querySelector('#global-search-dialog'),
+  globalSearchInput: document.querySelector('#global-search-input'),
+  globalSearchStatus: document.querySelector('#global-search-status'),
+  globalSearchResults: document.querySelector('#global-search-results'),
   modal: document.querySelector('#modal'),
   modalTitle: document.querySelector('#modal-title'),
   modalEyebrow: document.querySelector('#modal-eyebrow'),
@@ -929,8 +938,196 @@ function showApp() {
   dom.currentRoles.textContent = state.identity.roles.map(role => role.name).join(', ') || 'Brak roli';
   renderNavigation();
   const mustChangePassword = state.identity.user.must_change_password;
+  dom.globalSearchOpen.hidden = mustChangePassword;
   navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'dashboard');
   if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
+}
+
+const GLOBAL_SEARCH_CACHE_MS = 30000;
+
+function searchable(value) {
+  return String(value ?? '').toLocaleLowerCase('pl-PL').normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function globalSearchSources() {
+  return [
+    {
+      permission: 'inventory.read', path: '/inventory/vms?limit=200', route: 'inventory', kind: 'VM',
+      map: item => ({
+        title: item.name || `VM ${item.vm_id}`,
+        subtitle: `${item.node || 'node ?'} · VMID ${item.vm_id} · ${statusLabel(item.lifecycle_status)}`,
+        keywords: [item.vm_id, item.node, item.management_mode, item.lifecycle_status, item.live?.status],
+        entity: { type: 'vm', item },
+      }),
+    },
+    {
+      permission: 'deployments.read', path: '/deployments?limit=200', route: 'deployments', kind: 'Wdrożenie',
+      map: item => ({
+        title: item.name || short(item.id, 18),
+        subtitle: `${item.template || 'template'} · ${statusLabel(item.status)}`,
+        keywords: [item.id, item.provider, item.template, item.executor, item.status],
+      }),
+    },
+    {
+      permission: 'jobs.read', path: '/jobs?limit=200', route: 'jobs', kind: 'Zadanie',
+      map: item => ({
+        title: operationLabel(item.operation),
+        subtitle: `${short(item.id, 22)} · ${statusLabel(item.status)}`,
+        keywords: [item.id, item.operation, item.status, item.deployment_id],
+      }),
+    },
+    {
+      permission: 'providers.read', path: '/providers?limit=200', route: 'providers', kind: 'Platforma',
+      map: item => ({
+        title: item.name,
+        subtitle: CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type,
+        keywords: [item.id, item.type, item.credentials_id],
+      }),
+    },
+    {
+      permission: 'blueprints.read', path: '/blueprints?limit=200', route: 'blueprints', kind: 'Blueprint',
+      map: item => ({
+        title: item.name,
+        subtitle: `${item.slug} · v${item.version}`,
+        keywords: [item.slug, item.version, ...(item.tags || [])],
+      }),
+    },
+    {
+      permission: 'users.read', path: '/users?limit=200', route: 'users', kind: 'Użytkownik',
+      map: item => ({
+        title: item.username,
+        subtitle: item.email || (item.is_service_account ? 'konto serwisowe' : 'konto użytkownika'),
+        keywords: [item.email, item.first_name, item.last_name, item.id],
+      }),
+    },
+    {
+      permission: 'credentials.read', path: '/credentials?limit=200', route: 'credentials', kind: 'Credential',
+      map: item => ({
+        title: item.name,
+        subtitle: CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type,
+        keywords: [item.endpoint, item.username, item.type, item.id],
+      }),
+    },
+    {
+      permission: 'hostnames.read', path: '/hostnames?limit=200', route: 'hostnames', kind: 'Hostname',
+      map: item => ({
+        title: item.hostname,
+        subtitle: statusLabel(item.status),
+        keywords: [item.id, item.status, item.resource_id],
+      }),
+    },
+  ];
+}
+
+async function loadGlobalSearchIndex(force = false) {
+  const fresh = state.globalSearchCache && Date.now() - state.globalSearchLoadedAt < GLOBAL_SEARCH_CACHE_MS;
+  if (fresh && !force) return state.globalSearchCache;
+  const index = routes
+    .filter(route => allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
+    .map(route => ({
+      kind: 'Widok', route: route.id, title: route.label, subtitle: 'Przejdź do sekcji',
+      search: searchable([route.label, route.id].join(' ')),
+    }));
+  const sources = globalSearchSources().filter(source => allowed(source.permission));
+  await Promise.all(sources.map(async source => {
+    try {
+      const response = await api(source.path);
+      (response.items || []).forEach(item => {
+        const mapped = source.map(item);
+        index.push({
+          kind: source.kind,
+          route: source.route,
+          title: mapped.title || '—',
+          subtitle: mapped.subtitle || '',
+          entity: mapped.entity || null,
+          search: searchable([
+            source.kind, mapped.title, mapped.subtitle, ...(mapped.keywords || []),
+          ].join(' ')),
+        });
+      });
+    } catch {
+      // Search remains useful even if one permitted module is temporarily unavailable.
+    }
+  }));
+  state.globalSearchCache = index;
+  state.globalSearchLoadedAt = Date.now();
+  return index;
+}
+
+function closeGlobalSearch() {
+  if (dom.globalSearchDialog?.open) dom.globalSearchDialog.close();
+  state.globalSearchActiveIndex = -1;
+}
+
+async function activateGlobalSearchResult(result) {
+  closeGlobalSearch();
+  await navigate(result.route);
+  if (result.entity?.type === 'vm' && typeof openVmManager === 'function' && allowed('vms.read')) {
+    await openVmManager(result.entity.item);
+  }
+}
+
+function setGlobalSearchActive(index) {
+  const results = [...dom.globalSearchResults.querySelectorAll('.global-search-result')];
+  if (!results.length) {
+    state.globalSearchActiveIndex = -1;
+    return;
+  }
+  state.globalSearchActiveIndex = Math.max(0, Math.min(index, results.length - 1));
+  results.forEach((item, itemIndex) => {
+    const active = itemIndex === state.globalSearchActiveIndex;
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-selected', String(active));
+    if (active) item.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+async function renderGlobalSearch(query = '') {
+  const value = query.trim();
+  if (value.length < 2) {
+    dom.globalSearchResults.replaceChildren();
+    dom.globalSearchStatus.textContent = 'Wpisz co najmniej 2 znaki.';
+    state.globalSearchActiveIndex = -1;
+    return;
+  }
+  dom.globalSearchStatus.textContent = 'Szukam…';
+  const index = await loadGlobalSearchIndex();
+  if (!dom.globalSearchDialog.open || dom.globalSearchInput.value.trim() !== value) return;
+  const tokens = searchable(value).split(/\s+/).filter(Boolean);
+  const results = index
+    .filter(item => tokens.every(token => item.search.includes(token)))
+    .slice(0, 30);
+  dom.globalSearchResults.replaceChildren(...results.map((result, indexValue) => node('button', {
+    class: 'global-search-result',
+    type: 'button',
+    role: 'option',
+    'aria-selected': 'false',
+    onClick: () => activateGlobalSearchResult(result),
+    onMouseenter: () => setGlobalSearchActive(indexValue),
+  },
+  node('span', { class: 'global-search-kind', text: result.kind }),
+  node('span', { class: 'global-search-result-copy' },
+    node('strong', { text: result.title }),
+    node('small', { text: result.subtitle || '—' })),
+  node('span', { class: 'global-search-arrow', 'aria-hidden': 'true', text: '↵' }))));
+  dom.globalSearchStatus.textContent = results.length
+    ? `${results.length} wyników · Enter otwiera zaznaczony wynik`
+    : 'Brak wyników.';
+  setGlobalSearchActive(results.length ? 0 : -1);
+}
+
+async function openGlobalSearch() {
+  if (!state.identity || state.identity.user.must_change_password) return;
+  if (!dom.globalSearchDialog.open) dom.globalSearchDialog.showModal();
+  dom.globalSearchInput.value = '';
+  dom.globalSearchResults.replaceChildren();
+  dom.globalSearchStatus.textContent = 'Ładowanie indeksu…';
+  state.globalSearchActiveIndex = -1;
+  dom.globalSearchInput.focus();
+  await loadGlobalSearchIndex();
+  if (dom.globalSearchDialog.open && !dom.globalSearchInput.value) {
+    dom.globalSearchStatus.textContent = 'Wpisz co najmniej 2 znaki.';
+  }
 }
 
 function renderNavigation() {
@@ -4034,6 +4231,40 @@ document.querySelector('#reset-open').addEventListener('click', () => {
     await api('/auth/reset-password', { method: 'POST', auth: false, body: { token: data.get('token'), password: data.get('password') } }, false);
     setLoginMessage('Hasło zostało zmienione. Możesz się zalogować.', 'success');
   }});
+});
+
+dom.globalSearchOpen.addEventListener('click', openGlobalSearch);
+dom.globalSearchInput.addEventListener('input', () => { renderGlobalSearch(dom.globalSearchInput.value); });
+dom.globalSearchInput.addEventListener('keydown', event => {
+  const count = dom.globalSearchResults.querySelectorAll('.global-search-result').length;
+  if (event.key === 'ArrowDown' && count) {
+    event.preventDefault();
+    setGlobalSearchActive(state.globalSearchActiveIndex + 1);
+  } else if (event.key === 'ArrowUp' && count) {
+    event.preventDefault();
+    setGlobalSearchActive(state.globalSearchActiveIndex - 1);
+  } else if (event.key === 'Enter' && state.globalSearchActiveIndex >= 0) {
+    event.preventDefault();
+    dom.globalSearchResults.querySelectorAll('.global-search-result')[state.globalSearchActiveIndex]?.click();
+  }
+});
+dom.globalSearchDialog.addEventListener('close', () => {
+  dom.globalSearchInput.value = '';
+  dom.globalSearchResults.replaceChildren();
+});
+document.addEventListener('keydown', event => {
+  const target = event.target;
+  const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target?.isContentEditable;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') {
+    event.preventDefault();
+    if (dom.globalSearchDialog.open) closeGlobalSearch();
+    else openGlobalSearch();
+    return;
+  }
+  if (event.key === '/' && !typing && !event.ctrlKey && !event.metaKey && !event.altKey && state.identity && !state.identity.user.must_change_password) {
+    event.preventDefault();
+    openGlobalSearch();
+  }
 });
 
 document.querySelector('#logout').addEventListener('click', async () => {
