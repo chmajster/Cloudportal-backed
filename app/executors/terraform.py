@@ -4,6 +4,7 @@ import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 from app.catalog import resolve_template_source, template_definition
 from app.config import settings
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
@@ -35,20 +36,50 @@ class TerraformExecutor(Executor):
             definition, source = template_definition(deployment.template)
         except Exception:
             raise ExecutionFailed('Unapproved Terraform template') from None
-        if definition['provider'] != 'proxmox':
-            raise ExecutionFailed('Terraform executor does not support this provider yet')
         secret = decrypt_secret(credential)
         env = execution_environment(workspace)
-        env['PROXMOX_VE_ENDPOINT'] = credential.endpoint.rstrip('/') + '/'
-        env['PROXMOX_VE_INSECURE'] = 'false' if credential.verify_ssl else 'true'
-        if secret.get('token_secret'):
-            token_id = secret['token_id']
-            if '!' not in token_id:
-                token_id = credential.username + '!' + token_id
-            env['PROXMOX_VE_API_TOKEN'] = token_id + '=' + secret['token_secret']
+        provider_type = definition['provider']
+        if credential.type != provider_type:
+            raise ExecutionFailed('Credential type does not match Terraform template provider')
+        if provider_type == 'proxmox':
+            env['PROXMOX_VE_ENDPOINT'] = credential.endpoint.rstrip('/') + '/'
+            env['PROXMOX_VE_INSECURE'] = 'false' if credential.verify_ssl else 'true'
+            if secret.get('token_secret'):
+                token_id = secret['token_id']
+                if '!' not in token_id:
+                    token_id = credential.username + '!' + token_id
+                env['PROXMOX_VE_API_TOKEN'] = token_id + '=' + secret['token_secret']
+            else:
+                env['PROXMOX_VE_USERNAME'] = credential.username
+                env['PROXMOX_VE_PASSWORD'] = secret['password']
+        elif provider_type == 'aws':
+            env['AWS_ACCESS_KEY_ID'] = secret['access_key_id']
+            env['AWS_SECRET_ACCESS_KEY'] = secret['secret_access_key']
+            if secret.get('session_token'):
+                env['AWS_SESSION_TOKEN'] = secret['session_token']
+        elif provider_type == 'azure':
+            env['ARM_TENANT_ID'] = secret['tenant_id']
+            env['ARM_CLIENT_ID'] = secret['client_id']
+            env['ARM_CLIENT_SECRET'] = secret['client_secret']
+            env['ARM_SUBSCRIPTION_ID'] = secret['subscription_id']
+        elif provider_type == 'openstack':
+            env['OS_AUTH_URL'] = credential.endpoint.rstrip('/') + ('' if credential.endpoint.rstrip('/').endswith('/v3') else '/v3')
+            env['OS_USERNAME'] = credential.username
+            env['OS_PASSWORD'] = secret['password']
+            env['OS_PROJECT_NAME'] = secret['project_name']
+            env['OS_USER_DOMAIN_NAME'] = secret.get('domain_name', 'Default')
+            env['OS_PROJECT_DOMAIN_NAME'] = secret.get('domain_name', 'Default')
+            env['OS_INSECURE'] = 'false' if credential.verify_ssl else 'true'
+        elif provider_type == 'vmware':
+            endpoint = urlsplit(credential.endpoint)
+            if not endpoint.hostname:
+                raise ExecutionFailed('VMware endpoint is invalid')
+            env['VSPHERE_SERVER'] = endpoint.hostname
+            env['VSPHERE_USER'] = credential.username
+            env['VSPHERE_PASSWORD'] = secret['password']
+            env['VSPHERE_ALLOW_UNVERIFIED_SSL'] = 'false' if credential.verify_ssl else 'true'
         else:
-            env['PROXMOX_VE_USERNAME'] = credential.username
-            env['PROXMOX_VE_PASSWORD'] = secret['password']
+            raise ExecutionFailed('Unsupported Terraform provider')
         with distributed_deployment_lock(deployment.id):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
