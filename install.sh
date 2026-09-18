@@ -322,6 +322,7 @@ EOF
 done
 tls_source_file="$config/tls/certificate-source"
 tls_source=''
+tls_certificate_changed=0
 
 certificate_is_self_signed() {
   local subject issuer
@@ -353,6 +354,7 @@ generate_managed_tls_certificate() {
     -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
   chmod 0600 "$config/tls/server.crt" "$config/tls/server.key"
   tls_source='managed-self-signed'
+  tls_certificate_changed=1
   printf '%s\n' "$tls_source" > "$tls_source_file"
   echo "A self-signed TLS certificate for $backend_host was generated. Trust server.crt on the PHP server, or install a CA-issued certificate."
 }
@@ -361,6 +363,7 @@ if [[ -n "$cert_file" ]]; then
   install -m 0600 "$cert_file" "$config/tls/server.crt"
   install -m 0600 "$cert_key" "$config/tls/server.key"
   tls_source='custom'
+  tls_certificate_changed=1
   printf '%s\n' "$tls_source" > "$tls_source_file"
 elif [[ ! -f "$config/tls/server.crt" || ! -f "$config/tls/server.key" ]]; then
   generate_managed_tls_certificate
@@ -469,7 +472,13 @@ else
   systemctl disable --now cloudportal-backup.timer >/dev/null 2>&1 || true
 fi
 systemctl enable --now nginx
-systemctl reload nginx
+if ((tls_certificate_changed)); then
+  # A graceful reload may briefly leave an old TLS worker serving the previous certificate.
+  # Restart only when certificate material changed; ordinary reinstalls keep a zero-downtime reload.
+  systemctl restart nginx
+else
+  systemctl reload nginx
+fi
 if [[ "$os_family" == rhel ]] && systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-port="$backend_port/tcp"
   firewall-cmd --reload
