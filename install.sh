@@ -13,6 +13,7 @@ cert_file=''
 cert_key=''
 backup_schedule=''
 backup_retention_days=''
+gui=0
 non_interactive=0
 check_platform=0
 while (($#)); do
@@ -26,9 +27,10 @@ while (($#)); do
       shift 2;;
     --enable-backups) backup_schedule=true; shift;;
     --disable-backups) backup_schedule=false; shift;;
+    --gui|-gui) gui=1; shift;;
     --non-interactive) non_interactive=1; shift;;
     --check-platform) check_platform=1; shift;;
-    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--enable-backups|--disable-backups] [--backup-retention-days 14] [--non-interactive] [--check-platform] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
+    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--enable-backups|--disable-backups] [--backup-retention-days 14] [--gui|-gui] [--non-interactive] [--check-platform] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -94,20 +96,118 @@ fi
 workers=${workers:-${previous_workers:-1}}
 backup_schedule=${backup_schedule:-${previous_backup_schedule:-false}}
 backup_retention_days=${backup_retention_days:-${previous_backup_retention_days:-14}}
-[[ "$backend_host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]] || { echo 'Invalid host.' >&2; exit 2; }
-[[ "$backend_port" =~ ^[0-9]{1,5}$ ]] && ((10#$backend_port >= 1 && 10#$backend_port <= 65535)) || { echo 'Invalid port.' >&2; exit 2; }
-[[ "$workers" =~ ^[0-9]{1,2}$ ]] && ((10#$workers >= 1 && 10#$workers <= 64)) || { echo 'Invalid workers count.' >&2; exit 2; }
+valid_host() {
+  [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]]
+}
+valid_port() {
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535 && 10#$1 != 6389))
+}
+valid_workers() {
+  [[ "$1" =~ ^[0-9]{1,2}$ ]] && ((10#$1 >= 1 && 10#$1 <= 64))
+}
+valid_retention() {
+  [[ "$1" =~ ^[0-9]{1,4}$ ]] && ((10#$1 >= 1 && 10#$1 <= 3650))
+}
+((gui == 0 || non_interactive == 0)) || { echo '--gui/-gui cannot be combined with --non-interactive.' >&2; exit 2; }
+
+exec 9>/run/cloudportal-install.lock
+flock -n 9 || { echo 'Another installation is running.' >&2; exit 1; }
+
+gui_cancel() {
+  dialog --clear </dev/tty 2>/dev/tty || true
+  echo 'Installation cancelled.' >&2
+  drain_script_input
+  exit 0
+}
+gui_message() {
+  dialog --title 'Cloudportal-backed installer' --msgbox "$1" 9 68 </dev/tty 2>/dev/tty
+}
+gui_input() {
+  local label=$1 value=$2 result
+  if ! result=$(dialog --stdout --title 'Cloudportal-backed installer' --inputbox "$label" 10 72 "$value" </dev/tty 9>&-); then
+    gui_cancel
+  fi
+  printf '%s' "$result"
+}
+if ((gui)); then
+  [[ -r /dev/tty && -w /dev/tty ]] || { echo 'GUI mode requires an interactive TTY.' >&2; drain_script_input; exit 1; }
+  if ! command -v dialog >/dev/null; then
+    echo 'Installing dialog dependency for GUI mode...'
+    case "$os_family" in
+      debian)
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update 9>&-
+        apt-get install -y dialog 9>&-
+        ;;
+      rhel)
+        dnf install -y dialog 9>&-
+        ;;
+    esac
+  fi
+  command -v dialog >/dev/null || { echo 'dialog could not be installed.' >&2; drain_script_input; exit 1; }
+
+  while :; do
+    backend_host=$(gui_input 'Hostname lub adres DNS backendu:' "$backend_host")
+    valid_host "$backend_host" && break
+    gui_message 'Nieprawidłowy hostname. Użyj liter, cyfr, kropek i myślników.'
+  done
+  while :; do
+    backend_port=$(gui_input 'Port HTTPS backendu (1-65535; 6389 jest zarezerwowany):' "$backend_port")
+    valid_port "$backend_port" && break
+    gui_message 'Nieprawidłowy port. Dozwolone 1-65535 z wyjątkiem 6389.'
+  done
+  while :; do
+    workers=$(gui_input 'Liczba workerów (1-64):' "$workers")
+    valid_workers "$workers" && break
+    gui_message 'Nieprawidłowa liczba workerów. Dozwolone 1-64.'
+  done
+
+  if [[ "$backup_schedule" == true ]]; then
+    backup_default=(--defaultno)
+  else
+    backup_default=()
+  fi
+  if dialog "${backup_default[@]}" --title 'Cloudportal-backed installer' --yesno 'Włączyć codzienny backup PostgreSQL?' 9 68 </dev/tty 9>&-; then
+    backup_schedule=true
+  else
+    rc=$?
+    if ((rc == 1)); then backup_schedule=false; else gui_cancel; fi
+  fi
+  if [[ "$backup_schedule" == true ]]; then
+    while :; do
+      backup_retention_days=$(gui_input 'Retencja backupów w dniach (1-3650):' "$backup_retention_days")
+      valid_retention "$backup_retention_days" && break
+      gui_message 'Nieprawidłowa retencja. Dozwolone 1-3650 dni.'
+    done
+  fi
+
+  summary="Host: $backend_host
+Port HTTPS: $backend_port
+Workery: $workers
+Backup codzienny: $backup_schedule
+Retencja backupu: $backup_retention_days dni
+Git ref: $ref"
+  if ! dialog --title 'Cloudportal-backed installer' --yesno "Sprawdź konfigurację:
+
+$summary
+
+Rozpocząć instalację?" 16 72 </dev/tty 9>&-; then
+    gui_cancel
+  fi
+  dialog --clear </dev/tty 2>/dev/tty || true
+fi
+
+valid_host "$backend_host" || { echo 'Invalid host.' >&2; exit 2; }
+valid_port "$backend_port" || { echo 'Invalid port.' >&2; exit 2; }
+valid_workers "$workers" || { echo 'Invalid workers count.' >&2; exit 2; }
 [[ "$backup_schedule" == true || "$backup_schedule" == false ]] || { echo 'Invalid backup schedule flag.' >&2; exit 2; }
-[[ "$backup_retention_days" =~ ^[0-9]{1,4}$ ]] && ((10#$backup_retention_days >= 1 && 10#$backup_retention_days <= 3650)) || { echo 'Invalid backup retention days.' >&2; exit 2; }
+valid_retention "$backup_retention_days" || { echo 'Invalid backup retention days.' >&2; exit 2; }
 backend_port=$((10#$backend_port))
 workers=$((10#$workers))
 backup_retention_days=$((10#$backup_retention_days))
-((backend_port != 6389)) || { echo 'Port 6389 is reserved for the internal Redis/Valkey instance.' >&2; exit 2; }
 [[ -z "$github_token_file" || -z "$github_config" ]] || { echo 'Use either --github-token-file or --github-config.' >&2; exit 2; }
 [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || { echo 'Invalid git ref.' >&2; exit 2; }
 [[ -z "$cert_file" && -z "$cert_key" || -r "$cert_file" && -r "$cert_key" ]] || { echo 'Both certificate files are required.' >&2; exit 2; }
-exec 9>/run/cloudportal-install.lock
-flock -n 9 || { echo 'Another installation is running.' >&2; exit 1; }
 case "$os_family" in
   debian)
     export DEBIAN_FRONTEND=noninteractive
