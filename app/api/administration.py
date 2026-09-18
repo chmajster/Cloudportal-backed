@@ -3,7 +3,7 @@ from datetime import timedelta, timezone
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, update
-from app.api.common import find, idempotent, paginate, public
+from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
                              IssuedResetOutput, DeletedOutput, AuditOutput)
 from app.api.schemas import AssignRoles, RoleInput, TokenInput, UserCreate, UserUpdate
@@ -14,10 +14,6 @@ from app.rbac.service import ALL_PERMISSIONS, ensure_admin_remains, governance_l
 from app.security.core import audit, digest, effective_permissions, issue_token, password_hasher, require, revoke_user
 
 router = APIRouter(tags=['administration'])
-Limit = Annotated[int, Query(ge=1, le=200)]
-Offset = Annotated[int, Query(ge=0)]
-
-
 def role_public(role):
     return {'id': role.id, 'name': role.name, 'permissions': sorted(p.name for p in role.permissions)}
 
