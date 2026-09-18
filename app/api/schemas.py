@@ -102,6 +102,32 @@ class CredentialInput(Input):
         return value
 
 
+class ProxmoxAutoTokenInput(Input):
+    name: Name
+    endpoint: Annotated[str, Field(min_length=1, max_length=2048)]
+    username: Annotated[str, Field(min_length=1, max_length=254)]
+    password: Annotated[str, Field(min_length=1, max_length=256, json_schema_extra={'writeOnly': True})]
+    verify_ssl: bool = True
+
+    @field_validator('endpoint')
+    @classmethod
+    def proxmox_endpoint(cls, value):
+        parsed = urlsplit(value)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('Proxmox endpoint must be HTTPS without credentials, query or fragment')
+        path = parsed.path.rstrip('/')
+        if path.endswith('/api2/json'):
+            value = value[:-(len('/api2/json'))]
+        return value.rstrip('/')
+
+    @field_validator('username')
+    @classmethod
+    def proxmox_username(cls, value):
+        if '@' not in value or value.startswith('@') or value.endswith('@'):
+            raise ValueError('Proxmox username must include a realm, for example root@pam')
+        return value
+
+
 class ProviderInput(Input):
     name: Name
     type: Literal['proxmox'] = 'proxmox'
