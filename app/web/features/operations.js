@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function schedulesView() {
   const schedules = (await api('/schedules?limit=200')).items;
   const actions = allowed('schedules.create') && allowed('deployments.read') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
@@ -152,3 +153,4 @@ function webhookForm(item = null) {
 
 registerView({ id: 'schedules', label: 'Harmonogramy', icon: 'S', permission: 'schedules.read', order: 130 }, schedulesView);
 registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhooks.read', order: 140 }, webhooksView);
+})();
