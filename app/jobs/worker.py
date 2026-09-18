@@ -10,7 +10,7 @@ from app.database import session
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
-from app.models import Audit, Credential, Deployment, Job, JobLog, Token, now
+from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Token, now
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
 
@@ -154,6 +154,15 @@ def execute(job_id):
                 deployment.status = current.payload.get('previous_status', 'failed')
             if deployment.status == 'destroyed':
                 deployment.destroyed_at = now()
+                released_at = now()
+                db.execute(update(HostnameReservation).where(
+                    HostnameReservation.resource_id == deployment.id,
+                    HostnameReservation.status != 'released',
+                ).values(status='released', released_at=released_at))
+                db.execute(update(IPAllocation).where(
+                    IPAllocation.resource_id == deployment.id,
+                    IPAllocation.status != 'released',
+                ).values(status='released', released_at=released_at))
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))
         db.add(Audit(user_id=job.created_by, token_id=job.token_id, ip=job.ip, action='job.' + status,
                      source=job.source,
