@@ -526,3 +526,43 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-bottom-width: 2px;
   .vm-title-row { padding: 14px; }
 }
 
+/* Visual Blueprint workflow designer */
+.workflow-dag { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--info-border); border-radius: 12px; background: var(--info-soft); }
+.workflow-dag-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.workflow-dag-header > div { display: grid; gap: 3px; }
+.workflow-dag-header small, .workflow-dag-header > span { font-size: .72rem; }
+.workflow-dag-columns { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(190px, 1fr); gap: 28px; overflow-x: auto; padding: 4px 4px 10px; }
+.workflow-dag-column { position: relative; display: grid; align-content: start; gap: 10px; min-width: 190px; }
+.workflow-dag-column:not(:last-child)::after { content: '→'; position: absolute; right: -22px; top: 55%; transform: translateY(-50%); color: var(--muted); font-size: 1.2rem; }
+.workflow-dag-level { color: var(--muted); font-size: .66rem; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
+.workflow-dag-card { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; }
+.workflow-dag-card:hover { border-color: var(--accent-border); background: var(--surface-2); }
+.workflow-dag-card.invalid { border-color: var(--danger-border); background: var(--danger-soft); }
+.workflow-dag-card-head { display: grid; grid-template-columns: 26px minmax(0,1fr) auto; gap: 8px; align-items: center; }
+.workflow-dag-card-head > div { min-width: 0; display: grid; gap: 2px; }
+.workflow-dag-card-head strong, .workflow-dag-card-head small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-dag-card-head small { color: var(--muted); font-size: .68rem; }
+.workflow-dag-index { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: .68rem; font-weight: 900; }
+.workflow-dag-dependencies { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: .68rem; }
+.workflow-dag-chip { padding: 3px 6px; border-radius: 999px; background: var(--surface-3); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.workflow-dag-chip.danger { background: var(--danger-bg); color: var(--danger-text); }
+.workflow-step-controls { display: flex; flex-wrap: wrap; gap: 5px; }
+.workflow-editor-card .editor-card-header > div:first-child { display: grid; gap: 3px; }
+.workflow-editor-card .editor-card-header small { font-size: .68rem; }
+.workflow-editor-details { border: 1px dashed var(--line); border-radius: 10px; overflow: hidden; }
+.workflow-editor-details > summary { padding: 11px 13px; cursor: pointer; background: var(--surface-2); color: var(--text); font-size: .78rem; font-weight: 800; }
+.workflow-editor-details > .editor-list { padding: 12px; }
+.workflow-editor-details > .editor-add-row { padding: 0 12px 12px; }
+
+.workflow-preview-visual { display: flex; align-items: center; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 6px; }
+.workflow-preview-card { flex: 0 0 auto; min-width: 150px; display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.workflow-preview-card > div { min-width: 0; display: grid; gap: 2px; }
+.workflow-preview-card strong, .workflow-preview-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-preview-card small { font-size: .66rem; }
+.workflow-preview-arrow { flex: 0 0 auto; color: var(--muted); }
+
+@media (max-width: 700px) {
+  .workflow-dag-header { flex-direction: column; }
+  .workflow-dag-columns { grid-auto-columns: minmax(170px, 80vw); }
+}
+
