@@ -11,6 +11,7 @@ from app.catalog import list_templates
 from app.config import settings
 from app.database import session
 from app.models import (
+    Credential,
     Deployment,
     IPAllocation,
     Job,
@@ -242,6 +243,34 @@ def alerts(actor=Depends(require('metrics.read'))):
                 'resource_id': job.id,
                 'message': f'Job {job.id} has a stale heartbeat',
             })
+        warning_horizon = now() + timedelta(days=settings().credential_expiry_warning_days)
+        credentials = db.scalars(select(Credential).where(
+            (Credential.expires_at.is_not(None) & (Credential.expires_at <= warning_horizon))
+            | (Credential.rotation_due_at.is_not(None) & (Credential.rotation_due_at <= warning_horizon))
+        ).limit(100)).all()
+        for credential in credentials:
+            if credential.expires_at is not None and credential.expires_at <= now():
+                result.append({
+                    'severity': 'critical',
+                    'code': 'credential_expired',
+                    'resource_id': str(credential.id),
+                    'message': f'Credential {credential.name} is expired',
+                })
+            elif credential.expires_at is not None and credential.expires_at <= warning_horizon:
+                result.append({
+                    'severity': 'warning',
+                    'code': 'credential_expiring',
+                    'resource_id': str(credential.id),
+                    'message': f'Credential {credential.name} expires soon',
+                })
+            if credential.rotation_due_at is not None and credential.rotation_due_at <= warning_horizon:
+                result.append({
+                    'severity': 'warning',
+                    'code': 'credential_rotation_due',
+                    'resource_id': str(credential.id),
+                    'message': f'Credential {credential.name} rotation is due soon',
+                })
+
         failed_webhooks = db.scalar(
             select(func.count()).select_from(WebhookDelivery).where(
                 WebhookDelivery.status == 'failed'
