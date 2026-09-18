@@ -182,6 +182,10 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     source = portal_source(source_header)
     if not available_to(row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
+    if row.requires_approval and 'blueprints.approve' not in request.state.permissions:
+        raise HTTPException(403, 'blueprints.approve required by this blueprint')
+    if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
+        raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
     def create():
         rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id)
         blueprint_variables = rendered.pop('blueprint_variables')
@@ -201,7 +205,9 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                 credentials_id=parsed.credentials_id, variables=parsed.variables,
                                 workflow={'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
-                                                        'variables': blueprint_variables, 'steps': row.workflow}},
+                                                        'variables': blueprint_variables, 'steps': row.workflow,
+                                                        'requires_approval': row.requires_approval,
+                                                        'recovery_policy': row.recovery_policy}},
                                 created_by=actor.user_id, executor=parsed.executor)
         db.add(deployment)
         db.flush()
