@@ -1344,7 +1344,7 @@ async function providersView() {
   ]);
   const providers = providerResult.items;
   const credentialNames = new Map(credentialResult.items.map(item => [Number(item.id), item.name]));
-  const actions = allowed('providers.create') ? [button('Dodaj platformę', () => providerForm(), 'primary')] : [];
+  const actions = allowed('providers.create') && allowed('credentials.read') ? [button('Dodaj platformę', () => providerForm(), 'primary')] : [];
   dom.content.replaceChildren(heading('Połączenia z platformami infrastruktury. Każda platforma korzysta z przypisanych, zaszyfrowanych danych dostępowych.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -1354,7 +1354,7 @@ async function providersView() {
     ], providers, item => {
       const actions = [];
       actions.push(button('Przeglądaj zasoby', () => discoverProvider(item)));
-      if (allowed('providers.update')) actions.push(button('Edytuj', () => providerForm(item)));
+      if (allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => providerForm(item)));
       if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Platforma „${item.name}” zostanie usunięta. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
         toast('Platforma usunięta.');
@@ -1473,7 +1473,8 @@ async function discoverProvider(provider) {
 
 async function deploymentsView() {
   const deployments = (await api('/deployments?limit=200')).items;
-  const actions = allowed('deployments.create') ? [button('Nowe wdrożenie', createDeployment, 'primary')] : [];
+  const actions = allowed('deployments.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')
+    ? [button('Nowe wdrożenie', createDeployment, 'primary')] : [];
   dom.content.replaceChildren(heading('Kontrolowane wdrożenia Terraform/OpenTofu. Każda operacja tworzy audytowalne zadanie.', actions),
     table([
       { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
@@ -1503,7 +1504,7 @@ async function createDeployment() {
       api('/providers?limit=200'),
       api('/credentials?limit=200'),
       api('/templates'),
-      allowed('ansible.execute') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
+      allowed('ansible.execute') && allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items;
     const credentials = credentialResult.items;
@@ -1648,7 +1649,9 @@ async function createDeployment() {
 async function jobsView() {
   const jobs = (await api('/jobs?limit=200')).items;
   const actions = [];
-  if (allowed('jobs.execute') && allowed('ansible.execute')) actions.push(button('Uruchom Ansible', runStandaloneAnsible, 'primary'));
+  if (allowed('jobs.execute') && allowed('ansible.execute') && allowed('ansible.read') && allowed('credentials.read')) {
+    actions.push(button('Uruchom Ansible', runStandaloneAnsible, 'primary'));
+  }
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.', actions),
     table([
       { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => operationLabel(item.operation) },
@@ -1776,7 +1779,8 @@ async function auditView(requestId = '') {
 
 async function blueprintsView() {
   const blueprints = (await api('/blueprints?limit=200')).items;
-  const actions = allowed('blueprints.create') ? [button('Nowy Blueprint', () => blueprintForm(), 'primary')] : [];
+  const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
+  const actions = allowed('blueprints.create') && canDesignBlueprint ? [button('Nowy Blueprint', () => blueprintForm(), 'primary')] : [];
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
       { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
@@ -1788,7 +1792,7 @@ async function blueprintsView() {
     ], blueprints, item => {
       const result = [];
       if (allowed('blueprints.execute') && (!item.requires_approval || allowed('blueprints.approve')) && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
-      if (allowed('blueprints.update')) result.push(button('Edytuj', () => blueprintForm(item)));
+      if (allowed('blueprints.update') && canDesignBlueprint) result.push(button('Edytuj', () => blueprintForm(item)));
       if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
@@ -1814,7 +1818,7 @@ async function blueprintForm(item = null) {
       allowed('ipam.read') ? api('/ipam/pools?limit=200') : Promise.resolve({ items: [] }),
       allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
       allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
-      allowed('ansible.execute') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
+      allowed('ansible.execute') && allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items;
     const credentials = credentialResult.items;
@@ -2407,10 +2411,11 @@ function splitValues(value) {
 }
 
 async function catalogView() {
-  const [templates, playbooks] = await Promise.all([api('/templates'), api('/ansible/playbooks')]);
-  dom.content.replaceChildren(
-    heading('Zatwierdzony, wersjonowany katalog IaC. API nie przyjmuje arbitralnego HCL ani dowolnych playbooków.'),
-    node('section', { class: 'panel' },
+  const [templates, playbooks] = await Promise.all([
+    api('/templates'),
+    allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
+  ]);
+  const sections = [    node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Szablony Terraform / OpenTofu' })),
       table([
         { label: 'Szablon', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
@@ -2419,15 +2424,20 @@ async function catalogView() {
         { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
       ], templates.items, item => [button('Pola', () => showTemplateFields(item))])
     ),
-    node('section', { class: 'panel' },
+  ];
+  if (allowed('ansible.read')) {
+    sections.push(node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Zatwierdzone playbooki Ansible' })),
       table([
         { label: 'Playbook', value: item => node('strong', { text: item.name }) },
         { label: 'ID', class: 'mono', value: item => item.id },
         { label: 'Transport', value: item => badge(item.transport, 'info') },
         { label: 'Zmienne', value: item => item.variables.map(name => FIELD_LABELS[name] || name.replaceAll('_', ' ')).join(', ') || '—' },
-      ], playbooks.items)
-    )
+      ], playbooks.items)));
+  }
+  dom.content.replaceChildren(
+    heading('Zatwierdzony, wersjonowany katalog IaC. API nie przyjmuje arbitralnego HCL ani dowolnych playbooków.'),
+    ...sections,
   );
 }
 
@@ -2518,7 +2528,7 @@ async function inventoryView() {
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
   ]);
   const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
-  const actions = allowed('inventory.import') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
+  const actions = allowed('inventory.import') && allowed('providers.read') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
   dom.content.replaceChildren(
     heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego zastosowania zmian.', actions),
     node('section', { class: 'panel' },
@@ -2553,7 +2563,7 @@ function inventoryVmActions(item) {
     toast('Stan zasobu odświeżony.');
     navigate('inventory');
   }));
-  if (allowed('deployments.adopt') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => adoptInventoryVm(item)));
+  if (allowed('deployments.adopt') && allowed('terraform.read') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => adoptInventoryVm(item)));
   if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z platformy źródłowej.', async () => {
     await api(`/inventory/vms/${item.id}`, { method: 'DELETE' });
     navigate('inventory');
@@ -2981,7 +2991,7 @@ async function cloneVm(item) {
 
 async function schedulesView() {
   const schedules = (await api('/schedules?limit=200')).items;
-  const actions = allowed('schedules.create') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
+  const actions = allowed('schedules.create') && allowed('deployments.read') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
   dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą uprawnień.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -2994,7 +3004,7 @@ async function schedulesView() {
     ], schedules, item => {
       const result = [];
       if (allowed('schedules.update')) {
-        result.push(button(item.is_active ? 'Edytuj' : 'Włącz i edytuj', () => scheduleForm(item)));
+        if (allowed('deployments.read')) result.push(button(item.is_active ? 'Edytuj' : 'Włącz i edytuj', () => scheduleForm(item)));
         if (item.is_active) result.push(button('Wyłącz', async () => { await api(`/schedules/${item.id}/disable`, { method: 'POST' }); navigate('schedules'); }));
       }
       if (allowed('schedules.delete')) result.push(button('Usuń', () => confirmAction('Usuń harmonogram', item.name, async () => {
