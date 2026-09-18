@@ -477,7 +477,7 @@ const CREDENTIAL_TYPE_CONFIG = {
     defaultAuth: 'auto_token',
     authModes: {
       auto_token: { label: 'Login + hasło → utwórz token automatycznie (zalecane)', fields: [
-        { key: 'password', label: 'Hasło Proxmox', type: 'password', required: true, autocomplete: 'new-password', wide: true, help: 'Hasło jest używane tylko raz do zalogowania w Proxmox i utworzenia API tokena. Cloudportal zapisuje wyłącznie wygenerowany token, nie hasło.' },
+        { key: 'password', label: 'Hasło Proxmox', type: 'password', required: true, autocomplete: 'new-password', wide: true, help: 'Hasło jest używane tylko raz do zalogowania w Proxmox i utworzenia API tokena. Cloudportal zapisuje wyłącznie wygenerowany token, nie hasło. Token dziedziczy uprawnienia tego użytkownika, więc najlepiej używać dedykowanego konta o minimalnych uprawnieniach.' },
       ]},
       token: { label: 'Mam już API token', fields: [
         { key: 'token_id', label: 'Token ID', placeholder: 'root@pam!cloudportal', required: true, help: 'Pełny identyfikator tokena albo sama nazwa tokena. Backend dołączy użytkownika, gdy brakuje znaku !.' },
