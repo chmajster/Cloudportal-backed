@@ -45,7 +45,10 @@ jobs:
         with: {python-version: '3.12'}
       - run: pip install -r requirements-dev.txt
       - run: python -m compileall -q app migrations scripts
-      - run: node --check app/web/app.js
+      - name: Check modular boundaries
+        run: python scripts/check-module-boundaries.py
+      - name: Check all browser JavaScript
+        run: find app/web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
       - run: bash -n install.sh scripts/install.sh
       - run: scripts/test-installer-platforms.sh
       - run: pytest -q --tb=short
