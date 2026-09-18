@@ -123,6 +123,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function storageLabel(' in script
     assert 'function hostnameValueFields(' in script
     assert 'function proxmoxBlueprintForm(' in script
+    assert 'const workflowGraph = node(' in script
+    assert 'const syncWorkflowGraph = () =>' in script
+    assert 'const moveWorkflowRow = (row, direction) =>' in script
+    assert 'workflow-dag-card' in script
+    assert 'workflow-preview-visual' in script
     assert 'Szybki Blueprint Proxmox' in script
     assert 'Obraz / szablon Proxmox' in script
     assert 'Wzorzec nazwy hosta' in script
@@ -196,6 +201,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.designer-heading' in stylesheet
     assert '.designer-subsection' in stylesheet
     assert '.workflow-preview' in stylesheet
+    assert '.workflow-dag' in stylesheet
+    assert '.workflow-dag-columns' in stylesheet
+    assert '.workflow-preview-visual' in stylesheet
     assert '.blueprint-run-summary' in stylesheet
     assert '.table-toolbar' in stylesheet
     assert '.permission-group' in stylesheet
