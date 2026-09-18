@@ -1,0 +1,40 @@
+{
+  "playbooks": [
+    {
+      "id": "bootstrap-linux",
+      "name": "Configure hostname/timezone and guest agent",
+      "file": "bootstrap-linux.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "hostname": {
+          "required": false,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9.-]{0,62}"
+        },
+        "timezone": {
+          "required": false,
+          "pattern": "[A-Za-z_]+(?:/[A-Za-z_+-]+){0,2}"
+        }
+      }
+    },
+    {
+      "id": "validate-linux",
+      "name": "Validate Linux connectivity",
+      "file": "validate-linux.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": null,
+      "variables": {}
+    },
+    {
+      "id": "validate-windows",
+      "name": "Validate Windows connectivity",
+      "file": "validate-windows.yml",
+      "transport": "winrm",
+      "wait": "wait-windows.yml",
+      "validate": null,
+      "variables": {}
+    }
+  ]
+}
