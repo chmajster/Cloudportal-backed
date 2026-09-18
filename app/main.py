@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from app.api import administration, automation, health, infrastructure, inventory, ipam, operations, proxmox_management
 from app.auth import routes as auth
 from app.config import settings
+from app.observability import configure_telemetry
 from app.security.core import throttle
 
 app = FastAPI(title='Cloudportal-backed', version='1.0.0', docs_url='/docs', redoc_url=None)
@@ -100,3 +101,6 @@ def web_console():
 
 
 app.mount('/ui', StaticFiles(directory=Path(__file__).with_name('web'), html=True), name='web-console')
+
+
+configure_telemetry(app)
