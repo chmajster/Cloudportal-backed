@@ -11,6 +11,7 @@ from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
 from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, Token, now
+from app.operations.service import queue_job_webhooks, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
 
@@ -53,24 +54,29 @@ class Context:
 
 
 def validate_authorization(db, job):
-    token = db.get(Token, job.token_id)
-    if not token or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
-        raise ExecutionFailed('Job authorization has been revoked')
-    if token.kind == 'session':
-        # Normal refresh rotates the access token. Authorize the surviving session family,
-        # while logout, replay detection and password changes revoke the whole family.
-        active_family = db.scalar(select(Token.id).where(
-            Token.family == token.family, Token.kind == 'refresh', Token.revoked_at.is_(None),
-            Token.expires_at > now()).limit(1))
-        if not active_family:
-            raise ExecutionFailed('Job session has ended')
-    elif token.kind != 'api' or token.revoked_at:
-        raise ExecutionFailed('Job authorization has been revoked')
-    permissions = effective_permissions(token.user)
-    if token.kind == 'api':
-        if token.expires_at and token.expires_at <= now():
-            raise ExecutionFailed('Job API token expired')
-        permissions &= set(token.scopes)
+    if job.source == 'Scheduler' and job.token_id is None:
+        permissions = scheduler_user_permissions(db, job.created_by)
+        if permissions is None:
+            raise ExecutionFailed('Scheduled job owner is disabled or locked')
+    else:
+        token = db.get(Token, job.token_id)
+        if not token or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
+            raise ExecutionFailed('Job authorization has been revoked')
+        if token.kind == 'session':
+            # Normal refresh rotates the access token. Authorize the surviving session family,
+            # while logout, replay detection and password changes revoke the whole family.
+            active_family = db.scalar(select(Token.id).where(
+                Token.family == token.family, Token.kind == 'refresh', Token.revoked_at.is_(None),
+                Token.expires_at > now()).limit(1))
+            if not active_family:
+                raise ExecutionFailed('Job session has ended')
+        elif token.kind != 'api' or token.revoked_at:
+            raise ExecutionFailed('Job authorization has been revoked')
+        permissions = effective_permissions(token.user)
+        if token.kind == 'api':
+            if token.expires_at and token.expires_at <= now():
+                raise ExecutionFailed('Job API token expired')
+            permissions &= set(token.scopes)
     needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
     if job.operation == 'terraform.apply':
         needed.add('deployments.create')
@@ -255,6 +261,7 @@ def execute(job_id):
                     ManagedResource.deployment_id == deployment.id,
                 ).values(lifecycle_status='destroyed', destroyed_at=released_at))
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))
+        queue_job_webhooks(db, current)
         db.add(Audit(user_id=job.created_by, token_id=job.token_id, ip=job.ip, action='job.' + status,
                      source=job.source,
                      resource='jobs', resource_id=job.id, result=status, request_id=job.request_id))
