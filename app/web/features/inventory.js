@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function inventoryView() {
   const [vms, resources, providerResult] = await Promise.all([
     api('/inventory/vms?refresh=true&limit=200'),
@@ -538,3 +539,4 @@ async function cloneVm(item) {
 }
 
 registerView({ id: 'inventory', label: 'Zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
+})();
