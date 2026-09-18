@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function deploymentsView() {
   const [deploymentResult, providerResult] = await Promise.all([
     api('/deployments?limit=200'),
@@ -337,3 +338,4 @@ async function showJobLogs(job) {
 
 registerView({ id: 'deployments', label: 'Wdrożenia', icon: 'D', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
+})();
