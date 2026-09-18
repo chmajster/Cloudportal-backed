@@ -205,6 +205,8 @@ def check_job_permissions(request, operation):
     required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
     if operation == 'terraform.destroy':
         required.add('deployments.destroy')
+    if operation == 'terraform.import':
+        required.add('deployments.adopt')
     if operation == 'terraform.apply':
         required.add('deployments.create')
     if not required <= request.state.permissions:
