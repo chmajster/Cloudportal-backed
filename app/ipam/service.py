@@ -90,11 +90,18 @@ def allocate_address(db, pool_id, actor_id, *, preferred_address=None, hostname=
             raise HTTPException(409, 'Preferred IP address is already allocated')
     else:
         start = max(1, int(pool.next_offset or 1))
+        used = {
+            ipaddress.ip_address(value)
+            for value in db.scalars(select(IPAllocation.address).where(
+                IPAllocation.pool_id == pool.id,
+                IPAllocation.status.in_(['reserved', 'assigned']),
+            )).all()
+        }
         candidate = None
         for index in range(total_hosts):
             offset = ((start - 1 + index) % total_hosts) + 1
             current = network.network_address + offset
-            if _valid_candidate(pool, network, current) and not active_address_exists(db, pool.id, current):
+            if _valid_candidate(pool, network, current) and current not in used:
                 candidate = current
                 pool.next_offset = (offset % total_hosts) + 1
                 break
