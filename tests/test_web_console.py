@@ -17,6 +17,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="modal-close"' in page.text
     assert 'id="refresh-view"' in page.text
     assert 'src="./theme-init.js"' in page.text
+    assert 'src="./core.js"' in page.text
+    assert 'src="./loader.js"' in page.text
+    assert 'src="./app.js"' not in page.text
+    assert 'features/' not in page.text
     assert page.headers['cache-control'] == 'no-store'
     assert page.headers['x-frame-options'] == 'DENY'
     assert page.headers['content-security-policy'] == (
@@ -25,11 +29,16 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         "form-action 'self'; frame-ancestors 'none'"
     )
 
-    script_paths = [
-        'core.js',
-        'features/credentials.js',
+    manifest_response = client.get('/ui/manifest.json')
+    assert manifest_response.status_code == 200
+    manifest = manifest_response.json()
+    assert manifest['version'] == 1
+    assert manifest['scripts'] == sorted(manifest['scripts'])
+    assert manifest['styles'] == sorted(manifest['styles'])
+    assert {
         'features/dashboard.js',
         'features/identity.js',
+        'features/credentials.js',
         'features/providers.js',
         'features/catalog.js',
         'features/blueprints.js',
@@ -37,20 +46,16 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/inventory.js',
         'features/deployments.js',
         'features/operations.js',
-        'app.js',
-    ]
-    style_paths = [
-        'styles.css',
+    } == set(manifest['scripts'])
+    assert {
         'styles/features/identity.css',
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
         'styles/features/inventory.css',
-    ]
+    } == set(manifest['styles'])
 
-    for path in script_paths:
-        assert f'src="./{path}"' in page.text
-    for path in style_paths:
-        assert f'href="./{path}"' in page.text
+    script_paths = ['core.js', 'loader.js', *manifest['scripts'], 'app.js']
+    style_paths = ['styles.css', *manifest['styles']]
 
     theme_script = client.get('/ui/theme-init.js')
     assert theme_script.status_code == 200
@@ -71,6 +76,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     stylesheet = '\n'.join(response.text for response in styles.values())
     bootstrap = scripts['app.js'].text
     core = scripts['core.js'].text
+    loader = scripts['loader.js'].text
+
+    assert "fetch('./manifest.json'" in loader
+    assert "loadFeatureScript('app.js')" in loader
+    assert 'loadFeatureStyle' in loader
 
     assert "const API = '/api/v1';" in core
     assert 'function registerView(' in core
