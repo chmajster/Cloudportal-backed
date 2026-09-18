@@ -18,3 +18,5 @@ opentelemetry-sdk>=1.30,<2
 opentelemetry-exporter-otlp-proto-http>=1.30,<2
 opentelemetry-instrumentation-fastapi>=0.51b0,<1
 websockets>=13,<17
+PyMySQL>=1.1,<2
+PyNaCl>=1.5,<2

@@ -192,3 +192,21 @@ python scripts/rewrap-secrets.py --apply
 ```
 
 Nie usuwaj lokalnego `master.key` po przełączeniu, dopóki wszystkie stare ciphertexty nie zostaną przepakowane i backup/restore nie zostanie przetestowany. AWS KMS/Vault musi być osiągalny przez każdy worker, który odszyfrowuje dane.
+
+
+## Migracja ze starego Cloud Portal
+
+Jawny importer `scripts/migrate-legacy-cloudportal.py` przenosi wyłącznie dane mające bezpieczny odpowiednik w backendzie: użytkowników i role, połączenia Proxmox jako szyfrowane credentiale+providery, istniejące VM jako Inventory `external` oraz podsieci jako IPAM pools. Domyślnie działa jako **dry-run** i wycofuje transakcję. Dopiero `--apply` zapisuje zmiany.
+
+Źródłowy klucz `APP_KEY/ENCRYPTION_KEY` zapisz jako base64 w osobnym pliku mode 0600 i ustaw wraz z DSN MySQL przez zmienne środowiskowe:
+
+```bash
+export LEGACY_DATABASE_URL='mysql+pymysql://user:password@legacy-db/cloud_portal'
+export LEGACY_ENCRYPTION_KEY_FILE=/root/legacy-cloudportal.key
+python scripts/migrate-legacy-cloudportal.py
+python scripts/migrate-legacy-cloudportal.py --apply
+```
+
+Importer odszyfrowuje stare tokeny tylko w pamięci i natychmiast szyfruje je kluczem Cloudportal-backed. Starych hashy haseł nie kopiuje: importowane konta otrzymują nieznane losowe hasło i `must_change_password`; administrator powinien wydać token resetu. Legacy administrator **nie** dostaje automatycznie roli Administrator — wymaga jawnej flagi `--grant-legacy-admin`.
+
+Projekty, memberships, quotas, resource plans i historyczne jobs/snapshots nie mają obecnie jednoznacznego modelu docelowego. Importer podaje ich liczby w `skipped` i nie tworzy zgadywanego mapowania.
