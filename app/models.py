@@ -96,6 +96,9 @@ class Credential(Timestamp, Base):
     username: Mapped[str] = mapped_column(String(254), default="")
     verify_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
     encrypted_secret: Mapped[bytes] = mapped_column(LargeBinary)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    rotation_due_at: Mapped[datetime | None] = mapped_column(DateTime)
+    secret_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class Provider(Timestamp, Base):
