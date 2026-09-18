@@ -228,3 +228,20 @@ python scripts/e2e-ha-failover.py --url https://backend.example.com:8443 \
 ```
 
 Dodanie `--exercise-failover` wykonuje kontrolowane wyłączenie jednego workera. Ten test potwierdza redundancję workerów i wspólny control plane; awaria podczas rzeczywistego `terraform apply` nadal wymaga osobnego live acceptance z testowym deploymentem i późniejszej kontroli częściowego state.
+
+## Disaster-recovery restore drill
+
+`scripts/e2e-disaster-restore.py` przywraca backup do **oddzielnej, wcześniej utworzonej bazy PostgreSQL** i po restore sprawdza Alembic, liczbę kont/credentiali oraz próbę odszyfrowania pierwszego credentiala. Skrypt odmawia działania, jeśli target odpowiada produkcyjnej bazie z `backend.env`, a nazwa bazy musi zostać powtórzona przez `--confirm-isolated-database`. Dodatkowo wymagana jest destrukcyjna flaga `--allow-destructive-isolated-restore`.
+
+Przykład:
+
+```bash
+sudo python scripts/e2e-disaster-restore.py \
+  --backup /var/backups/cloudportal-backed/20260918T120000Z \
+  --target-database-url 'postgresql+psycopg://cloudportal:...@dr-db/cloudportal_restore_drill' \
+  --confirm-isolated-database cloudportal_restore_drill \
+  --allow-destructive-isolated-restore
+```
+
+Target jest czyszczony przez `pg_restore --clean --if-exists`; nigdy nie używaj istniejącej bazy z danymi, których potrzebujesz. Przy external KMS/Vault środowisko uruchamiające drill musi mieć dostęp do tego samego KEK, aby test odszyfrowania zakończył się powodzeniem.
+
