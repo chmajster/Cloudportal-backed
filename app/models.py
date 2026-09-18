@@ -278,3 +278,20 @@ class TerraformState(Base):
     state_sha256: Mapped[str] = mapped_column(String(64))
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+
+class ManagedResource(Timestamp, Base):
+    __tablename__ = "managed_resources"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    deployment_id: Mapped[str] = mapped_column(ForeignKey("deployments.id", ondelete="CASCADE"), unique=True, index=True)
+    provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    resource_type: Mapped[str] = mapped_column(String(32), default="vm", index=True)
+    external_id: Mapped[str] = mapped_column(String(512))
+    name: Mapped[str] = mapped_column(String(100))
+    primary_ip: Mapped[str | None] = mapped_column(String(64))
+    lifecycle_status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    destroyed_at: Mapped[datetime | None] = mapped_column(DateTime)
