@@ -1,5 +1,5 @@
 import ipaddress
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import HTTPException
@@ -221,13 +221,26 @@ class ProxmoxProvider(InfrastructureProvider):
         )
         if not isinstance(data, dict) or not data.get('ticket') or not data.get('port'):
             raise HTTPException(502, 'Proxmox did not return a console ticket')
+        websocket_path = f'/api2/json/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncwebsocket'
+        origin = self.endpoint.removesuffix('/api2/json')
+        socket_path = websocket_path.lstrip('/') + '?' + urlencode({
+            'port': int(data['port']),
+            'vncticket': data['ticket'],
+        })
+        viewer_url = origin + '/novnc/vnc_lite.html?' + urlencode({
+            'encrypt': 1,
+            'autoconnect': 1,
+            'resize': 'scale',
+            'path': socket_path,
+        })
         return {
             'ticket': data['ticket'],
             'port': int(data['port']),
             'user': data.get('user'),
             'cert': data.get('cert'),
-            'websocket_path': f'/api2/json/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncwebsocket',
-            'origin': self.endpoint.removesuffix('/api2/json'),
+            'websocket_path': websocket_path,
+            'origin': origin,
+            'viewer_url': viewer_url,
         }
 
     def task_status(self, node, upid):
