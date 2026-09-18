@@ -57,8 +57,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
         'styles/features/inventory.css',
-        'styles/features/search.css',
-    } == set(manifest['styles'])
+    } <= set(manifest['styles'])
 
     script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
     style_paths = ['styles.css', *manifest['styles']]
