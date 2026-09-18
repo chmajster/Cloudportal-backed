@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.api.administration import Limit, Offset
 from app.api.common import find, idempotent
-from app.api.schemas import Input
+from app.api.schemas import Input, Slug
 from app.catalog import template_import_target, template_public, validate_template_variables
 from app.database import get_db
 from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider
@@ -21,6 +21,10 @@ FIELDS = (
     'id provider_id deployment_id node vm_id name management_mode lifecycle_status '
     'created_by created_at updated_at destroyed_at'
 )
+RESOURCE_FIELDS = (
+    'id deployment_id provider_id provider resource_type external_id name primary_ip '
+    'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
+)
 
 
 class ImportVMInput(Input):
@@ -29,8 +33,17 @@ class ImportVMInput(Input):
 
 
 class AdoptVMInput(Input):
-    template: Annotated[str, Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}def public(row):
+    template: Slug = 'proxmox-vm'
+    variables: dict
+    executor: Literal['terraform', 'opentofu'] = 'terraform'
+
+
+def public(row):
     return {field: getattr(row, field) for field in FIELDS.split()}
+
+
+def resource_public(row):
+    return {field: getattr(row, field) for field in RESOURCE_FIELDS.split()}
 
 
 def provider_adapter(db, provider_id):
@@ -52,82 +65,6 @@ def discover_vm(adapter, vm_id):
 def live_public(row):
     allowed = 'vmid name node status template type tags mem maxmem cpu maxcpu disk maxdisk uptime'.split()
     return {key: value for key, value in row.items() if key in allowed}
-
-
-@router.get('/vms')
-def managed_vms(provider_id: Annotated[int | None, Query(gt=0)] = None,
-                management_mode: Annotated[Literal['external', 'terraform'] | None, Query()] = None,
-                lifecycle_status: Annotated[Literal['active', 'missing', 'destroyed'] | None, Query()] = None,
-                refresh: bool = False, limit: Limit = 100, offset: Offset = 0,
-                actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
-    query = select(ManagedVM)
-    if provider_id:
-        query = query.where(ManagedVM.provider_id == provider_id)
-    if management_mode:
-        query = query.where(ManagedVM.management_mode == management_mode)
-    if lifecycle_status:
-        query = query.where(ManagedVM.lifecycle_status == lifecycle_status)
-    rows = db.scalars(query.order_by(ManagedVM.created_at.desc()).offset(offset).limit(limit)).all()
-    result = [public(row) for row in rows]
-    if refresh and rows:
-        by_provider = {}
-        for row in rows:
-            by_provider.setdefault(row.provider_id, []).append(row)
-        for pid, managed in by_provider.items():
-            _, adapter = provider_adapter(db, pid)
-            discovered = {int(vm['vmid']): vm for vm in adapter.discover('vms') if vm.get('vmid') is not None}
-            for item, row in zip([x for x in result if x['provider_id'] == pid], managed):
-                if row.vm_id in discovered:
-                    item['live'] = live_public(discovered[row.vm_id])
-                else:
-                    item['live'] = None
-    return {'items': result}
-
-
-@router.get('/vms/{id}')
-def managed_vm(id: str, refresh: bool = False, actor=Depends(require('inventory.read')),
-               db=Depends(get_db, scope='function')):
-    row = find(db, ManagedVM, id)
-    result = public(row)
-    if refresh:
-        _, adapter = provider_adapter(db, row.provider_id)
-        try:
-            result['live'] = live_public(discover_vm(adapter, row.vm_id))
-        except HTTPException as error:
-            if error.status_code != 404:
-                raise
-            result['live'] = None
-    return result
-
-
-@router.post('/vms/import', status_code=201)
-def import_vm(data: ImportVMInput, request: Request, actor=Depends(require('inventory.import')),
-              db=Depends(get_db, scope='function')):
-    def create():
-        provider, adapter = provider_adapter(db, data.provider_id)
-        if provider.type != 'proxmox':
-            raise HTTPException(422, 'Existing VM import is currently supported for Proxmox')
-        existing = db.scalar(select(ManagedVM).where(
-            ManagedVM.provider_id == data.provider_id,
-            ManagedVM.vm_id == data.vm_id,
-        ))
-        if existing:
-            raise HTTPException(409, 'VM is already present in the managed inventory')
-        live = discover_vm(adapter, data.vm_id)
-        row = ManagedVM(
-            provider_id=data.provider_id,
-            node=str(live.get('node', '')),
-            vm_id=data.vm_id,
-            name=str(live.get('name', '')),
-            management_mode='external',
-            lifecycle_status='active',
-            created_by=actor.user_id,
-        )
-        db.add(row)
-        db.flush()
-        audit(db, request, 'inventory.vm_imported', 'managed_vms', row.id)
-        return public(row)
-    return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 
 def adoption_suggestion(row, live):
@@ -159,9 +96,106 @@ def adoption_suggestion(row, live):
     return suggestion
 
 
+@router.get('/vms')
+def managed_vms(
+    provider_id: Annotated[int | None, Query(gt=0)] = None,
+    management_mode: Annotated[Literal['external', 'terraform'] | None, Query()] = None,
+    lifecycle_status: Annotated[Literal['active', 'missing', 'destroyed'] | None, Query()] = None,
+    refresh: bool = False,
+    limit: Limit = 100,
+    offset: Offset = 0,
+    actor=Depends(require('inventory.read')),
+    db=Depends(get_db, scope='function'),
+):
+    query = select(ManagedVM)
+    if provider_id:
+        query = query.where(ManagedVM.provider_id == provider_id)
+    if management_mode:
+        query = query.where(ManagedVM.management_mode == management_mode)
+    if lifecycle_status:
+        query = query.where(ManagedVM.lifecycle_status == lifecycle_status)
+    rows = db.scalars(query.order_by(ManagedVM.created_at.desc()).offset(offset).limit(limit)).all()
+    result = [public(row) for row in rows]
+    if refresh and rows:
+        by_provider = {}
+        for row in rows:
+            by_provider.setdefault(row.provider_id, []).append(row)
+        for pid, managed in by_provider.items():
+            _, adapter = provider_adapter(db, pid)
+            discovered = {
+                int(vm['vmid']): vm
+                for vm in adapter.discover('vms')
+                if vm.get('vmid') is not None
+            }
+            result_by_id = {item['id']: item for item in result}
+            for row in managed:
+                item = result_by_id[row.id]
+                item['live'] = live_public(discovered[row.vm_id]) if row.vm_id in discovered else None
+    return {'items': result}
+
+
+@router.get('/vms/{id}')
+def managed_vm(
+    id: str,
+    refresh: bool = False,
+    actor=Depends(require('inventory.read')),
+    db=Depends(get_db, scope='function'),
+):
+    row = find(db, ManagedVM, id)
+    result = public(row)
+    if refresh:
+        _, adapter = provider_adapter(db, row.provider_id)
+        try:
+            result['live'] = live_public(discover_vm(adapter, row.vm_id))
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            result['live'] = None
+    return result
+
+
+@router.post('/vms/import', status_code=201)
+def import_vm(
+    data: ImportVMInput,
+    request: Request,
+    actor=Depends(require('inventory.import')),
+    db=Depends(get_db, scope='function'),
+):
+    def create():
+        provider, adapter = provider_adapter(db, data.provider_id)
+        if provider.type != 'proxmox':
+            raise HTTPException(422, 'Existing VM import is currently supported for Proxmox')
+        existing = db.scalar(select(ManagedVM).where(
+            ManagedVM.provider_id == data.provider_id,
+            ManagedVM.vm_id == data.vm_id,
+        ))
+        if existing:
+            raise HTTPException(409, 'VM is already present in the managed inventory')
+        live = discover_vm(adapter, data.vm_id)
+        row = ManagedVM(
+            provider_id=data.provider_id,
+            node=str(live.get('node', '')),
+            vm_id=data.vm_id,
+            name=str(live.get('name', '')),
+            management_mode='external',
+            lifecycle_status='active',
+            created_by=actor.user_id,
+        )
+        db.add(row)
+        db.flush()
+        audit(db, request, 'inventory.vm_imported', 'managed_vms', row.id)
+        return public(row)
+
+    return idempotent(db, request, actor, data.model_dump(), create, required=True)
+
+
 @router.get('/vms/{id}/adoption-preview')
-def adoption_preview(id: str, template: Annotated[str, Query(max_length=63)] = 'proxmox-vm',
-                     actor=Depends(require('deployments.adopt')), db=Depends(get_db, scope='function')):
+def adoption_preview(
+    id: str,
+    template: Annotated[str, Query(max_length=63)] = 'proxmox-vm',
+    actor=Depends(require('deployments.adopt')),
+    db=Depends(get_db, scope='function'),
+):
     row = find(db, ManagedVM, id)
     if row.management_mode != 'external' or row.lifecycle_status != 'active' or row.deployment_id:
         raise HTTPException(409, 'Only an active external VM can be adopted')
@@ -183,8 +217,13 @@ def adoption_preview(id: str, template: Annotated[str, Query(max_length=63)] = '
 
 
 @router.post('/vms/{id}/adopt', status_code=202)
-def adopt_vm(id: str, data: AdoptVMInput, request: Request,
-             actor=Depends(require('deployments.adopt')), db=Depends(get_db, scope='function')):
+def adopt_vm(
+    id: str,
+    data: AdoptVMInput,
+    request: Request,
+    actor=Depends(require('deployments.adopt')),
+    db=Depends(get_db, scope='function'),
+):
     from app.api.infrastructure import deployment_public, job_public, locked_credential, new_job
 
     row = db.scalar(select(ManagedVM).where(ManagedVM.id == id).with_for_update())
@@ -233,7 +272,10 @@ def adopt_vm(id: str, data: AdoptVMInput, request: Request,
             actor,
             'terraform.import',
             deployment,
-            {'import_values': import_values, 'adoption': {'managed_vm_id': row.id, 'plan_only': True}},
+            {
+                'import_values': import_values,
+                'adoption': {'managed_vm_id': row.id, 'plan_only': True},
+            },
         )
         audit(db, request, 'inventory.vm_adoption_started', 'managed_vms', row.id)
         audit(db, request, 'deployment.created', 'deployments', deployment.id)
@@ -250,8 +292,12 @@ def adopt_vm(id: str, data: AdoptVMInput, request: Request,
 
 
 @router.post('/vms/{id}/reconcile')
-def reconcile_vm(id: str, request: Request, actor=Depends(require('inventory.update')),
-                 db=Depends(get_db, scope='function')):
+def reconcile_vm(
+    id: str,
+    request: Request,
+    actor=Depends(require('inventory.update')),
+    db=Depends(get_db, scope='function'),
+):
     row = db.scalar(select(ManagedVM).where(ManagedVM.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Resource not found')
@@ -272,8 +318,12 @@ def reconcile_vm(id: str, request: Request, actor=Depends(require('inventory.upd
 
 
 @router.delete('/vms/{id}')
-def unmanage_vm(id: str, request: Request, actor=Depends(require('inventory.delete')),
-                db=Depends(get_db, scope='function')):
+def unmanage_vm(
+    id: str,
+    request: Request,
+    actor=Depends(require('inventory.delete')),
+    db=Depends(get_db, scope='function'),
+):
     row = find(db, ManagedVM, id)
     if row.management_mode == 'terraform' and row.lifecycle_status != 'destroyed':
         raise HTTPException(409, 'Active Terraform-managed VM must be destroyed through its deployment')
@@ -282,196 +332,28 @@ def unmanage_vm(id: str, request: Request, actor=Depends(require('inventory.dele
     return {'deleted': True}
 
 
-
 @router.get('/resources')
-def managed_resources(provider: Annotated[str | None, Query(max_length=32)] = None,
-                      lifecycle_status: Annotated[Literal['active', 'destroyed'] | None, Query()] = None,
-                      limit: Limit = 100, offset: Offset = 0,
-                      actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
+def managed_resources(
+    provider: Annotated[str | None, Query(max_length=32)] = None,
+    lifecycle_status: Annotated[Literal['active', 'destroyed'] | None, Query()] = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
+    actor=Depends(require('inventory.read')),
+    db=Depends(get_db, scope='function'),
+):
     query = select(ManagedResource)
     if provider:
         query = query.where(ManagedResource.provider == provider)
     if lifecycle_status:
         query = query.where(ManagedResource.lifecycle_status == lifecycle_status)
     rows = db.scalars(query.order_by(ManagedResource.created_at.desc()).offset(offset).limit(limit)).all()
-    fields = (
-        'id deployment_id provider_id provider resource_type external_id name primary_ip '
-        'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
-    )
-    return {'items': [{field: getattr(row, field) for field in fields.split()} for row in rows]}
+    return {'items': [resource_public(row) for row in rows]}
 
 
 @router.get('/resources/{id}')
-def managed_resource(id: str, actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
-    row = find(db, ManagedResource, id)
-    fields = (
-        'id deployment_id provider_id provider resource_type external_id name primary_ip '
-        'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
-    )
-    return {field: getattr(row, field) for field in fields.split()}
-)] = 'proxmox-vm'
-    variables: dict
-    executor: Literal['terraform', 'opentofu'] = 'terraform'
-
-
-def public(row):
-    return {field: getattr(row, field) for field in FIELDS.split()}
-
-
-def provider_adapter(db, provider_id):
-    provider = find(db, Provider, provider_id)
-    credential = find(db, Credential, provider.credentials_id)
-    return provider, provider_for(credential)
-
-
-def discover_vm(adapter, vm_id):
-    rows = adapter.discover('vms')
-    matches = [row for row in rows if int(row.get('vmid', -1)) == vm_id]
-    if not matches:
-        raise HTTPException(404, 'VM was not found on the provider')
-    if len(matches) != 1:
-        raise HTTPException(409, 'Provider returned an ambiguous VM identity')
-    return matches[0]
-
-
-def live_public(row):
-    allowed = 'vmid name node status template type tags mem maxmem cpu maxcpu disk maxdisk uptime'.split()
-    return {key: value for key, value in row.items() if key in allowed}
-
-
-@router.get('/vms')
-def managed_vms(provider_id: Annotated[int | None, Query(gt=0)] = None,
-                management_mode: Annotated[Literal['external', 'terraform'] | None, Query()] = None,
-                lifecycle_status: Annotated[Literal['active', 'missing', 'destroyed'] | None, Query()] = None,
-                refresh: bool = False, limit: Limit = 100, offset: Offset = 0,
-                actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
-    query = select(ManagedVM)
-    if provider_id:
-        query = query.where(ManagedVM.provider_id == provider_id)
-    if management_mode:
-        query = query.where(ManagedVM.management_mode == management_mode)
-    if lifecycle_status:
-        query = query.where(ManagedVM.lifecycle_status == lifecycle_status)
-    rows = db.scalars(query.order_by(ManagedVM.created_at.desc()).offset(offset).limit(limit)).all()
-    result = [public(row) for row in rows]
-    if refresh and rows:
-        by_provider = {}
-        for row in rows:
-            by_provider.setdefault(row.provider_id, []).append(row)
-        for pid, managed in by_provider.items():
-            _, adapter = provider_adapter(db, pid)
-            discovered = {int(vm['vmid']): vm for vm in adapter.discover('vms') if vm.get('vmid') is not None}
-            for item, row in zip([x for x in result if x['provider_id'] == pid], managed):
-                if row.vm_id in discovered:
-                    item['live'] = live_public(discovered[row.vm_id])
-                else:
-                    item['live'] = None
-    return {'items': result}
-
-
-@router.get('/vms/{id}')
-def managed_vm(id: str, refresh: bool = False, actor=Depends(require('inventory.read')),
-               db=Depends(get_db, scope='function')):
-    row = find(db, ManagedVM, id)
-    result = public(row)
-    if refresh:
-        _, adapter = provider_adapter(db, row.provider_id)
-        try:
-            result['live'] = live_public(discover_vm(adapter, row.vm_id))
-        except HTTPException as error:
-            if error.status_code != 404:
-                raise
-            result['live'] = None
-    return result
-
-
-@router.post('/vms/import', status_code=201)
-def import_vm(data: ImportVMInput, request: Request, actor=Depends(require('inventory.import')),
-              db=Depends(get_db, scope='function')):
-    def create():
-        provider, adapter = provider_adapter(db, data.provider_id)
-        if provider.type != 'proxmox':
-            raise HTTPException(422, 'Existing VM import is currently supported for Proxmox')
-        existing = db.scalar(select(ManagedVM).where(
-            ManagedVM.provider_id == data.provider_id,
-            ManagedVM.vm_id == data.vm_id,
-        ))
-        if existing:
-            raise HTTPException(409, 'VM is already present in the managed inventory')
-        live = discover_vm(adapter, data.vm_id)
-        row = ManagedVM(
-            provider_id=data.provider_id,
-            node=str(live.get('node', '')),
-            vm_id=data.vm_id,
-            name=str(live.get('name', '')),
-            management_mode='external',
-            lifecycle_status='active',
-            created_by=actor.user_id,
-        )
-        db.add(row)
-        db.flush()
-        audit(db, request, 'inventory.vm_imported', 'managed_vms', row.id)
-        return public(row)
-    return idempotent(db, request, actor, data.model_dump(), create, required=True)
-
-
-@router.post('/vms/{id}/reconcile')
-def reconcile_vm(id: str, request: Request, actor=Depends(require('inventory.update')),
-                 db=Depends(get_db, scope='function')):
-    row = db.scalar(select(ManagedVM).where(ManagedVM.id == id).with_for_update())
-    if row is None:
-        raise HTTPException(404, 'Resource not found')
-    _, adapter = provider_adapter(db, row.provider_id)
-    try:
-        live = discover_vm(adapter, row.vm_id)
-    except HTTPException as error:
-        if error.status_code != 404:
-            raise
-        row.lifecycle_status = 'missing' if row.lifecycle_status != 'destroyed' else 'destroyed'
-        audit(db, request, 'inventory.vm_missing', 'managed_vms', row.id)
-        return public(row)
-    row.node = str(live.get('node', row.node))
-    row.name = str(live.get('name', row.name))
-    row.lifecycle_status = 'active'
-    audit(db, request, 'inventory.vm_reconciled', 'managed_vms', row.id)
-    return public(row)
-
-
-@router.delete('/vms/{id}')
-def unmanage_vm(id: str, request: Request, actor=Depends(require('inventory.delete')),
-                db=Depends(get_db, scope='function')):
-    row = find(db, ManagedVM, id)
-    if row.management_mode == 'terraform' and row.lifecycle_status != 'destroyed':
-        raise HTTPException(409, 'Active Terraform-managed VM must be destroyed through its deployment')
-    db.delete(row)
-    audit(db, request, 'inventory.vm_unmanaged', 'managed_vms', id)
-    return {'deleted': True}
-
-
-
-@router.get('/resources')
-def managed_resources(provider: Annotated[str | None, Query(max_length=32)] = None,
-                      lifecycle_status: Annotated[Literal['active', 'destroyed'] | None, Query()] = None,
-                      limit: Limit = 100, offset: Offset = 0,
-                      actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
-    query = select(ManagedResource)
-    if provider:
-        query = query.where(ManagedResource.provider == provider)
-    if lifecycle_status:
-        query = query.where(ManagedResource.lifecycle_status == lifecycle_status)
-    rows = db.scalars(query.order_by(ManagedResource.created_at.desc()).offset(offset).limit(limit)).all()
-    fields = (
-        'id deployment_id provider_id provider resource_type external_id name primary_ip '
-        'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
-    )
-    return {'items': [{field: getattr(row, field) for field in fields.split()} for row in rows]}
-
-
-@router.get('/resources/{id}')
-def managed_resource(id: str, actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
-    row = find(db, ManagedResource, id)
-    fields = (
-        'id deployment_id provider_id provider resource_type external_id name primary_ip '
-        'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
-    )
-    return {field: getattr(row, field) for field in fields.split()}
+def managed_resource(
+    id: str,
+    actor=Depends(require('inventory.read')),
+    db=Depends(get_db, scope='function'),
+):
+    return resource_public(find(db, ManagedResource, id))
