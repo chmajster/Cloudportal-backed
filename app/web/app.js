@@ -337,12 +337,14 @@ function formSection(title, description, ...children) {
 }
 
 const STATUS_LABELS = {
-  active: 'Aktywny', inactive: 'Nieaktywny', configured: 'Skonfigurowany', locked: 'Zablokowany',
+  ok: 'OK', active: 'Aktywny', inactive: 'Nieaktywny', configured: 'Skonfigurowany', locked: 'Zablokowany',
   revoked: 'Unieważniony', expired: 'Wygasły', queued: 'W kolejce', running: 'W trakcie',
   successful: 'Zakończony', failed: 'Błąd', cancelled: 'Anulowany', destroyed: 'Usunięty',
   degraded: 'Ograniczony', missing: 'Brak', present: 'Dostępny', defined: 'Zdefiniowany',
   released: 'Zwolniony', reserved: 'Zarezerwowany', assigned: 'Przypisany', disabled: 'Wyłączony',
-  stopped: 'Zatrzymany', started: 'Uruchomiony', available: 'Dostępny',
+  stopped: 'Zatrzymany', started: 'Uruchomiony', available: 'Dostępny', external: 'Zewnętrzny',
+  terraform: 'Terraform', pending: 'Oczekuje', delivered: 'Dostarczony', retrying: 'Ponawianie',
+  success: 'Sukces', failure: 'Błąd', critical: 'Krytyczny', warning: 'Ostrzeżenie', down: 'Niedostępny',
 };
 
 const OPERATION_LABELS = {
@@ -789,28 +791,47 @@ async function dashboardView() {
     ['users', 'users.read', '/users'], ['credentials', 'credentials.read', '/credentials'],
     ['deployments', 'deployments.read', '/deployments'], ['jobs', 'jobs.read', '/jobs'],
   ];
-  const health = await api('/health', { auth: false, allow: [503] });
+  const [health, systemInfo] = await Promise.all([
+    api('/health', { auth: false, allow: [503] }),
+    allowed('portal.connect') ? api('/info') : Promise.resolve(null),
+  ]);
   const counts = {};
   await Promise.all(resources.map(async ([key, permission, path]) => {
     if (!allowed(permission)) return;
     try { counts[key] = (await api(`${path}?limit=200`)).items.length; } catch { counts[key] = '—'; }
   }));
   const metrics = node('div', { class: 'metrics' },
-    metric('Stan backendu', health.status === 'ok' ? 'OK' : 'Degraded', `${health.checks.workers.online}/${health.checks.workers.expected} workerów`),
+    metric('Stan backendu', statusLabel(health.status), `${health.checks.workers.online}/${health.checks.workers.expected} workerów`),
     metric('Użytkownicy', counts.users ?? '—', allowed('users.read') ? 'widoczne konta' : 'brak uprawnienia'),
-    metric('Deploymenty', counts.deployments ?? '—', 'łącznie'),
+    metric('Wdrożenia', counts.deployments ?? '—', 'łącznie'),
     metric('Zadania', counts.jobs ?? '—', 'ostatnie 200'),
   );
+  const checkLabels = {
+    api: 'API', database: 'Baza danych', queue: 'Kolejka Redis', dispatcher: 'Dispatcher',
+    workers: 'Workery', terraform: 'Terraform', ansible: 'Ansible', disk: 'Miejsce na dysku', encryption: 'Szyfrowanie',
+  };
   const checks = node('div', { class: 'checks' });
   Object.entries(health.checks).forEach(([name, value]) => {
     const ok = typeof value === 'object' ? value.online >= value.expected : Boolean(value);
-    checks.append(node('div', { class: 'check' }, node('span', { text: name }), node('strong', { text: ok ? 'OK' : 'Problem' })));
+    const detail = typeof value === 'object' ? `${value.online}/${value.expected}` : (ok ? 'OK' : 'Problem');
+    checks.append(node('div', { class: 'check' }, node('span', { text: checkLabels[name] || name }), node('strong', { text: detail })));
   });
   const recent = allowed('jobs.read') ? (await api('/jobs?limit=8')).items : [];
+  const componentPanel = node('section', { class: 'panel' },
+    node('div', { class: 'panel-header' }, node('h2', { text: 'Komponenty' }), badge(statusLabel(health.status), statusKind(health.status))),
+    checks);
+  if (systemInfo) componentPanel.append(node('p', {
+    class: 'muted system-version',
+    text: `Cloudportal-backed ${systemInfo.version} · API ${systemInfo.api_version} · ${systemInfo.providers.length} providerów`,
+  }));
   dom.content.replaceChildren(metrics, node('div', { class: 'panels' },
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Ostatnie zadania' }), button('Wszystkie', () => navigate('jobs'))),
-      recent.length ? table([{ label: 'Operacja', value: row => row.operation }, { label: 'Status', value: row => badge(row.status, statusKind(row.status)) }, { label: 'Utworzono', value: row => formatDate(row.created_at) }], recent) : node('div', { class: 'empty', text: 'Brak dostępnych zadań.' })),
-    node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Komponenty' }), badge(health.status, statusKind(health.status))), checks),
+      recent.length ? table([
+        { label: 'Operacja', value: row => operationLabel(row.operation) },
+        { label: 'Status', value: row => badge(statusLabel(row.status), statusKind(row.status)) },
+        { label: 'Utworzono', value: row => formatDate(row.created_at) },
+      ], recent) : node('div', { class: 'empty', text: 'Brak dostępnych zadań.' })),
+    componentPanel,
   ));
   setApiStatus(health.status === 'ok');
 }
@@ -827,7 +848,7 @@ async function usersView() {
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
       { label: 'Typ', value: user => badge(user.is_service_account ? 'serwisowe' : 'osobowe', user.is_service_account ? 'info' : '') },
-      { label: 'Status', value: user => badge(user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive', statusKind(user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive')) },
+      { label: 'Status', value: user => { const status = user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive'; return badge(statusLabel(status), statusKind(status)); } },
       { label: 'Ostatnie logowanie', value: user => formatDate(user.last_login_at) },
     ], users, user => userActions(user)));
 }
@@ -898,8 +919,8 @@ function resetUserPassword(user) {
 async function rolesView() {
   const roles = (await api('/roles?limit=200')).items;
   const actions = allowed('roles.create') ? [button('Dodaj rolę', () => roleForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Role grupują granularne permissions. System chroni ostatniego aktywnego administratora.', actions),
-    table([{ label: 'Rola', value: role => node('strong', { text: role.name }) }, { label: 'Uprawnienia', value: role => node('span', { class: 'muted', text: role.permissions.join(', ') || 'Brak' }) }], roles, role => {
+  dom.content.replaceChildren(heading('Role grupują uprawnienia do poszczególnych modułów. System chroni ostatniego aktywnego administratora.', actions),
+    table([{ label: 'Rola', value: role => node('strong', { text: role.name }) }, { label: 'Uprawnienia', value: role => badge(`${role.permissions.length} uprawnień`, role.permissions.length ? 'info' : '') }], roles, role => {
       const actions = [];
       if (allowed('roles.update')) actions.push(button('Edytuj', () => roleForm(role)));
       if (allowed('roles.delete')) actions.push(button('Usuń', () => confirmAction('Usuń rolę', `Rola ${role.name} zostanie trwale usunięta.`, async () => { await api(`/roles/${role.id}`, { method: 'DELETE' }); toast('Rola usunięta.'); navigate('roles'); }), 'danger'));
@@ -924,14 +945,19 @@ async function roleForm(role = null) {
 }
 
 async function tokensView() {
-  const tokens = (await api('/tokens?limit=200')).items;
+  const [tokenResult, userResult] = await Promise.all([
+    api('/tokens?limit=200'),
+    allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const tokens = tokenResult.items;
+  const users = new Map(userResult.items.map(user => [Number(user.id), user.username]));
   const actions = allowed('tokens.create') ? [button('Utwórz token', createToken, 'primary')] : [];
-  dom.content.replaceChildren(heading('Tokeny API mają jawny, ograniczony scope. Sekret jest dostępny wyłącznie po utworzeniu.', actions),
+  dom.content.replaceChildren(heading('Tokeny API mają jawny, ograniczony zakres. Sekret jest dostępny wyłącznie po utworzeniu.', actions),
     table([
       { label: 'Nazwa', value: token => node('div', {}, node('strong', { text: token.name }), node('div', { class: 'mono muted', text: token.token_prefix })) },
-      { label: 'Użytkownik ID', value: token => token.user_id },
-      { label: 'Scopes', value: token => node('span', { class: 'muted', text: token.scopes.join(', ') }) },
-      { label: 'Status', value: token => badge(token.revoked_at ? 'revoked' : token.expires_at && new Date(token.expires_at) < new Date() ? 'expired' : 'active', token.revoked_at ? 'danger' : 'ok') },
+      { label: 'Właściciel', value: token => users.get(Number(token.user_id)) || `Użytkownik #${token.user_id}` },
+      { label: 'Zakres', value: token => badge(`${token.scopes.length} uprawnień`, token.scopes.length ? 'info' : '') },
+      { label: 'Status', value: token => { const status = token.revoked_at ? 'revoked' : token.expires_at && new Date(token.expires_at) < new Date() ? 'expired' : 'active'; return badge(statusLabel(status), status === 'active' ? 'ok' : 'danger'); } },
       { label: 'Ostatnio użyty', value: token => formatDate(token.last_used_at) },
     ], tokens, token => allowed('tokens.revoke') && !token.revoked_at ? [button('Unieważnij', () => confirmAction('Unieważnij token', `Token ${token.name} natychmiast przestanie działać.`, async () => { await api(`/tokens/${token.id}/revoke`, { method: 'POST' }); toast('Token unieważniony.'); navigate('tokens'); }), 'danger')] : []));
 }
@@ -1395,12 +1421,12 @@ async function discoverProvider(provider) {
 
 async function deploymentsView() {
   const deployments = (await api('/deployments?limit=200')).items;
-  const actions = allowed('deployments.create') ? [button('Nowy deployment', createDeployment, 'primary')] : [];
+  const actions = allowed('deployments.create') ? [button('Nowe wdrożenie', createDeployment, 'primary')] : [];
   dom.content.replaceChildren(heading('Kontrolowane wdrożenia Terraform/OpenTofu. Każda operacja tworzy audytowalne zadanie.', actions),
     table([
       { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
       { label: 'Provider', value: item => `${item.provider} #${item.provider_id}` }, { label: 'Executor', value: item => badge(item.executor, 'info') },
-      { label: 'Status', value: item => badge(item.status, statusKind(item.status)) }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], deployments, item => deploymentActions(item)));
 }
 
@@ -1408,14 +1434,14 @@ function deploymentActions(item) {
   const actions = [];
   if (allowed('jobs.execute') && allowed('terraform.execute') && !item.active_job_id && item.status !== 'destroyed') {
     actions.push(button('Plan', () => createTerraformJob(item, 'terraform.plan')));
-    actions.push(button('Apply', () => createTerraformJob(item, 'terraform.apply')));
+    actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
   }
-  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Destroy', () => confirmAction('Zniszcz deployment', `Terraform zniszczy zasoby deploymentu ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Zadanie destroy utworzone.'); navigate('deployments'); }), 'danger'));
+  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform zniszczy zasoby deploymentu ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate('deployments'); }), 'danger'));
   return actions;
 }
 
 async function createTerraformJob(item, operation) {
-  try { await api('/jobs', { method: 'POST', body: { operation, deployment_id: item.id }, idempotent: true }); toast(`Zadanie ${operation} utworzone.`); navigate('jobs'); }
+  try { await api('/jobs', { method: 'POST', body: { operation, deployment_id: item.id }, idempotent: true }); toast(`Utworzono zadanie: ${operationLabel(operation)}.`); navigate('jobs'); }
   catch (error) { toast(error.message, 'error'); }
 }
 
@@ -1571,15 +1597,15 @@ async function jobsView() {
   const jobs = (await api('/jobs?limit=200')).items;
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.'),
     table([
-      { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => item.operation },
-      { label: 'Status', value: item => badge(item.status, statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 14) },
+      { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => operationLabel(item.operation) },
+      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 14) },
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
       const actions = [button('Logi', () => showJobLogs(item))];
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(item.status)) actions.push(button('Anuluj', () => confirmAction('Anuluj zadanie', `Zadanie ${short(item.id)} otrzyma żądanie anulowania.`, async () => { await api(`/jobs/${item.id}/cancel`, { method: 'POST' }); toast('Zadanie anulowane.'); navigate('jobs'); }), 'danger'));
-      if (allowed('jobs.execute') && ['failed', 'cancelled'].includes(item.status)) actions.push(button('Retry', async () => {
+      if (allowed('jobs.execute') && ['failed', 'cancelled'].includes(item.status)) actions.push(button('Ponów', async () => {
         await api(`/jobs/${item.id}/retry`, { method: 'POST', idempotent: true });
-        toast('Utworzono retry job.');
+        toast('Utworzono ponowienie zadania.');
         navigate('jobs');
       }));
       return actions;
@@ -1588,7 +1614,7 @@ async function jobsView() {
 
 async function showJobLogs(job) {
   dom.modalTitle.textContent = `Logi ${short(job.id, 18)}`;
-  dom.modalEyebrow.textContent = job.operation;
+  dom.modalEyebrow.textContent = operationLabel(job.operation);
   dom.modalBody.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner' })));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   dom.modal.showModal();
@@ -1616,10 +1642,10 @@ async function blueprintsView() {
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
       { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
-      { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
-      { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => key).join(', ') || '—' },
+      { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
+      { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => ({ backend: 'Backend', cloudportal: 'CloudPortal', api: 'API' }[key] || key)).join(', ') || '—' },
       { label: 'Kroki', value: item => item.workflow.length },
-      { label: 'Governance', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('approval', 'warning') : badge('standard', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('auto-cleanup', 'danger') : badge('preserve', 'info')) },
+      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Wymaga akceptacji', 'warning') : badge('Bez akceptacji', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
@@ -2135,10 +2161,10 @@ async function hostnamesView() {
   dom.content.replaceChildren(heading('Centralne generowanie nazw z blokadą sekwencji, wykrywaniem kolizji i historią rezerwacji.', actions),
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Schematy' })), table([
       { label: 'Nazwa', value: item => item.name }, { label: 'Wzorzec', value: item => node('span', { class: 'mono', text: item.pattern }) },
-      { label: 'Następny numer', value: item => item.next_number }, { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
+      { label: 'Następny numer', value: item => item.next_number }, { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
     ], schemes.items, item => allowed('hostnames.update') ? [button('Edytuj', () => hostnameSchemeForm(item))] : [])),
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Rezerwacje' })), table([
-      { label: 'Hostname', value: item => node('strong', { class: 'mono', text: item.hostname }) }, { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
+      { label: 'Hostname', value: item => node('strong', { class: 'mono', text: item.hostname }) }, { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
       { label: 'Zasób', value: item => short(item.resource_id, 18) }, { label: 'Utworzono', value: item => formatDate(item.created_at) },
     ], reservations.items, item => allowed('hostnames.release') && item.status !== 'released' ? [button('Zwolnij', () => confirmAction('Zwolnij hostname', `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`, async () => { await api(`/hostnames/${item.id}/release`, { method: 'POST' }); navigate('hostnames'); }), 'danger')] : [])));
 }
@@ -2209,16 +2235,16 @@ async function catalogView() {
   dom.content.replaceChildren(
     heading('Zatwierdzony, wersjonowany katalog IaC. API nie przyjmuje arbitralnego HCL ani dowolnych playbooków.'),
     node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Terraform / OpenTofu templates' })),
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Szablony Terraform / OpenTofu' })),
       table([
         { label: 'Template', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
         { label: 'Provider', value: item => badge(item.provider, 'info') },
         { label: 'Wersja', value: item => `v${item.version}` },
-        { label: 'Import', value: item => badge(item.importable ? 'importable' : 'create-only', item.importable ? 'ok' : 'info') },
-      ], templates.items, item => [button('Schema', () => showJson(`Schema ${item.id}`, item.variables_schema, `Template v${item.version}`))])
+        { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
+      ], templates.items, item => [button('Pola', () => showJson(`Pola ${item.id}`, item.variables_schema, `Szablon v${item.version}`))])
     ),
     node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Approved Ansible playbooks' })),
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Zatwierdzone playbooki Ansible' })),
       table([
         { label: 'Playbook', value: item => node('strong', { text: item.name }) },
         { label: 'ID', class: 'mono', value: item => item.id },
@@ -2318,25 +2344,25 @@ async function inventoryView() {
   dom.content.replaceChildren(
     heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Adoption jest zawsze import + plan-only.', actions),
     node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Proxmox VM inventory' })),
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Maszyny Proxmox' })),
       table([
         { label: 'VM', value: item => node('div', {}, node('strong', { text: item.name || `VM ${item.vm_id}` }), node('div', { class: 'mono muted', text: `${item.node}/${item.vm_id}` })) },
         { label: 'Tryb', value: item => badge(item.management_mode, item.management_mode === 'terraform' ? 'ok' : 'info') },
-        { label: 'Lifecycle', value: item => badge(item.lifecycle_status, statusKind(item.lifecycle_status)) },
+        { label: 'Stan', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
         { label: 'Provider', value: item => `#${item.provider_id}` },
-        { label: 'Live', value: item => item.live ? badge(item.live.status || 'present', statusKind(item.live.status)) : badge('missing', 'danger') },
+        { label: 'Stan w platformie', value: item => item.live ? badge(statusLabel(item.live.status || 'present'), statusKind(item.live.status)) : badge(statusLabel('missing'), 'danger') },
       ], vms.items, item => inventoryVmActions(item))
     ),
     node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Managed resources' })),
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Zasoby zarządzane' })),
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
         { label: 'Provider', value: item => badge(item.provider, 'info') },
         { label: 'External ID', class: 'mono', value: item => short(item.external_id, 26) },
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
-        { label: 'Status', value: item => badge(item.lifecycle_status, statusKind(item.lifecycle_status)) },
+        { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
         { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
-      ], resources.items, item => [button('Metadata', () => showJson(item.name, item.metadata_json || {}, 'Managed resource'))])
+      ], resources.items, item => [button('Szczegóły', () => showJson(item.name, item.metadata_json || {}, 'Zasób zarządzany'))])
     )
   );
 }
@@ -2344,13 +2370,13 @@ async function inventoryView() {
 function inventoryVmActions(item) {
   const actions = [];
   if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('VM', () => openVmManager(item), 'primary'));
-  if (allowed('inventory.update')) actions.push(button('Reconcile', async () => {
+  if (allowed('inventory.update')) actions.push(button('Odśwież stan', async () => {
     await api(`/inventory/vms/${item.id}/reconcile`, { method: 'POST' });
-    toast('Inventory odświeżone.');
+    toast('Stan zasobu odświeżony.');
     navigate('inventory');
   }));
-  if (allowed('deployments.adopt') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Adopt', () => adoptInventoryVm(item)));
-  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Unmanage', () => confirmAction('Usuń z inventory', 'Zasób nie zostanie usunięty z providera.', async () => {
+  if (allowed('deployments.adopt') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => adoptInventoryVm(item)));
+  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z providera.', async () => {
     await api(`/inventory/vms/${item.id}`, { method: 'DELETE' });
     navigate('inventory');
   }), 'danger'));
@@ -2366,7 +2392,7 @@ async function importInventoryVm() {
     await api('/inventory/vms/import', { method: 'POST', idempotent: true, body: {
       provider_id: Number(data.get('provider_id')), vm_id: Number(data.get('vm_id')),
     } });
-    toast('VM dodana jako external.');
+    toast('VM dodana do katalogu jako zasób zewnętrzny.');
     navigate('inventory');
   }});
 }
@@ -2686,16 +2712,16 @@ async function schedulesView() {
   dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą permissions.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-      { label: 'Operacja', value: item => item.operation },
+      { label: 'Operacja', value: item => operationLabel(item.operation) },
       { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
       { label: 'Następne', value: item => formatDate(item.next_run_at) },
       { label: 'Interwał', value: item => item.interval_seconds ? `${item.interval_seconds}s` : 'jednorazowo' },
-      { label: 'Status', value: item => badge(item.is_active ? 'active' : 'disabled', item.is_active ? 'ok' : 'info') },
+      { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'disabled'), item.is_active ? 'ok' : 'info') },
       { label: 'Błąd', value: item => item.last_error || '—' },
     ], schedules, item => {
       const result = [];
       if (allowed('schedules.update')) {
-        result.push(button('Edytuj', () => scheduleForm(item)));
+        result.push(button(item.is_active ? 'Edytuj' : 'Włącz i edytuj', () => scheduleForm(item)));
         if (item.is_active) result.push(button('Wyłącz', async () => { await api(`/schedules/${item.id}/disable`, { method: 'POST' }); navigate('schedules'); }));
       }
       if (allowed('schedules.delete')) result.push(button('Usuń', () => confirmAction('Usuń harmonogram', item.name, async () => {
@@ -2712,10 +2738,10 @@ async function scheduleForm(item = null) {
     const fields = node('div', { class: 'form-grid' },
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
       selectField('Deployment', 'deployment_id', deployments.map(row => ({ value: row.id, label: `${row.name} · ${short(row.id, 10)}` })), item?.deployment_id || '', { required: true, placeholder: 'Wybierz deployment' }),
-      selectField('Operacja', 'operation', [{ value: 'terraform.plan', label: 'Plan' }, { value: 'terraform.apply', label: 'Apply' }, { value: 'terraform.destroy', label: 'Destroy' }], item?.operation || 'terraform.plan'),
+      selectField('Operacja', 'operation', [{ value: 'terraform.plan', label: 'Plan' }, { value: 'terraform.apply', label: 'Zastosuj' }, { value: 'terraform.destroy', label: 'Usuń zasoby' }], item?.operation || 'terraform.plan'),
       field('Następne uruchomienie', 'next_run_at', { type: 'datetime-local', required: true, value: dateValue }),
       field('Interwał sekund (puste = raz)', 'interval_seconds', { type: 'number', min: 60, value: item?.interval_seconds || '' }));
-    openModal({ title: item ? 'Edytuj harmonogram' : 'Nowy harmonogram', eyebrow: 'Scheduler', body: fields, onSubmit: async data => {
+    openModal({ title: item ? 'Edytuj harmonogram' : 'Nowy harmonogram', eyebrow: 'Harmonogram', body: fields, onSubmit: async data => {
       await api(item ? `/schedules/${item.id}` : '/schedules', { method: item ? 'PUT' : 'POST', body: {
         name: data.get('name'), deployment_id: data.get('deployment_id'), operation: data.get('operation'),
         next_run_at: new Date(data.get('next_run_at')).toISOString(),
@@ -2736,7 +2762,7 @@ async function webhooksView() {
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
         { label: 'URL', class: 'mono', value: item => short(item.url, 48) },
-        { label: 'Eventy', value: item => item.events.join(', ') },
+        { label: 'Zdarzenia', value: item => item.events.join(', ') },
         { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
       ], hooks.items, item => {
         const result = [];
@@ -2756,7 +2782,7 @@ async function webhooksView() {
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Dostawy' })),
       table([
-        { label: 'Event', value: item => item.event },
+        { label: 'Zdarzenie', value: item => item.event },
         { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
         { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
         { label: 'Próby', value: item => item.attempts },
@@ -2812,14 +2838,14 @@ async function observabilityView() {
   dom.content.replaceChildren(
     heading('Stan control plane, alerty oraz surowe metryki w formacie Prometheus.'),
     node('div', { class: 'metrics' },
-      metric('Backend', health.status, 'health'),
-      metric('Workers', `${health.checks.workers.online}/${health.checks.workers.expected}`, 'online/expected'),
+      metric('Backend', statusLabel(health.status), 'health'),
+      metric('Workery', `${health.checks.workers.online}/${health.checks.workers.expected}`, 'online/expected'),
       metric('Alerty', items.length, 'aktywne'),
-      metric('Dispatcher', health.checks.dispatcher ? 'OK' : 'DOWN', 'heartbeat')),
+      metric('Dispatcher', health.checks.dispatcher ? 'OK' : 'Niedostępny', 'heartbeat')),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Alerty' })),
       table([
-        { label: 'Severity', value: item => badge(item.severity, item.severity === 'critical' ? 'danger' : 'warning') },
+        { label: 'Ważność', value: item => badge(statusLabel(item.severity), item.severity === 'critical' ? 'danger' : 'warning') },
         { label: 'Kod', class: 'mono', value: item => item.code },
         { label: 'Zasób', class: 'mono', value: item => item.resource_id || '—' },
         { label: 'Opis', value: item => item.message },
@@ -2840,7 +2866,7 @@ async function accountView() {
     ? 'Konto używa początkowego hasła admin. Zmień je, aby odblokować panel administracyjny.'
     : 'Zmiana hasła unieważnia wszystkie sesje i tokeny resetu. Po zapisaniu wymagane jest ponowne logowanie.';
   const security = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Bezpieczeństwo konta' }), user.must_change_password ? badge('wymagana zmiana', 'warning') : ''), node('p', { class: user.must_change_password ? 'form-error' : 'muted', text: passwordMessage }), button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary'));
-  dom.content.replaceChildren(heading('Twoja sesja i skuteczne uprawnienia.'), node('div', { class: 'panels' }, details, security), node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Permissions' })), node('p', { class: 'mono muted', text: state.identity.permissions.join(' · ') || 'Brak uprawnień' })));
+  dom.content.replaceChildren(heading('Twoja sesja i skuteczne uprawnienia.'), node('div', { class: 'panels' }, details, security), node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Uprawnienia' })), node('p', { class: 'mono muted', text: state.identity.permissions.join(' · ') || 'Brak uprawnień' })));
 }
 
 function info(label, value) { return node('div', { class: 'check' }, node('span', { text: label }), node('strong', { text: value })); }
