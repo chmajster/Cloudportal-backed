@@ -14,13 +14,13 @@ def save_secret(db, c, value):
             raise HTTPException(422, 'Secret is required')
         return
 
-    endpoint_types = {'proxmox', 'vmware', 'ssh', 'winrm', 'openstack'}
+    endpoint_types = {'proxmox', 'vmware', 'winrm', 'openstack'}
     identity_types = {'proxmox', 'vmware', 'ssh', 'winrm', 'openstack'}
     if c.type in endpoint_types and not c.endpoint:
         raise HTTPException(422, 'This credential type requires an endpoint')
     if c.type in identity_types and not c.username:
         raise HTTPException(422, 'This credential type requires a username')
-    if c.type == 'ssh' and not c.endpoint.startswith('ssh://'):
+    if c.type == 'ssh' and c.endpoint and not c.endpoint.startswith('ssh://'):
         raise HTTPException(422, 'SSH credential endpoint must use ssh://')
 
     if c.type == 'proxmox':
