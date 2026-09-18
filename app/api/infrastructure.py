@@ -7,6 +7,7 @@ from app.api.common import find, idempotent, paginate, public
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput)
 from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput
+from app.catalog import list_playbooks, list_templates, playbook_definition, template_definition, template_public, validate_template_variables
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.database import get_db
@@ -187,22 +188,17 @@ def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templa
 @router.get('/templates', response_model=Items[TemplateOutput])
 @router.get('/terraform/templates', response_model=Items[TemplateOutput])
 def templates(actor=Depends(require('terraform.read'))):
-    from app.api.schemas import VMVariables
-    return {'items': [{'id': 'proxmox-vm', 'name': 'Proxmox VM clone', 'provider': 'proxmox', 'variables_schema': VMVariables.model_json_schema()}]}
+    return {'items': list_templates()}
 
 
 @router.get('/templates/{id}', response_model=TemplateOutput)
 def template(id: str, actor=Depends(require('terraform.read'))):
-    if id != 'proxmox-vm':
-        raise HTTPException(404, 'Template not found')
-    return templates(actor)['items'][0]
+    return template_public(id)
 
 
 @router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
 def playbooks(actor=Depends(require('ansible.read'))):
-    return {'items': [{'id': 'bootstrap-linux', 'name': 'Configure hostname/timezone and guest agent', 'variables': ['hostname', 'timezone'], 'transport': 'ssh'},
-                      {'id': 'validate-linux', 'name': 'Validate Linux connectivity', 'variables': [], 'transport': 'ssh'},
-                      {'id': 'validate-windows', 'name': 'Validate Windows connectivity', 'variables': [], 'transport': 'winrm'}]}
+    return {'items': list_playbooks()}
 
 
 def check_job_permissions(request, operation):
@@ -217,7 +213,7 @@ def check_job_permissions(request, operation):
 
 def validate_ansible(db, data):
     c = locked_credential(db, data.credentials_id)
-    expected = 'winrm' if data.playbook == 'validate-windows' else 'ssh'
+    expected = playbook_definition(data.playbook)['transport']
     if c.type != expected:
         raise HTTPException(422, f'Playbook requires {expected} credential')
 
@@ -248,6 +244,10 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
 def create_deployment(data: DeploymentInput, request: Request, actor=Depends(require('deployments.create')), db=Depends(get_db, scope='function')):
     check_job_permissions(request, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
+    template_meta, _ = template_definition(data.template)
+    if p.type != template_meta['provider']:
+        raise HTTPException(422, 'Selected infrastructure provider does not match the Terraform template')
+    variables = validate_template_variables(data.template, data.variables)
     if p.credentials_id != data.credentials_id:
         raise HTTPException(422, 'Credential does not belong to the selected provider')
     # Share the same row locks with credential mutation/deletion to preserve references.
@@ -259,7 +259,7 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
         validate_ansible(db, data.ansible)
     def create():
         d = Deployment(name=data.name, provider_id=p.id, template=data.template, credentials_id=data.credentials_id,
-                       variables=data.variables.model_dump(), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
+                       variables=variables.model_dump(mode='json'), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
         db.add(d)
         db.flush()
         d.state_location = f'database://terraform-states/{d.id}'
