@@ -1,6 +1,6 @@
 import uuid
 
-from tests.conftest import new_user
+from conftest import new_user
 
 
 def resources(client, headers):
