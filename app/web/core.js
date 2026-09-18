@@ -31,6 +31,8 @@ const dom = {
 
 const routes = [];
 const views = Object.create(null);
+const commands = Object.create(null);
+const extensions = new Set();
 
 function registerView(route, handler) {
   if (!route?.id || typeof handler !== 'function') throw new Error('Invalid UI feature registration');
@@ -38,6 +40,32 @@ function registerView(route, handler) {
   routes.push(Object.freeze({ order: 1000, ...route }));
   routes.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   views[route.id] = handler;
+}
+
+function registerCommand(name, handler) {
+  if (!name || typeof handler !== 'function') throw new Error('Invalid UI command registration');
+  if (commands[name]) throw new Error('Duplicate UI command: ' + name);
+  commands[name] = handler;
+}
+
+function hasCommand(name) {
+  return typeof commands[name] === 'function';
+}
+
+function runCommand(name, ...args) {
+  if (!hasCommand(name)) throw new Error('UI command is not registered: ' + name);
+  return commands[name](...args);
+}
+
+function registerExtension(name, initialize) {
+  if (!name || typeof initialize !== 'function') throw new Error('Invalid UI extension registration');
+  if (extensions.has(name)) throw new Error('Duplicate UI extension: ' + name);
+  extensions.add(name);
+  initialize();
+}
+
+function emitUiEvent(name, detail = {}) {
+  document.dispatchEvent(new CustomEvent('cloudportal:' + name, { detail }));
 }
 class ApiError extends Error {
   constructor(status, data) {
@@ -909,6 +937,7 @@ function showLogin(message = '', type = 'error') {
   setLoginMessage(message, type);
   dom.loginForm.querySelector('[name="password"]').value = '';
   dom.loginForm.querySelector('[name="username"]').focus();
+  emitUiEvent('app-hidden');
 }
 
 function showApp() {
@@ -916,6 +945,7 @@ function showApp() {
   dom.appView.hidden = false;
   dom.currentUser.textContent = state.identity.user.username;
   dom.currentRoles.textContent = state.identity.roles.map(role => role.name).join(', ') || 'Brak roli';
+  emitUiEvent('app-shown', { identity: state.identity });
   renderNavigation();
   const mustChangePassword = state.identity.user.must_change_password;
   navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'dashboard');
