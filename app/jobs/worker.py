@@ -1,3 +1,4 @@
+import uuid
 import json
 import os
 import time
@@ -54,7 +55,7 @@ class Context:
 
 
 def validate_authorization(db, job):
-    if job.source == 'Scheduler' and job.token_id is None:
+    if job.source in {'Scheduler', 'Recovery'} and job.token_id is None:
         permissions = scheduler_user_permissions(db, job.created_by)
         if permissions is None:
             raise ExecutionFailed('Scheduled job owner is disabled or locked')
@@ -80,6 +81,9 @@ def validate_authorization(db, job):
     needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
     if job.operation == 'terraform.apply':
         needed.add('deployments.create')
+        blueprint = job.payload.get('blueprint') or {}
+        if blueprint.get('recovery_policy') == 'destroy_on_failure':
+            needed.add('deployments.destroy')
     if job.operation == 'terraform.destroy':
         needed.add('deployments.destroy')
     if job.payload.get('ansible'):
@@ -260,6 +264,42 @@ def execute(job_id):
                 db.execute(update(ManagedResource).where(
                     ManagedResource.deployment_id == deployment.id,
                 ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+        recovery = None
+        blueprint = (current.payload or {}).get('blueprint') or {}
+        if (
+            status == 'failed'
+            and current.operation == 'terraform.apply'
+            and current.source != 'Recovery'
+            and current.deployment_id
+            and blueprint.get('recovery_policy') == 'destroy_on_failure'
+        ):
+            deployment = db.get(Deployment, current.deployment_id)
+            if deployment is not None and deployment.active_job_id is None:
+                recovery = Job(
+                    id=str(uuid.uuid4()),
+                    operation='terraform.destroy',
+                    deployment_id=deployment.id,
+                    payload={'previous_status': 'failed', 'recovery_of': current.id},
+                    created_by=current.created_by,
+                    token_id=current.token_id,
+                    request_id=str(uuid.uuid4()),
+                    ip=current.ip,
+                    source='Recovery',
+                )
+                db.add(recovery)
+                db.flush()
+                deployment.active_job_id = recovery.id
+                deployment.status = 'recovery_queued'
+                db.add(Audit(
+                    user_id=current.created_by,
+                    token_id=current.token_id,
+                    ip=current.ip,
+                    source='Recovery',
+                    action='recovery.queued',
+                    resource='jobs',
+                    resource_id=recovery.id,
+                    request_id=recovery.request_id,
+                ))
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))
         queue_job_webhooks(db, current)
         db.add(Audit(user_id=job.created_by, token_id=job.token_id, ip=job.ip, action='job.' + status,
