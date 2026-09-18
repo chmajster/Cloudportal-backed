@@ -974,52 +974,530 @@ function parseArray(value, label) {
   catch { throw new Error(`${label} musi zawierać poprawną tablicę JSON.`); }
 }
 
-function blueprintForm(item = null) {
-  const exampleVariables = { environment: { type: 'select', required: true, options: ['dev', 'test', 'prod'] }, cpu: { type: 'integer', default: 2, min: 1, max: 8 } };
-  const exampleDeployment = { name: '{{ hostname }}', provider_id: 1, credentials_id: 1, hostname_scheme_id: 1, template: 'proxmox-vm', executor: 'terraform', variables: { name: '{{ hostname }}', node: 'pve', template_id: 9000, cpu: '{{ cpu }}', memory: 4096, disk: 40, network: 'vmbr0', storage: 'local-lvm', ssh_username: 'clouduser' } };
-  const exampleWorkflow = [{ id: 'hostname', type: 'generate_hostname' }, { id: 'clone', type: 'clone_vm', depends_on: ['hostname'] }, { id: 'apply', type: 'terraform_apply', depends_on: ['clone'] }];
-  const fields = node('div', { class: 'form-grid' },
-    field('Slug', 'slug', { required: true, value: item?.slug || '' }), field('Nazwa', 'name', { required: true, value: item?.name || '' }),
-    field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
-    checkboxField('Aktywny', 'is_active', item?.is_active ?? true), checkboxField('Dostępny w panelu backendu', 'visibility_backend', item?.visibility.backend ?? true),
-    checkboxField('Dostępny w CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false), checkboxField('Dostępny przez API', 'visibility_api', item?.visibility.api ?? true),
-    checkboxField('Wymaga blueprints.approve przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
-    selectField('Recovery policy', 'recovery_policy', [{ value: 'preserve', label: 'Preserve state/resources' }, { value: 'destroy_on_failure', label: 'Destroy on failed apply' }], item?.recovery_policy || 'preserve'),
-    field('Dozwolone role ID (przecinki, puste = wszyscy)', 'role_ids', { value: (item?.allowed_role_ids || []).join(',') }),
-    field('Dozwoleni użytkownicy ID (przecinki)', 'user_ids', { value: (item?.allowed_user_ids || []).join(',') }),
-    field('Schemat zmiennych JSON', 'variables_schema', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.variables_schema || exampleVariables) }),
-    field('Definicja deploymentu JSON', 'deployment', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.deployment || exampleDeployment) }),
-    field('Workflow DAG JSON', 'workflow', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.workflow || exampleWorkflow) }));
-  openModal({ title: item ? `Edytuj ${item.name}` : 'Nowy Blueprint', eyebrow: 'Automation Designer', body: fields, submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz', onSubmit: async data => {
-    const ids = value => value.split(',').map(part => part.trim()).filter(Boolean).map(Number);
-    const payload = { slug: data.get('slug'), name: data.get('name'), description: data.get('description'), is_active: data.has('is_active'),
-      visibility: { backend: data.has('visibility_backend'), cloudportal: data.has('visibility_cloudportal'), api: data.has('visibility_api') },
-      allowed_role_ids: ids(data.get('role_ids')), allowed_user_ids: ids(data.get('user_ids')),
-      variables_schema: parseObject(data.get('variables_schema'), 'Schemat zmiennych'), deployment: parseObject(data.get('deployment'), 'Deployment'), workflow: parseArray(data.get('workflow'), 'Workflow'),
-      requires_approval: data.has('requires_approval'), recovery_policy: data.get('recovery_policy') };
-    await api(item ? `/blueprints/${item.id}` : '/blueprints', { method: item ? 'PUT' : 'POST', body: payload });
-    toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint utworzony.'); navigate('blueprints');
-  }});
+
+function hostnamePatternTokens(pattern) {
+  const automatic = new Set(['number', 'random', 'year']);
+  return [...new Set(Array.from(String(pattern || '').matchAll(/{([a-z]+)}/g), match => match[1]))]
+    .filter(token => !automatic.has(token));
 }
 
-function executeBlueprint(item) {
-  const fields = node('div', { class: 'form-grid' });
-  for (const [name, definition] of Object.entries(item.variables_schema)) {
-    if (definition.type === 'select') fields.append(selectField(definition.label || name, name, definition.options.map(value => ({ value, label: value })), definition.default, { required: definition.required }));
-    else if (definition.type === 'boolean') fields.append(checkboxField(definition.label || name, name, Boolean(definition.default)));
-    else fields.append(field(definition.label || name, name, { type: definition.type === 'integer' ? 'number' : 'text', value: definition.default ?? '', min: definition.min, max: definition.max, required: definition.required }));
-  }
-  fields.append(field('Wartości hostname JSON', 'hostname_values', { tag: 'textarea', wide: true, value: '{}', help: 'Np. {"location":"wro","env":"prod","role":"web"}' }));
-  openModal({ title: `Uruchom ${item.name}`, eyebrow: `Blueprint v${item.version}`, body: fields, submitLabel: 'Utwórz serwer', onSubmit: async (data, form) => {
-    const variables = {};
-    for (const [name, definition] of Object.entries(item.variables_schema)) {
-      const control = form.elements[name];
-      if (definition.type === 'boolean') variables[name] = control.checked;
-      else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
+function blueprintTags(value) {
+  return [...new Set(String(value || '').split(/[,\n]+/).map(item => item.trim().toLowerCase()).filter(Boolean))];
+}
+
+function setSelectChoices(select, choices, selected = '', placeholder = '') {
+  select.replaceChildren();
+  if (placeholder) select.append(node('option', { value: '', text: placeholder }));
+  choices.forEach(choice => select.append(node('option', {
+    value: choice.value,
+    text: choice.label,
+    selected: String(choice.value) === String(selected),
+  })));
+}
+
+function blueprintWorkflow(options) {
+  const steps = [];
+  let previous = [];
+  const add = (id, type) => {
+    steps.push({ id, type, depends_on: [...previous] });
+    previous = [id];
+  };
+  if (options.hostname) add('hostname', 'generate_hostname');
+  if (options.ipam) add('ip', 'allocate_ip');
+  add('clone', 'clone_vm');
+  add('cloud_init', 'cloud_init');
+  if (options.tags) add('tags', 'set_tags');
+  add('apply', 'terraform_apply');
+  if (options.waitAgent || options.ansible) add('agent', 'wait_for_agent');
+  if (options.ansible) add('ansible', 'run_ansible_playbook');
+  return steps;
+}
+
+async function blueprintForm(item = null) {
+  try {
+    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult] = await Promise.all([
+      api('/providers?limit=200'),
+      api('/hostname-schemes?limit=200'),
+      api('/ipam/pools?limit=200'),
+      api('/ansible/playbooks'),
+      api('/credentials?limit=200'),
+    ]);
+    const providers = providerResult.items.filter(value => value.type === 'proxmox');
+    if (!providers.length) throw new Error('Najpierw dodaj provider Proxmox.');
+
+    const schemes = schemeResult.items.filter(value => value.is_active);
+    const pools = poolResult.items.filter(value => value.is_active);
+    const playbooks = playbookResult.items;
+    const credentials = credentialResult.items;
+    const deployment = item?.deployment || {};
+    const variables = deployment.variables || {};
+    const currentProvider = providers.find(value => value.id === deployment.provider_id) || providers[0];
+
+    const providerField = selectField(
+      'Provider Proxmox', 'provider_id',
+      providers.map(value => ({ value: value.id, label: value.name + ' (#' + value.id + ')' })),
+      currentProvider.id, { required: true }
+    );
+    const nodeField = selectField('Docelowy node', 'node', [], variables.node || '', { required: true, placeholder: 'Wybierz node' });
+    const imageField = selectField('Obraz / template Proxmox', 'image', [], '', { required: true, placeholder: 'Wybierz template' });
+    const storageField = selectField('Storage VM', 'storage', [], variables.storage || '', { required: true, placeholder: 'Wybierz storage' });
+    const networkField = selectField('Bridge / sieć', 'network', [], variables.network || 'vmbr0', { required: true, placeholder: 'Wybierz sieć' });
+
+    const schemeChoices = [
+      ...schemes.map(value => ({ value: value.id, label: value.name + ' — ' + value.pattern })),
+      { value: '__new__', label: '+ Utwórz nowy pattern hostname' },
+    ];
+    const schemeField = selectField(
+      'Pattern hostname', 'hostname_scheme_id', schemeChoices,
+      deployment.hostname_scheme_id || (schemes[0]?.id || '__new__'),
+      { required: true, wide: true }
+    );
+    const newScheme = node('div', { class: 'form-grid designer-subsection wide' },
+      field('Nazwa patternu', 'hostname_scheme_name', { value: item ? item.name + ' hostnames' : '', placeholder: 'Np. WRO PROD WEB' }),
+      field('Pattern', 'hostname_pattern', {
+        value: '{env}-{role}-{number}',
+        placeholder: '{location}-{env}-{role}-{number}',
+        help: 'Dostępne m.in. {location}, {env}, {environment}, {application}, {service}, {role}, {os}, {cluster}, {site}, {year}, {number}, {random}.',
+        wide: true,
+      }),
+      field('Dopełnienie numeru', 'hostname_padding', { type: 'number', min: 1, max: 9, value: 3 })
+    );
+    const hostnameDefaults = node('div', { class: 'form-grid designer-subsection wide' });
+
+    const ipMode = selectField(
+      'Adres IPv4', 'ip_mode',
+      [
+        { value: 'dhcp', label: 'DHCP' },
+        { value: 'ipam', label: 'Automatycznie z IPAM' },
+        { value: 'static', label: 'Statyczny adres' },
+      ],
+      deployment.ipam_pool_id ? 'ipam' : (variables.ipv4_address ? 'static' : 'dhcp'),
+      { required: true }
+    );
+    const ipamField = selectField(
+      'Pula IPAM', 'ipam_pool_id',
+      pools.map(value => ({ value: value.id, label: value.name + ' — ' + value.cidr })),
+      deployment.ipam_pool_id || '', { placeholder: 'Wybierz pulę IPAM' }
+    );
+    const staticIp = field('IPv4/CIDR', 'ipv4_address', { value: variables.ipv4_address || '', placeholder: '10.0.20.25/24' });
+    const staticGateway = field('Gateway', 'ipv4_gateway', { value: variables.ipv4_gateway || '', placeholder: '10.0.20.1' });
+
+    const playbookField = selectField(
+      'Playbook po utworzeniu (opcjonalnie)', 'ansible_playbook',
+      [{ value: '', label: 'Bez Ansible' }, ...playbooks.map(value => ({ value: value.id, label: value.name + ' [' + value.transport + ']' }))],
+      deployment.ansible?.playbook || ''
+    );
+    const ansibleCredentialField = selectField(
+      'Credential Ansible', 'ansible_credentials_id',
+      credentials.filter(value => ['ssh', 'winrm'].includes(value.type)).map(value => ({
+        value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')',
+      })),
+      deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz credential' }
+    );
+
+    const workflowPreview = node('ol', { class: 'workflow-preview' });
+    const variablesSchema = field(
+      'Zmienne użytkownika Blueprintu (opcjonalnie, JSON)', 'variables_schema',
+      { tag: 'textarea', wide: true, value: jsonValue(item?.variables_schema || {}), help: 'Zostaw {} jeżeli Blueprint ma tworzyć VM bez dodatkowych pytań.' }
+    );
+
+    const fields = node('div', { class: 'form-grid blueprint-designer' },
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '1. Blueprint' }), node('span', { text: 'Zapisujesz kompletny preset VM.' })),
+      field('Slug', 'slug', { required: true, value: item?.slug || '' }),
+      field('Nazwa', 'name', { required: true, value: item?.name || '' }),
+      field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
+      providerField,
+
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '2. Proxmox i obraz' }), node('span', { text: 'Te wartości zostaną użyte przy każdym uruchomieniu.' })),
+      nodeField, imageField, storageField, networkField,
+      field('CPU cores', 'cpu', { type: 'number', min: 1, max: 128, value: variables.cpu ?? 2 }),
+      field('RAM MiB', 'memory', { type: 'number', min: 512, max: 1048576, value: variables.memory ?? 4096 }),
+      field('Dysk GiB', 'disk', { type: 'number', min: 1, max: 65536, value: variables.disk ?? 40 }),
+      field('VLAN ID (opcjonalnie)', 'vlan_id', { type: 'number', min: 1, max: 4094, value: variables.vlan_id ?? '' }),
+      field('Tagi Proxmox', 'tags', {
+        value: (variables.tags || []).join(', '), wide: true,
+        placeholder: 'linux, production, web',
+        help: 'Tagi zostaną zapisane w Blueprintcie, dodane do workflow i automatycznie ustawione na VM.',
+      }),
+
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Pattern i wartości są zapisywane w Blueprintcie.' })),
+      schemeField, newScheme, hostnameDefaults,
+
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '4. Cloud-init' }), node('span', { text: 'Konfiguracja sieci, DNS i konta trafia do template Proxmox.' })),
+      ipMode, ipamField, staticIp, staticGateway,
+      field('Użytkownik SSH', 'ssh_username', { value: variables.ssh_username || 'clouduser', required: true }),
+      field('Klucz publiczny SSH (opcjonalnie)', 'ssh_public_key', { tag: 'textarea', value: variables.ssh_public_key || '', wide: true }),
+      field('DNS servers', 'dns_servers', { value: (variables.dns_servers || []).join(', '), placeholder: '1.1.1.1, 8.8.8.8' }),
+      field('DNS search domain', 'dns_domain', { value: variables.dns_domain || '', placeholder: 'lab.example.com' }),
+
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '5. Workflow' }), node('span', { text: 'Bez ponownego wybierania obrazu, hostname, tagów ani cloud-init.' })),
+      checkboxField('Czekaj na QEMU Agent po Terraform apply', 'wait_agent', true),
+      playbookField, ansibleCredentialField,
+      field('Zmienne Ansible JSON', 'ansible_variables', {
+        tag: 'textarea', wide: true, value: jsonValue(deployment.ansible?.variables || {}),
+        help: 'Np. {"timezone":"Europe/Warsaw"}. Możesz używać {{ hostname }}.',
+      }),
+      node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),
+      variablesSchema,
+
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp i recovery' })),
+      checkboxField('Aktywny', 'is_active', item?.is_active ?? true),
+      checkboxField('Dostępny w panelu backendu', 'visibility_backend', item?.visibility.backend ?? true),
+      checkboxField('Dostępny w CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false),
+      checkboxField('Dostępny przez API', 'visibility_api', item?.visibility.api ?? true),
+      checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', item?.requires_approval ?? false),
+      selectField('Recovery policy', 'recovery_policy', [
+        { value: 'preserve', label: 'Preserve state/resources' },
+        { value: 'destroy_on_failure', label: 'Destroy on failed apply' },
+      ], item?.recovery_policy || 'preserve'),
+      field('Dozwolone role ID', 'role_ids', { value: (item?.allowed_role_ids || []).join(','), placeholder: 'puste = wszyscy' }),
+      field('Dozwoleni użytkownicy ID', 'user_ids', { value: (item?.allowed_user_ids || []).join(',') })
+    );
+
+    const providerSelect = providerField.querySelector('select');
+    const nodeSelect = nodeField.querySelector('select');
+    const imageSelect = imageField.querySelector('select');
+    const storageSelect = storageField.querySelector('select');
+    const networkSelect = networkField.querySelector('select');
+    const schemeSelect = schemeField.querySelector('select');
+    const ipModeSelect = ipMode.querySelector('select');
+    const ipamSelect = ipamField.querySelector('select');
+    const playbookSelect = playbookField.querySelector('select');
+    const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
+    let templateRows = [];
+
+    const updateHostnameFields = () => {
+      const selected = schemeSelect.value;
+      const scheme = schemes.find(value => String(value.id) === String(selected));
+      const custom = selected === '__new__';
+      newScheme.hidden = !custom;
+      const pattern = custom
+        ? newScheme.querySelector('[name="hostname_pattern"]').value
+        : (scheme?.pattern || '');
+      const defaults = deployment.hostname_values || {};
+      hostnameDefaults.replaceChildren();
+      const tokens = hostnamePatternTokens(pattern);
+      if (!tokens.length) {
+        hostnameDefaults.append(node('div', { class: 'field-help wide', text: 'Pattern używa wyłącznie automatycznych tokenów {number}/{random}/{year}.' }));
+      } else {
+        tokens.forEach(token => hostnameDefaults.append(field(
+          'Domyślne {' + token + '}', 'hostname_token_' + token,
+          { required: true, value: defaults[token] || '', placeholder: token === 'env' ? 'prod' : token, help: 'Możesz wpisać stałą wartość albo {{ nazwa_zmiennej }}.' }
+        )));
+      }
+      updateWorkflowPreview();
+    };
+
+    const updateIpMode = () => {
+      const mode = ipModeSelect.value;
+      ipamField.hidden = mode !== 'ipam';
+      staticIp.hidden = mode !== 'static';
+      staticGateway.hidden = mode !== 'static';
+      updateWorkflowPreview();
+    };
+
+    const updateAnsible = () => {
+      const playbook = playbooks.find(value => value.id === playbookSelect.value);
+      ansibleCredentialField.hidden = !playbook;
+      fields.querySelector('[name="ansible_variables"]').closest('label').hidden = !playbook;
+      if (playbook) {
+        const allowedType = playbook.transport;
+        const matching = credentials.filter(value => value.type === allowedType);
+        setSelectChoices(
+          ansibleCredentialSelect,
+          matching.map(value => ({ value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')' })),
+          deployment.ansible?.credentials_id || '',
+          'Wybierz credential ' + allowedType
+        );
+      }
+      updateWorkflowPreview();
+    };
+
+    function updateWorkflowPreview() {
+      const options = {
+        hostname: Boolean(schemeSelect.value),
+        ipam: ipModeSelect.value === 'ipam',
+        tags: blueprintTags(fields.querySelector('[name="tags"]')?.value).length > 0,
+        waitAgent: Boolean(fields.querySelector('[name="wait_agent"]')?.checked),
+        ansible: Boolean(playbookSelect.value),
+      };
+      const steps = blueprintWorkflow(options);
+      workflowPreview.replaceChildren(...steps.map(step =>
+        node('li', {}, node('strong', { text: step.type }), node('span', { class: 'muted', text: step.depends_on.length ? ' ← ' + step.depends_on.join(', ') : '' }))
+      ));
     }
-    const result = await api(`/blueprints/${item.id}/execute`, { method: 'POST', idempotent: true, body: { variables, hostname_values: parseObject(data.get('hostname_values') || '{}', 'Wartości hostname') } });
-    toast(`Deployment ${result.name} utworzony. Zadanie ${short(result.job.id)}.`); navigate('jobs');
-  }});
+
+    const loadNodeResources = async () => {
+      const providerId = providerSelect.value;
+      const targetNode = nodeSelect.value;
+      if (!providerId || !targetNode) return;
+      const [storageResult, networkResult] = await Promise.all([
+        api('/providers/' + providerId + '/storages?node=' + encodeURIComponent(targetNode)),
+        api('/providers/' + providerId + '/networks?node=' + encodeURIComponent(targetNode)),
+      ]);
+      const storages = storageResult.items.filter(value => !value.disable && String(value.content || '').includes('images'));
+      setSelectChoices(
+        storageSelect,
+        storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
+        variables.storage || storageSelect.value,
+        'Wybierz storage'
+      );
+      const networks = networkResult.items.filter(value => value.iface);
+      setSelectChoices(
+        networkSelect,
+        networks.map(value => ({ value: value.iface, label: value.iface + (value.type ? ' [' + value.type + ']' : '') })),
+        variables.network || networkSelect.value || 'vmbr0',
+        'Wybierz sieć'
+      );
+    };
+
+    const loadProvider = async () => {
+      const providerId = providerSelect.value;
+      const [nodeResult, templateResult] = await Promise.all([
+        api('/providers/' + providerId + '/nodes'),
+        api('/providers/' + providerId + '/templates'),
+      ]);
+      templateRows = templateResult.items;
+      setSelectChoices(
+        nodeSelect,
+        nodeResult.items.map(value => ({ value: value.node, label: value.node })),
+        variables.node || nodeSelect.value,
+        'Wybierz node'
+      );
+      const currentImage = variables.template_id
+        ? String(variables.template_node || '') + '|' + String(variables.template_id)
+        : '';
+      setSelectChoices(
+        imageSelect,
+        templateRows.map(value => ({
+          value: String(value.node || '') + '|' + String(value.vmid),
+          label: (value.name || 'VM template') + ' — VMID ' + value.vmid + ' @ ' + value.node,
+        })),
+        currentImage,
+        'Wybierz template'
+      );
+      await loadNodeResources();
+    };
+
+    providerSelect.addEventListener('change', loadProvider);
+    nodeSelect.addEventListener('change', loadNodeResources);
+    schemeSelect.addEventListener('change', updateHostnameFields);
+    newScheme.querySelector('[name="hostname_pattern"]').addEventListener('input', updateHostnameFields);
+    ipModeSelect.addEventListener('change', updateIpMode);
+    playbookSelect.addEventListener('change', updateAnsible);
+    fields.querySelector('[name="tags"]').addEventListener('input', updateWorkflowPreview);
+    fields.querySelector('[name="wait_agent"]').addEventListener('change', updateWorkflowPreview);
+
+    await loadProvider();
+    updateHostnameFields();
+    updateIpMode();
+    updateAnsible();
+    updateWorkflowPreview();
+
+    openModal({
+      title: item ? 'Edytuj ' + item.name : 'Nowy Blueprint Proxmox',
+      eyebrow: 'Blueprint Designer',
+      body: fields,
+      submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz Blueprint',
+      wide: true,
+      onSubmit: async (data, form) => {
+        const ids = value => String(value || '').split(',').map(part => part.trim()).filter(Boolean).map(Number);
+        const provider = providers.find(value => String(value.id) === String(data.get('provider_id')));
+        if (!provider) throw new Error('Wybierz provider Proxmox.');
+
+        let schemeId = data.get('hostname_scheme_id');
+        let selectedPattern = '';
+        if (schemeId === '__new__') {
+          const pattern = data.get('hostname_pattern');
+          const created = await api('/hostname-schemes', {
+            method: 'POST',
+            body: {
+              name: data.get('hostname_scheme_name') || data.get('name') + ' hostnames',
+              pattern,
+              next_number: 1,
+              padding: Number(data.get('hostname_padding') || 3),
+              is_active: true,
+            },
+          });
+          schemeId = created.id;
+          selectedPattern = created.pattern;
+        } else {
+          const selectedScheme = schemes.find(value => String(value.id) === String(schemeId));
+          selectedPattern = selectedScheme?.pattern || '';
+        }
+
+        const hostnameValues = {};
+        hostnamePatternTokens(selectedPattern).forEach(token => {
+          const value = form.elements['hostname_token_' + token]?.value.trim();
+          if (value) hostnameValues[token] = value;
+        });
+
+        const image = String(data.get('image') || '').split('|');
+        const templateNode = image[0];
+        const templateId = Number(image[1]);
+        if (!templateId) throw new Error('Wybierz obraz/template Proxmox.');
+
+        const tags = blueprintTags(data.get('tags'));
+        const vmVariables = {
+          name: '{{ hostname }}',
+          node: data.get('node'),
+          template_id: templateId,
+          template_node: templateNode || null,
+          cpu: Number(data.get('cpu')),
+          memory: Number(data.get('memory')),
+          disk: Number(data.get('disk')),
+          network: data.get('network'),
+          storage: data.get('storage'),
+          vlan_id: data.get('vlan_id') ? Number(data.get('vlan_id')) : null,
+          ssh_username: data.get('ssh_username'),
+          ssh_public_key: data.get('ssh_public_key') || null,
+          dns_servers: splitValues(data.get('dns_servers')),
+          dns_domain: data.get('dns_domain') || null,
+          tags,
+        };
+
+        const mode = data.get('ip_mode');
+        let ipamPoolId = null;
+        if (mode === 'ipam') {
+          ipamPoolId = Number(data.get('ipam_pool_id'));
+          if (!ipamPoolId) throw new Error('Wybierz pulę IPAM.');
+        } else if (mode === 'static') {
+          if (!data.get('ipv4_address') || !data.get('ipv4_gateway')) throw new Error('Statyczny IPv4 wymaga adresu/CIDR i gateway.');
+          vmVariables.ipv4_address = data.get('ipv4_address');
+          vmVariables.ipv4_gateway = data.get('ipv4_gateway');
+        }
+
+        let ansible = null;
+        if (data.get('ansible_playbook')) {
+          const credentialId = Number(data.get('ansible_credentials_id'));
+          if (!credentialId) throw new Error('Wybierz credential dla Ansible.');
+          ansible = {
+            playbook: data.get('ansible_playbook'),
+            credentials_id: credentialId,
+            variables: parseObject(data.get('ansible_variables') || '{}', 'Zmienne Ansible'),
+          };
+          if (schemeId && ansible.playbook === 'bootstrap-linux' && ansible.variables.hostname === undefined) {
+            ansible.variables.hostname = '{{ hostname }}';
+          }
+        }
+
+        const workflow = blueprintWorkflow({
+          hostname: Boolean(schemeId),
+          ipam: mode === 'ipam',
+          tags: tags.length > 0,
+          waitAgent: data.has('wait_agent'),
+          ansible: Boolean(ansible),
+        });
+
+        const payload = {
+          slug: data.get('slug'),
+          name: data.get('name'),
+          description: data.get('description'),
+          is_active: data.has('is_active'),
+          visibility: {
+            backend: data.has('visibility_backend'),
+            cloudportal: data.has('visibility_cloudportal'),
+            api: data.has('visibility_api'),
+          },
+          allowed_role_ids: ids(data.get('role_ids')),
+          allowed_user_ids: ids(data.get('user_ids')),
+          variables_schema: parseObject(data.get('variables_schema') || '{}', 'Zmienne użytkownika'),
+          deployment: {
+            name: '{{ hostname }}',
+            provider_id: provider.id,
+            credentials_id: provider.credentials_id,
+            hostname_scheme_id: Number(schemeId),
+            hostname_values: hostnameValues,
+            ipam_pool_id: ipamPoolId,
+            template: 'proxmox-vm',
+            executor: 'terraform',
+            variables: vmVariables,
+            ansible,
+          },
+          workflow,
+          requires_approval: data.has('requires_approval'),
+          recovery_policy: data.get('recovery_policy'),
+        };
+
+        await api(item ? '/blueprints/' + item.id : '/blueprints', {
+          method: item ? 'PUT' : 'POST',
+          body: payload,
+        });
+        toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint gotowy do szybkiego tworzenia VM.');
+        navigate('blueprints');
+      },
+    });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function executeBlueprint(item) {
+  const fields = node('div', { class: 'form-grid' });
+  const deployment = item.deployment || {};
+  const variables = deployment.variables || {};
+
+  fields.append(node('div', { class: 'blueprint-run-summary wide' },
+    node('strong', { text: 'Gotowy preset VM' }),
+    node('span', { text: 'Template VMID ' + (variables.template_id || '—') + ' · node ' + (variables.node || '—') + ' · ' + (variables.cpu || '—') + ' CPU · ' + (variables.memory || '—') + ' MiB RAM' }),
+    node('span', { text: 'Tagi: ' + ((variables.tags || []).join(', ') || 'brak') })
+  ));
+
+  for (const [name, definition] of Object.entries(item.variables_schema || {})) {
+    if (definition.type === 'select') {
+      fields.append(selectField(definition.label || name, name, definition.options.map(value => ({ value, label: value })), definition.default, { required: definition.required }));
+    } else if (definition.type === 'boolean') {
+      fields.append(checkboxField(definition.label || name, name, Boolean(definition.default)));
+    } else {
+      fields.append(field(definition.label || name, name, {
+        type: definition.type === 'integer' ? 'number' : 'text',
+        value: definition.default ?? '',
+        min: definition.min,
+        max: definition.max,
+        required: definition.required,
+      }));
+    }
+  }
+
+  let missingHostnameTokens = [];
+  if (deployment.hostname_scheme_id) {
+    try {
+      const scheme = await api('/hostname-schemes/' + deployment.hostname_scheme_id);
+      const defaults = deployment.hostname_values || {};
+      missingHostnameTokens = hostnamePatternTokens(scheme.pattern).filter(token => !defaults[token]);
+      fields.append(node('div', { class: 'field-help wide', text: 'Hostname: ' + scheme.pattern + (missingHostnameTokens.length ? ' — uzupełnij brakujące tokeny.' : ' — zostanie wygenerowany automatycznie.') }));
+      missingHostnameTokens.forEach(token => fields.append(field('Hostname {' + token + '}', 'hostname_' + token, { required: true })));
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  openModal({
+    title: 'Uruchom ' + item.name,
+    eyebrow: 'Blueprint v' + item.version,
+    body: fields,
+    submitLabel: 'Utwórz VM',
+    wide: true,
+    onSubmit: async (data, form) => {
+      const supplied = {};
+      for (const [name, definition] of Object.entries(item.variables_schema || {})) {
+        const control = form.elements[name];
+        if (definition.type === 'boolean') supplied[name] = control.checked;
+        else if (control.value !== '') supplied[name] = definition.type === 'integer' ? Number(control.value) : control.value;
+      }
+      const hostnameValues = {};
+      missingHostnameTokens.forEach(token => {
+        hostnameValues[token] = form.elements['hostname_' + token].value;
+      });
+      const result = await api('/blueprints/' + item.id + '/execute', {
+        method: 'POST',
+        idempotent: true,
+        body: { variables: supplied, hostname_values: hostnameValues },
+      });
+      toast('Deployment ' + result.name + ' utworzony. Zadanie ' + short(result.job.id) + '.');
+      navigate('jobs');
+    },
+  });
 }
 
 async function hostnamesView() {
