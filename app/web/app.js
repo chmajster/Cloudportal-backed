@@ -149,9 +149,14 @@ function allowed(permission) {
 }
 
 function toast(message, type = '') {
-  const item = node('div', { class: `toast ${type}`, text: message });
+  const item = node('div', {
+    class: `toast ${type}`,
+    text: message,
+    role: type === 'error' ? 'alert' : 'status',
+    'aria-live': type === 'error' ? 'assertive' : 'polite',
+  });
   dom.toastRegion.append(item);
-  window.setTimeout(() => item.remove(), 5000);
+  window.setTimeout(() => item.remove(), type === 'error' ? 12000 : 5000);
 }
 
 function formatDate(value) {
@@ -245,7 +250,8 @@ function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit
   dom.modalBody.replaceChildren();
   dom.modalActions.replaceChildren();
   const form = node('form', { id: 'modal-form', class: 'stack' });
-  form.append(body);
+  const formError = node('div', { class: 'form-error modal-form-error', role: 'alert', hidden: true });
+  form.append(formError, body);
   dom.modalBody.append(form);
   dom.modalActions.append(button('Anuluj', closeModal));
   if (onSubmit) {
@@ -253,12 +259,20 @@ function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit
     dom.modalActions.append(submit);
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      formError.hidden = true;
+      formError.textContent = '';
       submit.disabled = true;
       try {
         const shouldClose = await onSubmit(new FormData(form), form);
         if (shouldClose !== false) closeModal();
       }
-      catch (error) { toast(error.message, 'error'); }
+      catch (error) {
+        const message = error?.message || 'Operacja nie powiodła się.';
+        formError.textContent = message;
+        formError.hidden = false;
+        formError.scrollIntoView({ block: 'nearest' });
+        toast(message, 'error');
+      }
       finally { submit.disabled = false; }
     });
   }
@@ -500,8 +514,13 @@ async function createToken() {
 const CREDENTIAL_TYPE_CONFIG = {
   proxmox: {
     label: 'Proxmox VE',
-    description: 'Połączenie z API Proxmox VE. Preferowany jest dedykowany API Token z minimalnym zakresem uprawnień.',
-    endpoint: { label: 'Endpoint Proxmox HTTPS', placeholder: 'https://pve.example.com:8006', required: true },
+    description: 'Połączenie z API Proxmox VE. Adres może być samym IP/hostem albo jawnym URL HTTP/HTTPS.',
+    endpoint: {
+      label: 'Adres Proxmox (IP / host / URL)',
+      placeholder: '192.168.1.10',
+      required: true,
+      help: 'Bez http:// lub https:// backend najpierw sprawdzi HTTPS, potem HTTP. Dla samego IP/hosta używany jest domyślny port 8006.',
+    },
     username: { label: 'Użytkownik / realm', placeholder: 'root@pam', required: true },
     tls: true,
     defaultAuth: 'token',
@@ -639,7 +658,11 @@ function renderCredentialDynamic(container, type, item) {
   if (config.username) identity.append(field(config.username.label, 'username', {
     value: sameType ? item.username : '', required: config.username.required, placeholder: config.username.placeholder,
   }));
-  if (config.tls) identity.append(checkboxField('Weryfikuj certyfikat TLS', 'verify_ssl', sameType ? item.verify_ssl : true));
+  if (config.tls) {
+    identity.append(node('div', { class: 'credential-tls-control' },
+      checkboxField('Akceptuj certyfikat self-signed / niezaufany', 'accept_untrusted_tls', sameType ? !item.verify_ssl : false),
+      node('div', { class: 'field-help', text: 'Włączenie tej opcji wyłącza weryfikację CA i nazwy hosta dla tego credentiala.' })));
+  }
 
   const typeCard = node('div', { class: 'credential-type-card' },
     node('div', {}, node('strong', { text: config.label }), badge(type, 'info')),
@@ -729,7 +752,7 @@ function credentialForm(item = null) {
       const sameType = Boolean(item && item.type === type);
       const endpoint = form.elements.endpoint ? form.elements.endpoint.value : (sameType ? item.endpoint : '');
       const username = form.elements.username ? form.elements.username.value : (sameType ? item.username : '');
-      const verifySsl = config.tls ? data.has('verify_ssl') : (sameType ? item.verify_ssl : true);
+      const verifySsl = config.tls ? !data.has('accept_untrusted_tls') : (sameType ? item.verify_ssl : true);
       const replaceSecrets = !item || !sameType || data.has('replace_secrets');
       const identityChanged = Boolean(item && (item.type !== type || item.endpoint !== endpoint || item.username !== username || item.verify_ssl !== verifySsl));
       if (identityChanged && !replaceSecrets) throw new Error('Zmiana typu, endpointu, użytkownika lub TLS wymaga zastąpienia sekretów.');
