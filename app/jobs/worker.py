@@ -86,6 +86,8 @@ def validate_authorization(db, job):
             needed.add('deployments.destroy')
     if job.operation == 'terraform.destroy':
         needed.add('deployments.destroy')
+    if job.operation == 'terraform.import':
+        needed.add('deployments.adopt')
     if job.payload.get('ansible'):
         needed.add('ansible.execute')
     if not needed <= permissions:
@@ -177,6 +179,55 @@ def register_managed_resource(context, workspace):
             row.destroyed_at = None
         db.commit()
 
+
+def register_adopted_resource(context):
+    values = (context.job.payload or {}).get('import_values') or {}
+    node = values.get('node')
+    vm_id = values.get('vm_id')
+    if not node or not vm_id:
+        raise ExecutionFailed('Adoption identity is missing')
+    with session() as db:
+        deployment = db.get(Deployment, context.deployment.id)
+        managed_vm = db.scalar(select(ManagedVM).where(
+            ManagedVM.provider_id == deployment.provider_id,
+            ManagedVM.vm_id == int(vm_id),
+        ))
+        if managed_vm is None:
+            raise ExecutionFailed('Imported VM is missing from managed inventory')
+        if managed_vm.deployment_id not in {None, deployment.id}:
+            raise ExecutionFailed('Imported VM is already linked to another deployment')
+        managed_vm.deployment_id = deployment.id
+        managed_vm.node = str(node)
+        managed_vm.name = deployment.name
+        managed_vm.management_mode = 'terraform'
+        managed_vm.lifecycle_status = 'active'
+        managed_vm.destroyed_at = None
+
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == deployment.id
+        ))
+        if resource is None:
+            resource = ManagedResource(
+                deployment_id=deployment.id,
+                provider_id=deployment.provider_id,
+                provider=deployment.provider,
+                resource_type='vm',
+                external_id=str(vm_id),
+                name=deployment.name,
+                primary_ip=None,
+                lifecycle_status='active',
+                metadata_json={'adopted': True, 'node': str(node)},
+                created_by=deployment.created_by,
+            )
+            db.add(resource)
+        else:
+            resource.external_id = str(vm_id)
+            resource.name = deployment.name
+            resource.lifecycle_status = 'active'
+            resource.metadata_json = {'adopted': True, 'node': str(node)}
+            resource.destroyed_at = None
+        db.commit()
+
 def wait_for_vm(context, workspace):
     vm_id = vm_id_from_state(workspace)
     provider = provider_for(context.credential)
@@ -219,6 +270,8 @@ def execute(job_id):
         if job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             workspace = executor.execute(job.operation, context)
+            if job.operation == 'terraform.import':
+                register_adopted_resource(context)
             if job.operation == 'terraform.apply':
                 register_managed_resource(context, workspace)
                 if context.deployment.provider == 'proxmox':
@@ -247,6 +300,8 @@ def execute(job_id):
             deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
             if current.operation == 'terraform.plan' and status == 'successful':
                 deployment.status = current.payload.get('previous_status', 'failed')
+            if current.operation == 'terraform.import' and status == 'successful':
+                deployment.status = 'imported'
             if deployment.status == 'destroyed':
                 deployment.destroyed_at = now()
                 released_at = now()
