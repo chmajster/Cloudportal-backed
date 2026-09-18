@@ -1,17 +1,18 @@
 import uuid
 from typing import Annotated, Literal
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select, or_
 from app.api.administration import Limit, Offset
 from app.api.common import find, idempotent, paginate, public
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput)
-from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput
+from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput, ProxmoxAutoTokenInput
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.database import get_db
 from app.models import Credential, Deployment, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
+from app.providers.proxmox import create_api_token
 from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
@@ -52,6 +53,44 @@ def credential_in_use(db, id, *, pending_only=False):
 @router.get('/credentials', response_model=Items[CredentialOutput])
 def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
     return {'items': [credential_public(c) for c in paginate(db, Credential, offset, limit)]}
+
+
+@router.post('/credentials/proxmox/auto-token', status_code=201, response_model=CredentialOutput)
+def create_proxmox_auto_token(
+    data: ProxmoxAutoTokenInput,
+    request: Request,
+    idempotency_key: Annotated[str, Header(alias='Idempotency-Key')],
+    actor=Depends(require('credentials.create')),
+    db=Depends(get_db, scope='function'),
+):
+    def create():
+        generated = create_api_token(
+            endpoint=data.endpoint,
+            username=data.username,
+            password=data.password,
+            verify_ssl=data.verify_ssl,
+        )
+        c = Credential(
+            name=data.name,
+            type='proxmox',
+            endpoint=data.endpoint,
+            username=data.username,
+            verify_ssl=data.verify_ssl,
+            encrypted_secret=b'',
+        )
+        db.add(c)
+        db.flush()
+        save_secret(db, c, {
+            'token_id': generated['token_id'],
+            'token_secret': generated['token_secret'],
+        })
+        audit(db, request, 'credential.proxmox_token_bootstrapped', 'credentials', c.id)
+        db.flush()
+        return credential_public(c)
+
+    # The header prevents accidental double-clicks from creating multiple remote tokens.
+    # The password contributes only to an HMAC request fingerprint; plaintext is never persisted.
+    return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 
 @router.get('/credentials/{id}', response_model=CredentialOutput)
