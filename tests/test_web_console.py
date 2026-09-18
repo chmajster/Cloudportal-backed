@@ -29,6 +29,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'CREDENTIAL_TYPE_CONFIG' in script.text
     assert 'Secrets JSON' not in script.text
     assert 'Zastąp zapisane sekrety' in script.text
+    assert 'Login + hasło → utwórz token automatycznie' in script.text
+    assert '/credentials/proxmox/auto-token' in script.text
+    assert 'Hasło nie zostało zapisane' in script.text
     assert 'credential-secret-panel' in script.text
     assert stylesheet.status_code == 200
     assert '.credential-secret-panel' in stylesheet.text
