@@ -14,6 +14,7 @@ from app.config import settings
 from app.database import session
 from app.models import (
     Audit,
+    Credential,
     HostnameReservation,
     Idempotency,
     IPAllocation,
@@ -134,24 +135,13 @@ def materialize_scheduled_jobs():
         db.commit()
 
 
-def queue_job_webhooks(db, job):
-    event = 'job.' + job.status
-    if event not in {'job.successful', 'job.failed', 'job.cancelled'}:
-        return
+def queue_webhook_event(db, event, resource_id, data):
     endpoints = db.scalars(
         select(WebhookEndpoint).where(WebhookEndpoint.is_active.is_(True))
     ).all()
     payload = {
         'event': event,
-        'job': {
-            'id': job.id,
-            'deployment_id': job.deployment_id,
-            'operation': job.operation,
-            'status': job.status,
-            'request_id': job.request_id,
-            'attempt': job.attempt,
-            'error': job.error,
-        },
+        **data,
         'created_at': now().isoformat() + 'Z',
     }
     for endpoint in endpoints:
@@ -159,9 +149,101 @@ def queue_job_webhooks(db, job):
             db.add(WebhookDelivery(
                 endpoint_id=endpoint.id,
                 event=event,
-                resource_id=job.id,
+                resource_id=str(resource_id),
                 payload=payload,
             ))
+
+
+def queue_job_webhooks(db, job):
+    event = 'job.' + job.status
+    if event in {'job.successful', 'job.failed', 'job.cancelled'}:
+        queue_webhook_event(db, event, job.id, {
+            'job': {
+                'id': job.id,
+                'deployment_id': job.deployment_id,
+                'operation': job.operation,
+                'status': job.status,
+                'request_id': job.request_id,
+                'attempt': job.attempt,
+                'error': job.error,
+            }
+        })
+    if job.source == 'Recovery' and job.status in {'successful', 'failed'}:
+        queue_webhook_event(db, 'recovery.' + job.status, job.id, {
+            'recovery': {
+                'job_id': job.id,
+                'deployment_id': job.deployment_id,
+                'status': job.status,
+                'recovery_of': (job.payload or {}).get('recovery_of'),
+                'error': job.error,
+            }
+        })
+
+
+def queue_system_alert_webhooks_once():
+    try:
+        if not redis_client().set('cp:system-alerts:scan', '1', nx=True, ex=60):
+            return
+    except Exception:
+        return
+
+    current = now()
+    horizon = current + timedelta(days=settings().credential_expiry_warning_days)
+    alerts = []
+    with session() as db:
+        stuck = db.scalars(select(Job).where(
+            Job.status == 'running',
+            Job.heartbeat_at.is_not(None),
+            Job.heartbeat_at < current - timedelta(seconds=settings().execution_timeout + 180),
+        ).limit(100)).all()
+        for job in stuck:
+            alerts.append({
+                'severity': 'critical',
+                'code': 'job_stuck',
+                'resource_id': job.id,
+                'message': 'Job heartbeat is stale',
+            })
+
+        credentials = db.scalars(select(Credential).where(
+            (Credential.expires_at.is_not(None) & (Credential.expires_at <= horizon))
+            | (Credential.rotation_due_at.is_not(None) & (Credential.rotation_due_at <= horizon))
+        ).limit(100)).all()
+        for credential in credentials:
+            if credential.expires_at is not None and credential.expires_at <= current:
+                alerts.append({
+                    'severity': 'critical', 'code': 'credential_expired',
+                    'resource_id': str(credential.id), 'message': 'Credential is expired',
+                })
+            elif credential.expires_at is not None and credential.expires_at <= horizon:
+                alerts.append({
+                    'severity': 'warning', 'code': 'credential_expiring',
+                    'resource_id': str(credential.id), 'message': 'Credential expires soon',
+                })
+            if credential.rotation_due_at is not None and credential.rotation_due_at <= horizon:
+                alerts.append({
+                    'severity': 'warning', 'code': 'credential_rotation_due',
+                    'resource_id': str(credential.id), 'message': 'Credential rotation is due soon',
+                })
+
+        failed_delivery = db.scalar(select(WebhookDelivery.id).where(
+            WebhookDelivery.status == 'failed',
+            WebhookDelivery.event != 'system.alert',
+        ).limit(1))
+        if failed_delivery:
+            alerts.append({
+                'severity': 'warning', 'code': 'webhook_delivery_failed',
+                'resource_id': str(failed_delivery), 'message': 'Webhook delivery exhausted retries',
+            })
+
+        for alert in alerts:
+            fingerprint = hashlib.sha256(json.dumps(alert, sort_keys=True).encode()).hexdigest()
+            try:
+                first = redis_client().set('cp:system-alert:' + fingerprint, '1', nx=True, ex=3600)
+            except Exception:
+                first = False
+            if first:
+                queue_webhook_event(db, 'system.alert', alert['resource_id'], {'alert': alert})
+        db.commit()
 
 
 def _delivery_signature(secret, body):
