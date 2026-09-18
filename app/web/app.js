@@ -2771,38 +2771,86 @@ function resizeVmDisk(item) {
     field('Powiększ o GiB', 'grow_gib', { type: 'number', min: 1, required: true }));
   openModal({ title: 'Powiększ dysk', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
     await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk: data.get('disk'), grow_gib: Number(data.get('grow_gib')) } });
-    toast('Resize uruchomiony.');
+    toast('Powiększanie dysku zostało uruchomione.');
   }});
 }
 
-function migrateVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Docelowy node', 'target', { required: true }),
-    checkboxField('Online migration', 'online'),
-    checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
-  openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
-      target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
-    } });
-    toast('Migracja uruchomiona.');
-  }});
+async function migrateVm(item) {
+  try {
+    const nodes = (await discoverVmOptions(item, 'nodes')).filter(node => node.node && node.node !== item.node);
+    const targetField = nodes.length
+      ? selectField('Docelowy węzeł', 'target', nodes.map(node => ({
+        value: node.node,
+        label: `${node.node}${node.status ? ' · ' + statusLabel(node.status) : ''}`,
+      })), '', { required: true, placeholder: 'Wybierz węzeł' })
+      : field('Docelowy węzeł', 'target', { required: true, help: 'Nie udało się pobrać listy węzłów — wpisz nazwę ręcznie.' });
+    const fields = node('div', { class: 'form-grid' },
+      targetField,
+      checkboxField('Migracja online', 'online'),
+      checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
+    openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom migrację', onSubmit: async data => {
+      await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
+        target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
+      } });
+      toast('Migracja została uruchomiona.');
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
-function cloneVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Nowy VMID', 'new_vm_id', { type: 'number', min: 100, required: true }),
-    field('Nazwa', 'name', { required: true }),
-    field('Docelowy node', 'target'),
-    field('Storage', 'storage'),
-    field('Pool', 'pool'),
-    checkboxField('Full clone', 'full', true));
-  openModal({ title: 'Clone VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
-      new_vm_id: Number(data.get('new_vm_id')), name: data.get('name'), target: data.get('target') || null,
-      storage: data.get('storage') || null, pool: data.get('pool') || null, full: data.has('full'),
-    } });
-    toast('Clone uruchomiony.');
-  }});
+async function cloneVm(item) {
+  try {
+    const [nodes, pools] = await Promise.all([
+      discoverVmOptions(item, 'nodes'),
+      discoverVmOptions(item, 'pools'),
+    ]);
+    const targetField = nodes.length
+      ? selectField('Docelowy węzeł', 'target', [{ value: '', label: `Bez zmiany — ${item.node}` }].concat(nodes.map(node => ({
+        value: node.node, label: `${node.node}${node.status ? ' · ' + statusLabel(node.status) : ''}`,
+      }))), '')
+      : field('Docelowy węzeł (opcjonalnie)', 'target');
+    const storageHolder = node('div', { class: 'wide' });
+    const poolField = pools.length
+      ? selectField('Pula (opcjonalnie)', 'pool', [{ value: '', label: 'Bez puli' }].concat(pools.map(pool => ({
+        value: pool.poolid, label: pool.comment ? `${pool.poolid} · ${pool.comment}` : pool.poolid,
+      }))), '')
+      : field('Pula (opcjonalnie)', 'pool');
+
+    const fields = node('div', { class: 'form-grid' },
+      field('Nowy VMID', 'new_vm_id', { type: 'number', min: 100, required: true }),
+      field('Nazwa nowej VM', 'name', { required: true, value: item.name ? item.name + '-clone' : '' }),
+      targetField,
+      storageHolder,
+      poolField,
+      checkboxField('Pełny klon', 'full', true));
+
+    const targetControl = targetField.querySelector('select,input');
+    const refreshStorages = async () => {
+      const target = targetControl.value || item.node;
+      const storages = (await discoverVmOptions(item, 'storages', target)).filter(storage => storage.active !== 0 && storage.enabled !== 0);
+      if (storages.length) {
+        storageHolder.replaceChildren(selectField('Docelowy storage (opcjonalnie)', 'storage',
+          [{ value: '', label: 'Domyślny' }].concat(storages.map(storage => ({ value: storage.storage, label: storageLabel(storage) }))), ''));
+      } else {
+        storageHolder.replaceChildren(field('Docelowy storage (opcjonalnie)', 'storage', {
+          help: 'Lista storage jest niedostępna — pole można zostawić puste.',
+        }));
+      }
+    };
+    targetControl.addEventListener('change', () => { refreshStorages(); });
+    await refreshStorages();
+
+    openModal({ title: 'Klonuj VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom klonowanie', onSubmit: async data => {
+      await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
+        new_vm_id: Number(data.get('new_vm_id')),
+        name: data.get('name'),
+        target: data.get('target') || null,
+        storage: data.get('storage') || null,
+        pool: data.get('pool') || null,
+        full: data.has('full'),
+      } });
+      toast('Klonowanie zostało uruchomione.');
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 async function schedulesView() {
