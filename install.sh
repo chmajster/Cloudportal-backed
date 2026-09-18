@@ -339,6 +339,20 @@ certificate_matches_host() {
   fi
 }
 
+managed_certificate_matches_host() {
+  local expected
+  if [[ "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    expected="IP Address:$backend_host"
+  else
+    expected="DNS:$backend_host"
+  fi
+  openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null \
+    | tail -n +2 \
+    | tr ',' '\n' \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+    | grep -Fxq "$expected"
+}
+
 certificate_key_matches() {
   local cert_public key_public
   cert_public=$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
@@ -378,7 +392,8 @@ else
   if [[ "$tls_source" == 'managed-self-signed' ]]; then
     regenerate_tls=0
     openssl x509 -in "$config/tls/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate_tls=1
-    certificate_matches_host "$config/tls/server.crt" || regenerate_tls=1
+    managed_certificate_matches_host "$config/tls/server.crt" || regenerate_tls=1
+    [[ -z ${previous_host:-} || "$previous_host" == "$backend_host" ]] || regenerate_tls=1
     certificate_key_matches "$config/tls/server.crt" "$config/tls/server.key" || regenerate_tls=1
     if ((regenerate_tls)); then
       echo "Existing installer-managed TLS certificate is expired, mismatched, or does not cover $backend_host; regenerating it."
