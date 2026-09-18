@@ -282,6 +282,14 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
     return idempotent(db, request, actor, payload, execute, required=True)
 
 
+@router.post('/providers/{provider_id}/vms/{node}/{vmid}/console')
+def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
+                    actor=Depends(require('vms.console')), db=Depends(get_db, scope='function')):
+    result = adapter(db, provider_id).console_session(node, vmid)
+    audit(db, request, 'vm.console_ticket_issued', 'vms', f'{provider_id}:{node}:{vmid}')
+    return result
+
+
 @router.get('/providers/{provider_id}/tasks/{node}/{upid}')
 def task_status(provider_id: int, node: NODE,
                 upid: Annotated[str, Path(min_length=1, max_length=1024)],
