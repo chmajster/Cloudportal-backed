@@ -334,3 +334,31 @@ def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
         worker.terminate()
         output, _ = worker.communicate(timeout=15)
     assert 'TimeoutError' not in output and 'Error connecting' not in output
+
+
+
+def test_provider_specific_credential_validation(client, headers):
+    invalid = [
+        {'name': 'VMware invalid', 'type': 'vmware', 'endpoint': 'https://vc.example.com', 'username': 'administrator@vsphere.local', 'secrets': {'secret': 'x'}},
+        {'name': 'SSH invalid', 'type': 'ssh', 'username': 'clouduser', 'secrets': {'known_hosts': 'host ssh-ed25519 example'}},
+        {'name': 'AWS invalid', 'type': 'aws', 'secrets': {'access_key_id': 'AKIATEST'}},
+        {'name': 'Azure invalid', 'type': 'azure', 'secrets': {'tenant_id': 'tenant', 'client_id': 'client'}},
+        {'name': 'OpenStack invalid', 'type': 'openstack', 'endpoint': 'https://os.example.com:5000/v3', 'username': 'cloudportal', 'secrets': {'password': 'private'}},
+    ]
+    for payload in invalid:
+        response = client.post('/api/v1/credentials', headers=headers, json=payload)
+        assert response.status_code == 422, (payload['type'], response.text)
+
+    valid = [
+        {'name': 'VMware valid', 'type': 'vmware', 'endpoint': 'https://vc.example.com', 'username': 'administrator@vsphere.local', 'secrets': {'password': 'private'}},
+        {'name': 'SSH valid', 'type': 'ssh', 'username': 'clouduser', 'secrets': {'private_key': 'private-key-data', 'known_hosts': 'host ssh-ed25519 example'}},
+        {'name': 'AWS valid', 'type': 'aws', 'secrets': {'access_key_id': 'AKIATEST', 'secret_access_key': 'private'}},
+        {'name': 'Azure valid', 'type': 'azure', 'secrets': {'tenant_id': 'tenant', 'client_id': 'client', 'client_secret': 'private'}},
+        {'name': 'OpenStack valid', 'type': 'openstack', 'endpoint': 'https://os.example.com:5000/v3', 'username': 'cloudportal', 'secrets': {'password': 'private', 'project_name': 'admin', 'domain_name': 'Default'}},
+        {'name': 'Other valid', 'type': 'other', 'secrets': {'secret': 'private'}},
+    ]
+    for payload in valid:
+        response = client.post('/api/v1/credentials', headers=headers, json=payload)
+        assert response.status_code == 201, (payload['type'], response.text)
+        assert response.json()['configured'] is True
+        assert response.json()['secret'] == '********'
