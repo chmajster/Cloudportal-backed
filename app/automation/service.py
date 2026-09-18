@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
-from app.api.schemas import AnsibleInput, VMVariables
+from app.api.schemas import AnsibleInput
+from app.catalog import validate_template_variables
 from app.ipam.service import allocate_address
 from app.models import Blueprint, HostnameReservation, HostnameScheme, now
 
