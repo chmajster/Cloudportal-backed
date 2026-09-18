@@ -19,7 +19,7 @@ def upgrade():
         sa.Column('interval_seconds', sa.Integer(), nullable=True),
         sa.Column('is_active', sa.Boolean(), nullable=False),
         sa.Column('created_by', sa.Integer(), nullable=False),
-        sa.Column('token_id', sa.Integer(), nullable=False),
+        sa.Column('token_id', sa.Integer(), nullable=True),
         sa.Column('last_run_at', sa.DateTime(), nullable=True),
         sa.Column('last_error', sa.String(length=500), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
