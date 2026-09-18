@@ -30,9 +30,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Secrets JSON' not in script.text
     assert 'Zastąp zapisane sekrety' in script.text
     assert 'credential-secret-panel' in script.text
+    assert 'Blueprint Designer' in script.text
+    assert 'Obraz / template Proxmox' in script.text
+    assert 'Pattern hostname' in script.text
+    assert 'Tagi Proxmox' in script.text
+    assert 'Cloud-init' in script.text
+    assert "'set_tags'" in script.text
     assert stylesheet.status_code == 200
     assert '.credential-secret-panel' in stylesheet.text
     assert '.modal.modal-wide' in stylesheet.text
+    assert '.workflow-preview' in stylesheet.text
+    assert '.blueprint-run-summary' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
 
 
