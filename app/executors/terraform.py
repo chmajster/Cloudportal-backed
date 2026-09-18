@@ -7,6 +7,7 @@ from pathlib import Path
 from app.config import settings
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
 from app.security.core import decrypt_secret
+from app.terraform.state import distributed_deployment_lock, persist_state, restore_state
 
 
 @contextmanager
@@ -44,29 +45,35 @@ class TerraformExecutor(Executor):
         else:
             env['PROXMOX_VE_USERNAME'] = credential.username
             env['PROXMOX_VE_PASSWORD'] = secret['password']
-        with workspace_lock(workspace):
-            # Code is root-owned and approved; keep an existing provider lock on updates.
-            for path in source.glob('*.tf'):
-                shutil.copyfile(path, workspace / path.name)
-            lock_source = source / '.terraform.lock.hcl'
-            if lock_source.exists() and not (workspace / '.terraform.lock.hcl').exists():
-                shutil.copyfile(lock_source, workspace / '.terraform.lock.hcl')
-            variables_path = workspace / 'terraform.tfvars.json'
-            variables_path.write_text(json.dumps(deployment.variables))
-            os.chmod(variables_path, 0o600)
-            context.stage('terraform.init')
-            run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, secret.values())
-            context.stage('terraform.plan')
-            plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
-            if operation == 'terraform.destroy':
-                plan.append('-destroy')
-            try:
-                run_process(plan, workspace, env, context, secret.values())
-                if operation != 'terraform.plan':
-                    context.stage(operation)
-                    run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
-            finally:
-                (workspace / 'execution.tfplan').unlink(missing_ok=True)
+        with distributed_deployment_lock(deployment.id):
+            with workspace_lock(workspace):
+                context.stage('terraform.state.restore')
+                restore_state(deployment.id, workspace)
+                # Code is root-owned and approved; keep an existing provider lock on updates.
+                for path in source.glob('*.tf'):
+                    shutil.copyfile(path, workspace / path.name)
+                lock_source = source / '.terraform.lock.hcl'
+                if lock_source.exists() and not (workspace / '.terraform.lock.hcl').exists():
+                    shutil.copyfile(lock_source, workspace / '.terraform.lock.hcl')
+                variables_path = workspace / 'terraform.tfvars.json'
+                variables_path.write_text(json.dumps(deployment.variables))
+                os.chmod(variables_path, 0o600)
+                context.stage('terraform.init')
+                run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, secret.values())
+                context.stage('terraform.plan')
+                plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
+                if operation == 'terraform.destroy':
+                    plan.append('-destroy')
+                try:
+                    run_process(plan, workspace, env, context, secret.values())
+                    if operation != 'terraform.plan':
+                        context.stage(operation)
+                        run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
+                finally:
+                    (workspace / 'execution.tfplan').unlink(missing_ok=True)
+                    if (workspace / 'terraform.tfstate').exists():
+                        context.stage('terraform.state.persist')
+                        persist_state(deployment.id, workspace)
         return workspace
 
 
