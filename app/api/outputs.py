@@ -128,6 +128,7 @@ class DeploymentOutput(Output):
     template: str
     credentials_id: int
     workspace: str
+    state_location: str
     variables: dict[str, Any]
     workflow: dict[str, Any]
     status: str
