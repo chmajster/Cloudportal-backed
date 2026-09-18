@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function blueprintsView() {
   const blueprints = (await api('/blueprints?limit=200')).items;
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
@@ -1107,3 +1108,4 @@ function generateHostname(schemes) {
 
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
 registerView({ id: 'hostnames', label: 'Nazwy hostów', icon: 'H', permission: 'hostnames.read', order: 80 }, hostnamesView);
+})();
