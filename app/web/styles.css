@@ -140,8 +140,10 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent-s
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .form-grid .wide { grid-column: 1 / -1; }
 .form-error { color: var(--danger); margin: -4px 0 0; font-size: .82rem; }
+.form-error.success { color: var(--accent); }
 .modal-form-error { margin: 0; padding: 12px 14px; border: 1px solid var(--danger-border); border-left: 4px solid var(--danger); border-radius: 10px; background: var(--danger-bg); color: var(--danger-text); font-weight: 750; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .field-help { color: var(--muted); font-size: .72rem; line-height: 1.5; font-weight: 400; }
+.clipboard-fallback { position: fixed; left: -10000px; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
 .button { border: 1px solid transparent; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-weight: 750; font-size: .82rem; transition: transform .12s, background .12s, border-color .12s; }
 .button:hover { transform: translateY(-1px); }
