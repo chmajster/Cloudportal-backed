@@ -170,7 +170,8 @@ def execute(job_id):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             workspace = executor.execute(job.operation, context)
             if job.operation == 'terraform.apply':
-                register_managed_vm(context, workspace)
+                if context.deployment.provider == 'proxmox':
+                    register_managed_vm(context, workspace)
                 if context.ansible:
                     context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
                     AnsibleExecutor().execute('ansible.execute', context)
