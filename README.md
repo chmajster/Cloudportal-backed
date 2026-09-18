@@ -210,3 +210,21 @@ python scripts/migrate-legacy-cloudportal.py --apply
 Importer odszyfrowuje stare tokeny tylko w pamięci i natychmiast szyfruje je kluczem Cloudportal-backed. Starych hashy haseł nie kopiuje: importowane konta otrzymują nieznane losowe hasło i `must_change_password`; administrator powinien wydać token resetu. Legacy administrator **nie** dostaje automatycznie roli Administrator — wymaga jawnej flagi `--grant-legacy-admin`.
 
 Projekty, memberships, quotas, resource plans i historyczne jobs/snapshots nie mają obecnie jednoznacznego modelu docelowego. Importer podaje ich liczby w `skipped` i nie tworzy zgadywanego mapowania.
+
+
+## Multi-host HA drill
+
+`scripts/e2e-ha-failover.py` wykonuje jawny preflight co najmniej dwóch workerów. Sprawdza backend `/health`, aktywność `cloudportal-worker@1`, zgodny fingerprint master key oraz zgodny fingerprint konfiguracji PostgreSQL/Redis bez wypisywania wartości sekretów. Opcjonalne `--exercise-failover` zatrzymuje wyłącznie usługę workera na pierwszym wskazanym hoście, wymaga pozostania drugiego workera online i zawsze próbuje uruchomić usługę ponownie.
+
+SSH działa z `BatchMode=yes`, `StrictHostKeyChecking=yes`, wskazanym plikiem known_hosts oraz stałymi komendami systemd. Konto SSH musi mieć bezhasłowe sudo wyłącznie dla wymaganych odczytów i `systemctl stop/start cloudportal-worker@1.service`.
+
+Przykład preflight:
+
+```bash
+python scripts/e2e-ha-failover.py --url https://backend.example.com:8443 \
+  --worker-host worker-a.example.com --worker-host worker-b.example.com \
+  --ssh-user cloudportal-drill --ssh-key-file /root/ha-drill.key \
+  --known-hosts-file /root/ha-known-hosts
+```
+
+Dodanie `--exercise-failover` wykonuje kontrolowane wyłączenie jednego workera. Ten test potwierdza redundancję workerów i wspólny control plane; awaria podczas rzeczywistego `terraform apply` nadal wymaga osobnego live acceptance z testowym deploymentem i późniejszej kontroli częściowego state.
