@@ -8,6 +8,50 @@ from app.providers.base import InfrastructureProvider
 from app.security.core import decrypt_secret
 
 
+def create_api_token(endpoint, username, password, token_name, *, verify_ssl=True, privilege_separation=True):
+    """Create a Proxmox API token using a one-shot username/password login.
+
+    The password is used only for the ticket request and is never returned or persisted.
+    """
+    base = endpoint.rstrip('/') + '/api2/json'
+    try:
+        with httpx.Client(
+            verify=verify_ssl,
+            timeout=httpx.Timeout(30, connect=5),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            auth = client.post(
+                base + '/access/ticket',
+                data={'username': username, 'password': password},
+            )
+            auth.raise_for_status()
+            ticket = auth.json()['data']
+            client.cookies.set('PVEAuthCookie', ticket['ticket'])
+            response = client.post(
+                base + '/access/users/' + quote(username, safe='') + '/token/' + quote(token_name, safe=''),
+                headers={'CSRFPreventionToken': ticket['CSRFPreventionToken']},
+                data={
+                    'privsep': int(privilege_separation),
+                    'comment': 'Managed by Cloudportal-backed',
+                },
+            )
+            response.raise_for_status()
+            data = response.json()['data']
+            token_secret = data.get('value')
+            if not token_secret:
+                raise ValueError('Proxmox did not return token value')
+            return {
+                'token_id': data.get('full-tokenid') or f'{username}!{token_name}',
+                'token_secret': token_secret,
+            }
+    except (httpx.HTTPError, KeyError, ValueError):
+        raise HTTPException(
+            502,
+            'Proxmox API token creation failed; verify endpoint, TLS, password and user-management permissions',
+        ) from None
+
+
 class ProxmoxProvider(InfrastructureProvider):
     def __init__(self, credential):
         self.endpoint = credential.endpoint.rstrip('/') + '/api2/json'
