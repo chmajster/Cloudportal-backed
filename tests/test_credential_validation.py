@@ -16,6 +16,7 @@ def test_provider_specific_credential_validation(client, headers):
         assert response.status_code == 422, (payload['type'], response.text)
 
     valid = [
+        {'name': 'Proxmox HTTP valid', 'type': 'proxmox', 'endpoint': 'http://pve.example.com:8006', 'username': 'root@pam', 'secrets': {'token_id': 'root@pam!portal', 'token_secret': 'private'}},
         {'name': 'VMware valid', 'type': 'vmware', 'endpoint': 'https://vc.example.com', 'username': 'administrator@vsphere.local', 'secrets': {'password': 'private'}},
         {'name': 'SSH valid', 'type': 'ssh', 'username': 'clouduser', 'secrets': {'private_key': 'private-key-data', 'known_hosts': 'host ssh-ed25519 example'}},
         {'name': 'AWS valid', 'type': 'aws', 'secrets': {'access_key_id': 'AKIATEST', 'secret_access_key': 'private'}},
