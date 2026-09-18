@@ -94,6 +94,14 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job permissions have been revoked')
 
 
+def ensure_runtime_credential(credential):
+    if credential is None:
+        raise ExecutionFailed('Required credential is missing')
+    if credential.expires_at is not None and credential.expires_at <= now():
+        raise ExecutionFailed('Infrastructure credential expired before job execution')
+    return credential
+
+
 def vm_id_from_state(workspace):
     # State is internal, never sent to PHP or returned by API.
     try:
@@ -262,10 +270,10 @@ def execute(job_id):
             validate_authorization(db, job)
             if job.deployment_id:
                 context.deployment = db.get(Deployment, job.deployment_id)
-                context.credential = db.get(Credential, context.deployment.credentials_id)
+                context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
             if job.payload.get('ansible'):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
-                context.ansible_credential = db.get(Credential, context.ansible.credentials_id)
+                context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
         context.stage('job.running')
         if job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
