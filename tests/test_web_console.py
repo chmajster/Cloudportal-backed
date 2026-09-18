@@ -58,6 +58,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function hostnameValueFields(' in script.text
     assert 'function multiCheckboxField(' in script.text
     assert 'function toDateTimeLocal(' in script.text
+    assert 'table-search-empty' in script.text
     assert 'function showDeploymentDetails(' in script.text
     assert 'function assignHostname(' in script.text
     assert 'function assignIpAllocation(' in script.text
