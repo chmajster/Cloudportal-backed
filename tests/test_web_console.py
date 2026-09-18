@@ -56,6 +56,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function discoverVmOptions(' in script.text
     assert 'function storageLabel(' in script.text
     assert 'function hostnameValueFields(' in script.text
+    assert 'function proxmoxBlueprintForm(' in script.text
+    assert 'Szybki Blueprint Proxmox' in script.text
+    assert 'Obraz / szablon Proxmox' in script.text
+    assert 'Wzorzec nazwy hosta' in script.text
+    assert 'Tagi Proxmox' in script.text
+    assert 'Serwery DNS' in script.text
+    assert "'set_tags'" in script.text
     assert 'function multiCheckboxField(' in script.text
     assert 'function toDateTimeLocal(' in script.text
     assert 'table-search-empty' in script.text
@@ -110,6 +117,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.advanced-options' in stylesheet.text
     assert '.task-id-details' in stylesheet.text
     assert '.editor-card' in stylesheet.text
+    assert '.designer-heading' in stylesheet.text
+    assert '.designer-subsection' in stylesheet.text
+    assert '.workflow-preview' in stylesheet.text
+    assert '.blueprint-run-summary' in stylesheet.text
     assert '.table-toolbar' in stylesheet.text
     assert '.permission-group' in stylesheet.text
     assert '.modal-form-error' in stylesheet.text
