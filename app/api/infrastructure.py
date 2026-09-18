@@ -15,7 +15,7 @@ from app.providers.registry import provider_for
 from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
-DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
+DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace state_location variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
 JOB_FIELDS = 'id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error retry_of attempt'
 
 
