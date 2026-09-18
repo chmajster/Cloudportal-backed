@@ -15,6 +15,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert page.text.count('data-theme-toggle') == 2
     assert 'id="sidebar-backdrop"' in page.text
     assert 'id="modal-close"' in page.text
+    assert 'src="./theme-init.js"' in page.text
     assert 'src="./app.js"' in page.text
     assert page.headers['cache-control'] == 'no-store'
     assert page.headers['x-frame-options'] == 'DENY'
@@ -24,8 +25,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         "form-action 'self'; frame-ancestors 'none'"
     )
 
+    theme_script = client.get('/ui/theme-init.js')
     script = client.get('/ui/app.js')
     stylesheet = client.get('/ui/styles.css')
+
+    assert theme_script.status_code == 200
+    assert theme_script.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
+    assert "cloudportal.console.theme" in theme_script.text
+    assert "document.documentElement.dataset.theme" in theme_script.text
 
     assert script.status_code == 200
     assert script.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
@@ -40,6 +47,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'destroy_unreferenced_disks' in script.text
     assert 'credential-secret-panel' in script.text
     assert 'Akceptuj certyfikat self-signed / niezaufany' in script.text
+    assert 'template-variable-grid' in script.text
+    assert 'data-workflow-row' in script.text
+    assert 'deployment_ansible_enabled' in script.text
+    assert 'function permissionPicker(' in script.text
+    assert 'function hostnameValueFields(' in script.text
+    assert 'Zmienne template JSON' not in script.text
+    assert 'Schemat zmiennych JSON' not in script.text
+    assert 'Definicja deploymentu JSON' not in script.text
+    assert 'Workflow DAG JSON' not in script.text
+    assert 'Wartości hostname JSON' not in script.text
+    assert 'Desired variables JSON' not in script.text
     assert 'modal-form-error' in script.text
     assert "const THEME_KEY = 'cloudportal.console.theme';" in script.text
     assert 'function setTheme(' in script.text
@@ -64,6 +82,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.sidebar-backdrop' in stylesheet.text
     assert '.credential-secret-panel' in stylesheet.text
     assert '.credential-tls-control' in stylesheet.text
+    assert '.form-section' in stylesheet.text
+    assert '.editor-card' in stylesheet.text
+    assert '.table-toolbar' in stylesheet.text
+    assert '.permission-group' in stylesheet.text
     assert '.modal-form-error' in stylesheet.text
     assert '.form-error.success' in stylesheet.text
     assert '.clipboard-fallback' in stylesheet.text
