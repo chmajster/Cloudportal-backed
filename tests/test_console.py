@@ -68,3 +68,14 @@ def test_novnc_asset_validation_blocks_traversal(system):
         assert error.status_code == 404
     else:
         raise AssertionError('Traversal asset path was accepted')
+
+def test_console_websocket_url_supports_http(system):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+    provider.endpoint = 'http://pve.example.com:8006/api2/json'
+    provider.verify_ssl = True
+
+    url = provider.console_websocket_url('pve01', 101, 5900, 'ticket')
+    assert url.startswith('ws://pve.example.com:8006/api2/json/nodes/pve01/qemu/101/vncwebsocket?')
+
