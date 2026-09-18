@@ -1,0 +1,6 @@
+{
+  "id": "openstack-vm",
+  "name": "OpenStack compute instance",
+  "provider": "openstack",
+  "schema_model": "app.api.schemas:OpenStackVariables"
+}
