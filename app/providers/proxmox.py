@@ -180,6 +180,37 @@ class ProxmoxProvider(InfrastructureProvider):
             },
         )
 
+
+
+    def backups(self, node, storage, vm_id=None):
+        rows = self._get(
+            f'/nodes/{quote(node, safe="")}/storage/{quote(storage, safe="")}/content?content=backup'
+        )
+        if vm_id is not None:
+            rows = [row for row in rows if int(row.get('vmid', -1)) == int(vm_id)]
+        return rows
+
+    def backup_vm(self, node, vm_id, *, storage, mode='snapshot', compress='zstd', notes=None):
+        data = {
+            'vmid': int(vm_id),
+            'storage': storage,
+            'mode': mode,
+            'compress': compress,
+        }
+        if notes:
+            data['notes-template'] = notes
+        return self._post(f'/nodes/{quote(node, safe="")}/vzdump', data)
+
+    def restore_vm(self, node, *, vm_id, archive, storage=None, unique=True):
+        data = {
+            'vmid': int(vm_id),
+            'archive': archive,
+            'unique': int(unique),
+        }
+        if storage:
+            data['storage'] = storage
+        return self._post(f'/nodes/{quote(node, safe="")}/qemu', data)
+
     def task_status(self, node, upid):
         return self._get(
             f'/nodes/{quote(node, safe="")}/tasks/{quote(upid, safe="")}/status'
