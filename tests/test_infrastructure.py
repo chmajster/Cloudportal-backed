@@ -261,7 +261,8 @@ def test_ansible_secrets_are_unsafe_data(client,headers,monkeypatch,tmp_path):
     monkeypatch.setattr('app.executors.ansible.run_process',inspect)
     context=SimpleNamespace(ansible=AnsibleInput(playbook='validate-linux',credentials_id=c.id,inventory={'hosts':['192.0.2.1']}),ansible_credential=c,stage=lambda _:None)
     AnsibleExecutor().execute('ansible.execute',context)
-    assert len(observed)==3
+    # validate-linux runs controlled wait-for-connection + validation once; no duplicate validation pass.
+    assert len(observed)==2
 
 
 def test_successful_plan_does_not_mark_failed_deployment_as_provisioned(client,headers,monkeypatch):
