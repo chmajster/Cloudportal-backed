@@ -626,6 +626,11 @@ async function jobsView() {
     ], jobs, item => {
       const actions = [button('Logi', () => showJobLogs(item))];
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(item.status)) actions.push(button('Anuluj', () => confirmAction('Anuluj zadanie', `Zadanie ${short(item.id)} otrzyma żądanie anulowania.`, async () => { await api(`/jobs/${item.id}/cancel`, { method: 'POST' }); toast('Zadanie anulowane.'); navigate('jobs'); }), 'danger'));
+      if (allowed('jobs.execute') && ['failed', 'cancelled'].includes(item.status)) actions.push(button('Retry', async () => {
+        await api(`/jobs/${item.id}/retry`, { method: 'POST', idempotent: true });
+        toast('Utworzono retry job.');
+        navigate('jobs');
+      }));
       return actions;
     }));
 }
@@ -764,6 +769,509 @@ function generateHostname(schemes) {
   }});
 }
 
+
+function showJson(title, value, eyebrow = 'Szczegóły') {
+  dom.modalTitle.textContent = title;
+  dom.modalEyebrow.textContent = eyebrow;
+  dom.modalBody.replaceChildren(node('pre', { class: 'log-output mono', text: JSON.stringify(value, null, 2) }));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
+function splitValues(value) {
+  return String(value || '').split(/[\n,]+/).map(item => item.trim()).filter(Boolean);
+}
+
+async function catalogView() {
+  const [templates, playbooks] = await Promise.all([api('/templates'), api('/ansible/playbooks')]);
+  dom.content.replaceChildren(
+    heading('Zatwierdzony, wersjonowany katalog IaC. API nie przyjmuje arbitralnego HCL ani dowolnych playbooków.'),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Terraform / OpenTofu templates' })),
+      table([
+        { label: 'Template', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
+        { label: 'Provider', value: item => badge(item.provider, 'info') },
+        { label: 'Wersja', value: item => `v${item.version}` },
+        { label: 'Import', value: item => badge(item.importable ? 'importable' : 'create-only', item.importable ? 'ok' : 'info') },
+      ], templates.items, item => [button('Schema', () => showJson(`Schema ${item.id}`, item.variables_schema, `Template v${item.version}`))])
+    ),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Approved Ansible playbooks' })),
+      table([
+        { label: 'Playbook', value: item => node('strong', { text: item.name }) },
+        { label: 'ID', class: 'mono', value: item => item.id },
+        { label: 'Transport', value: item => badge(item.transport, 'info') },
+        { label: 'Zmienne', value: item => item.variables.join(', ') || '—' },
+      ], playbooks.items)
+    )
+  );
+}
+
+async function ipamView() {
+  const [pools, allocations] = await Promise.all([
+    api('/ipam/pools?limit=200'),
+    api('/ipam/allocations?limit=200'),
+  ]);
+  const actions = allowed('ipam.create') ? [button('Nowa pula', () => ipamPoolForm(), 'primary')] : [];
+  dom.content.replaceChildren(
+    heading('Centralne pule IPv4, rezerwacje i przypisania do deploymentów.', actions),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Pule adresowe' })),
+      table([
+        { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
+        { label: 'CIDR', class: 'mono', value: item => item.cidr },
+        { label: 'Gateway', class: 'mono', value: item => item.gateway || '—' },
+        { label: 'DNS', value: item => (item.dns_servers || []).join(', ') || '—' },
+        { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
+      ], pools.items, item => {
+        const result = [];
+        if (allowed('ipam.allocate') && item.is_active) result.push(button('Przydziel IP', () => allocateIp(item), 'primary'));
+        if (allowed('ipam.update')) result.push(button('Edytuj', () => ipamPoolForm(item)));
+        if (allowed('ipam.delete')) result.push(button('Usuń', () => confirmAction('Usuń pulę IPAM', `Pula ${item.name} zostanie usunięta tylko jeśli nie ma historii alokacji.`, async () => {
+          await api(`/ipam/pools/${item.id}`, { method: 'DELETE' });
+          navigate('ipam');
+        }), 'danger'));
+        return result;
+      })
+    ),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Alokacje' })),
+      table([
+        { label: 'Adres', class: 'mono', value: item => `${item.address}/${item.prefix_length}` },
+        { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
+        { label: 'Hostname', value: item => item.hostname || '—' },
+        { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
+        { label: 'Utworzono', value: item => formatDate(item.created_at) },
+      ], allocations.items, item => allowed('ipam.release') && item.status !== 'released'
+        ? [button('Zwolnij', () => confirmAction('Zwolnij adres', `${item.address} wróci do puli.`, async () => {
+            await api(`/ipam/allocations/${item.id}/release`, { method: 'POST' });
+            navigate('ipam');
+          }), 'danger')]
+        : [])
+    )
+  );
+}
+
+function ipamPoolForm(item = null) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Nazwa', 'name', { required: true, value: item?.name || '' }),
+    field('CIDR', 'cidr', { required: true, value: item?.cidr || '192.0.2.0/24' }),
+    field('Gateway', 'gateway', { value: item?.gateway || '' }),
+    field('DNS (przecinki lub nowe linie)', 'dns_servers', { tag: 'textarea', value: (item?.dns_servers || []).join('\n') }),
+    field('Wykluczenia IP/CIDR', 'excluded_addresses', { tag: 'textarea', wide: true, value: (item?.excluded_addresses || []).join('\n') }),
+    checkboxField('Aktywna', 'is_active', item?.is_active ?? true));
+  openModal({ title: item ? 'Edytuj pulę IPAM' : 'Nowa pula IPAM', eyebrow: 'IPAM', body: fields, onSubmit: async data => {
+    await api(item ? `/ipam/pools/${item.id}` : '/ipam/pools', {
+      method: item ? 'PUT' : 'POST',
+      body: {
+        name: data.get('name'), cidr: data.get('cidr'), gateway: data.get('gateway') || null,
+        dns_servers: splitValues(data.get('dns_servers')), excluded_addresses: splitValues(data.get('excluded_addresses')),
+        is_active: data.has('is_active'),
+      },
+    });
+    toast('Pula IPAM zapisana.');
+    navigate('ipam');
+  }});
+}
+
+function allocateIp(pool) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Preferowany adres (opcjonalnie)', 'preferred_address'),
+    field('Hostname (opcjonalnie)', 'hostname'));
+  openModal({ title: `Przydziel IP z ${pool.name}`, eyebrow: pool.cidr, body: fields, submitLabel: 'Rezerwuj', onSubmit: async data => {
+    const result = await api(`/ipam/pools/${pool.id}/allocate`, { method: 'POST', idempotent: true, body: {
+      preferred_address: data.get('preferred_address') || null, hostname: data.get('hostname') || null,
+    } });
+    toast(`Zarezerwowano ${result.address}.`);
+    navigate('ipam');
+  }});
+}
+
+async function inventoryView() {
+  const [vms, resources] = await Promise.all([
+    api('/inventory/vms?refresh=true&limit=200'),
+    api('/inventory/resources?limit=200'),
+  ]);
+  const actions = allowed('inventory.import') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
+  dom.content.replaceChildren(
+    heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Adoption jest zawsze import + plan-only.', actions),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Proxmox VM inventory' })),
+      table([
+        { label: 'VM', value: item => node('div', {}, node('strong', { text: item.name || `VM ${item.vm_id}` }), node('div', { class: 'mono muted', text: `${item.node}/${item.vm_id}` })) },
+        { label: 'Tryb', value: item => badge(item.management_mode, item.management_mode === 'terraform' ? 'ok' : 'info') },
+        { label: 'Lifecycle', value: item => badge(item.lifecycle_status, statusKind(item.lifecycle_status)) },
+        { label: 'Provider', value: item => `#${item.provider_id}` },
+        { label: 'Live', value: item => item.live ? badge(item.live.status || 'present', statusKind(item.live.status)) : badge('missing', 'danger') },
+      ], vms.items, item => inventoryVmActions(item))
+    ),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Managed resources' })),
+      table([
+        { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
+        { label: 'Provider', value: item => badge(item.provider, 'info') },
+        { label: 'External ID', class: 'mono', value: item => short(item.external_id, 26) },
+        { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
+        { label: 'Status', value: item => badge(item.lifecycle_status, statusKind(item.lifecycle_status)) },
+        { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
+      ], resources.items, item => [button('Metadata', () => showJson(item.name, item.metadata_json || {}, 'Managed resource'))])
+    )
+  );
+}
+
+function inventoryVmActions(item) {
+  const actions = [];
+  if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('VM', () => openVmManager(item), 'primary'));
+  if (allowed('inventory.update')) actions.push(button('Reconcile', async () => {
+    await api(`/inventory/vms/${item.id}/reconcile`, { method: 'POST' });
+    toast('Inventory odświeżone.');
+    navigate('inventory');
+  }));
+  if (allowed('deployments.adopt') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Adopt', () => adoptInventoryVm(item)));
+  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Unmanage', () => confirmAction('Usuń z inventory', 'Zasób nie zostanie usunięty z providera.', async () => {
+    await api(`/inventory/vms/${item.id}`, { method: 'DELETE' });
+    navigate('inventory');
+  }), 'danger'));
+  return actions;
+}
+
+async function importInventoryVm() {
+  const providers = (await api('/providers?limit=200')).items.filter(item => item.type === 'proxmox');
+  const fields = node('div', { class: 'form-grid' },
+    selectField('Provider Proxmox', 'provider_id', providers.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
+    field('VMID', 'vm_id', { type: 'number', min: 100, required: true }));
+  openModal({ title: 'Importuj istniejącą VM', eyebrow: 'Inventory', body: fields, submitLabel: 'Dodaj do katalogu', onSubmit: async data => {
+    await api('/inventory/vms/import', { method: 'POST', idempotent: true, body: {
+      provider_id: Number(data.get('provider_id')), vm_id: Number(data.get('vm_id')),
+    } });
+    toast('VM dodana jako external.');
+    navigate('inventory');
+  }});
+}
+
+async function adoptInventoryVm(item) {
+  try {
+    const preview = await api(`/inventory/vms/${item.id}/adoption-preview`);
+    const fields = node('div', { class: 'form-grid' },
+      field('Template', 'template', { value: preview.template.id, required: true }),
+      selectField('Executor', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'),
+      field('Desired variables JSON', 'variables', { tag: 'textarea', wide: true, required: true, value: jsonValue(preview.suggested_variables), help: 'Import wykona wyłącznie plan. Apply wymaga osobnej decyzji po analizie driftu.' }),
+      field('Live config', 'live', { tag: 'textarea', wide: true, value: jsonValue(preview.live) }));
+    fields.querySelector('[name="live"]').disabled = true;
+    openModal({ title: `Adopt ${item.name || item.vm_id}`, eyebrow: 'Terraform import + plan only', body: fields, submitLabel: 'Importuj state i wykonaj plan', onSubmit: async data => {
+      const result = await api(`/inventory/vms/${item.id}/adopt`, { method: 'POST', idempotent: true, body: {
+        template: data.get('template'), executor: data.get('executor'), variables: parseObject(data.get('variables'), 'Desired variables'),
+      } });
+      toast(`Utworzono import job ${short(result.job.id)}.`);
+      navigate('jobs');
+    }});
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+function vmBase(item) {
+  return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
+}
+
+async function openVmManager(item) {
+  try {
+    const base = vmBase(item);
+    const status = await api(`${base}/status`);
+    const snapshots = allowed('snapshots.read') ? (await api(`${base}/snapshots`)).items : [];
+    dom.modalTitle.textContent = item.name || `VM ${item.vm_id}`;
+    dom.modalEyebrow.textContent = `${item.node} / VMID ${item.vm_id}`;
+    const statusPanel = node('div', { class: 'checks' },
+      info('Status', status.status || '—'), info('CPU', status.cpus ?? status.cpu ?? '—'),
+      info('RAM', status.mem && status.maxmem ? `${Math.round(status.mem / 1024 / 1024)} / ${Math.round(status.maxmem / 1024 / 1024)} MiB` : '—'),
+      info('Uptime', status.uptime ?? '—'));
+    const snapshotTable = allowed('snapshots.read') ? table([
+      { label: 'Snapshot', value: snap => snap.name },
+      { label: 'Opis', value: snap => snap.description || '—' },
+      { label: 'RAM', value: snap => snap.vmstate ? 'Tak' : 'Nie' },
+    ], snapshots, snap => allowed('snapshots.delete') && snap.name !== 'current' ? [button('Usuń', () => confirmAction('Usuń snapshot', snap.name, async () => {
+      await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
+      openVmManager(item);
+    }), 'danger'), ...(allowed('snapshots.rollback') ? [button('Rollback', () => confirmAction('Rollback snapshot', `VM zostanie przywrócona do ${snap.name}.`, async () => {
+      await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
+      toast('Rollback uruchomiony.');
+      closeModal();
+    }), 'danger')] : [])] : []) : node('p', { class: 'muted', text: 'Brak uprawnienia do snapshotów.' });
+    dom.modalBody.replaceChildren(node('div', { class: 'stack' }, statusPanel, node('h3', { text: 'Snapshoty' }), snapshotTable));
+    const actions = [button('Zamknij', closeModal)];
+    if (allowed('vms.power')) {
+      for (const action of ['start', 'shutdown', 'reboot', 'stop']) actions.push(button(action, () => vmPower(item, action), action === 'stop' ? 'danger' : 'ghost'));
+    }
+    if (allowed('snapshots.create')) actions.push(button('Snapshot', () => createVmSnapshot(item)));
+    if (allowed('backups.create')) actions.push(button('Backup', () => backupVm(item)));
+    if (allowed('backups.read')) actions.push(button('Backupy', () => listVmBackups(item)));
+    if (allowed('vms.console')) actions.push(button('Konsola', () => showVmConsole(item), 'primary'));
+    if (allowed('vms.update')) {
+      actions.push(button('CPU/RAM', () => configureVm(item)));
+      actions.push(button('Dysk +', () => resizeVmDisk(item)));
+    }
+    if (allowed('vms.migrate')) actions.push(button('Migracja', () => migrateVm(item)));
+    if (allowed('vms.clone')) actions.push(button('Clone', () => cloneVm(item)));
+    if (allowed('vms.template')) actions.push(button('→ Template', () => confirmAction('Konwertuj do template', 'Operacja zmieni VM w template.', async () => {
+      await api(`${base}/template`, { method: 'POST', idempotent: true });
+      closeModal(); toast('Konwersja uruchomiona.');
+    })));
+    if (allowed('vms.delete')) actions.push(button('Usuń VM', () => confirmAction('Usuń VM', 'VM zostanie usunięta bezpośrednio w Proxmox. Dla Terraform-managed używaj Destroy deploymentu.', async () => {
+      await api(base, { method: 'DELETE', idempotent: true });
+      closeModal(); navigate('inventory');
+    }), 'danger'));
+    dom.modalActions.replaceChildren(...actions);
+    if (!dom.modal.open) dom.modal.showModal();
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+async function vmPower(item, action) {
+  await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
+  toast(`Polecenie ${action} wysłane.`);
+  closeModal();
+}
+
+function createVmSnapshot(item) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Nazwa snapshotu', 'snapname', { required: true }),
+    field('Opis', 'description', { wide: true }),
+    checkboxField('Dołącz stan RAM', 'include_ram'));
+  openModal({ title: 'Nowy snapshot', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
+    await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
+      snapname: data.get('snapname'), description: data.get('description'), include_ram: data.has('include_ram'),
+    } });
+    toast('Snapshot uruchomiony.');
+  }});
+}
+
+function backupVm(item) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Storage backup', 'storage', { required: true }),
+    selectField('Tryb', 'mode', [{ value: 'snapshot', label: 'snapshot' }, { value: 'suspend', label: 'suspend' }, { value: 'stop', label: 'stop' }], 'snapshot'),
+    selectField('Kompresja', 'compress', [{ value: 'zstd', label: 'zstd' }, { value: 'lzo', label: 'lzo' }, { value: 'gzip', label: 'gzip' }], 'zstd'),
+    field('Notatka', 'notes', { wide: true }));
+  openModal({ title: 'Backup VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom backup', onSubmit: async data => {
+    await api(`${vmBase(item)}/backups`, { method: 'POST', idempotent: true, body: {
+      storage: data.get('storage'), mode: data.get('mode'), compress: data.get('compress'), notes: data.get('notes') || null,
+    } });
+    toast('Backup uruchomiony.');
+  }});
+}
+
+function listVmBackups(item) {
+  openModal({ title: 'Pokaż backupy', eyebrow: item.name || String(item.vm_id), body: field('Storage backup', 'storage', { required: true }), submitLabel: 'Pokaż', onSubmit: async data => {
+    const result = await api(`${vmBase(item)}/backups?storage=${encodeURIComponent(data.get('storage'))}`);
+    showJson('Backupy VM', result.items, data.get('storage'));
+    return false;
+  }});
+}
+
+async function showVmConsole(item) {
+  try {
+    const result = await api(`${vmBase(item)}/console`, { method: 'POST' });
+    showSecret('Ephemeral VNC console', JSON.stringify(result, null, 2), 'To jest krótkotrwały bilet konsoli Proxmox. Credential providera nie jest ujawniany ani zapisywany.');
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+function configureVm(item) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Nazwa (opcjonalnie)', 'name'),
+    field('CPU cores', 'cores', { type: 'number', min: 1 }),
+    field('RAM MiB', 'memory', { type: 'number', min: 512 }),
+    field('Tagi', 'tags'),
+    selectField('On boot', 'onboot', [{ value: '', label: 'bez zmiany' }, { value: 'true', label: 'włącz' }, { value: 'false', label: 'wyłącz' }], ''));
+  openModal({ title: 'Konfiguracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
+    const payload = {};
+    if (data.get('name')) payload.name = data.get('name');
+    if (data.get('cores')) payload.cores = Number(data.get('cores'));
+    if (data.get('memory')) payload.memory = Number(data.get('memory'));
+    if (data.get('tags')) payload.tags = data.get('tags');
+    if (data.get('onboot')) payload.onboot = data.get('onboot') === 'true';
+    if (!Object.keys(payload).length) throw new Error('Podaj co najmniej jedną zmianę.');
+    await api(`${vmBase(item)}/config`, { method: 'PUT', idempotent: true, body: payload });
+    toast('Zmiana konfiguracji uruchomiona.');
+  }});
+}
+
+function resizeVmDisk(item) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Dysk', 'disk', { value: 'scsi0', required: true }),
+    field('Powiększ o GiB', 'grow_gib', { type: 'number', min: 1, required: true }));
+  openModal({ title: 'Powiększ dysk', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
+    await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk: data.get('disk'), grow_gib: Number(data.get('grow_gib')) } });
+    toast('Resize uruchomiony.');
+  }});
+}
+
+function migrateVm(item) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Docelowy node', 'target', { required: true }),
+    checkboxField('Online migration', 'online'),
+    checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
+  openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
+    await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
+      target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
+    } });
+    toast('Migracja uruchomiona.');
+  }});
+}
+
+function cloneVm(item) {
+  const fields = node('div', { class: 'form-grid' },
+    field('Nowy VMID', 'new_vm_id', { type: 'number', min: 100, required: true }),
+    field('Nazwa', 'name', { required: true }),
+    field('Docelowy node', 'target'),
+    field('Storage', 'storage'),
+    field('Pool', 'pool'),
+    checkboxField('Full clone', 'full', true));
+  openModal({ title: 'Clone VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
+    await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
+      new_vm_id: Number(data.get('new_vm_id')), name: data.get('name'), target: data.get('target') || null,
+      storage: data.get('storage') || null, pool: data.get('pool') || null, full: data.has('full'),
+    } });
+    toast('Clone uruchomiony.');
+  }});
+}
+
+async function schedulesView() {
+  const schedules = (await api('/schedules?limit=200')).items;
+  const actions = allowed('schedules.create') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
+  dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą permissions.', actions),
+    table([
+      { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
+      { label: 'Operacja', value: item => item.operation },
+      { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
+      { label: 'Następne', value: item => formatDate(item.next_run_at) },
+      { label: 'Interwał', value: item => item.interval_seconds ? `${item.interval_seconds}s` : 'jednorazowo' },
+      { label: 'Status', value: item => badge(item.is_active ? 'active' : 'disabled', item.is_active ? 'ok' : 'info') },
+      { label: 'Błąd', value: item => item.last_error || '—' },
+    ], schedules, item => {
+      const result = [];
+      if (allowed('schedules.update')) {
+        result.push(button('Edytuj', () => scheduleForm(item)));
+        if (item.is_active) result.push(button('Wyłącz', async () => { await api(`/schedules/${item.id}/disable`, { method: 'POST' }); navigate('schedules'); }));
+      }
+      if (allowed('schedules.delete')) result.push(button('Usuń', () => confirmAction('Usuń harmonogram', item.name, async () => {
+        await api(`/schedules/${item.id}`, { method: 'DELETE' }); navigate('schedules');
+      }), 'danger'));
+      return result;
+    }));
+}
+
+async function scheduleForm(item = null) {
+  try {
+    const deployments = (await api('/deployments?limit=200')).items.filter(row => row.status !== 'destroyed');
+    const dateValue = item?.next_run_at ? new Date(item.next_run_at).toISOString().slice(0, 16) : new Date(Date.now() + 3600000).toISOString().slice(0, 16);
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa', 'name', { required: true, value: item?.name || '' }),
+      selectField('Deployment', 'deployment_id', deployments.map(row => ({ value: row.id, label: `${row.name} · ${short(row.id, 10)}` })), item?.deployment_id || '', { required: true, placeholder: 'Wybierz deployment' }),
+      selectField('Operacja', 'operation', [{ value: 'terraform.plan', label: 'Plan' }, { value: 'terraform.apply', label: 'Apply' }, { value: 'terraform.destroy', label: 'Destroy' }], item?.operation || 'terraform.plan'),
+      field('Następne uruchomienie', 'next_run_at', { type: 'datetime-local', required: true, value: dateValue }),
+      field('Interwał sekund (puste = raz)', 'interval_seconds', { type: 'number', min: 60, value: item?.interval_seconds || '' }));
+    openModal({ title: item ? 'Edytuj harmonogram' : 'Nowy harmonogram', eyebrow: 'Scheduler', body: fields, onSubmit: async data => {
+      await api(item ? `/schedules/${item.id}` : '/schedules', { method: item ? 'PUT' : 'POST', body: {
+        name: data.get('name'), deployment_id: data.get('deployment_id'), operation: data.get('operation'),
+        next_run_at: new Date(data.get('next_run_at')).toISOString(),
+        interval_seconds: data.get('interval_seconds') ? Number(data.get('interval_seconds')) : null,
+      } });
+      toast('Harmonogram zapisany.');
+      navigate('schedules');
+    }});
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+async function webhooksView() {
+  const [hooks, deliveries] = await Promise.all([api('/webhooks?limit=200'), api('/webhook-deliveries?limit=200')]);
+  const actions = allowed('webhooks.create') ? [button('Nowy webhook', () => webhookForm(), 'primary')] : [];
+  dom.content.replaceChildren(heading('Podpisane HMAC dostawy HTTPS. Host musi znajdować się w allowliście backendu.', actions),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Endpointy' })),
+      table([
+        { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
+        { label: 'URL', class: 'mono', value: item => short(item.url, 48) },
+        { label: 'Eventy', value: item => item.events.join(', ') },
+        { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
+      ], hooks.items, item => {
+        const result = [];
+        if (allowed('webhooks.update')) {
+          result.push(button('Edytuj', () => webhookForm(item)));
+          result.push(button('Rotuj sekret', async () => {
+            const value = await api(`/webhooks/${item.id}/rotate-secret`, { method: 'POST' });
+            showSecret('Nowy webhook secret', value.secret);
+          }));
+        }
+        if (allowed('webhooks.delete')) result.push(button('Usuń', () => confirmAction('Usuń webhook', item.name, async () => {
+          await api(`/webhooks/${item.id}`, { method: 'DELETE' }); navigate('webhooks');
+        }), 'danger'));
+        return result;
+      })
+    ),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Dostawy' })),
+      table([
+        { label: 'Event', value: item => item.event },
+        { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
+        { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
+        { label: 'Próby', value: item => item.attempts },
+        { label: 'Następna', value: item => formatDate(item.next_attempt_at) },
+        { label: 'Błąd', value: item => item.last_error || '—' },
+      ], deliveries.items)
+    )
+  );
+}
+
+function webhookForm(item = null) {
+  const events = item?.events || ['job.successful', 'job.failed'];
+  const fields = node('div', { class: 'form-grid' },
+    field('Nazwa', 'name', { required: true, value: item?.name || '' }),
+    field('HTTPS URL', 'url', { required: true, value: item?.url || '', wide: true }),
+    checkboxField('job.successful', 'event_successful', events.includes('job.successful')),
+    checkboxField('job.failed', 'event_failed', events.includes('job.failed')),
+    checkboxField('job.cancelled', 'event_cancelled', events.includes('job.cancelled')),
+    checkboxField('Aktywny', 'is_active', item?.is_active ?? true));
+  openModal({ title: item ? 'Edytuj webhook' : 'Nowy webhook', eyebrow: 'Signed HMAC', body: fields, onSubmit: async data => {
+    const selected = [];
+    if (data.has('event_successful')) selected.push('job.successful');
+    if (data.has('event_failed')) selected.push('job.failed');
+    if (data.has('event_cancelled')) selected.push('job.cancelled');
+    if (!selected.length) throw new Error('Wybierz co najmniej jeden event.');
+    const result = await api(item ? `/webhooks/${item.id}` : '/webhooks', {
+      method: item ? 'PUT' : 'POST', idempotent: !item, body: {
+        name: data.get('name'), url: data.get('url'), events: selected, is_active: data.has('is_active'),
+      },
+    });
+    if (!item && result.secret) showSecret('Webhook secret', result.secret);
+    else { toast('Webhook zapisany.'); navigate('webhooks'); }
+    return item ? true : false;
+  }});
+}
+
+async function observabilityView() {
+  const [health, alerts, metricsText] = await Promise.all([
+    api('/health', { auth: false, allow: [503] }),
+    api('/alerts'),
+    apiText('/metrics'),
+  ]);
+  const items = alerts.items || [];
+  dom.content.replaceChildren(
+    heading('Stan control plane, alerty oraz surowe metryki w formacie Prometheus.'),
+    node('div', { class: 'metrics' },
+      metric('Backend', health.status, 'health'),
+      metric('Workers', `${health.checks.workers.online}/${health.checks.workers.expected}`, 'online/expected'),
+      metric('Alerty', items.length, 'aktywne'),
+      metric('Dispatcher', health.checks.dispatcher ? 'OK' : 'DOWN', 'heartbeat')),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Alerty' })),
+      table([
+        { label: 'Severity', value: item => badge(item.severity, item.severity === 'critical' ? 'danger' : 'warning') },
+        { label: 'Kod', class: 'mono', value: item => item.code },
+        { label: 'Zasób', class: 'mono', value: item => item.resource_id || '—' },
+        { label: 'Opis', value: item => item.message },
+      ], items)),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Prometheus exposition' }), badge('/api/v1/metrics', 'info')),
+      node('pre', { class: 'log-output mono', text: metricsText }))
+  );
+}
+
 async function accountView() {
   const user = state.identity.user;
   const details = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Tożsamość' }), badge(state.identity.token_type, 'info')),
@@ -790,8 +1298,10 @@ function changePassword(required = false) {
 
 const views = {
   dashboard: dashboardView, users: usersView, roles: rolesView, tokens: tokensView,
-  credentials: credentialsView, providers: providersView, deployments: deploymentsView,
-  blueprints: blueprintsView, hostnames: hostnamesView, jobs: jobsView, audit: auditView, account: accountView,
+  credentials: credentialsView, providers: providersView, catalog: catalogView,
+  blueprints: blueprintsView, hostnames: hostnamesView, ipam: ipamView, inventory: inventoryView,
+  deployments: deploymentsView, jobs: jobsView, schedules: schedulesView, webhooks: webhooksView,
+  observability: observabilityView, audit: auditView, account: accountView,
 };
 
 function setApiStatus(ok) {
