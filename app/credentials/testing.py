@@ -9,7 +9,7 @@ from app.security.core import decrypt_secret
 
 
 def test_connection(credential):
-    if credential.type == 'proxmox':
+    if credential.type in {'proxmox', 'vmware', 'aws', 'azure', 'openstack'}:
         return provider_for(credential).test()
     secret = decrypt_secret(credential)
     try:

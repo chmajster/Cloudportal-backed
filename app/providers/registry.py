@@ -1,8 +1,15 @@
 from fastapi import HTTPException
 from app.models import now
 from app.providers.proxmox import ProxmoxProvider
+from app.providers.cloud import AWSProvider, AzureProvider, OpenStackProvider, VMwareProvider
 
-PROVIDERS = {'proxmox': ProxmoxProvider}
+PROVIDERS = {
+    'proxmox': ProxmoxProvider,
+    'aws': AWSProvider,
+    'azure': AzureProvider,
+    'openstack': OpenStackProvider,
+    'vmware': VMwareProvider,
+}
 
 
 def provider_for(credential):

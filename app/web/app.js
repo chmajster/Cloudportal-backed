@@ -789,7 +789,7 @@ async function providersView() {
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
       const actions = [];
-      if (item.type === 'proxmox') actions.push(button('Discovery', () => discoverProvider(item)));
+      actions.push(button('Discovery', () => discoverProvider(item)));
       if (allowed('providers.update')) actions.push(button('Edytuj', () => providerForm(item)));
       if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń provider', 'Provider ' + item.name + ' zostanie usunięty.', async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
@@ -832,7 +832,7 @@ async function providerForm(item = null) {
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
       typeField,
       credentialField,
-      node('div', { class: 'wide field-help', text: 'Provider i credential muszą mieć ten sam typ. Proxmox ma dodatkowe discovery i operacje lifecycle; pozostałe providery są wykonywane przez zatwierdzony katalog Terraform.' })
+      node('div', { class: 'wide field-help', text: 'Provider i credential muszą mieć ten sam typ. Providery mają read-only discovery; provisioning wielochmurowy jest wykonywany przez zatwierdzony katalog Terraform.' })
     );
 
     openModal({
@@ -857,22 +857,29 @@ async function providerForm(item = null) {
 }
 
 async function discoverProvider(provider) {
-  if (provider.type !== 'proxmox') {
-    toast('Discovery zasobów jest obecnie dostępne bezpośrednio tylko dla Proxmox; chmurowe zasoby są widoczne w Inventory po Terraform apply.', 'error');
-    return;
-  }
-  dom.modalTitle.textContent = 'Zasoby: ' + provider.name;
-  dom.modalEyebrow.textContent = 'Discovery Proxmox';
-  dom.modalBody.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner' })));
-  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-  dom.modal.showModal();
-  try {
-    const nodes = (await api('/providers/' + provider.id + '/nodes')).items;
-    dom.modalBody.replaceChildren(table(
-      Object.keys(nodes[0] || { node: '' }).slice(0, 6).map(key => ({ label: key, value: row => String(row[key] ?? '—') })),
-      nodes
-    ));
-  } catch (error) { dom.modalBody.replaceChildren(node('p', { class: 'form-error', text: error.message })); }
+  const resources = [
+    { value: 'vms', label: 'VM / instances' }, { value: 'templates', label: 'Templates / images' },
+    { value: 'networks', label: 'Networks' }, { value: 'storages', label: 'Storage / volumes' },
+    { value: 'nodes', label: 'Nodes / locations' }, { value: 'pools', label: 'Pools / groups' },
+  ];
+  const fields = node('div', { class: 'form-grid' },
+    selectField('Zasób', 'resource', resources, provider.type === 'proxmox' ? 'nodes' : 'vms', { required: true }));
+  if (provider.type === 'aws') fields.append(field('Region AWS', 'node', { value: 'eu-central-1', required: true, placeholder: 'eu-central-1' }));
+  openModal({
+    title: 'Discovery: ' + provider.name, eyebrow: provider.type, body: fields, submitLabel: 'Pobierz',
+    onSubmit: async data => {
+      const resource = data.get('resource');
+      const scope = data.get('node');
+      const suffix = scope ? '?node=' + encodeURIComponent(scope) : '';
+      const rows = (await api('/providers/' + provider.id + '/' + resource + suffix)).items;
+      const columns = Object.keys(rows[0] || { id: '' }).slice(0, 8).map(key => ({ label: key, value: row => String(row[key] ?? '—') }));
+      dom.modalTitle.textContent = 'Zasoby: ' + provider.name;
+      dom.modalEyebrow.textContent = resource + (scope ? ' / ' + scope : '');
+      dom.modalBody.replaceChildren(rows.length ? table(columns, rows) : node('p', { class: 'muted', text: 'Brak zasobów.' }));
+      dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+      return false;
+    },
+  });
 }
 async function deploymentsView() {
   const deployments = (await api('/deployments?limit=200')).items;
