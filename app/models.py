@@ -308,7 +308,7 @@ class ScheduledOperation(Timestamp, Base):
     interval_seconds: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    token_id: Mapped[int] = mapped_column(ForeignKey("tokens.id"))
+    token_id: Mapped[int | None] = mapped_column(ForeignKey("tokens.id"))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_error: Mapped[str | None] = mapped_column(String(500))
 
