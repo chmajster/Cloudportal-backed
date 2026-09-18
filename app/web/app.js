@@ -1,5 +1,11 @@
 'use strict';
 
+const loginSubmit = dom.loginForm.querySelector('[data-boot-disabled]');
+if (loginSubmit) {
+  loginSubmit.disabled = false;
+  loginSubmit.textContent = 'Zaloguj';
+}
+
 dom.loginForm.addEventListener('submit', async event => {
   event.preventDefault();
   const submit = dom.loginForm.querySelector('button[type="submit"]');
