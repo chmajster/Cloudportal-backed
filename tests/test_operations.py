@@ -8,7 +8,7 @@ from app.config import settings
 from app.database import session
 from app.executors.terraform import TerraformExecutor
 from app.jobs.worker import execute
-from app.models import Job, ScheduledOperation, User, WebhookDelivery, now
+from app.models import Deployment, Job, ScheduledOperation, User, WebhookDelivery, now
 from app.operations.service import deliver_webhooks_once, materialize_scheduled_jobs
 
 
@@ -46,6 +46,14 @@ def deployment(client, headers):
 
 def test_schedule_materializes_durable_job_and_rechecks_user(client, headers, monkeypatch, tmp_path):
     created = deployment(client, headers)
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        initial = db.get(Job, dep.active_job_id)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        db.commit()
+
     future = (now() + timedelta(hours=1)).isoformat() + 'Z'
     response = client.post('/api/v1/schedules', headers=headers, json={
         'name': 'hourly-plan',
@@ -97,8 +105,10 @@ def test_schedule_materializes_durable_job_and_rechecks_user(client, headers, mo
         next_id = next_job.id
 
     execute(next_id)
-    failed = client.get('/api/v1/jobs/' + next_id, headers=headers)
-    assert failed.status_code == 401
+    with session() as db:
+        failed = db.get(Job, next_id)
+        assert failed.status == 'failed'
+        assert failed.error == 'Scheduled job owner is disabled or locked'
 
 
 def test_signed_webhook_delivery_and_secret_redaction(client, headers, monkeypatch):
