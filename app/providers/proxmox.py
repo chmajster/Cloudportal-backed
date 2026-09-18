@@ -1,10 +1,57 @@
 import ipaddress
 import re
+import secrets
 from urllib.parse import quote
 import httpx
 from fastapi import HTTPException
 from app.providers.base import InfrastructureProvider
 from app.security.core import decrypt_secret
+
+
+def create_api_token(endpoint, username, password, verify_ssl=True):
+    """Authenticate once with a password, create a PVE API token, then verify that token."""
+    base = endpoint.rstrip('/') + '/api2/json'
+    token_name = 'cloudportal-' + secrets.token_hex(4)
+    token_id = username + '!' + token_name
+    try:
+        with httpx.Client(verify=verify_ssl, timeout=httpx.Timeout(20, connect=5),
+                          follow_redirects=False, trust_env=False) as client:
+            auth = client.post(base + '/access/ticket', data={'username': username, 'password': password})
+            if auth.status_code in {401, 403}:
+                raise HTTPException(422, 'Proxmox login failed; verify username, realm and password')
+            auth.raise_for_status()
+            auth_data = auth.json()['data']
+            ticket = auth_data.get('ticket')
+            csrf = auth_data.get('CSRFPreventionToken')
+            if not ticket or not csrf or str(ticket).startswith('PVE:tfa!'):
+                raise HTTPException(422, 'Proxmox account requires additional authentication; create an API token manually or use an account without interactive 2FA for bootstrap')
+            client.cookies.set('PVEAuthCookie', ticket)
+            created = client.post(
+                base + '/access/users/' + quote(username, safe='') + '/token/' + quote(token_name, safe=''),
+                headers={'CSRFPreventionToken': csrf},
+                data={'privsep': 0, 'comment': 'Created automatically by Cloudportal-backed'},
+            )
+            if created.status_code in {401, 403}:
+                raise HTTPException(422, 'Proxmox user is not allowed to create this API token')
+            created.raise_for_status()
+            token_secret = created.json()['data']['value']
+            if not token_secret:
+                raise ValueError('Missing API token value')
+
+            # Do not let the login cookie make the verification pass accidentally.
+            client.cookies.clear()
+            check = client.get(base + '/version', headers={
+                'Authorization': 'PVEAPIToken=' + token_id + '=' + token_secret,
+            })
+            check.raise_for_status()
+            version = check.json().get('data', {}).get('version')
+            return {'token_id': token_id, 'token_secret': token_secret, 'version': version}
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(502, 'Proxmox connection or API token creation failed; verify endpoint, TLS and permissions') from None
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(502, 'Proxmox returned an invalid response while creating the API token') from None
 
 
 class ProxmoxProvider(InfrastructureProvider):
