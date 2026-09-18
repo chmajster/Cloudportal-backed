@@ -182,6 +182,7 @@ class TemplateOutput(Output):
 class PlaybookOutput(Output):
     id: str
     name: str
+    version: int
     variables: list[str]
     transport: Literal['ssh', 'winrm']
 
