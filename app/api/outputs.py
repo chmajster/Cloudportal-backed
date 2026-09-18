@@ -98,7 +98,7 @@ class CredentialOutput(Output):
 class ProviderOutput(Output):
     id: int
     name: str
-    type: Literal['proxmox']
+    type: Literal['proxmox', 'vmware', 'aws', 'azure', 'openstack']
     credentials_id: int
     created_at: datetime
     updated_at: datetime
