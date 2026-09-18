@@ -76,8 +76,16 @@ function node(tag, attributes = {}, ...children) {
 
 function errorMessage(data) {
   const detail = data && data.detail;
-  if (Array.isArray(detail)) return detail.map(item => item.msg || String(item)).join('; ');
-  return detail || 'Operacja nie powiodła się.';
+  if (Array.isArray(detail)) {
+    return detail.map(item => {
+      const location = Array.isArray(item?.loc) ? item.loc.filter(part => part !== 'body').join('.') : '';
+      const message = String(item?.msg || item || 'Błąd walidacji').replace(/^Value error,\s*/i, '');
+      return location ? `${location}: ${message}` : message;
+    }).join('; ');
+  }
+  if (typeof detail === 'string') return detail.replace(/^Value error,\s*/i, '');
+  if (detail && typeof detail === 'object') return detail.message || JSON.stringify(detail);
+  return 'Operacja nie powiodła się.';
 }
 
 function updateThemeControls() {
@@ -325,11 +333,32 @@ function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit
   window.setTimeout(() => form.querySelector('input,select,textarea')?.focus(), 30);
 }
 
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch { /* Fall back for HTTP/insecure contexts or denied clipboard access. */ }
+  }
+  const fallback = node('textarea', { class: 'clipboard-fallback', 'aria-hidden': 'true', tabindex: '-1' });
+  fallback.value = value;
+  document.body.append(fallback);
+  fallback.focus();
+  fallback.select();
+  const copied = document.execCommand('copy');
+  fallback.remove();
+  if (!copied) throw new Error('Przeglądarka zablokowała kopiowanie do schowka.');
+}
+
 function showSecret(title, value, note = 'Ta wartość jest wyświetlana tylko raz. Skopiuj ją teraz.') {
   dom.modal.classList.remove('modal-console', 'modal-wide');
   const copy = button('Kopiuj', async () => {
-    await navigator.clipboard.writeText(value);
-    toast('Skopiowano do schowka.');
+    try {
+      await copyText(value);
+      toast('Skopiowano do schowka.');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
   }, 'primary');
   dom.modalTitle.textContent = title;
   dom.modalEyebrow.textContent = 'Sekret jednorazowy';
@@ -342,12 +371,18 @@ function confirmAction(title, message, action) {
   openModal({ title, eyebrow: 'Potwierdzenie', body: node('p', { text: message }), submitLabel: 'Potwierdź', danger: true, onSubmit: action });
 }
 
-function showLogin(message = '') {
+function setLoginMessage(message = '', type = 'error') {
+  dom.loginError.textContent = message;
+  dom.loginError.hidden = !message;
+  dom.loginError.classList.toggle('success', Boolean(message) && type === 'success');
+}
+
+function showLogin(message = '', type = 'error') {
   clearSession();
+  setMobileMenu(false);
   dom.appView.hidden = true;
   dom.loginView.hidden = false;
-  dom.loginError.hidden = !message;
-  dom.loginError.textContent = message;
+  setLoginMessage(message, type);
   dom.loginForm.querySelector('[name="password"]').value = '';
   dom.loginForm.querySelector('[name="username"]').focus();
 }
@@ -1791,7 +1826,7 @@ function changePassword(required = false) {
   openModal({ title: required ? 'Zmień hasło początkowe' : 'Zmień hasło', eyebrow: 'Moje konto', body: fields, submitLabel: 'Zmień hasło', onSubmit: async data => {
     if (data.get('password') !== data.get('confirm')) throw new Error('Nowe hasła nie są identyczne.');
     await api('/auth/change-password', { method: 'POST', body: { current_password: data.get('current_password'), password: data.get('password') } });
-    showLogin('Hasło zmienione. Zaloguj się ponownie.');
+    showLogin('Hasło zmienione. Zaloguj się ponownie.', 'success');
   }});
 }
 
@@ -1811,7 +1846,7 @@ dom.loginForm.addEventListener('submit', async event => {
   event.preventDefault();
   const submit = dom.loginForm.querySelector('button[type="submit"]');
   submit.disabled = true;
-  dom.loginError.hidden = true;
+  setLoginMessage();
   try {
     const data = new FormData(dom.loginForm);
     const pair = await api('/auth/login', { method: 'POST', auth: false, body: { username: data.get('username'), password: data.get('password') } }, false);
@@ -1819,8 +1854,7 @@ dom.loginForm.addEventListener('submit', async event => {
     state.identity = { user: pair.user, roles: pair.roles, permissions: pair.permissions, token_type: 'session' };
     showApp();
   } catch (error) {
-    dom.loginError.textContent = error.message;
-    dom.loginError.hidden = false;
+    setLoginMessage(error.message);
   } finally { submit.disabled = false; }
 });
 
@@ -1829,14 +1863,13 @@ document.querySelector('#reset-open').addEventListener('click', () => {
   openModal({ title: 'Ustaw nowe hasło', eyebrow: 'Reset hasła', body: fields, submitLabel: 'Zapisz hasło', onSubmit: async data => {
     if (data.get('password') !== data.get('confirm')) throw new Error('Hasła nie są identyczne.');
     await api('/auth/reset-password', { method: 'POST', auth: false, body: { token: data.get('token'), password: data.get('password') } }, false);
-    dom.loginError.textContent = 'Hasło zostało zmienione. Możesz się zalogować.';
-    dom.loginError.hidden = false;
+    setLoginMessage('Hasło zostało zmienione. Możesz się zalogować.', 'success');
   }});
 });
 
 document.querySelector('#logout').addEventListener('click', async () => {
   try { await api('/auth/logout', { method: 'POST' }); } catch { /* Local logout still clears the session. */ }
-  showLogin('Wylogowano.');
+  showLogin('Wylogowano.', 'success');
 });
 document.querySelectorAll('[data-theme-toggle]').forEach(control => control.addEventListener('click', toggleTheme));
 dom.menuToggle.addEventListener('click', () => setMobileMenu(!dom.appView.classList.contains('menu-open')));
