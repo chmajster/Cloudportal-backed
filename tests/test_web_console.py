@@ -115,6 +115,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.form-error.success' in stylesheet.text
     assert '.clipboard-fallback' in stylesheet.text
     assert '.toast.error' in stylesheet.text
+    assert '.toast-close' in stylesheet.text
     assert '.modal.modal-wide' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
 
