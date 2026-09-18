@@ -139,8 +139,11 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
     deployment = deepcopy(blueprint.deployment)
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
+    default_hostname_values = deployment.pop('hostname_values', {})
     if scheme_id:
-        hostname, reservation = generate_hostname(db, scheme_id, hostname_values, actor_id, reserve=True)
+        defaults = render_template(default_hostname_values, variables)
+        merged_hostname_values = {**defaults, **hostname_values}
+        hostname, reservation = generate_hostname(db, scheme_id, merged_hostname_values, actor_id, reserve=True)
         variables['hostname'] = hostname
     if ipam_pool_id:
         ip_allocation = allocate_address(
