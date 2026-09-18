@@ -26,7 +26,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert script.status_code == 200
     assert script.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
     assert "const API = '/api/v1';" in script.text
+    assert 'CREDENTIAL_TYPE_CONFIG' in script.text
+    assert 'Secrets JSON' not in script.text
+    assert 'Zastąp zapisane sekrety' in script.text
+    assert 'credential-secret-panel' in script.text
     assert stylesheet.status_code == 200
+    assert '.credential-secret-panel' in stylesheet.text
+    assert '.modal.modal-wide' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
 
 
