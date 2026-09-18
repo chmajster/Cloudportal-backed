@@ -29,6 +29,7 @@ def test_proxmox_bootstrap_creates_token_without_storing_password(client, header
             if url.endswith('/access/ticket'):
                 return Response({'data': {'ticket': 'ticket', 'CSRFPreventionToken': 'csrf'}})
             assert '/access/users/root%40pam/token/cloudportal' in url
+            assert data['privsep'] == 0
             return Response({'data': {'full-tokenid': 'root@pam!cloudportal', 'value': 'generated-token-secret'}})
 
     monkeypatch.setattr('app.providers.proxmox.httpx.Client', FakeClient)
