@@ -3,7 +3,7 @@
 const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
 const THEME_KEY = 'cloudportal.console.theme';
-const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null };
+const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
 
 const dom = {
   loginView: document.querySelector('#login-view'),
@@ -700,7 +700,14 @@ function readHostnameValues(form) {
   return result;
 }
 
+function stopTaskPolling() {
+  if (state.taskPollTimer) window.clearTimeout(state.taskPollTimer);
+  state.taskPollTimer = null;
+  state.taskPollNonce += 1;
+}
+
 function closeModal() {
+  stopTaskPolling();
   if (state.consoleRfb) {
     try { state.consoleRfb.disconnect(); } catch { /* Session may already be disconnected. */ }
     state.consoleRfb = null;
@@ -2779,6 +2786,67 @@ function vmBase(item) {
   return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
 }
 
+async function showProxmoxTask(item, result, title) {
+  if (!result?.task) {
+    toast(`${title}: operacja została przyjęta.`);
+    return;
+  }
+
+  stopTaskPolling();
+  const nonce = state.taskPollNonce;
+  const statusValue = node('strong', { text: 'Uruchamianie…' });
+  const exitValue = node('strong', { text: '—' });
+  const typeValue = node('strong', { text: '—' });
+  const startedValue = node('strong', { text: '—' });
+  const progress = node('div', { class: 'task-progress' },
+    node('div', { class: 'spinner', 'aria-hidden': 'true' }),
+    node('span', { text: 'Oczekiwanie na status zadania Proxmox…' }));
+
+  dom.modal.classList.remove('modal-console');
+  dom.modalTitle.textContent = title;
+  dom.modalEyebrow.textContent = item.name || `${item.node} / VMID ${item.vm_id}`;
+  dom.modalBody.replaceChildren(
+    progress,
+    node('div', { class: 'checks task-checks' },
+      node('div', { class: 'check' }, node('span', { text: 'Status' }), statusValue),
+      node('div', { class: 'check' }, node('span', { text: 'Wynik' }), exitValue),
+      node('div', { class: 'check' }, node('span', { text: 'Typ operacji' }), typeValue),
+      node('div', { class: 'check' }, node('span', { text: 'Start' }), startedValue)),
+    node('details', { class: 'task-id-details' },
+      node('summary', { text: 'Identyfikator zadania' }),
+      node('div', { class: 'secret-box mono', text: String(result.task) })));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+
+  const poll = async () => {
+    if (nonce !== state.taskPollNonce || !dom.modal.open) return;
+    try {
+      const task = await api(`/providers/${item.provider_id}/tasks/${encodeURIComponent(item.node)}/${encodeURIComponent(String(result.task))}`);
+      const stopped = task.status === 'stopped' || Boolean(task.exitstatus);
+      statusValue.textContent = stopped ? 'Zakończone' : statusLabel(task.status || 'running');
+      exitValue.textContent = task.exitstatus || (stopped ? '—' : 'W trakcie');
+      typeValue.textContent = task.type || '—';
+      startedValue.textContent = task.starttime ? new Date(task.starttime * 1000).toLocaleString('pl-PL') : '—';
+
+      if (stopped) {
+        const success = !task.exitstatus || task.exitstatus === 'OK';
+        progress.replaceChildren(
+          badge(success ? 'Zakończono pomyślnie' : 'Operacja zakończona błędem', success ? 'ok' : 'danger'));
+        if (success) toast(`${title}: zakończono.`);
+        else toast(`${title}: ${task.exitstatus || 'błąd operacji'}.`, 'error');
+        state.taskPollTimer = null;
+        return;
+      }
+      state.taskPollTimer = window.setTimeout(poll, 1500);
+    } catch (error) {
+      progress.replaceChildren(node('span', { class: 'form-error', text: 'Nie udało się odświeżyć statusu: ' + error.message }));
+      state.taskPollTimer = window.setTimeout(poll, 4000);
+    }
+  };
+
+  await poll();
+}
+
 async function discoverVmOptions(item, resource, node = null) {
   if (!allowed('providers.read')) return [];
   try {
@@ -2812,12 +2880,13 @@ async function openVmManager(item) {
       { label: 'Opis', value: snap => snap.description || '—' },
       { label: 'RAM', value: snap => snap.vmstate ? 'Tak' : 'Nie' },
     ], snapshots, snap => allowed('snapshots.delete') && snap.name !== 'current' ? [button('Usuń', () => confirmAction('Usuń snapshot', snap.name, async () => {
-      await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
-      openVmManager(item);
+      const result = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
+      await showProxmoxTask(item, result, 'Usuwanie snapshotu');
+      return false;
     }), 'danger'), ...(allowed('snapshots.rollback') ? [button('Przywróć', () => confirmAction('Przywróć snapshot', `VM zostanie przywrócona do snapshotu ${snap.name}.`, async () => {
-      await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
-      toast('Przywracanie snapshotu uruchomione.');
-      closeModal();
+      const result = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
+      await showProxmoxTask(item, result, 'Przywracanie snapshotu');
+      return false;
     }), 'danger')] : [])] : []) : node('p', { class: 'muted', text: 'Brak uprawnienia do snapshotów.' });
     dom.modalBody.replaceChildren(node('div', { class: 'stack' }, statusPanel, node('h3', { text: 'Snapshoty' }), snapshotTable));
     const actions = [button('Zamknij', closeModal)];
@@ -2841,8 +2910,9 @@ async function openVmManager(item) {
     if (allowed('vms.migrate')) actions.push(button('Migracja', () => migrateVm(item)));
     if (allowed('vms.clone')) actions.push(button('Klonuj', () => cloneVm(item)));
     if (allowed('vms.template')) actions.push(button('→ Szablon', () => confirmAction('Konwertuj do szablonu', 'Operacja zmieni VM w szablon.', async () => {
-      await api(`${base}/template`, { method: 'POST', idempotent: true });
-      closeModal(); toast('Konwersja uruchomiona.');
+      const result = await api(`${base}/template`, { method: 'POST', idempotent: true });
+      await showProxmoxTask(item, result, 'Konwersja VM do szablonu');
+      return false;
     })));
     if (allowed('vms.delete')) actions.push(button('Usuń VM', () => deleteVm(item), 'danger'));
     dom.modalActions.replaceChildren(...actions);
@@ -2852,12 +2922,13 @@ async function openVmManager(item) {
 
 async function vmPower(item, action) {
   const labels = {
-    start: 'uruchomienia', shutdown: 'bezpiecznego wyłączenia', reboot: 'restartu',
-    suspend: 'wstrzymania', resume: 'wznowienia', reset: 'twardego resetu', stop: 'wymuszonego zatrzymania',
+    start: 'Uruchamianie VM', shutdown: 'Bezpieczne wyłączanie VM', reboot: 'Restart VM',
+    suspend: 'Wstrzymywanie VM', resume: 'Wznawianie VM', reset: 'Twardy reset VM', stop: 'Zatrzymywanie VM',
   };
-  await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
-  toast(`Wysłano polecenie ${labels[action] || action}.`);
-  closeModal();
+  try {
+    const result = await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
+    await showProxmoxTask(item, result, labels[action] || 'Operacja zasilania');
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function deleteVm(item) {
@@ -2873,10 +2944,9 @@ function deleteVm(item) {
         purge: data.has('purge') ? 'true' : 'false',
         destroy_unreferenced_disks: data.has('destroy_unreferenced_disks') ? 'true' : 'false',
       });
-      await api(`${vmBase(item)}?${query.toString()}`, { method: 'DELETE', idempotent: true });
-      closeModal();
-      toast('Usuwanie VM uruchomione.');
-      navigate('inventory');
+      const result = await api(`${vmBase(item)}?${query.toString()}`, { method: 'DELETE', idempotent: true });
+      await showProxmoxTask(item, result, 'Usuwanie VM');
+      return false;
     },
   });
 }
@@ -2887,10 +2957,11 @@ function createVmSnapshot(item) {
     field('Opis', 'description', { wide: true }),
     checkboxField('Dołącz stan RAM', 'include_ram'));
   openModal({ title: 'Nowy snapshot', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
+    const result = await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
       snapname: data.get('snapname'), description: data.get('description'), include_ram: data.has('include_ram'),
     } });
-    toast('Snapshot uruchomiony.');
+    await showProxmoxTask(item, result, 'Tworzenie snapshotu');
+    return false;
   }});
 }
 
@@ -2911,10 +2982,11 @@ async function backupVm(item) {
       selectField('Kompresja', 'compress', [{ value: 'zstd', label: 'Zstandard (zalecane)' }, { value: 'lzo', label: 'LZO' }, { value: 'gzip', label: 'Gzip' }], 'zstd'),
       field('Notatka', 'notes', { wide: true }));
     openModal({ title: 'Utwórz backup VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom backup', onSubmit: async data => {
-      await api(`${vmBase(item)}/backups`, { method: 'POST', idempotent: true, body: {
+      const result = await api(`${vmBase(item)}/backups`, { method: 'POST', idempotent: true, body: {
         storage: data.get('storage'), mode: data.get('mode'), compress: data.get('compress'), notes: data.get('notes') || null,
       } });
-      toast('Tworzenie backupu zostało uruchomione.');
+      await showProxmoxTask(item, result, 'Tworzenie backupu');
+      return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
 }
@@ -2963,11 +3035,11 @@ function restoreVmFromBackup(item, backup) {
         unique: data.has('unique'),
       };
       if (data.get('storage')) payload.storage = data.get('storage');
-      await api(`/providers/${item.provider_id}/restore/${encodeURIComponent(item.node)}`, {
+      const result = await api(`/providers/${item.provider_id}/restore/${encodeURIComponent(item.node)}`, {
         method: 'POST', idempotent: true, body: payload,
       });
-      toast(`Przywracanie VMID ${payload.vm_id} zostało uruchomione.`);
-      closeModal();
+      await showProxmoxTask(item, result, `Przywracanie VMID ${payload.vm_id}`);
+      return false;
     },
   });
 }
@@ -3038,8 +3110,9 @@ async function configureVm(item) {
       if (data.get('tags') !== (status.tags || '')) payload.tags = data.get('tags');
       if (data.get('onboot')) payload.onboot = data.get('onboot') === 'true';
       if (!Object.keys(payload).length) throw new Error('Nie wykryto żadnej zmiany.');
-      await api(`${vmBase(item)}/config`, { method: 'PUT', idempotent: true, body: payload });
-      toast('Zmiana konfiguracji została uruchomiona.');
+      const result = await api(`${vmBase(item)}/config`, { method: 'PUT', idempotent: true, body: payload });
+      await showProxmoxTask(item, result, 'Zmiana konfiguracji VM');
+      return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
 }
@@ -3049,8 +3122,9 @@ function resizeVmDisk(item) {
     field('Dysk', 'disk', { value: 'scsi0', required: true }),
     field('Powiększ o GiB', 'grow_gib', { type: 'number', min: 1, required: true }));
   openModal({ title: 'Powiększ dysk', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk: data.get('disk'), grow_gib: Number(data.get('grow_gib')) } });
-    toast('Powiększanie dysku zostało uruchomione.');
+    const result = await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk: data.get('disk'), grow_gib: Number(data.get('grow_gib')) } });
+    await showProxmoxTask(item, result, 'Powiększanie dysku');
+    return false;
   }});
 }
 
@@ -3068,10 +3142,11 @@ async function migrateVm(item) {
       checkboxField('Migracja online', 'online'),
       checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
     openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom migrację', onSubmit: async data => {
-      await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
+      const result = await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
         target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
       } });
-      toast('Migracja została uruchomiona.');
+      await showProxmoxTask(item, result, 'Migracja VM');
+      return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
 }
@@ -3119,7 +3194,7 @@ async function cloneVm(item) {
     await refreshStorages();
 
     openModal({ title: 'Klonuj VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom klonowanie', onSubmit: async data => {
-      await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
+      const result = await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
         new_vm_id: Number(data.get('new_vm_id')),
         name: data.get('name'),
         target: data.get('target') || null,
@@ -3127,7 +3202,8 @@ async function cloneVm(item) {
         pool: data.get('pool') || null,
         full: data.has('full'),
       } });
-      toast('Klonowanie zostało uruchomione.');
+      await showProxmoxTask(item, result, 'Klonowanie VM');
+      return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
 }
