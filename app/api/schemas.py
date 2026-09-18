@@ -500,7 +500,7 @@ class ScheduledOperationInput(Input):
 class WebhookEndpointInput(Input):
     name: Name
     url: Annotated[str, Field(min_length=9, max_length=2048)]
-    events: Annotated[list[Literal['job.successful', 'job.failed', 'job.cancelled']], Field(min_length=1, max_length=3)]
+    events: Annotated[list[Literal['job.successful', 'job.failed', 'job.cancelled', 'recovery.queued', 'recovery.successful', 'recovery.failed', 'system.alert']], Field(min_length=1, max_length=7)]
     is_active: bool = True
 
     @field_validator('url')
