@@ -73,6 +73,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function assignHostname(' in script.text
     assert 'function assignIpAllocation(' in script.text
     assert 'function showProxmoxTask(' in script.text
+    assert 'function showVmDetailsPage(' in script.text
+    assert 'function vmDetailActions(' in script.text
+    assert 'function vmSnapshotsContent(' in script.text
+    assert 'function vmBackupsContent(' in script.text
+    assert 'function vmAuditContent(' in script.text
+    assert "['overview', 'Przegląd']" in script.text
     assert "selectField('Powtarzanie', 'interval_preset'" in script.text
     assert "class: 'advanced-options wide'" in script.text
     assert 'function stopTaskPolling(' in script.text
@@ -138,6 +144,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.modal.modal-wide' in stylesheet.text
     assert '.global-search-trigger' in stylesheet.text
     assert '.global-search-dialog' in stylesheet.text
+    assert '.vm-detail-header' in stylesheet.text
+    assert '.vm-tabs' in stylesheet.text
+    assert '.vm-overview-grid' in stylesheet.text
     assert '.global-search-result' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
 
