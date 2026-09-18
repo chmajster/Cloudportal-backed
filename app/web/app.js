@@ -2615,50 +2615,68 @@ function createVmSnapshot(item) {
   }});
 }
 
-function backupVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Storage backup', 'storage', { required: true }),
-    selectField('Tryb', 'mode', [{ value: 'snapshot', label: 'snapshot' }, { value: 'suspend', label: 'suspend' }, { value: 'stop', label: 'stop' }], 'snapshot'),
-    selectField('Kompresja', 'compress', [{ value: 'zstd', label: 'zstd' }, { value: 'lzo', label: 'lzo' }, { value: 'gzip', label: 'gzip' }], 'zstd'),
-    field('Notatka', 'notes', { wide: true }));
-  openModal({ title: 'Backup VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom backup', onSubmit: async data => {
-    await api(`${vmBase(item)}/backups`, { method: 'POST', idempotent: true, body: {
-      storage: data.get('storage'), mode: data.get('mode'), compress: data.get('compress'), notes: data.get('notes') || null,
-    } });
-    toast('Backup uruchomiony.');
-  }});
+async function backupVm(item) {
+  try {
+    const storages = (await discoverVmOptions(item, 'storages', item.node))
+      .filter(storage => storage.active !== 0 && storage.enabled !== 0 && String(storage.content || '').includes('backup'));
+    const storageField = storages.length
+      ? selectField('Miejsce backupu', 'storage', storages.map(storage => ({ value: storage.storage, label: storageLabel(storage) })), storages[0].storage, { required: true })
+      : field('Miejsce backupu', 'storage', { required: true, help: 'Nie udało się pobrać listy storage — wpisz nazwę ręcznie.' });
+    const fields = node('div', { class: 'form-grid' },
+      storageField,
+      selectField('Tryb backupu', 'mode', [
+        { value: 'snapshot', label: 'Snapshot — bez przestoju, jeśli wspierany' },
+        { value: 'suspend', label: 'Wstrzymaj VM na czas backupu' },
+        { value: 'stop', label: 'Zatrzymaj VM na czas backupu' },
+      ], 'snapshot'),
+      selectField('Kompresja', 'compress', [{ value: 'zstd', label: 'Zstandard (zalecane)' }, { value: 'lzo', label: 'LZO' }, { value: 'gzip', label: 'Gzip' }], 'zstd'),
+      field('Notatka', 'notes', { wide: true }));
+    openModal({ title: 'Utwórz backup VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom backup', onSubmit: async data => {
+      await api(`${vmBase(item)}/backups`, { method: 'POST', idempotent: true, body: {
+        storage: data.get('storage'), mode: data.get('mode'), compress: data.get('compress'), notes: data.get('notes') || null,
+      } });
+      toast('Tworzenie backupu zostało uruchomione.');
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
-function listVmBackups(item) {
-  openModal({ title: 'Pokaż backupy', eyebrow: item.name || String(item.vm_id), body: field('Storage backup', 'storage', { required: true }), submitLabel: 'Pokaż', onSubmit: async data => {
-    const storage = data.get('storage');
-    const result = await api(`${vmBase(item)}/backups?storage=${encodeURIComponent(storage)}`);
-    dom.modalTitle.textContent = 'Backupy VM';
-    dom.modalEyebrow.textContent = storage;
-    const rows = result.items || [];
-    const backupTable = table([
-      { label: 'Volume', value: backup => node('span', { class: 'mono', text: backup.volid || '—' }) },
-      { label: 'Format', value: backup => backup.format || '—' },
-      { label: 'Rozmiar', value: backup => backup.size ? String(backup.size) : '—' },
-      { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString() : '—' },
-      { label: 'Protected', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
-    ], rows, backup => allowed('backups.restore') ? [button('Restore', () => restoreVmFromBackup(item, backup), 'primary')] : []);
-    dom.modalBody.replaceChildren(rows.length ? backupTable : node('p', { class: 'muted', text: 'Brak backupów dla tej VM.' }));
-    dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-    return false;
-  }});
+async function listVmBackups(item) {
+  try {
+    const storages = (await discoverVmOptions(item, 'storages', item.node))
+      .filter(storage => storage.active !== 0 && String(storage.content || '').includes('backup'));
+    const storageField = storages.length
+      ? selectField('Miejsce backupu', 'storage', storages.map(storage => ({ value: storage.storage, label: storageLabel(storage) })), storages[0].storage, { required: true })
+      : field('Miejsce backupu', 'storage', { required: true, help: 'Nie udało się pobrać listy storage — wpisz nazwę ręcznie.' });
+    openModal({ title: 'Backupy VM', eyebrow: item.name || String(item.vm_id), body: storageField, submitLabel: 'Pokaż backupy', onSubmit: async data => {
+      const storage = data.get('storage');
+      const result = await api(`${vmBase(item)}/backups?storage=${encodeURIComponent(storage)}`);
+      dom.modalTitle.textContent = 'Backupy VM';
+      dom.modalEyebrow.textContent = storage;
+      const rows = result.items || [];
+      const backupTable = table([
+        { label: 'Wolumen', value: backup => node('span', { class: 'mono', text: backup.volid || '—' }) },
+        { label: 'Format', value: backup => backup.format || '—' },
+        { label: 'Rozmiar', value: backup => formatBytes(backup.size) },
+        { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString('pl-PL') : '—' },
+        { label: 'Chroniony', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
+      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => restoreVmFromBackup(item, backup), 'primary')] : []);
+      dom.modalBody.replaceChildren(rows.length ? backupTable : node('p', { class: 'muted', text: 'Brak backupów dla tej VM.' }));
+      dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+      return false;
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function restoreVmFromBackup(item, backup) {
   if (!backup?.volid) { toast('Backup nie ma identyfikatora volume.', 'error'); return; }
   const fields = node('div', { class: 'form-grid' },
-    field('Backup volume', 'archive', { value: backup.volid, required: true, wide: true }),
+    field('Wolumen backupu', 'archive', { value: backup.volid, required: true, wide: true }),
     field('Nowy VMID', 'vm_id', { type: 'number', min: 100, required: true }),
-    field('Storage docelowy (opcjonalnie)', 'storage'),
+    field('Docelowy storage (opcjonalnie)', 'storage'),
     checkboxField('Nadaj unikalne parametry urządzeń / MAC', 'unique', true));
   fields.querySelector('[name="archive"]').readOnly = true;
   openModal({
-    title: 'Restore VM z backupu', eyebrow: item.node, body: fields, submitLabel: 'Uruchom restore',
+    title: 'Przywróć VM z backupu', eyebrow: item.node, body: fields, submitLabel: 'Uruchom przywracanie',
     onSubmit: async data => {
       const payload = {
         vm_id: Number(data.get('vm_id')),
@@ -2669,7 +2687,7 @@ function restoreVmFromBackup(item, backup) {
       await api(`/providers/${item.provider_id}/restore/${encodeURIComponent(item.node)}`, {
         method: 'POST', idempotent: true, body: payload,
       });
-      toast(`Restore VMID ${payload.vm_id} uruchomiony.`);
+      toast(`Przywracanie VMID ${payload.vm_id} zostało uruchomione.`);
       closeModal();
     },
   });
@@ -2719,24 +2737,32 @@ async function showVmConsole(item) {
   }
 }
 
-function configureVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Nazwa (opcjonalnie)', 'name'),
-    field('CPU cores', 'cores', { type: 'number', min: 1 }),
-    field('RAM MiB', 'memory', { type: 'number', min: 512 }),
-    field('Tagi', 'tags'),
-    selectField('On boot', 'onboot', [{ value: '', label: 'bez zmiany' }, { value: 'true', label: 'włącz' }, { value: 'false', label: 'wyłącz' }], ''));
-  openModal({ title: 'Konfiguracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    const payload = {};
-    if (data.get('name')) payload.name = data.get('name');
-    if (data.get('cores')) payload.cores = Number(data.get('cores'));
-    if (data.get('memory')) payload.memory = Number(data.get('memory'));
-    if (data.get('tags')) payload.tags = data.get('tags');
-    if (data.get('onboot')) payload.onboot = data.get('onboot') === 'true';
-    if (!Object.keys(payload).length) throw new Error('Podaj co najmniej jedną zmianę.');
-    await api(`${vmBase(item)}/config`, { method: 'PUT', idempotent: true, body: payload });
-    toast('Zmiana konfiguracji uruchomiona.');
-  }});
+async function configureVm(item) {
+  try {
+    const status = await api(`${vmBase(item)}/status`);
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa VM', 'name', { value: status.name || item.name || '' }),
+      field('Rdzenie CPU', 'cores', { type: 'number', min: 1, value: status.cpus ?? '' }),
+      field('RAM (MiB)', 'memory', { type: 'number', min: 512, value: status.maxmem ? Math.round(status.maxmem / 1024 / 1024) : '' }),
+      field('Tagi', 'tags', { value: status.tags || '' }),
+      selectField('Startuj automatycznie z hostem', 'onboot', [
+        { value: '', label: 'Bez zmiany' },
+        { value: 'true', label: 'Tak' },
+        { value: 'false', label: 'Nie' },
+      ], ''));
+    openModal({ title: 'Konfiguracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
+      const payload = {};
+      if (data.get('name') && data.get('name') !== status.name) payload.name = data.get('name');
+      if (data.get('cores') && Number(data.get('cores')) !== Number(status.cpus)) payload.cores = Number(data.get('cores'));
+      const currentMemory = status.maxmem ? Math.round(status.maxmem / 1024 / 1024) : null;
+      if (data.get('memory') && Number(data.get('memory')) !== currentMemory) payload.memory = Number(data.get('memory'));
+      if (data.get('tags') !== (status.tags || '')) payload.tags = data.get('tags');
+      if (data.get('onboot')) payload.onboot = data.get('onboot') === 'true';
+      if (!Object.keys(payload).length) throw new Error('Nie wykryto żadnej zmiany.');
+      await api(`${vmBase(item)}/config`, { method: 'PUT', idempotent: true, body: payload });
+      toast('Zmiana konfiguracji została uruchomiona.');
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function resizeVmDisk(item) {
