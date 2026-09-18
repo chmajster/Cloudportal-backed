@@ -2023,6 +2023,16 @@ async function blueprintForm(item = null) {
     ];
     const addWorkflowStep = (step = {}) => {
       workflowCounter += 1;
+      const advanced = node('details', { class: 'advanced-options wide' },
+        node('summary', { text: 'Opcje zaawansowane' }),
+        node('div', { class: 'form-grid advanced-options-body' },
+          field('Liczba ponowień', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
+          field('Limit czasu (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
+          field('Krok cofania — ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
+          field('Warunki — JSON (opcjonalnie)', 'workflow_conditions', {
+            tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? jsonValue(step.conditions) : '',
+            help: 'Zaawansowane warunki wykonania kroku.',
+          })));
       const row = node('div', { class: 'editor-card', 'data-workflow-row': String(workflowCounter) },
         node('div', { class: 'editor-card-header' },
           node('strong', { text: 'Krok workflow' }),
@@ -2030,14 +2040,8 @@ async function blueprintForm(item = null) {
         node('div', { class: 'form-grid' },
           field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
           selectField('Akcja', 'workflow_type', workflowTypes.map(([value, label]) => ({ value, label })), step.type || 'terraform_apply', { required: true }),
-          field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), help: 'Kilka ID oddziel przecinkami.' }),
-          field('Liczba ponowień', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
-          field('Limit czasu (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
-          field('Krok cofania — ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
-          field('Warunki — zaawansowane JSON (opcjonalnie)', 'workflow_conditions', {
-            tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? jsonValue(step.conditions) : '',
-            help: 'Pozostaw puste, jeśli krok nie ma dodatkowych warunków.',
-          })));
+          field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), wide: true, help: 'Kilka ID oddziel przecinkami.' }),
+          advanced));
       workflowList.append(row);
     };
 
@@ -3325,17 +3329,45 @@ async function scheduleForm(item = null) {
   try {
     const deployments = (await api('/deployments?limit=200')).items.filter(row => row.status !== 'destroyed');
     const dateValue = toDateTimeLocal(item?.next_run_at || new Date(Date.now() + 3600000));
+    const commonIntervals = new Set([3600, 21600, 43200, 86400, 604800]);
+    const currentInterval = Number(item?.interval_seconds || 0);
+    const presetValue = currentInterval && !commonIntervals.has(currentInterval) ? 'custom' : String(currentInterval || '');
+    const recurrenceField = selectField('Powtarzanie', 'interval_preset', [
+      { value: '', label: 'Jednorazowo' },
+      { value: '3600', label: 'Co godzinę' },
+      { value: '21600', label: 'Co 6 godzin' },
+      { value: '43200', label: 'Co 12 godzin' },
+      { value: '86400', label: 'Codziennie' },
+      { value: '604800', label: 'Co tydzień' },
+      { value: 'custom', label: 'Własny interwał' },
+    ], presetValue);
+    const customInterval = field('Własny interwał (sekundy)', 'interval_seconds', {
+      type: 'number', min: 60, value: presetValue === 'custom' ? currentInterval : '',
+      help: 'Minimum 60 sekund.',
+    });
+    const refreshRecurrence = () => { customInterval.hidden = recurrenceField.querySelector('select').value !== 'custom'; };
+    recurrenceField.querySelector('select').addEventListener('change', refreshRecurrence);
+    refreshRecurrence();
+
     const fields = node('div', { class: 'form-grid' },
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
       selectField('Wdrożenie', 'deployment_id', deployments.map(row => ({ value: row.id, label: `${row.name} · ${short(row.id, 10)}` })), item?.deployment_id || '', { required: true, placeholder: 'Wybierz wdrożenie' }),
       selectField('Operacja', 'operation', [{ value: 'terraform.plan', label: 'Plan' }, { value: 'terraform.apply', label: 'Zastosuj' }, { value: 'terraform.destroy', label: 'Usuń zasoby' }], item?.operation || 'terraform.plan'),
       field('Następne uruchomienie', 'next_run_at', { type: 'datetime-local', required: true, value: dateValue }),
-      field('Interwał sekund (puste = raz)', 'interval_seconds', { type: 'number', min: 60, value: item?.interval_seconds || '' }));
+      recurrenceField,
+      customInterval);
     openModal({ title: item ? 'Edytuj harmonogram' : 'Nowy harmonogram', eyebrow: 'Harmonogram', body: fields, onSubmit: async data => {
+      const preset = data.get('interval_preset');
+      const intervalSeconds = preset === 'custom'
+        ? Number(data.get('interval_seconds'))
+        : (preset ? Number(preset) : null);
+      if (preset === 'custom' && (!Number.isFinite(intervalSeconds) || intervalSeconds < 60)) {
+        throw new Error('Własny interwał musi mieć co najmniej 60 sekund.');
+      }
       await api(item ? `/schedules/${item.id}` : '/schedules', { method: item ? 'PUT' : 'POST', body: {
         name: data.get('name'), deployment_id: data.get('deployment_id'), operation: data.get('operation'),
         next_run_at: new Date(data.get('next_run_at')).toISOString(),
-        interval_seconds: data.get('interval_seconds') ? Number(data.get('interval_seconds')) : null,
+        interval_seconds: intervalSeconds,
       } });
       toast('Harmonogram zapisany.');
       navigate('schedules');
