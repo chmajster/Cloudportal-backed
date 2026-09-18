@@ -1233,15 +1233,19 @@ function webhookForm(item = null) {
   const fields = node('div', { class: 'form-grid' },
     field('Nazwa', 'name', { required: true, value: item?.name || '' }),
     field('HTTPS URL', 'url', { required: true, value: item?.url || '', wide: true }),
-    checkboxField('job.successful', 'event_successful', events.includes('job.successful')),
-    checkboxField('job.failed', 'event_failed', events.includes('job.failed')),
-    checkboxField('job.cancelled', 'event_cancelled', events.includes('job.cancelled')),
+    checkboxField('job.successful', 'event_job_successful', events.includes('job.successful')),
+    checkboxField('job.failed', 'event_job_failed', events.includes('job.failed')),
+    checkboxField('job.cancelled', 'event_job_cancelled', events.includes('job.cancelled')),
+    checkboxField('recovery.queued', 'event_recovery_queued', events.includes('recovery.queued')),
+    checkboxField('recovery.successful', 'event_recovery_successful', events.includes('recovery.successful')),
+    checkboxField('recovery.failed', 'event_recovery_failed', events.includes('recovery.failed')),
+    checkboxField('system.alert', 'event_system_alert', events.includes('system.alert')),
     checkboxField('Aktywny', 'is_active', item?.is_active ?? true));
   openModal({ title: item ? 'Edytuj webhook' : 'Nowy webhook', eyebrow: 'Signed HMAC', body: fields, onSubmit: async data => {
     const selected = [];
-    if (data.has('event_successful')) selected.push('job.successful');
-    if (data.has('event_failed')) selected.push('job.failed');
-    if (data.has('event_cancelled')) selected.push('job.cancelled');
+    for (const event of ['job.successful', 'job.failed', 'job.cancelled', 'recovery.queued', 'recovery.successful', 'recovery.failed', 'system.alert']) {
+      if (data.has('event_' + event.replace('.', '_'))) selected.push(event);
+    }
     if (!selected.length) throw new Error('Wybierz co najmniej jeden event.');
     const result = await api(item ? `/webhooks/${item.id}` : '/webhooks', {
       method: item ? 'PUT' : 'POST', idempotent: !item, body: {
