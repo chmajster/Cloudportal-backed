@@ -362,7 +362,8 @@ cat > /usr/local/sbin/cloudportal-restore <<'EOF'
 #!/bin/sh
 exec /opt/cloudportal-backed/current/.venv/bin/python /opt/cloudportal-backed/current/scripts/backend-restore.py "$@"
 EOF
-chmod 0750 /usr/local/sbin/cloudportal-backup /usr/local/sbin/cloudportal-restore
+chmod 0755 /usr/local/sbin/cloudportal-backup
+chmod 0750 /usr/local/sbin/cloudportal-restore
 install -d -m 0700 -o cloudportal -g cloudportal /var/backups/cloudportal-backed
 cat > /etc/systemd/system/cloudportal-backup.service <<EOF
 [Unit]
