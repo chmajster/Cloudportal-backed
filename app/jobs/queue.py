@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import session
 from app.models import Deployment, Job, JobLog, now
+from app.operations.service import deliver_webhooks_once, materialize_scheduled_jobs
 from app.security.core import redis_client
 
 
@@ -26,6 +27,7 @@ def queue():
 
 
 def dispatch_once():
+    materialize_scheduled_jobs()
     q = queue()
     with session() as db:
         jobs = db.scalars(select(Job).where(Job.status == 'queued', Job.cancel_requested.is_(False))
@@ -52,6 +54,7 @@ def dispatch_once():
                 d.active_job_id, d.status = None, 'failed'
             db.add(JobLog(job_id=job.id, message=job.error))
         db.commit()
+    deliver_webhooks_once()
     redis_client().set('cp:dispatcher:heartbeat', 'alive', ex=30)
 
 
