@@ -16,6 +16,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="sidebar-backdrop"' in page.text
     assert 'id="modal-close"' in page.text
     assert 'id="refresh-view"' in page.text
+    assert 'id="global-search-open"' in page.text
+    assert 'id="global-search-dialog"' in page.text
+    assert 'id="global-search-input"' in page.text
     assert 'src="./theme-init.js"' in page.text
     assert 'src="./core.js"' in page.text
     assert 'src="./loader.js"' in page.text
@@ -54,6 +57,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
         'styles/features/inventory.css',
+        'styles/features/search.css',
     } == set(manifest['styles'])
 
     script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
@@ -87,6 +91,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
 
     assert "const API = '/api/v1';" in core
     assert 'function registerView(' in core
+    assert 'function registerCommand(' in core
+    assert 'function registerExtension(' in core
+    assert 'function emitUiEvent(' in core
     assert 'const routes = [];' in core
     assert 'const views = Object.create(null);' in core
     assert len(bootstrap.splitlines()) < 120
@@ -133,6 +140,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
+    assert "registerExtension('global-search'" in script
+    assert 'function loadIndex(' in script
+    assert 'function renderSearch(' in script
+    assert "event.key.toLocaleLowerCase() === 'k'" in script
     assert 'Zmienne template JSON' not in script
     assert 'Schemat zmiennych JSON' not in script
     assert 'Definicja deploymentu JSON' not in script
@@ -189,6 +200,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.toast.error' in stylesheet
     assert '.toast-close' in stylesheet
     assert '.modal.modal-wide' in stylesheet
+    assert '.global-search-trigger' in stylesheet
+    assert '.global-search-dialog' in stylesheet
+    assert '.global-search-result' in stylesheet
 
 
 def test_web_console_is_not_added_to_openapi_contract(client):
