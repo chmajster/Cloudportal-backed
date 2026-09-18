@@ -1,0 +1,6 @@
+{
+  "id": "aws-ec2",
+  "name": "AWS EC2 instance",
+  "provider": "aws",
+  "schema_model": "app.api.schemas:AWSVariables"
+}
