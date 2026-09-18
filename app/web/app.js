@@ -413,6 +413,37 @@ function permissionPicker(permissions, selectedValues = [], name = 'permission')
   return wrapper;
 }
 
+function permissionSummary(permissions) {
+  if (!permissions?.length) return node('p', { class: 'muted', text: 'Brak uprawnień.' });
+  const grouped = new Map();
+  permissions.forEach(permission => {
+    const group = String(permission).split('.')[0] || 'other';
+    if (!grouped.has(group)) grouped.set(group, []);
+    grouped.get(group).push(permission);
+  });
+  const wrapper = node('div', { class: 'permission-groups permission-summary' });
+  [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, 'pl')).forEach(([group, values]) => {
+    wrapper.append(node('details', { class: 'permission-group', open: true },
+      node('summary', {},
+        node('span', { text: PERMISSION_GROUP_LABELS[group] || group }),
+        badge(String(values.length), 'info')),
+      node('div', { class: 'permission-chip-list' },
+        ...values.sort((a, b) => a.localeCompare(b, 'pl')).map(permission =>
+          node('span', { class: 'permission-chip', title: permission, text: permissionLabel(permission) })))));
+  });
+  return wrapper;
+}
+
+function showPermissionSummary(title, permissions) {
+  dom.modal.classList.remove('modal-console');
+  dom.modal.classList.add('modal-wide');
+  dom.modalTitle.textContent = title;
+  dom.modalEyebrow.textContent = 'Uprawnienia';
+  dom.modalBody.replaceChildren(permissionSummary(permissions));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
 function displayValue(value) {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'Tak' : 'Nie';
@@ -822,7 +853,7 @@ async function dashboardView() {
     checks);
   if (systemInfo) componentPanel.append(node('p', {
     class: 'muted system-version',
-    text: `Cloudportal-backed ${systemInfo.version} · API ${systemInfo.api_version} · ${systemInfo.providers.length} providerów`,
+    text: `Cloudportal-backed ${systemInfo.version} · API ${systemInfo.api_version} · ${systemInfo.providers.length} platform`,
   }));
   dom.content.replaceChildren(metrics, node('div', { class: 'panels' },
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Ostatnie zadania' }), button('Wszystkie', () => navigate('jobs'))),
@@ -959,7 +990,15 @@ async function tokensView() {
       { label: 'Zakres', value: token => badge(`${token.scopes.length} uprawnień`, token.scopes.length ? 'info' : '') },
       { label: 'Status', value: token => { const status = token.revoked_at ? 'revoked' : token.expires_at && new Date(token.expires_at) < new Date() ? 'expired' : 'active'; return badge(statusLabel(status), status === 'active' ? 'ok' : 'danger'); } },
       { label: 'Ostatnio użyty', value: token => formatDate(token.last_used_at) },
-    ], tokens, token => allowed('tokens.revoke') && !token.revoked_at ? [button('Unieważnij', () => confirmAction('Unieważnij token', `Token ${token.name} natychmiast przestanie działać.`, async () => { await api(`/tokens/${token.id}/revoke`, { method: 'POST' }); toast('Token unieważniony.'); navigate('tokens'); }), 'danger')] : []));
+    ], tokens, token => {
+      const result = [button('Zakres', () => showPermissionSummary(`Zakres: ${token.name}`, token.scopes))];
+      if (allowed('tokens.revoke') && !token.revoked_at) result.push(button('Unieważnij', () => confirmAction('Unieważnij token', `Token ${token.name} natychmiast przestanie działać.`, async () => {
+        await api(`/tokens/${token.id}/revoke`, { method: 'POST' });
+        toast('Token unieważniony.');
+        navigate('tokens');
+      }), 'danger'));
+      return result;
+    }));
 }
 
 async function createToken() {
@@ -1035,7 +1074,7 @@ const CREDENTIAL_TYPE_CONFIG = {
   ssh: {
     label: 'SSH / Linux',
     description: 'Dane dostępowe do Ansible i SSH. Weryfikacja known_hosts jest obowiązkowa.',
-    endpoint: { label: 'Endpoint SSH (opcjonalnie)', placeholder: 'ssh://server.example.com:22', required: false, help: 'Używany przez Testuj; workflow Ansible korzysta z inventory.' },
+    endpoint: { label: 'Endpoint SSH (opcjonalnie)', placeholder: 'ssh://server.example.com:22', required: false, help: 'Używany przez Testuj; workflow Ansible korzysta z listy wykrytych hostów.' },
     username: { label: 'Użytkownik SSH', placeholder: 'clouduser', required: true },
     tls: false, defaultAuth: 'private_key',
     authModes: {
@@ -1145,7 +1184,7 @@ function renderCredentialDynamic(container, type, item) {
   if (config.tls) {
     identity.append(node('div', { class: 'credential-tls-control' },
       checkboxField('Akceptuj certyfikat self-signed / niezaufany', 'accept_untrusted_tls', sameType ? !item.verify_ssl : false),
-      node('div', { class: 'field-help', text: 'Włączenie tej opcji wyłącza weryfikację CA i nazwy hosta dla tego credentiala.' })));
+      node('div', { class: 'field-help', text: 'Włączenie tej opcji wyłącza weryfikację CA i nazwy hosta dla tych danych dostępowych.' })));
   }
 
   const typeCard = node('div', { class: 'credential-type-card' },
@@ -1205,7 +1244,7 @@ function credentialActions(item) {
     } catch (error) { toast(error.message, 'error'); }
   }));
   if (allowed('credentials.update')) actions.push(button('Edytuj', () => credentialForm(item)));
-  if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń dane dostępowe', 'Dane dostępowe ' + item.name + ' zostanie trwale usunięty.', async () => {
+  if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń dane dostępowe', 'Pozycja „' + item.name + '” zostanie trwale usunięta.', async () => {
     await api('/credentials/' + item.id, { method: 'DELETE' }); toast('Dane dostępowe usunięte.'); navigate('credentials');
   }), 'danger'));
   return actions;
@@ -1297,13 +1336,13 @@ async function providersView() {
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
       { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type, 'info') },
-      { label: 'Credential', value: item => credentialNames.get(Number(item.credentials_id)) || `#${item.credentials_id}` },
+      { label: 'Dane dostępowe', value: item => credentialNames.get(Number(item.credentials_id)) || `#${item.credentials_id}` },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
       const actions = [];
       actions.push(button('Przeglądaj zasoby', () => discoverProvider(item)));
       if (allowed('providers.update')) actions.push(button('Edytuj', () => providerForm(item)));
-      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Provider „${item.name}” zostanie usunięty. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
+      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Platforma „${item.name}” zostanie usunięta. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
         toast('Platforma usunięta.');
         navigate('providers');
@@ -1319,8 +1358,8 @@ async function providerForm(item = null) {
     const typeField = selectField('Typ platformy', 'type', providerTypes.map(value => ({
       value, label: CREDENTIAL_TYPE_CONFIG[value]?.label || value,
     })), item?.type || 'proxmox', { required: true });
-    const credentialField = selectField('Credential', 'credentials_id', [], item?.credentials_id || '', {
-      required: true, placeholder: 'Wybierz credential tego samego typu',
+    const credentialField = selectField('Dane dostępowe', 'credentials_id', [], item?.credentials_id || '', {
+      required: true, placeholder: 'Wybierz dane dostępowe tego samego typu',
     });
     const credentialSelect = credentialField.querySelector('select');
     const typeSelect = typeField.querySelector('select');
@@ -1329,13 +1368,13 @@ async function providerForm(item = null) {
       const selectedType = typeSelect.value;
       const matching = credentials.filter(value => value.type === selectedType);
       const previous = String(item?.credentials_id || credentialSelect.value || '');
-      credentialSelect.replaceChildren(node('option', { value: '', text: 'Wybierz credential' }));
+      credentialSelect.replaceChildren(node('option', { value: '', text: 'Wybierz dane dostępowe' }));
       matching.forEach(value => credentialSelect.append(node('option', {
         value: value.id,
         text: value.name + ' (#' + value.id + ')',
         selected: String(value.id) === previous,
       })));
-      if (!matching.length) credentialSelect.append(node('option', { value: '', text: 'Brak credentiali tego typu', disabled: true }));
+      if (!matching.length) credentialSelect.append(node('option', { value: '', text: 'Brak danych dostępowych tego typu', disabled: true }));
     };
     typeSelect.addEventListener('change', refreshCredentials);
     refreshCredentials();
@@ -1352,7 +1391,7 @@ async function providerForm(item = null) {
       eyebrow: 'Infrastruktura',
       body: fields,
       onSubmit: async data => {
-        if (!data.get('credentials_id')) throw new Error('Wybierz credential zgodny z typem providera.');
+        if (!data.get('credentials_id')) throw new Error('Wybierz dane dostępowe zgodne z typem platformy.');
         await api(item ? '/providers/' + item.id : '/providers', {
           method: item ? 'PUT' : 'POST',
           body: {
@@ -1425,7 +1464,7 @@ async function deploymentsView() {
   dom.content.replaceChildren(heading('Kontrolowane wdrożenia Terraform/OpenTofu. Każda operacja tworzy audytowalne zadanie.', actions),
     table([
       { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
-      { label: 'Provider', value: item => `${item.provider} #${item.provider_id}` }, { label: 'Executor', value: item => badge(item.executor, 'info') },
+      { label: 'Platforma', value: item => `${item.provider} #${item.provider_id}` }, { label: 'Executor', value: item => badge(item.executor, 'info') },
       { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], deployments, item => deploymentActions(item)));
 }
@@ -1464,8 +1503,8 @@ async function createDeployment() {
     const templateField = selectField('Szablon', 'template', templates.map(item => ({
       value: item.id, label: `${item.name} · v${item.version} · ${CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider}`,
     })), templates[0].id, { required: true });
-    const providerField = selectField('Provider', 'provider_id', [], '', { required: true });
-    const credentialField = selectField('Credential', 'credentials_id', [], '', { required: true });
+    const providerField = selectField('Platforma', 'provider_id', [], '', { required: true });
+    const credentialField = selectField('Dane dostępowe', 'credentials_id', [], '', { required: true });
     const variableFields = node('div', { class: 'form-grid wide template-variable-grid' });
     const ansibleFields = node('div', { class: 'form-grid wide ansible-fields' });
     const ansibleToggle = checkboxField('Po utworzeniu skonfiguruj system przez Ansible', 'ansible_enabled', false);
@@ -1499,7 +1538,7 @@ async function createDeployment() {
       const matching = provider
         ? credentials.filter(item => Number(item.id) === Number(provider.credentials_id)).map(item => ({ id: item.id, label: item.name }))
         : [];
-      refill(credentialSelect, matching, matching.length ? 'Dane dostępowe providera' : 'Wybierz provider');
+      refill(credentialSelect, matching, matching.length ? 'Dane dostępowe platformy' : 'Wybierz provider');
     };
 
     const renderAnsible = () => {
@@ -1516,7 +1555,7 @@ async function createDeployment() {
         value: playbook.id,
         label: `${playbook.name} · v${playbook.version}`,
       })), playbooks[0]?.id || '', { required: enabled });
-      const credentialField = selectField('Dane dostępowe systemowy', 'ansible_credentials_id', [], '', { required: enabled });
+      const credentialField = selectField('Systemowe dane dostępowe', 'ansible_credentials_id', [], '', { required: enabled });
       const variablesContainer = node('div', { class: 'form-grid wide' });
       ansibleFields.replaceChildren(playbookField, credentialField, variablesContainer);
       ansibleFields.querySelectorAll('input,select,textarea').forEach(control => { control.disabled = !enabled; });
@@ -1526,7 +1565,7 @@ async function createDeployment() {
         const matchingCredentials = credentials.filter(value => value.type === playbook?.transport);
         const select = credentialField.querySelector('select');
         refill(select, matchingCredentials.map(value => ({ id: value.id, label: `${value.name} · ${credentialTypeLabel(value.type)}` })),
-          matchingCredentials.length ? 'Wybierz credential systemowy' : `Brak credentiala typu ${playbook?.transport || ''}`);
+          matchingCredentials.length ? 'Wybierz systemowe dane dostępowe' : `Brak danych dostępowych typu ${playbook?.transport || ''}`);
         variablesContainer.replaceChildren();
         (playbook?.variables || []).forEach(name => variablesContainer.append(
           field(FIELD_LABELS[name] || name.replaceAll('_', ' '), `ansible_var_${name}`, {
@@ -1541,7 +1580,7 @@ async function createDeployment() {
       const template = currentTemplate();
       if (!template) return;
       const matchingProviders = providers.filter(item => item.type === template.provider).map(item => ({ id: item.id, label: item.name }));
-      refill(providerSelect, matchingProviders, matchingProviders.length ? 'Wybierz provider' : 'Brak providera dla tej platformy');
+      refill(providerSelect, matchingProviders, matchingProviders.length ? 'Wybierz provider' : 'Brak połączenia z tą platformą');
       refreshCredentials();
       renderTemplateVariables(variableFields, template);
       renderAnsible();
@@ -1573,7 +1612,7 @@ async function createDeployment() {
         if (form.elements.ansible_enabled?.checked) {
           const playbook = playbooks.find(value => value.id === form.elements.ansible_playbook?.value);
           if (!playbook) throw new Error('Wybierz playbook Ansible.');
-          if (!form.elements.ansible_credentials_id?.value) throw new Error('Wybierz credential systemowy dla Ansible.');
+          if (!form.elements.ansible_credentials_id?.value) throw new Error('Wybierz systemowe dane dostępowe dla Ansible.');
           const variables = {};
           (playbook.variables || []).forEach(name => {
             const value = form.elements[`ansible_var_${name}`]?.value?.trim();
@@ -1779,8 +1818,8 @@ async function blueprintForm(item = null) {
       value: template.id,
       label: `${template.name} · v${template.version} · ${CREDENTIAL_TYPE_CONFIG[template.provider]?.label || template.provider}`,
     })), initialTemplate.id, { required: true });
-    const providerField = selectField('Provider', 'deployment_provider_id', [], deployment.provider_id || '', { required: true });
-    const credentialField = selectField('Credential', 'deployment_credentials_id', [], deployment.credentials_id || '', { required: true });
+    const providerField = selectField('Platforma', 'deployment_provider_id', [], deployment.provider_id || '', { required: true });
+    const credentialField = selectField('Dane dostępowe', 'deployment_credentials_id', [], deployment.credentials_id || '', { required: true });
     const templateVariables = node('div', { class: 'form-grid wide template-variable-grid' });
     const variableState = new Map([[initialTemplate.id, { ...(deployment.variables || {}) }]]);
     let currentTemplateId = initialTemplate.id;
@@ -1810,7 +1849,7 @@ async function blueprintForm(item = null) {
         ? credentials.filter(value => Number(value.id) === Number(provider.credentials_id)).map(value => ({ id: value.id, label: value.name }))
         : [];
       refill(credentialField.querySelector('select'), matches,
-        matches.length ? 'Dane dostępowe providera' : 'Wybierz provider',
+        matches.length ? 'Dane dostępowe platformy' : 'Wybierz provider',
         deployment.credentials_id);
     };
 
@@ -1865,7 +1904,7 @@ async function blueprintForm(item = null) {
       const playbookField = selectField('Playbook', 'deployment_ansible_playbook', choices.map(value => ({
         value: value.id, label: `${value.name} · v${value.version}`,
       })), existingAnsible?.playbook || choices[0].id, { required: true });
-      const systemCredentialField = selectField('Dane dostępowe systemowy', 'deployment_ansible_credentials_id', [], existingAnsible?.credentials_id || '', { required: true });
+      const systemCredentialField = selectField('Systemowe dane dostępowe', 'deployment_ansible_credentials_id', [], existingAnsible?.credentials_id || '', { required: true });
       const variableFields = node('div', { class: 'form-grid wide' });
       ansibleFields.replaceChildren(playbookField, systemCredentialField, variableFields);
 
@@ -1875,7 +1914,7 @@ async function blueprintForm(item = null) {
         refill(
           systemCredentialField.querySelector('select'),
           matching,
-          matching.length ? 'Wybierz credential systemowy' : `Brak credentiala typu ${playbook.transport}`,
+          matching.length ? 'Wybierz systemowe dane dostępowe' : `Brak danych dostępowych typu ${playbook.transport}`,
           existingAnsible?.credentials_id,
         );
         variableFields.replaceChildren();
@@ -1895,7 +1934,7 @@ async function blueprintForm(item = null) {
       currentTemplateId = template.id;
       const matches = providers.filter(value => value.type === template.provider).map(value => ({ id: value.id, label: value.name }));
       refill(providerField.querySelector('select'), matches,
-        matches.length ? 'Wybierz provider' : 'Brak providera dla tej platformy',
+        matches.length ? 'Wybierz provider' : 'Brak połączenia z tą platformą',
         deployment.provider_id);
       refreshCredentialChoices();
       templateVariables.replaceChildren();
@@ -2037,7 +2076,7 @@ async function blueprintForm(item = null) {
           variables: variableState.get(template.id) || readBlueprintTemplateVariables(form, template),
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
-        if (!deploymentPayload.credentials_id) throw new Error('Wybierz credential dla Blueprintu.');
+        if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
         if (form.elements.deployment_hostname_scheme_id.value) deploymentPayload.hostname_scheme_id = Number(form.elements.deployment_hostname_scheme_id.value);
         if (form.elements.deployment_ipam_pool_id.value) deploymentPayload.ipam_pool_id = Number(form.elements.deployment_ipam_pool_id.value);
 
@@ -2049,7 +2088,7 @@ async function blueprintForm(item = null) {
               ? { id: existingAnsible.playbook, variables: Object.keys(existingAnsible.variables || {}) }
               : null);
           if (!playbook) throw new Error('Wybierz playbook Ansible dla Blueprintu.');
-          if (!form.elements.deployment_ansible_credentials_id?.value) throw new Error('Wybierz credential systemowy dla Ansible.');
+          if (!form.elements.deployment_ansible_credentials_id?.value) throw new Error('Wybierz systemowe dane dostępowe dla Ansible.');
           const variables = {};
           (playbook.variables || []).forEach(name => {
             const value = form.elements[`deployment_ansible_var_${name}`]?.value?.trim();
@@ -2238,7 +2277,7 @@ async function catalogView() {
       node('div', { class: 'panel-header' }, node('h2', { text: 'Szablony Terraform / OpenTofu' })),
       table([
         { label: 'Template', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
-        { label: 'Provider', value: item => badge(item.provider, 'info') },
+        { label: 'Platforma', value: item => badge(item.provider, 'info') },
         { label: 'Wersja', value: item => `v${item.version}` },
         { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
       ], templates.items, item => [button('Pola', () => showJson(`Pola ${item.id}`, item.variables_schema, `Szablon v${item.version}`))])
@@ -2342,14 +2381,14 @@ async function inventoryView() {
   ]);
   const actions = allowed('inventory.import') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
   dom.content.replaceChildren(
-    heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego apply.', actions),
+    heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego zastosowania zmian.', actions),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Maszyny Proxmox' })),
       table([
         { label: 'VM', value: item => node('div', {}, node('strong', { text: item.name || `VM ${item.vm_id}` }), node('div', { class: 'mono muted', text: `${item.node}/${item.vm_id}` })) },
         { label: 'Tryb', value: item => badge(item.management_mode, item.management_mode === 'terraform' ? 'ok' : 'info') },
         { label: 'Stan', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
-        { label: 'Provider', value: item => `#${item.provider_id}` },
+        { label: 'Platforma', value: item => `#${item.provider_id}` },
         { label: 'Stan w platformie', value: item => item.live ? badge(statusLabel(item.live.status || 'present'), statusKind(item.live.status)) : badge(statusLabel('missing'), 'danger') },
       ], vms.items, item => inventoryVmActions(item))
     ),
@@ -2357,7 +2396,7 @@ async function inventoryView() {
       node('div', { class: 'panel-header' }, node('h2', { text: 'Zasoby zarządzane' })),
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-        { label: 'Provider', value: item => badge(item.provider, 'info') },
+        { label: 'Platforma', value: item => badge(item.provider, 'info') },
         { label: 'External ID', class: 'mono', value: item => short(item.external_id, 26) },
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
         { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
@@ -2386,7 +2425,7 @@ function inventoryVmActions(item) {
 async function importInventoryVm() {
   const providers = (await api('/providers?limit=200')).items.filter(item => item.type === 'proxmox');
   const fields = node('div', { class: 'form-grid' },
-    selectField('Provider Proxmox', 'provider_id', providers.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
+    selectField('Platforma Proxmox', 'provider_id', providers.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz platformę' }),
     field('VMID', 'vm_id', { type: 'number', min: 100, required: true }));
   openModal({ title: 'Importuj istniejącą VM', eyebrow: 'Zasoby', body: fields, submitLabel: 'Dodaj do katalogu', onSubmit: async data => {
     await api('/inventory/vms/import', { method: 'POST', idempotent: true, body: {
@@ -2866,7 +2905,12 @@ async function accountView() {
     ? 'Konto używa początkowego hasła admin. Zmień je, aby odblokować panel administracyjny.'
     : 'Zmiana hasła unieważnia wszystkie sesje i tokeny resetu. Po zapisaniu wymagane jest ponowne logowanie.';
   const security = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Bezpieczeństwo konta' }), user.must_change_password ? badge('wymagana zmiana', 'warning') : ''), node('p', { class: user.must_change_password ? 'form-error' : 'muted', text: passwordMessage }), button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary'));
-  dom.content.replaceChildren(heading('Twoja sesja i skuteczne uprawnienia.'), node('div', { class: 'panels' }, details, security), node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Uprawnienia' })), node('p', { class: 'mono muted', text: state.identity.permissions.join(' · ') || 'Brak uprawnień' })));
+  dom.content.replaceChildren(
+    heading('Twoja sesja i skuteczne uprawnienia.'),
+    node('div', { class: 'panels' }, details, security),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Uprawnienia' }), badge(`${state.identity.permissions.length}`, 'info')),
+      permissionSummary(state.identity.permissions)));
 }
 
 function info(label, value) { return node('div', { class: 'check' }, node('span', { text: label }), node('strong', { text: value })); }
