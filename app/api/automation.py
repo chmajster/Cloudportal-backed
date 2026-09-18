@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from app.api.administration import Limit, Offset
 from app.api.common import find, idempotent, paginate
+from app.catalog import template_definition
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items)
 from app.api.schemas import BlueprintExecuteInput, BlueprintInput, DeploymentInput, HostnameGenerateInput, HostnameSchemeInput
@@ -100,6 +101,9 @@ def release_hostname(id: str, request: Request, actor=Depends(require('hostnames
 
 def validate_blueprint_references(db, data):
     provider = find(db, Provider, data.deployment.provider_id)
+    template_meta, _ = template_definition(data.deployment.template)
+    if provider.type != template_meta['provider']:
+        raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
     if data.deployment.hostname_scheme_id:
@@ -192,7 +196,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                 raise HTTPException(403, 'ansible.execute required by blueprint')
             validate_ansible(db, parsed.ansible)
         deployment = Deployment(name=parsed.name, provider_id=provider.id, template=parsed.template,
-                                credentials_id=parsed.credentials_id, variables=parsed.variables.model_dump(),
+                                credentials_id=parsed.credentials_id, variables=parsed.variables,
                                 workflow={'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
                                                         'variables': blueprint_variables, 'steps': row.workflow}},
