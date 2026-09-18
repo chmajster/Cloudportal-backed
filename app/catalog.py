@@ -1,0 +1,165 @@
+import importlib
+import json
+import re
+from functools import lru_cache
+from pathlib import Path
+
+from fastapi import HTTPException
+from pydantic import ValidationError
+
+from app.config import settings
+
+
+SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$')
+PLAYBOOK_FILE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\.ya?ml$')
+
+
+def _safe_slug(value):
+    if not isinstance(value, str) or not SLUG.fullmatch(value):
+        raise HTTPException(422, 'Invalid catalog identifier')
+    return value
+
+
+def _read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError, TypeError):
+        raise RuntimeError(f'Invalid catalog manifest: {path}') from None
+
+
+def template_definition(template_id):
+    template_id = _safe_slug(template_id)
+    root = (settings().source_dir / 'terraform' / 'templates').resolve()
+    folder = (root / template_id).resolve()
+    if folder.parent != root:
+        raise HTTPException(422, 'Invalid Terraform template path')
+    manifest = folder / 'template.json'
+    if not manifest.is_file():
+        raise HTTPException(404, 'Template not found')
+    data = _read_json(manifest)
+    if data.get('id') != template_id or not SLUG.fullmatch(str(data.get('provider', ''))):
+        raise RuntimeError(f'Invalid Terraform template manifest: {manifest}')
+    model_path = data.get('schema_model', '')
+    if not isinstance(model_path, str) or not model_path.startswith('app.api.schemas:'):
+        raise RuntimeError(f'Unapproved template schema model: {manifest}')
+    if not any(folder.glob('*.tf')):
+        raise RuntimeError(f'Terraform template contains no HCL: {folder}')
+    return data, folder
+
+
+def template_model(template_id):
+    data, _ = template_definition(template_id)
+    module_name, class_name = data['schema_model'].split(':', 1)
+    module = importlib.import_module(module_name)
+    model = getattr(module, class_name, None)
+    if model is None or not hasattr(model, 'model_validate'):
+        raise RuntimeError('Template schema model is unavailable')
+    return model
+
+
+def validate_template_variables(template_id, values):
+    model = template_model(template_id)
+    try:
+        return model.model_validate(values)
+    except ValidationError as error:
+        raise HTTPException(422, error.errors()) from None
+
+
+def template_public(template_id):
+    data, _ = template_definition(template_id)
+    return {
+        'id': data['id'],
+        'name': data['name'],
+        'provider': data['provider'],
+        'variables_schema': template_model(template_id).model_json_schema(),
+    }
+
+
+def list_templates():
+    root = settings().source_dir / 'terraform' / 'templates'
+    if not root.is_dir():
+        return []
+    result = []
+    for folder in sorted(root.iterdir()):
+        if folder.is_dir() and SLUG.fullmatch(folder.name) and (folder / 'template.json').is_file():
+            result.append(template_public(folder.name))
+    return result
+
+
+def resolve_template_source(template_id):
+    _, folder = template_definition(template_id)
+    return folder
+
+
+@lru_cache
+def _playbook_catalog(source_dir):
+    root = Path(source_dir) / 'ansible' / 'playbooks'
+    document = _read_json(root / 'catalog.json')
+    items = document.get('playbooks')
+    if not isinstance(items, list):
+        raise RuntimeError('Ansible catalog must contain a playbooks list')
+    result = {}
+    for item in items:
+        identifier = str(item.get('id', ''))
+        filename = str(item.get('file', ''))
+        transport = item.get('transport')
+        if not SLUG.fullmatch(identifier) or not PLAYBOOK_FILE.fullmatch(filename):
+            raise RuntimeError('Invalid Ansible catalog identifier or filename')
+        if transport not in {'ssh', 'winrm'} or identifier in result:
+            raise RuntimeError('Invalid Ansible catalog entry')
+        if not (root / filename).is_file():
+            raise RuntimeError(f'Ansible playbook is missing: {filename}')
+        variables = item.get('variables', {})
+        if not isinstance(variables, dict) or any(not SLUG.fullmatch(str(name)) for name in variables):
+            raise RuntimeError('Invalid Ansible variable catalog')
+        for definition in variables.values():
+            if set(definition) - {'pattern', 'required'} or not isinstance(definition.get('pattern', ''), str):
+                raise RuntimeError('Invalid Ansible variable definition')
+            re.compile(definition['pattern'])
+        for key in ('wait', 'validate'):
+            extra = item.get(key)
+            if extra is not None and (not PLAYBOOK_FILE.fullmatch(str(extra)) or not (root / extra).is_file()):
+                raise RuntimeError(f'Invalid Ansible {key} playbook')
+        result[identifier] = item
+    return result
+
+
+def playbook_definition(playbook_id):
+    _safe_slug(playbook_id)
+    item = _playbook_catalog(str(settings().source_dir)).get(playbook_id)
+    if item is None:
+        raise HTTPException(422, 'Unapproved playbook')
+    return item
+
+
+def playbook_public(playbook_id):
+    item = playbook_definition(playbook_id)
+    return {
+        'id': item['id'],
+        'name': item['name'],
+        'variables': list(item.get('variables', {}).keys()),
+        'transport': item['transport'],
+    }
+
+
+def list_playbooks():
+    return [playbook_public(identifier) for identifier in sorted(_playbook_catalog(str(settings().source_dir)))]
+
+
+def validate_playbook_variables(playbook_id, variables):
+    item = playbook_definition(playbook_id)
+    definitions = item.get('variables', {})
+    unknown = set(variables) - set(definitions)
+    if unknown:
+        raise HTTPException(422, 'Unsupported playbook variables: ' + ', '.join(sorted(unknown)))
+    result = {}
+    for name, definition in definitions.items():
+        value = variables.get(name)
+        if value is None:
+            if definition.get('required'):
+                raise HTTPException(422, f'Missing playbook variable: {name}')
+            continue
+        if not isinstance(value, str) or len(value) > 8192 or not re.fullmatch(definition['pattern'], value):
+            raise HTTPException(422, f'Invalid playbook variable: {name}')
+        result[name] = value
+    return result
