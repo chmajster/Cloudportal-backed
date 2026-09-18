@@ -55,6 +55,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function discoverVmOptions(' in script.text
     assert 'function storageLabel(' in script.text
     assert 'function hostnameValueFields(' in script.text
+    assert 'function multiCheckboxField(' in script.text
+    assert 'function toDateTimeLocal(' in script.text
+    assert 'function showDeploymentDetails(' in script.text
+    assert 'function assignHostname(' in script.text
+    assert 'function assignIpAllocation(' in script.text
     assert 'Zmienne template JSON' not in script.text
     assert 'Schemat zmiennych JSON' not in script.text
     assert 'Definicja deploymentu JSON' not in script.text
@@ -86,6 +91,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-secret-panel' in stylesheet.text
     assert '.credential-tls-control' in stylesheet.text
     assert '.form-section' in stylesheet.text
+    assert '.choice-fieldset' in stylesheet.text
+    assert '.choice-grid' in stylesheet.text
+    assert '.detail-section' in stylesheet.text
     assert '.editor-card' in stylesheet.text
     assert '.table-toolbar' in stylesheet.text
     assert '.permission-group' in stylesheet.text
