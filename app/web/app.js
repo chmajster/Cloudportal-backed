@@ -2289,8 +2289,8 @@ async function catalogView() {
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Szablony Terraform / OpenTofu' })),
       table([
-        { label: 'Template', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
-        { label: 'Platforma', value: item => badge(item.provider, 'info') },
+        { label: 'Szablon', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
+        { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider, 'info') },
         { label: 'Wersja', value: item => `v${item.version}` },
         { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
       ], templates.items, item => [button('Pola', () => showJson(`Pola ${item.id}`, item.variables_schema, `Szablon v${item.version}`))])
@@ -2301,7 +2301,7 @@ async function catalogView() {
         { label: 'Playbook', value: item => node('strong', { text: item.name }) },
         { label: 'ID', class: 'mono', value: item => item.id },
         { label: 'Transport', value: item => badge(item.transport, 'info') },
-        { label: 'Zmienne', value: item => item.variables.join(', ') || '—' },
+        { label: 'Zmienne', value: item => item.variables.map(name => FIELD_LABELS[name] || name.replaceAll('_', ' ')).join(', ') || '—' },
       ], playbooks.items)
     )
   );
@@ -2322,7 +2322,7 @@ async function ipamView() {
         { label: 'CIDR', class: 'mono', value: item => item.cidr },
         { label: 'Gateway', class: 'mono', value: item => item.gateway || '—' },
         { label: 'DNS', value: item => (item.dns_servers || []).join(', ') || '—' },
-        { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
+        { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
       ], pools.items, item => {
         const result = [];
         if (allowed('ipam.allocate') && item.is_active) result.push(button('Przydziel IP', () => allocateIp(item), 'primary'));
@@ -2338,7 +2338,7 @@ async function ipamView() {
       node('div', { class: 'panel-header' }, node('h2', { text: 'Alokacje' })),
       table([
         { label: 'Adres', class: 'mono', value: item => `${item.address}/${item.prefix_length}` },
-        { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
+        { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
         { label: 'Hostname', value: item => item.hostname || '—' },
         { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
         { label: 'Utworzono', value: item => formatDate(item.created_at) },
@@ -2388,10 +2388,12 @@ function allocateIp(pool) {
 }
 
 async function inventoryView() {
-  const [vms, resources] = await Promise.all([
+  const [vms, resources, providerResult] = await Promise.all([
     api('/inventory/vms?refresh=true&limit=200'),
     api('/inventory/resources?limit=200'),
+    allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
   ]);
+  const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
   const actions = allowed('inventory.import') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
   dom.content.replaceChildren(
     heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego zastosowania zmian.', actions),
@@ -2399,9 +2401,9 @@ async function inventoryView() {
       node('div', { class: 'panel-header' }, node('h2', { text: 'Maszyny Proxmox' })),
       table([
         { label: 'VM', value: item => node('div', {}, node('strong', { text: item.name || `VM ${item.vm_id}` }), node('div', { class: 'mono muted', text: `${item.node}/${item.vm_id}` })) },
-        { label: 'Tryb', value: item => badge(item.management_mode, item.management_mode === 'terraform' ? 'ok' : 'info') },
+        { label: 'Tryb', value: item => badge(statusLabel(item.management_mode), item.management_mode === 'terraform' ? 'ok' : 'info') },
         { label: 'Stan', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
-        { label: 'Platforma', value: item => `#${item.provider_id}` },
+        { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || `#${item.provider_id}` },
         { label: 'Stan w platformie', value: item => item.live ? badge(statusLabel(item.live.status || 'present'), statusKind(item.live.status)) : badge(statusLabel('missing'), 'danger') },
       ], vms.items, item => inventoryVmActions(item))
     ),
@@ -2409,7 +2411,7 @@ async function inventoryView() {
       node('div', { class: 'panel-header' }, node('h2', { text: 'Zasoby zarządzane' })),
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-        { label: 'Platforma', value: item => badge(item.provider, 'info') },
+        { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider, 'info') },
         { label: 'External ID', class: 'mono', value: item => short(item.external_id, 26) },
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
         { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
@@ -2465,7 +2467,7 @@ async function adoptInventoryVm(item) {
       ...liveEntries.map(([key, value]) => info(FIELD_LABELS[key] || key.replaceAll('_', ' '), displayValue(value))));
 
     const fields = node('div', { class: 'form-grid' },
-      formSection('Import do Terraform', 'Operacja wykona terraform import oraz plan. Apply nie zostanie uruchomiony automatycznie.',
+      formSection('Import do Terraform', 'Operacja wykona import do Terraform oraz plan. Zastosowanie zmian nie zostanie uruchomione automatycznie.',
         node('div', { class: 'form-grid' },
           field('Szablon', 'template', { value: template.name + ' · v' + template.version, wide: true }),
           selectField('Silnik IaC', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'))),
@@ -2477,7 +2479,7 @@ async function adoptInventoryVm(item) {
       title: `Przejmij zarządzanie: ${item.name || item.vm_id}`,
       eyebrow: 'Terraform import + plan',
       body: fields,
-      submitLabel: 'Importuj state i wykonaj plan',
+      submitLabel: 'Importuj stan i wykonaj plan',
       wide: true,
       onSubmit: async (_data, form) => {
         const result = await api(`/inventory/vms/${item.id}/adopt`, {
