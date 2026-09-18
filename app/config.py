@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     worker_count: int = Field(default=1, ge=1, le=64)
     execution_timeout: int = 3600
     allow_http: bool = False
+    webhook_allowed_hosts: list[str] = Field(default_factory=list)
 
 
 @lru_cache
