@@ -16,7 +16,7 @@ from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
 DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
-JOB_FIELDS = 'id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error'
+JOB_FIELDS = 'id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error retry_of attempt'
 
 
 def deployment_public(d):
@@ -222,7 +222,7 @@ def validate_ansible(db, data):
         raise HTTPException(422, f'Playbook requires {expected} credential')
 
 
-def new_job(db, request, actor, operation, deployment=None, payload=None):
+def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
     check_job_permissions(request, operation)
     if deployment and deployment.workflow.get('ansible') and operation == 'terraform.apply' and 'ansible.execute' not in request.state.permissions:
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
@@ -234,7 +234,7 @@ def new_job(db, request, actor, operation, deployment=None, payload=None):
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
               payload=job_payload, created_by=actor.user_id, token_id=actor.id,
               request_id=request.state.request_id, ip=request.client.host if request.client else '',
-              source=getattr(request.state, 'source', 'API'))
+              source=getattr(request.state, 'source', 'API'), retry_of=retry_of, attempt=attempt)
     db.add(job)
     db.flush()
     if deployment:
@@ -313,6 +313,48 @@ def jobs(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('jobs.rea
 @router.get('/jobs/{id}', response_model=JobOutput)
 def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
     return job_public(find(db, Job, id))
+
+
+@router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)
+def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
+    original = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if original is None:
+        raise HTTPException(404, 'Job not found')
+    if original.status not in {'failed', 'cancelled'}:
+        raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
+    check_job_permissions(request, original.operation)
+    payload = dict(original.payload or {})
+    if original.operation == 'ansible.execute' and payload.get('ansible'):
+        from app.api.schemas import AnsibleInput
+        validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))
+
+    def create():
+        deployment = None
+        if original.deployment_id:
+            deployment = db.scalar(select(Deployment).where(Deployment.id == original.deployment_id).with_for_update())
+            if deployment is None:
+                raise HTTPException(404, 'Deployment not found')
+        new = new_job(
+            db,
+            request,
+            actor,
+            original.operation,
+            deployment,
+            payload,
+            retry_of=original.id,
+            attempt=original.attempt + 1,
+        )
+        audit(db, request, 'job.retried', 'jobs', new.id)
+        return job_public(new)
+
+    return idempotent(
+        db,
+        request,
+        actor,
+        {'retry_of': original.id, 'attempt': original.attempt + 1},
+        create,
+        required=True,
+    )
 
 
 @router.get('/jobs/{id}/logs', response_model=JobLogsOutput)
