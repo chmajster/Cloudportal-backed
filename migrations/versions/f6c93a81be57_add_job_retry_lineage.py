@@ -9,14 +9,16 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('jobs', sa.Column('retry_of', sa.String(length=36), nullable=True))
-    op.add_column('jobs', sa.Column('attempt', sa.Integer(), server_default='1', nullable=False))
-    op.create_foreign_key('fk_jobs_retry_of_jobs', 'jobs', 'jobs', ['retry_of'], ['id'])
-    op.create_index(op.f('ix_jobs_retry_of'), 'jobs', ['retry_of'])
+    with op.batch_alter_table('jobs') as batch:
+        batch.add_column(sa.Column('retry_of', sa.String(length=36), nullable=True))
+        batch.add_column(sa.Column('attempt', sa.Integer(), server_default='1', nullable=False))
+        batch.create_foreign_key('fk_jobs_retry_of_jobs', 'jobs', ['retry_of'], ['id'])
+        batch.create_index(op.f('ix_jobs_retry_of'), ['retry_of'])
 
 
 def downgrade():
-    op.drop_index(op.f('ix_jobs_retry_of'), table_name='jobs')
-    op.drop_constraint('fk_jobs_retry_of_jobs', 'jobs', type_='foreignkey')
-    op.drop_column('jobs', 'attempt')
-    op.drop_column('jobs', 'retry_of')
+    with op.batch_alter_table('jobs') as batch:
+        batch.drop_index(op.f('ix_jobs_retry_of'))
+        batch.drop_constraint('fk_jobs_retry_of_jobs', type_='foreignkey')
+        batch.drop_column('attempt')
+        batch.drop_column('retry_of')
