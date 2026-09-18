@@ -2,6 +2,7 @@
 
 const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
+const THEME_KEY = 'cloudportal.console.theme';
 const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null };
 
 const dom = {
@@ -16,6 +17,9 @@ const dom = {
   currentUser: document.querySelector('#current-user'),
   currentRoles: document.querySelector('#current-roles'),
   apiStatus: document.querySelector('#api-status'),
+  sidebar: document.querySelector('#sidebar'),
+  sidebarBackdrop: document.querySelector('#sidebar-backdrop'),
+  menuToggle: document.querySelector('#menu-toggle'),
   modal: document.querySelector('#modal'),
   modalTitle: document.querySelector('#modal-title'),
   modalEyebrow: document.querySelector('#modal-eyebrow'),
@@ -74,6 +78,47 @@ function errorMessage(data) {
   const detail = data && data.detail;
   if (Array.isArray(detail)) return detail.map(item => item.msg || String(item)).join('; ');
   return detail || 'Operacja nie powiodła się.';
+}
+
+function updateThemeControls() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  document.querySelectorAll('[data-theme-toggle]').forEach(control => {
+    const label = dark ? 'Włącz jasny motyw' : 'Włącz ciemny motyw';
+    control.textContent = dark ? '☀' : '☾';
+    control.setAttribute('aria-label', label);
+    control.setAttribute('title', label);
+    control.setAttribute('aria-pressed', String(dark));
+  });
+}
+
+function setTheme(theme, persist = true) {
+  const selected = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = selected;
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, selected); } catch { /* Storage may be disabled. */ }
+  }
+  updateThemeControls();
+}
+
+function loadTheme() {
+  let selected = 'light';
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === 'light' || stored === 'dark') selected = stored;
+  } catch { /* Use the light default when storage is unavailable. */ }
+  setTheme(selected, false);
+}
+
+function toggleTheme() {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+}
+
+function setMobileMenu(open) {
+  const active = Boolean(open);
+  dom.sidebar.classList.toggle('open', active);
+  dom.appView.classList.toggle('menu-open', active);
+  dom.menuToggle.setAttribute('aria-expanded', String(active));
+  dom.menuToggle.setAttribute('aria-label', active ? 'Zamknij menu' : 'Otwórz menu');
 }
 
 function loadSession() {
@@ -239,7 +284,7 @@ function closeModal() {
     try { state.consoleRfb.disconnect(); } catch { /* Session may already be disconnected. */ }
     state.consoleRfb = null;
   }
-  dom.modal.classList.remove('modal-console');
+  dom.modal.classList.remove('modal-console', 'modal-wide');
   if (dom.modal.open) dom.modal.close();
 }
 
@@ -281,6 +326,7 @@ function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit
 }
 
 function showSecret(title, value, note = 'Ta wartość jest wyświetlana tylko raz. Skopiuj ją teraz.') {
+  dom.modal.classList.remove('modal-console', 'modal-wide');
   const copy = button('Kopiuj', async () => {
     await navigator.clipboard.writeText(value);
     toast('Skopiowano do schowka.');
@@ -335,7 +381,7 @@ async function navigate(view) {
   dom.pageTitle.textContent = route.label;
   dom.pageEyebrow.textContent = route.id === 'dashboard' ? 'Stan systemu' : 'Zarządzanie lokalne';
   dom.navigation.querySelectorAll('.nav-link').forEach(item => item.classList.toggle('active', item.dataset.route === route.id));
-  document.querySelector('.sidebar').classList.remove('open');
+  setMobileMenu(false);
   loading();
   try { await views[route.id](); }
   catch (error) {
@@ -1686,8 +1732,13 @@ function webhookForm(item = null) {
         name: data.get('name'), url: data.get('url'), events: selected, is_active: data.has('is_active'),
       },
     });
-    if (!item && result.secret) showSecret('Webhook secret', result.secret);
-    else { toast('Webhook zapisany.'); navigate('webhooks'); }
+    if (!item && result.secret) {
+      navigate('webhooks');
+      showSecret('Webhook secret', result.secret);
+    } else {
+      toast('Webhook zapisany.');
+      navigate('webhooks');
+    }
     return item ? true : false;
   }});
 }
@@ -1787,10 +1838,22 @@ document.querySelector('#logout').addEventListener('click', async () => {
   try { await api('/auth/logout', { method: 'POST' }); } catch { /* Local logout still clears the session. */ }
   showLogin('Wylogowano.');
 });
-document.querySelector('#menu-toggle').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
-dom.modal.querySelector('header .icon-button').addEventListener('click', closeModal);
+document.querySelectorAll('[data-theme-toggle]').forEach(control => control.addEventListener('click', toggleTheme));
+dom.menuToggle.addEventListener('click', () => setMobileMenu(!dom.appView.classList.contains('menu-open')));
+dom.sidebarBackdrop.addEventListener('click', () => setMobileMenu(false));
+document.querySelector('#modal-close').addEventListener('click', closeModal);
+dom.modal.addEventListener('cancel', event => {
+  event.preventDefault();
+  closeModal();
+});
 dom.modal.addEventListener('click', event => { if (event.target === dom.modal) closeModal(); });
+window.addEventListener('resize', () => { if (window.innerWidth > 760) setMobileMenu(false); });
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !dom.modal.open && dom.appView.classList.contains('menu-open')) setMobileMenu(false);
+});
 window.addEventListener('hashchange', () => { if (!dom.appView.hidden && location.hash.slice(1) !== state.view) navigate(location.hash.slice(1)); });
+
+loadTheme();
 
 (async function boot() {
   loadSession();
