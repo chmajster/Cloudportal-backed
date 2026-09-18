@@ -29,6 +29,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'CREDENTIAL_TYPE_CONFIG' in script.text
     assert 'Secrets JSON' not in script.text
     assert 'Zastąp zapisane sekrety' in script.text
+    assert "['suspend', 'Resume']" not in script.text
+    assert "['suspend', 'Suspend']" in script.text
+    assert "['resume', 'Resume']" in script.text
+    assert "['reset', 'Reset']" in script.text
+    assert 'destroy_unreferenced_disks' in script.text
     assert 'credential-secret-panel' in script.text
     assert 'consoleRfb' in script.text
     assert 'rfb_module' in script.text
