@@ -463,6 +463,19 @@ function formatBytes(value) {
   return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
 }
 
+function formatDuration(value) {
+  let seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  seconds = Math.floor(seconds);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days) return `${days} d ${hours} h`;
+  if (hours) return `${hours} h ${minutes} min`;
+  if (minutes) return `${minutes} min`;
+  return `${seconds} s`;
+}
+
 const FIELD_LABELS = {
   name: 'Nazwa',
   node: 'Węzeł / lokalizacja',
@@ -2487,6 +2500,23 @@ function vmBase(item) {
   return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
 }
 
+async function discoverVmOptions(item, resource, node = null) {
+  if (!allowed('providers.read')) return [];
+  try {
+    const query = node ? '?node=' + encodeURIComponent(node) : '';
+    return (await api(`/providers/${item.provider_id}/${resource}${query}`)).items || [];
+  } catch {
+    return [];
+  }
+}
+
+function storageLabel(storage) {
+  const parts = [storage.storage || storage.id || 'storage'];
+  if (storage.avail !== undefined) parts.push(`wolne ${formatBytes(storage.avail)}`);
+  if (storage.content) parts.push(Array.isArray(storage.content) ? storage.content.join(', ') : String(storage.content));
+  return parts.join(' · ');
+}
+
 async function openVmManager(item) {
   try {
     const base = vmBase(item);
@@ -2495,9 +2525,9 @@ async function openVmManager(item) {
     dom.modalTitle.textContent = item.name || `VM ${item.vm_id}`;
     dom.modalEyebrow.textContent = `${item.node} / VMID ${item.vm_id}`;
     const statusPanel = node('div', { class: 'checks' },
-      info('Status', status.status || '—'), info('CPU', status.cpus ?? status.cpu ?? '—'),
+      info('Status', statusLabel(status.status || '—')), info('CPU', status.cpus ?? status.cpu ?? '—'),
       info('RAM', status.mem && status.maxmem ? `${Math.round(status.mem / 1024 / 1024)} / ${Math.round(status.maxmem / 1024 / 1024)} MiB` : '—'),
-      info('Uptime', status.uptime ?? '—'));
+      info('Czas działania', formatDuration(status.uptime)));
     const snapshotTable = allowed('snapshots.read') ? table([
       { label: 'Snapshot', value: snap => snap.name },
       { label: 'Opis', value: snap => snap.description || '—' },
@@ -2505,17 +2535,17 @@ async function openVmManager(item) {
     ], snapshots, snap => allowed('snapshots.delete') && snap.name !== 'current' ? [button('Usuń', () => confirmAction('Usuń snapshot', snap.name, async () => {
       await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
       openVmManager(item);
-    }), 'danger'), ...(allowed('snapshots.rollback') ? [button('Rollback', () => confirmAction('Rollback snapshot', `VM zostanie przywrócona do ${snap.name}.`, async () => {
+    }), 'danger'), ...(allowed('snapshots.rollback') ? [button('Przywróć', () => confirmAction('Przywróć snapshot', `VM zostanie przywrócona do snapshotu ${snap.name}.`, async () => {
       await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
-      toast('Rollback uruchomiony.');
+      toast('Przywracanie snapshotu uruchomione.');
       closeModal();
     }), 'danger')] : [])] : []) : node('p', { class: 'muted', text: 'Brak uprawnienia do snapshotów.' });
     dom.modalBody.replaceChildren(node('div', { class: 'stack' }, statusPanel, node('h3', { text: 'Snapshoty' }), snapshotTable));
     const actions = [button('Zamknij', closeModal)];
     if (allowed('vms.power')) {
       const powerActions = [
-        ['start', 'Start'], ['shutdown', 'Shutdown'], ['reboot', 'Reboot'],
-        ['suspend', 'Suspend'], ['resume', 'Resume'], ['reset', 'Reset'], ['stop', 'Stop'],
+        ['start', 'Uruchom'], ['shutdown', 'Wyłącz bezpiecznie'], ['reboot', 'Restart'],
+        ['suspend', 'Wstrzymaj'], ['resume', 'Wznów'], ['reset', 'Twardy reset'], ['stop', 'Wymuś stop'],
       ];
       for (const [action, label] of powerActions) {
         actions.push(button(label, () => vmPower(item, action), ['stop', 'reset'].includes(action) ? 'danger' : 'ghost'));
@@ -2530,8 +2560,8 @@ async function openVmManager(item) {
       actions.push(button('Dysk +', () => resizeVmDisk(item)));
     }
     if (allowed('vms.migrate')) actions.push(button('Migracja', () => migrateVm(item)));
-    if (allowed('vms.clone')) actions.push(button('Clone', () => cloneVm(item)));
-    if (allowed('vms.template')) actions.push(button('→ Template', () => confirmAction('Konwertuj do template', 'Operacja zmieni VM w template.', async () => {
+    if (allowed('vms.clone')) actions.push(button('Klonuj', () => cloneVm(item)));
+    if (allowed('vms.template')) actions.push(button('→ Szablon', () => confirmAction('Konwertuj do szablonu', 'Operacja zmieni VM w szablon.', async () => {
       await api(`${base}/template`, { method: 'POST', idempotent: true });
       closeModal(); toast('Konwersja uruchomiona.');
     })));
@@ -2542,8 +2572,12 @@ async function openVmManager(item) {
 }
 
 async function vmPower(item, action) {
+  const labels = {
+    start: 'uruchomienia', shutdown: 'bezpiecznego wyłączenia', reboot: 'restartu',
+    suspend: 'wstrzymania', resume: 'wznowienia', reset: 'twardego resetu', stop: 'wymuszonego zatrzymania',
+  };
   await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
-  toast(`Polecenie ${action} wysłane.`);
+  toast(`Wysłano polecenie ${labels[action] || action}.`);
   closeModal();
 }
 
