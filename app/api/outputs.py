@@ -282,6 +282,8 @@ class BlueprintOutput(Output):
     variables_schema: dict[str, Any]
     deployment: dict[str, Any]
     workflow: list[dict[str, Any]]
+    requires_approval: bool
+    recovery_policy: Literal['preserve', 'destroy_on_failure']
     created_by: int
     created_at: datetime
     updated_at: datetime
