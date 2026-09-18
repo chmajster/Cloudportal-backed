@@ -23,7 +23,8 @@ def _canonical_proxmox_endpoint(endpoint, scheme=None):
     raw = endpoint.strip().rstrip('/')
     if not raw:
         raise HTTPException(422, 'Proxmox endpoint is required')
-    if '://' not in raw:
+    explicit_scheme = '://' in raw
+    if not explicit_scheme:
         try:
             address = ipaddress.ip_address(raw)
             if address.version == 6:
@@ -49,13 +50,16 @@ def _canonical_proxmox_endpoint(endpoint, scheme=None):
             'Proxmox endpoint must use HTTP or HTTPS and contain only host/IP and optional port',
         )
     try:
-        port = parsed.port or 8006
+        port = parsed.port
     except ValueError:
         raise HTTPException(422, 'Invalid Proxmox endpoint port') from None
+    if port is None and not explicit_scheme:
+        port = 8006
     host = parsed.hostname
     if ':' in host:
         host = f'[{host}]'
-    return f'{parsed.scheme}://{host}:{port}'
+    authority = host + (f':{port}' if port is not None else '')
+    return f'{parsed.scheme}://{authority}'
 
 
 def resolve_proxmox_endpoint(endpoint, *, verify_ssl=True):
