@@ -315,7 +315,7 @@ class DeploymentInput(Input):
 
 
 class JobInput(Input):
-    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'ansible.execute']
+    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'terraform.import', 'ansible.execute']
     deployment_id: str | None = None
     ansible: AnsibleInput | None = None
 
