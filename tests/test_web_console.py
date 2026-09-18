@@ -76,6 +76,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "dom.refreshView.addEventListener('click'" in script.text
     assert 'function copyText(' in script.text
     assert 'function setLoginMessage(' in script.text
+    assert 'function friendlyApiText(' in script.text
+    assert 'VALIDATION_FIELD_LABELS' in script.text
     assert "replace(/^Value error" in script.text
     assert "dom.modal.addEventListener('cancel'" in script.text
     assert "setMobileMenu(false)" in script.text
