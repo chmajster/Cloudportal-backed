@@ -501,7 +501,7 @@ const CREDENTIAL_TYPE_CONFIG = {
   ssh: {
     label: 'SSH / Linux',
     description: 'Credential do Ansible i operacji SSH. Weryfikacja known_hosts jest wymagana i nie jest automatycznie pomijana.',
-    endpoint: { label: 'Endpoint SSH', placeholder: 'ssh://server.example.com:22', required: true },
+    endpoint: { label: 'Endpoint SSH (opcjonalnie)', placeholder: 'ssh://server.example.com:22', required: false, help: 'Używany przez przycisk Testuj. Dla zadań Ansible hosty pochodzą z inventory, więc endpoint może pozostać pusty.' },
     username: { label: 'Użytkownik SSH', placeholder: 'clouduser', required: true },
     tls: false,
     defaultAuth: 'private_key',
@@ -633,7 +633,7 @@ function renderCredentialDynamic(container, type, item) {
       required: config.endpoint.required,
       placeholder: config.endpoint.placeholder,
       wide: true,
-      help: config.endpoint.required ? 'Adres bez loginu, hasła, parametrów query i fragmentu.' : undefined,
+      help: config.endpoint.help || (config.endpoint.required ? 'Adres bez loginu, hasła, parametrów query i fragmentu.' : undefined),
     }));
   }
   if (config.username) {
@@ -703,7 +703,7 @@ async function credentialsView() {
 
 function credentialActions(item) {
   const actions = [];
-  if (allowed('credentials.test') && item.type !== 'other') actions.push(button('Testuj', async () => {
+  if (allowed('credentials.test') && item.type !== 'other' && (item.type !== 'ssh' || item.endpoint)) actions.push(button('Testuj', async () => {
     try {
       const result = await api('/credentials/' + item.id + '/test', { method: 'POST' });
       toast('Połączenie działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
