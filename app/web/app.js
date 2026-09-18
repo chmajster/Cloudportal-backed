@@ -621,6 +621,27 @@ const FIELD_LABELS = {
   cluster: 'Klaster',
   template: 'Szablon',
   folder: 'Folder',
+  vmid: 'VMID',
+  status: 'Status',
+  type: 'Typ',
+  mem: 'Użycie RAM',
+  maxmem: 'RAM',
+  disk: 'Użycie dysku',
+  maxdisk: 'Dysk',
+  maxcpu: 'Maks. CPU',
+  uptime: 'Czas działania',
+  iface: 'Interfejs',
+  bridge_ports: 'Porty bridge',
+  content: 'Zawartość',
+  nodes: 'Węzły',
+  shared: 'Współdzielony',
+  active: 'Aktywny',
+  enabled: 'Włączony',
+  used: 'Użyte',
+  avail: 'Wolne',
+  total: 'Pojemność',
+  poolid: 'Pula',
+  comment: 'Opis',
 };
 
 function schemaVariant(spec = {}) {
@@ -1564,7 +1585,8 @@ async function discoverProvider(provider) {
       const columns = keys.slice(0, 8).map(key => ({
         label: FIELD_LABELS[key] || key.replaceAll('_', ' '),
         value: row => {
-          if (['total', 'avail', 'size'].includes(key) && Number.isFinite(Number(row[key]))) return formatBytes(row[key]);
+          if (['total', 'used', 'avail', 'size', 'mem', 'maxmem', 'disk', 'maxdisk'].includes(key) && Number.isFinite(Number(row[key]))) return formatBytes(row[key]);
+          if (key === 'uptime') return formatDuration(row[key]);
           if (key === 'status') return badge(statusLabel(row[key]), statusKind(row[key]));
           return displayValue(row[key]);
         },
