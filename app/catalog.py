@@ -39,6 +39,19 @@ def template_definition(template_id):
     data = _read_json(manifest)
     if data.get('id') != template_id or not SLUG.fullmatch(str(data.get('provider', ''))):
         raise RuntimeError(f'Invalid Terraform template manifest: {manifest}')
+    if not isinstance(data.get('version'), int) or data['version'] < 1:
+        raise RuntimeError(f'Terraform template version is invalid: {manifest}')
+    import_spec = data.get('import')
+    if import_spec is not None:
+        if not isinstance(import_spec, dict):
+            raise RuntimeError(f'Invalid Terraform import manifest: {manifest}')
+        if not isinstance(import_spec.get('resource_address'), str) or not re.fullmatch(r'[A-Za-z0-9_.\[\]"-]+', import_spec['resource_address']):
+            raise RuntimeError(f'Invalid Terraform import resource address: {manifest}')
+        if not isinstance(import_spec.get('id_format'), str) or len(import_spec['id_format']) > 256:
+            raise RuntimeError(f'Invalid Terraform import ID format: {manifest}')
+        fields = import_spec.get('fields')
+        if not isinstance(fields, list) or not fields or any(not SLUG.fullmatch(str(field)) for field in fields):
+            raise RuntimeError(f'Invalid Terraform import fields: {manifest}')
     model_path = data.get('schema_model', '')
     if not isinstance(model_path, str) or not model_path.startswith('app.api.schemas:'):
         raise RuntimeError(f'Unapproved template schema model: {manifest}')
@@ -71,6 +84,8 @@ def template_public(template_id):
         'id': data['id'],
         'name': data['name'],
         'provider': data['provider'],
+        'version': data['version'],
+        'importable': bool(data.get('import')),
         'variables_schema': template_model(template_id).model_json_schema(),
     }
 
@@ -163,3 +178,28 @@ def validate_playbook_variables(playbook_id, variables):
             raise HTTPException(422, f'Invalid playbook variable: {name}')
         result[name] = value
     return result
+
+
+
+def template_import_target(template_id, values):
+    data, _ = template_definition(template_id)
+    spec = data.get('import')
+    if not spec:
+        raise HTTPException(422, 'Terraform template does not support import')
+    fields = spec['fields']
+    if set(values) != set(fields):
+        raise HTTPException(422, 'Terraform import identity does not match the approved template manifest')
+    safe = {}
+    for field in fields:
+        value = values[field]
+        if isinstance(value, int):
+            safe[field] = str(value)
+        elif isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:@/-]{1,128}', value):
+            safe[field] = value
+        else:
+            raise HTTPException(422, 'Terraform import identity contains an invalid value')
+    try:
+        import_id = spec['id_format'].format(**safe)
+    except (KeyError, ValueError):
+        raise RuntimeError('Invalid Terraform import ID format') from None
+    return spec['resource_address'], import_id
