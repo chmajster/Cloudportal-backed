@@ -267,7 +267,7 @@ function showSecret(title, value, note = 'Ta wartość jest wyświetlana tylko r
   dom.modalEyebrow.textContent = 'Sekret jednorazowy';
   dom.modalBody.replaceChildren(node('div', { class: 'stack' }, node('p', { class: 'muted', text: note }), node('div', { class: 'secret-box mono', text: value })));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal), copy);
-  dom.modal.showModal();
+  if (!dom.modal.open) dom.modal.showModal();
 }
 
 function confirmAction(title, message, action) {
