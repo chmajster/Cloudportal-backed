@@ -34,8 +34,8 @@ class IPPoolInput(Input):
             raise ValueError('CIDR must be a canonical network') from None
         if network.version != 4:
             raise ValueError('Only IPv4 pools are currently supported')
-        if network.prefixlen < 8 or network.prefixlen > 30:
-            raise ValueError('IPv4 pool prefix must be between /8 and /30')
+        if network.prefixlen < 16 or network.prefixlen > 30:
+            raise ValueError('IPv4 pool prefix must be between /16 and /30')
         return str(network)
 
     @field_validator('gateway')
