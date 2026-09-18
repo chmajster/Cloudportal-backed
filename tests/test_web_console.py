@@ -35,6 +35,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "['reset', 'Reset']" in script.text
     assert 'destroy_unreferenced_disks' in script.text
     assert 'credential-secret-panel' in script.text
+    assert 'Akceptuj certyfikat self-signed / niezaufany' in script.text
+    assert 'modal-form-error' in script.text
+    assert '192.168.1.10' in script.text
     assert 'restoreVmFromBackup' in script.text
     assert "backups.restore" in script.text
     assert "Uruchom restore" in script.text
@@ -44,6 +47,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "window.open('about:blank'" not in script.text
     assert stylesheet.status_code == 200
     assert '.credential-secret-panel' in stylesheet.text
+    assert '.credential-tls-control' in stylesheet.text
+    assert '.modal-form-error' in stylesheet.text
+    assert '.toast.error' in stylesheet.text
     assert '.modal.modal-wide' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
 
