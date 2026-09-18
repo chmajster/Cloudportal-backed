@@ -7,7 +7,7 @@ PERMISSIONS = {
     **{area: actions.split() for area, actions in {
         'users': 'read create update delete', 'roles': 'read create update delete assign',
         'credentials': 'read create update delete test', 'providers': 'read create update delete',
-        'deployments': 'read create destroy', 'jobs': 'read execute cancel',
+        'deployments': 'read create destroy adopt', 'jobs': 'read execute cancel',
         'terraform': 'read execute', 'ansible': 'read execute', 'audit': 'read',
         'blueprints': 'read create update delete execute approve',
         'hostnames': 'read create update delete reserve release',
