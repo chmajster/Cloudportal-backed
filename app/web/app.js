@@ -242,10 +242,17 @@ function allowed(permission) {
 function toast(message, type = '') {
   const item = node('div', {
     class: `toast ${type}`,
-    text: message,
     role: type === 'error' ? 'alert' : 'status',
     'aria-live': type === 'error' ? 'assertive' : 'polite',
-  });
+  },
+  node('span', { class: 'toast-message', text: message }),
+  node('button', {
+    class: 'toast-close',
+    type: 'button',
+    'aria-label': 'Zamknij komunikat',
+    title: 'Zamknij',
+    onClick: () => item.remove(),
+  }, '×'));
   dom.toastRegion.append(item);
   window.setTimeout(() => item.remove(), type === 'error' ? 12000 : 5000);
 }
