@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function catalogView() {
   const [templates, playbooks] = await Promise.all([
     api('/templates'),
@@ -32,3 +33,4 @@ async function catalogView() {
 }
 
 registerView({ id: 'catalog', label: 'Katalog IaC', icon: 'C', permission: 'terraform.read', order: 60 }, catalogView);
+})();
