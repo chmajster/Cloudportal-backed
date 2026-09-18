@@ -1,0 +1,18 @@
+.permission-groups { display: grid; gap: 10px; }
+.permission-group { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.permission-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; cursor: pointer; background: var(--surface-2); font-size: .82rem; font-weight: 800; user-select: none; }
+.permission-group > summary:hover { background: var(--surface-3); }
+.permission-group > summary::marker { color: var(--accent); }
+.permission-group .permission-grid { padding: 10px; }
+.permission-chip-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; }
+.permission-chip { display: inline-flex; align-items: center; min-height: 30px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); color: var(--text); font-size: .72rem; font-weight: 700; }
+.permission-summary { width: 100%; }
+.permission-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.permission-grid label { display: flex; align-items: flex-start; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.permission-grid label span { min-width: 0; }
+.permission-grid label strong, .permission-grid label small { display: block; }
+.permission-grid label small { margin-top: 3px; overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .permission-group > summary { padding: 11px 12px; }
+}
