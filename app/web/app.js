@@ -739,7 +739,7 @@ function credentialForm(item = null) {
         if (!password || !tokenName) throw new Error('Podaj hasło Proxmox i nazwę tokenu.');
         const saved = await api('/credentials/proxmox/bootstrap', { method: 'POST', body: {
           name: payload.name, endpoint, username, password, token_name: tokenName,
-          verify_ssl: verifySsl, privilege_separation: true,
+          verify_ssl: verifySsl, privilege_separation: false,
           expires_at: payload.expires_at, rotation_due_at: payload.rotation_due_at,
         }});
         if (data.has('test_after_save')) {
