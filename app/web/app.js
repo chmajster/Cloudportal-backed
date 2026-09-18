@@ -1404,10 +1404,48 @@ function backupVm(item) {
 
 function listVmBackups(item) {
   openModal({ title: 'Pokaż backupy', eyebrow: item.name || String(item.vm_id), body: field('Storage backup', 'storage', { required: true }), submitLabel: 'Pokaż', onSubmit: async data => {
-    const result = await api(`${vmBase(item)}/backups?storage=${encodeURIComponent(data.get('storage'))}`);
-    showJson('Backupy VM', result.items, data.get('storage'));
+    const storage = data.get('storage');
+    const result = await api(`${vmBase(item)}/backups?storage=${encodeURIComponent(storage)}`);
+    dom.modalTitle.textContent = 'Backupy VM';
+    dom.modalEyebrow.textContent = storage;
+    const rows = result.items || [];
+    const backupTable = table([
+      { label: 'Volume', value: backup => node('span', { class: 'mono', text: backup.volid || '—' }) },
+      { label: 'Format', value: backup => backup.format || '—' },
+      { label: 'Rozmiar', value: backup => backup.size ? String(backup.size) : '—' },
+      { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString() : '—' },
+      { label: 'Protected', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
+    ], rows, backup => allowed('backups.restore') ? [button('Restore', () => restoreVmFromBackup(item, backup), 'primary')] : []);
+    dom.modalBody.replaceChildren(rows.length ? backupTable : node('p', { class: 'muted', text: 'Brak backupów dla tej VM.' }));
+    dom.modalActions.replaceChildren(button('Zamknij', closeModal));
     return false;
   }});
+}
+
+function restoreVmFromBackup(item, backup) {
+  if (!backup?.volid) { toast('Backup nie ma identyfikatora volume.', 'error'); return; }
+  const fields = node('div', { class: 'form-grid' },
+    field('Backup volume', 'archive', { value: backup.volid, required: true, wide: true }),
+    field('Nowy VMID', 'vm_id', { type: 'number', min: 100, required: true }),
+    field('Storage docelowy (opcjonalnie)', 'storage'),
+    checkboxField('Nadaj unikalne parametry urządzeń / MAC', 'unique', true));
+  fields.querySelector('[name="archive"]').readOnly = true;
+  openModal({
+    title: 'Restore VM z backupu', eyebrow: item.node, body: fields, submitLabel: 'Uruchom restore',
+    onSubmit: async data => {
+      const payload = {
+        vm_id: Number(data.get('vm_id')),
+        archive: backup.volid,
+        unique: data.has('unique'),
+      };
+      if (data.get('storage')) payload.storage = data.get('storage');
+      await api(`/providers/${item.provider_id}/restore/${encodeURIComponent(item.node)}`, {
+        method: 'POST', idempotent: true, body: payload,
+      });
+      toast(`Restore VMID ${payload.vm_id} uruchomiony.`);
+      closeModal();
+    },
+  });
 }
 
 async function showVmConsole(item) {

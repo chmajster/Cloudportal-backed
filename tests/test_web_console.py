@@ -35,6 +35,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "['reset', 'Reset']" in script.text
     assert 'destroy_unreferenced_disks' in script.text
     assert 'credential-secret-panel' in script.text
+    assert 'restoreVmFromBackup' in script.text
+    assert "backups.restore" in script.text
+    assert "Uruchom restore" in script.text
     assert 'consoleRfb' in script.text
     assert 'rfb_module' in script.text
     assert 'ws_path' in script.text
