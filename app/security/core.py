@@ -66,14 +66,23 @@ def encryption_key():
     return key
 
 
-def encrypt_secret(value, credential_id):
+def encrypt_blob(value: bytes, aad: str) -> bytes:
     nonce = os.urandom(12)
-    return nonce + AESGCM(encryption_key()).encrypt(nonce, json.dumps(value).encode(), f'credential:{credential_id}'.encode())
+    return nonce + AESGCM(encryption_key()).encrypt(nonce, value, aad.encode())
+
+
+def decrypt_blob(value: bytes, aad: str) -> bytes:
+    if not value or len(value) < 29:
+        raise RuntimeError('Encrypted value is invalid')
+    return AESGCM(encryption_key()).decrypt(value[:12], value[12:], aad.encode())
+
+
+def encrypt_secret(value, credential_id):
+    return encrypt_blob(json.dumps(value).encode(), f'credential:{credential_id}')
 
 
 def decrypt_secret(credential):
-    raw = credential.encrypted_secret
-    return json.loads(AESGCM(encryption_key()).decrypt(raw[:12], raw[12:], f'credential:{credential.id}'.encode()))
+    return json.loads(decrypt_blob(credential.encrypted_secret, f'credential:{credential.id}'))
 
 
 def effective_permissions(user):
