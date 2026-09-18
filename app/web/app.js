@@ -497,6 +497,9 @@ async function credentialsView() {
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) }, { label: 'Typ', value: item => badge(item.type, 'info') },
       { label: 'Endpoint', value: item => node('span', { class: 'mono', text: item.endpoint || '—' }) }, { label: 'Użytkownik', value: item => item.username || '—' },
       { label: 'TLS', value: item => item.verify_ssl ? badge('verify', 'ok') : badge('disabled', 'warning') },
+      { label: 'Wygasa', value: item => item.expires_at ? formatDate(item.expires_at) : '—' },
+      { label: 'Rotacja', value: item => item.rotation_due_at ? formatDate(item.rotation_due_at) : '—' },
+      { label: 'Sekret zmieniono', value: item => item.secret_updated_at ? formatDate(item.secret_updated_at) : '—' },
     ], credentials, item => credentialActions(item)));
 }
 
@@ -514,9 +517,16 @@ function credentialForm(item = null) {
     field('Nazwa', 'name', { required: true, value: item?.name || '' }), selectField('Typ', 'type', types, item?.type || 'proxmox', { required: true }),
     field('Endpoint HTTPS / SSH', 'endpoint', { value: item?.endpoint || '', wide: true }), field('Użytkownik', 'username', { value: item?.username || '' }),
     checkboxField('Weryfikuj certyfikat TLS', 'verify_ssl', item ? item.verify_ssl : true),
+    field('Credential wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', value: item?.expires_at ? new Date(item.expires_at).toISOString().slice(0, 16) : '' }),
+    field('Rotacja wymagana do (opcjonalnie)', 'rotation_due_at', { type: 'datetime-local', value: item?.rotation_due_at ? new Date(item.rotation_due_at).toISOString().slice(0, 16) : '' }),
     field(item ? 'Nowe secrets JSON (puste = zachowaj)' : 'Secrets JSON', 'secrets', { tag: 'textarea', required: !item, wide: true, placeholder: '{"token_id":"...","token_secret":"..."}', help: 'Dozwolone klucze obejmują password, token_id, token_secret, private_key, known_hosts, access_key_id, secret_access_key, tenant_id, client_id i client_secret.' }));
   openModal({ title: item ? 'Edytuj credential' : 'Nowy credential', eyebrow: 'Sekrety infrastruktury', body: fields, onSubmit: async data => {
-    const payload = { name: data.get('name'), type: data.get('type'), endpoint: data.get('endpoint'), username: data.get('username'), verify_ssl: data.has('verify_ssl') };
+    const payload = {
+      name: data.get('name'), type: data.get('type'), endpoint: data.get('endpoint'),
+      username: data.get('username'), verify_ssl: data.has('verify_ssl'),
+      expires_at: data.get('expires_at') ? new Date(data.get('expires_at')).toISOString() : null,
+      rotation_due_at: data.get('rotation_due_at') ? new Date(data.get('rotation_due_at')).toISOString() : null,
+    };
     if (data.get('secrets').trim()) {
       try { payload.secrets = JSON.parse(data.get('secrets')); }
       catch { throw new Error('Pole secrets musi zawierać poprawny obiekt JSON.'); }
