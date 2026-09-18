@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function providersView() {
   const [providerResult, credentialResult] = await Promise.all([
     api('/providers?limit=200'),
@@ -136,3 +137,4 @@ async function discoverProvider(provider) {
 }
 
 registerView({ id: 'providers', label: 'Platformy', icon: 'P', permission: 'providers.read', order: 50 }, providersView);
+})();
