@@ -134,6 +134,9 @@ class VMVariables(Input):
     ssh_public_key: Annotated[str, Field(max_length=8192)] | None = None
     ipv4_address: Annotated[str, Field(max_length=32)] | None = None
     ipv4_gateway: Annotated[str, Field(max_length=15)] | None = None
+    dns_servers: Annotated[list[str], Field(max_length=8)] = Field(default_factory=list)
+    dns_domain: Annotated[str | None, Field(max_length=253)] = None
+    tags: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
 
     @field_validator('ssh_public_key')
     @classmethod
@@ -169,6 +172,45 @@ class VMVariables(Input):
         if address.version != 4:
             raise ValueError('ipv4_gateway must be IPv4')
         return str(address)
+
+    @field_validator('dns_servers')
+    @classmethod
+    def cloud_init_dns_servers(cls, values):
+        import ipaddress
+        result = []
+        for value in values:
+            try:
+                result.append(str(ipaddress.ip_address(value)))
+            except ValueError:
+                raise ValueError('dns_servers must contain valid IP addresses') from None
+        return result
+
+    @field_validator('dns_domain')
+    @classmethod
+    def cloud_init_dns_domain(cls, value):
+        if value is None or value == '':
+            return None
+        import re
+        value = value.lower().rstrip('.')
+        if len(value) > 253 or any(
+            not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+            for label in value.split('.')
+        ):
+            raise ValueError('dns_domain must be a valid DNS domain')
+        return value
+
+    @field_validator('tags')
+    @classmethod
+    def proxmox_tags(cls, values):
+        import re
+        normalized = []
+        for value in values:
+            tag = value.strip().lower()
+            if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', tag):
+                raise ValueError('Proxmox tags may contain lowercase letters, digits, underscore and hyphen')
+            normalized.append(tag)
+        return sorted(set(normalized))
+
 
     @model_validator(mode='after')
     def static_ipv4_coherent(self):
@@ -410,7 +452,7 @@ class BlueprintStep(Input):
     type: Literal['generate_hostname', 'allocate_ip', 'release_ip', 'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
                   'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
                   'run_ansible_playbook', 'terraform_plan', 'terraform_apply', 'create_snapshot',
-                  'health_check', 'condition', 'approval', 'delay', 'notification']
+                  'set_tags', 'health_check', 'condition', 'approval', 'delay', 'notification']
     depends_on: Annotated[list[Slug], Field(max_length=50)] = Field(default_factory=list)
     conditions: dict[str, Any] = Field(default_factory=dict)
     retry: int = Field(default=0, ge=0, le=10)
@@ -428,6 +470,7 @@ class BlueprintDeployment(Input):
     ansible: dict[str, Any] | None = None
     hostname_scheme_id: int | None = Field(default=None, gt=0)
     ipam_pool_id: int | None = Field(default=None, gt=0)
+    hostname_values: dict[Slug, Annotated[str, Field(min_length=1, max_length=253)]] = Field(default_factory=dict)
 
 
 class BlueprintInput(Input):
