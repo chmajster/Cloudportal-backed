@@ -27,3 +27,15 @@ variable "ipv4_gateway" {
   type    = string
   default = null
 }
+variable "dns_servers" {
+  type    = list(string)
+  default = []
+}
+variable "dns_domain" {
+  type    = string
+  default = null
+}
+variable "tags" {
+  type    = list(string)
+  default = []
+}
