@@ -254,11 +254,13 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
     for credential_id in sorted({data.credentials_id} | ({data.ansible.credentials_id} if data.ansible else set())):
         locked_credential(db, credential_id)
     if data.ansible:
+        if p.type != 'proxmox':
+            raise HTTPException(422, 'Ansible post-provisioning currently requires the Proxmox guest-agent workflow')
         if 'ansible.execute' not in request.state.permissions:
             raise HTTPException(403, 'ansible.execute required')
         validate_ansible(db, data.ansible)
     def create():
-        d = Deployment(name=data.name, provider_id=p.id, template=data.template, credentials_id=data.credentials_id,
+        d = Deployment(name=data.name, provider_id=p.id, provider=p.type, template=data.template, credentials_id=data.credentials_id,
                        variables=variables.model_dump(mode='json'), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
         db.add(d)
         db.flush()
