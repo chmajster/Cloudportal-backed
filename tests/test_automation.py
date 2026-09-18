@@ -109,3 +109,94 @@ def test_blueprint_rejects_cycle(client, headers):
     response = client.post('/api/v1/blueprints', headers=headers, json=payload)
     assert response.status_code == 422
     assert 'acyclic' in response.text
+
+
+def test_blueprint_reuses_saved_hostname_tags_and_cloud_init(client, headers):
+    credential, provider, _ = resources(client, headers)
+    scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
+        'name': 'Production web',
+        'pattern': '{env}-{role}-{number}',
+        'padding': 3,
+    })
+    assert scheme.status_code == 201, scheme.text
+
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'fast-proxmox-vm',
+        'name': 'Fast Proxmox VM',
+        'variables_schema': {},
+        'deployment': {
+            'name': '{{ hostname }}',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'hostname_scheme_id': scheme.json()['id'],
+            'hostname_values': {'env': 'prod', 'role': 'web'},
+            'variables': {
+                'name': '{{ hostname }}',
+                'node': 'pve01',
+                'template_id': 9000,
+                'template_node': 'pve01',
+                'cpu': 4,
+                'memory': 8192,
+                'disk': 80,
+                'network': 'vmbr20',
+                'storage': 'local-lvm',
+                'ssh_username': 'clouduser',
+                'dns_servers': ['1.1.1.1', '8.8.8.8'],
+                'dns_domain': 'lab.example.com',
+                'tags': ['production', 'web', 'linux'],
+            },
+        },
+        'workflow': [
+            {'id': 'hostname', 'type': 'generate_hostname'},
+            {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname']},
+            {'id': 'cloud_init', 'type': 'cloud_init', 'depends_on': ['clone']},
+            {'id': 'tags', 'type': 'set_tags', 'depends_on': ['cloud_init']},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['tags']},
+        ],
+    })
+    assert created.status_code == 201, created.text
+
+    pattern = client.get('/api/v1/hostname-schemes/' + str(scheme.json()['id']), headers=headers)
+    assert pattern.status_code == 200
+    assert pattern.json()['pattern'] == '{env}-{role}-{number}'
+
+    execution = client.post(
+        '/api/v1/blueprints/' + str(created.json()['id']) + '/execute',
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    result = execution.json()
+    assert result['name'] == 'prod-web-001'
+    assert result['variables']['name'] == 'prod-web-001'
+    assert result['variables']['tags'] == ['linux', 'production', 'web']
+    assert result['variables']['dns_servers'] == ['1.1.1.1', '8.8.8.8']
+    assert result['variables']['dns_domain'] == 'lab.example.com'
+
+
+def test_blueprint_hostname_defaults_must_match_pattern(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
+        'name': 'Number only',
+        'pattern': 'vm-{number}',
+    }).json()
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'invalid-hostname-default',
+        'name': 'Invalid hostname default',
+        'deployment': {
+            'name': '{{ hostname }}',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'hostname_scheme_id': scheme['id'],
+            'hostname_values': {'env': 'prod'},
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'hostname', 'type': 'generate_hostname'},
+            {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname']},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'tokens not used' in response.text
