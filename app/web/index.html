@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pl">
+<html lang="pl" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -17,6 +17,7 @@
         <span class="brand-mark" aria-hidden="true">CP</span>
         <span><strong>Cloudportal</strong><small>Local control plane</small></span>
       </div>
+      <button class="icon-button theme-toggle theme-toggle-login" type="button" data-theme-toggle aria-label="Włącz ciemny motyw" title="Włącz ciemny motyw">☾</button>
       <div class="login-copy">
         <p class="eyebrow">Bezpieczny dostęp lokalny</p>
         <h1 id="login-title">Zaloguj się do backendu</h1>
@@ -44,7 +45,7 @@
   </main>
 
   <div id="app-view" class="app-layout" hidden>
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">CP</span>
         <span><strong>Cloudportal</strong><small>Console</small></span>
@@ -55,13 +56,15 @@
         <a href="/docs" class="nav-link secondary-link">Dokumentacja API</a>
       </div>
     </aside>
+    <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="Zamknij menu" tabindex="-1"></button>
     <div class="workspace">
       <header class="topbar">
-        <button id="menu-toggle" class="icon-button menu-button" type="button" aria-label="Otwórz menu">☰</button>
+        <button id="menu-toggle" class="icon-button menu-button" type="button" aria-label="Otwórz menu" aria-expanded="false" aria-controls="sidebar">☰</button>
         <div>
           <p id="page-eyebrow" class="eyebrow">Cloudportal</p>
           <h1 id="page-title">Dashboard</h1>
         </div>
+        <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Włącz ciemny motyw" title="Włącz ciemny motyw">☾</button>
         <div class="user-menu">
           <div><strong id="current-user"></strong><small id="current-roles"></small></div>
           <button id="logout" class="button ghost" type="button">Wyloguj</button>
@@ -73,7 +76,7 @@
 
   <dialog id="modal" class="modal">
     <div class="modal-shell">
-      <header><div><p id="modal-eyebrow" class="eyebrow"></p><h2 id="modal-title"></h2></div><button class="icon-button" value="cancel" aria-label="Zamknij">×</button></header>
+      <header><div><p id="modal-eyebrow" class="eyebrow"></p><h2 id="modal-title"></h2></div><button id="modal-close" class="icon-button" type="button" aria-label="Zamknij">×</button></header>
       <div id="modal-body" class="modal-body"></div>
       <footer id="modal-actions" class="modal-actions"></footer>
     </div>
