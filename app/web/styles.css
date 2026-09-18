@@ -182,6 +182,16 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent-s
 .advanced-options-body { padding: 12px; border-top: 1px solid var(--line); }
 .template-variable-grid:empty::before { content: 'Brak pól w tym szablonie.'; color: var(--muted); font-size: .8rem; }
 .blueprint-designer, .credential-secret-grid, .hostname-values { align-items: start; }
+.designer-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; padding: 12px 0 6px; border-bottom: 1px solid var(--line); }
+.designer-heading strong { font-size: .95rem; }
+.designer-heading span { color: var(--muted); font-size: .76rem; }
+.designer-subsection { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.workflow-box { padding: 16px; border: 1px solid var(--info-border); border-radius: 12px; background: var(--info-soft); }
+.workflow-preview { display: grid; gap: 8px; margin: 12px 0 0; padding-left: 22px; }
+.workflow-preview li { padding: 7px 8px; color: var(--text); }
+.workflow-preview li span { margin-left: 7px; font-size: .74rem; }
+.blueprint-run-summary { display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--accent-border); border-radius: 12px; background: var(--accent-soft); }
+.blueprint-run-summary span { color: var(--muted); font-size: .78rem; }
 .ansible-fields:empty { display: none; }
 .task-checks .check strong { text-align: right; overflow-wrap: anywhere; }
 .table-search-empty td { background: var(--surface); }
@@ -347,6 +357,7 @@ tbody tr:hover { background: var(--row-hover); }
   .form-section { padding: 13px; }
   .editor-card { padding: 12px; }
   .editor-card-header { align-items: flex-start; }
+  .designer-heading { align-items: flex-start; flex-direction: column; }
   .table-toolbar { align-items: stretch; flex-direction: column; }
   .table-search { max-width: none; }
   .page-actions { align-items: stretch; flex-direction: column; }
