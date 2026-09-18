@@ -55,12 +55,28 @@ def main() -> int:
             fail(f'{path.relative_to(ROOT)} must start with use strict', errors)
         if "(() => {" not in text or not text.rstrip().endswith("})();"):
             fail(f'{path.relative_to(ROOT)} must be isolated in an IIFE', errors)
-        if 'registerView({' not in text:
-            fail(f'{path.relative_to(ROOT)} must register at least one view', errors)
+        if 'registerView({' not in text and 'registerExtension(' not in text:
+            fail(f'{path.relative_to(ROOT)} must register a view or extension', errors)
         if len(text.splitlines()) > 1400:
             fail(f'{path.relative_to(ROOT)} exceeds 1400 lines; split the feature further', errors)
         for route_id in route_pattern.findall(text):
             route_ids.append((route_id, path))
+
+    extension_pattern = re.compile(r"registerExtension\(\s*'([^']+)'")
+    extension_ids: list[tuple[str, Path]] = []
+    for path in feature_files:
+        for extension_id in extension_pattern.findall(path.read_text(encoding='utf-8')):
+            extension_ids.append((extension_id, path))
+
+    seen_extensions: dict[str, Path] = {}
+    for extension_id, path in extension_ids:
+        if extension_id in seen_extensions:
+            fail(
+                f'duplicate frontend extension {extension_id!r}: '
+                f'{seen_extensions[extension_id].relative_to(ROOT)} and {path.relative_to(ROOT)}',
+                errors,
+            )
+        seen_extensions[extension_id] = path
 
     seen: dict[str, Path] = {}
     for route_id, path in route_ids:
@@ -88,7 +104,7 @@ def main() -> int:
         if selector in core_css:
             fail(f'feature selector {selector} leaked back into app/web/styles.css', errors)
 
-    expected_style_files = {'identity.css', 'credentials.css', 'blueprints.css', 'inventory.css'}
+    expected_style_files = {'identity.css', 'credentials.css', 'blueprints.css', 'inventory.css', 'search.css'}
     actual_style_files = {path.name for path in FEATURE_STYLES.glob('*.css')}
     if not expected_style_files <= actual_style_files:
         fail(f'missing feature styles: {sorted(expected_style_files - actual_style_files)}', errors)
@@ -115,7 +131,8 @@ def main() -> int:
 
     print(
         f'Module boundaries OK: {len(feature_files)} UI features, '
-        f'{len(route_ids)} UI routes, {len(backend_features)} backend descriptors.'
+        f'{len(route_ids)} UI routes, {len(extension_ids)} UI extensions, '
+        f'{len(backend_features)} backend descriptors.'
     )
     return 0
 
