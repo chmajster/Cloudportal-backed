@@ -56,7 +56,7 @@
         <a href="/docs" class="nav-link secondary-link">Dokumentacja API</a>
       </div>
     </aside>
-    <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="Zamknij menu" tabindex="-1"></button>
+    <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="Zamknij menu" aria-hidden="true" tabindex="-1"></button>
     <div class="workspace">
       <header class="topbar">
         <button id="menu-toggle" class="icon-button menu-button" type="button" aria-label="Otwórz menu" aria-expanded="false" aria-controls="sidebar">☰</button>
@@ -74,7 +74,7 @@
     </div>
   </div>
 
-  <dialog id="modal" class="modal">
+  <dialog id="modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-shell">
       <header><div><p id="modal-eyebrow" class="eyebrow"></p><h2 id="modal-title"></h2></div><button id="modal-close" class="icon-button" type="button" aria-label="Zamknij">×</button></header>
       <div id="modal-body" class="modal-body"></div>
