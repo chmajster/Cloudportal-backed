@@ -470,18 +470,21 @@ async function createToken() {
 const CREDENTIAL_TYPE_CONFIG = {
   proxmox: {
     label: 'Proxmox VE',
-    description: 'Połączenie z API Proxmox VE. Preferowany jest dedykowany API Token z minimalnym zakresem uprawnień.',
+    description: 'Połączenie z API Proxmox VE. Możesz podać adres, login i hasło — Cloudportal zaloguje się jednorazowo, utworzy API token, zweryfikuje go i zapisze wyłącznie token.',
     endpoint: { label: 'Endpoint Proxmox HTTPS', placeholder: 'https://pve.example.com:8006', required: true },
     username: { label: 'Użytkownik / realm', placeholder: 'root@pam', required: true },
     tls: true,
-    defaultAuth: 'token',
+    defaultAuth: 'auto_token',
     authModes: {
-      token: { label: 'API token (zalecane)', fields: [
+      auto_token: { label: 'Login + hasło → utwórz token automatycznie (zalecane)', fields: [
+        { key: 'password', label: 'Hasło Proxmox', type: 'password', required: true, autocomplete: 'new-password', wide: true, help: 'Hasło jest używane tylko raz do zalogowania w Proxmox i utworzenia API tokena. Cloudportal zapisuje wyłącznie wygenerowany token, nie hasło.' },
+      ]},
+      token: { label: 'Mam już API token', fields: [
         { key: 'token_id', label: 'Token ID', placeholder: 'root@pam!cloudportal', required: true, help: 'Pełny identyfikator tokena albo sama nazwa tokena. Backend dołączy użytkownika, gdy brakuje znaku !.' },
         { key: 'token_secret', label: 'Token secret', type: 'password', required: true, autocomplete: 'new-password' },
       ]},
-      password: { label: 'Użytkownik i hasło', fields: [
-        { key: 'password', label: 'Hasło', type: 'password', required: true, autocomplete: 'new-password' },
+      password: { label: 'Zapisz login i hasło zamiast tokena', fields: [
+        { key: 'password', label: 'Hasło', type: 'password', required: true, autocomplete: 'new-password', help: 'Ta metoda przechowuje zaszyfrowane hasło. Do nowych połączeń użyj automatycznego tworzenia API tokena.' },
       ]},
     },
   },
@@ -668,8 +671,10 @@ function renderCredentialDynamic(container, type, item) {
     secretPanel.append(replace);
   }
 
-  const authChoices = Object.entries(config.authModes).map(([value, mode]) => ({ value, label: mode.label }));
-  const authWrapper = selectField('Metoda uwierzytelnienia', 'auth_mode', authChoices, config.defaultAuth, { required: true, wide: true });
+  const availableAuthModes = Object.entries(config.authModes).filter(([value]) => !(item && value === 'auto_token'));
+  const authChoices = availableAuthModes.map(([value, mode]) => ({ value, label: mode.label }));
+  const initialAuthMode = item && config.defaultAuth === 'auto_token' ? (config.authModes.token ? 'token' : authChoices[0]?.value) : config.defaultAuth;
+  const authWrapper = selectField('Metoda uwierzytelnienia', 'auth_mode', authChoices, initialAuthMode, { required: true, wide: true });
   const authSelect = authWrapper.querySelector('select');
   const secretGrid = node('div', { class: 'form-grid credential-secret-grid' });
   secretPanel.append(authWrapper, secretGrid);
@@ -769,6 +774,36 @@ function credentialForm(item = null) {
         username,
         verify_ssl: verifySsl,
       };
+
+      const authMode = form.elements.auth_mode?.value;
+      if (!item && type === 'proxmox' && authMode === 'auto_token') {
+        const passwordInput = form.querySelector('[data-secret-key="password"]');
+        if (!passwordInput?.value) throw new Error('Podaj hasło Proxmox.');
+        const saved = await api('/credentials/proxmox/auto-token', {
+          method: 'POST',
+          idempotent: true,
+          body: {
+            name: data.get('name'),
+            endpoint,
+            username,
+            password: passwordInput.value,
+            verify_ssl: verifySsl,
+          },
+        });
+
+        if (data.has('test_after_save')) {
+          try {
+            const result = await api('/credentials/' + saved.id + '/test', { method: 'POST' });
+            toast('Token Proxmox utworzony automatycznie i zweryfikowany' + (result.version ? ' (' + result.version + ')' : '') + '. Hasło nie zostało zapisane.');
+          } catch (error) {
+            toast('Token został utworzony i zapisany, ale końcowy test nie powiódł się: ' + error.message, 'error');
+          }
+        } else {
+          toast('Token Proxmox utworzony automatycznie. Hasło nie zostało zapisane.');
+        }
+        navigate('credentials');
+        return;
+      }
 
       if (replaceSecrets) {
         const secrets = {};
