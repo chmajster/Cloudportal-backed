@@ -34,7 +34,10 @@ resource "proxmox_virtual_environment_vm" "vm" {
   initialization {
     datastore_id = var.storage
     ip_config {
-      ipv4 { address = "dhcp" }
+      ipv4 {
+        address = var.ipv4_address == null ? "dhcp" : var.ipv4_address
+        gateway = var.ipv4_address == null ? null : var.ipv4_gateway
+      }
     }
     user_account {
       username = var.ssh_username
