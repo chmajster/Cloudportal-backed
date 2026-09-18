@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     execution_timeout: int = 3600
     allow_http: bool = False
     webhook_allowed_hosts: list[str] = Field(default_factory=list)
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_service_name: str = 'cloudportal-backed'
 
 
 @lru_cache
