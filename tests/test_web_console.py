@@ -44,6 +44,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "const THEME_KEY = 'cloudportal.console.theme';" in script.text
     assert 'function setTheme(' in script.text
     assert 'function setMobileMenu(' in script.text
+    assert 'function copyText(' in script.text
+    assert 'function setLoginMessage(' in script.text
+    assert "replace(/^Value error" in script.text
     assert "dom.modal.addEventListener('cancel'" in script.text
     assert "setMobileMenu(false)" in script.text
     assert '192.168.1.10' in script.text
@@ -62,6 +65,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-secret-panel' in stylesheet.text
     assert '.credential-tls-control' in stylesheet.text
     assert '.modal-form-error' in stylesheet.text
+    assert '.form-error.success' in stylesheet.text
+    assert '.clipboard-fallback' in stylesheet.text
     assert '.toast.error' in stylesheet.text
     assert '.modal.modal-wide' in stylesheet.text
     assert stylesheet.headers['content-type'].startswith('text/css')
