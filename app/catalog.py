@@ -62,7 +62,7 @@ def validate_template_variables(template_id, values):
     try:
         return model.model_validate(values)
     except ValidationError as error:
-        raise HTTPException(422, error.errors()) from None
+        raise HTTPException(422, error.errors(include_url=False, include_context=False, include_input=False)) from None
 
 
 def template_public(template_id):
