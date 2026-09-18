@@ -156,7 +156,7 @@ async function proxmoxBlueprintForm(item = null) {
       deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' }
     );
 
-    const workflowPreview = node('ol', { class: 'workflow-preview' });
+    const workflowPreview = node('div', { class: 'workflow-preview workflow-preview-visual' });
     const preservedVariablesSchema = item?.variables_schema || {};
 
     const fields = node('div', { class: 'form-grid blueprint-designer' },
@@ -272,9 +272,16 @@ async function proxmoxBlueprintForm(item = null) {
         ansible: Boolean(playbookSelect.value),
       };
       const steps = blueprintWorkflow(options);
-      workflowPreview.replaceChildren(...steps.map(step =>
-        node('li', {}, node('strong', { text: step.type }), node('span', { class: 'muted', text: step.depends_on.length ? ' ← ' + step.depends_on.join(', ') : '' }))
-      ));
+      workflowPreview.replaceChildren(...steps.flatMap((step, index) => {
+        const card = node('div', { class: 'workflow-preview-card' },
+          node('span', { class: 'workflow-dag-index', text: String(index + 1) }),
+          node('div', {},
+            node('strong', { text: step.type }),
+            node('small', { class: 'muted', text: step.depends_on.length ? 'po: ' + step.depends_on.join(', ') : 'start' })));
+        return index < steps.length - 1
+          ? [card, node('span', { class: 'workflow-preview-arrow', 'aria-hidden': 'true', text: '→' })]
+          : [card];
+      }));
     }
 
     const loadNodeResources = async () => {
@@ -502,9 +509,102 @@ async function blueprintForm(item = null) {
     if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 
     const variableList = node('div', { class: 'editor-list wide' });
-    const workflowList = node('div', { class: 'editor-list wide' });
+    const workflowList = node('div', { class: 'editor-list wide workflow-editor-list' });
+    const workflowGraph = node('div', { class: 'workflow-dag wide', 'aria-live': 'polite' });
     let variableCounter = 0;
     let workflowCounter = 0;
+
+    const workflowRowData = row => {
+      const typeSelect = row.querySelector('[name="workflow_type"]');
+      return {
+        row,
+        id: row.querySelector('[name="workflow_id"]')?.value.trim() || '',
+        type: typeSelect?.value || '',
+        label: typeSelect?.selectedOptions?.[0]?.textContent || typeSelect?.value || 'Krok',
+        depends: splitValues(row.querySelector('[name="workflow_depends"]')?.value || ''),
+      };
+    };
+
+    const workflowDepths = steps => {
+      const byId = new Map(steps.filter(step => step.id).map(step => [step.id, step]));
+      const memo = new Map();
+      const visiting = new Set();
+      const depth = step => {
+        if (!step.id) return 0;
+        if (memo.has(step.id)) return memo.get(step.id);
+        if (visiting.has(step.id)) return 0;
+        visiting.add(step.id);
+        const parents = step.depends.map(id => byId.get(id)).filter(Boolean);
+        const value = parents.length ? 1 + Math.max(...parents.map(depth)) : 0;
+        visiting.delete(step.id);
+        memo.set(step.id, value);
+        return value;
+      };
+      return new Map(steps.map(step => [step, depth(step)]));
+    };
+
+    const syncWorkflowGraph = () => {
+      const steps = [...workflowList.querySelectorAll('[data-workflow-row]')].map(workflowRowData);
+      if (!steps.length) {
+        workflowGraph.replaceChildren(node('div', { class: 'empty', text: 'Dodaj pierwszy krok workflow.' }));
+        return;
+      }
+      const counts = new Map();
+      steps.forEach(step => { if (step.id) counts.set(step.id, (counts.get(step.id) || 0) + 1); });
+      const ids = new Set(steps.map(step => step.id).filter(Boolean));
+      const depths = workflowDepths(steps);
+      const maxDepth = Math.max(0, ...depths.values());
+      const columns = [];
+      for (let level = 0; level <= maxDepth; level += 1) {
+        const levelSteps = steps.filter(step => depths.get(step) === level);
+        if (!levelSteps.length) continue;
+        const cards = levelSteps.map(step => {
+          const missing = step.depends.filter(id => !ids.has(id));
+          const duplicate = step.id && counts.get(step.id) > 1;
+          const invalid = !step.id || duplicate || missing.length;
+          const dependencies = step.depends.length
+            ? node('div', { class: 'workflow-dag-dependencies' },
+              node('span', { class: 'muted', text: 'Zależy od:' }),
+              ...step.depends.map(id => node('span', {
+                class: `workflow-dag-chip ${ids.has(id) ? '' : 'danger'}`,
+                text: id,
+              })))
+            : node('span', { class: 'muted', text: 'Krok startowy' });
+          return node('article', {
+            class: `workflow-dag-card ${invalid ? 'invalid' : ''}`,
+            onClick: () => step.row.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+          },
+          node('div', { class: 'workflow-dag-card-head' },
+            node('span', { class: 'workflow-dag-index', text: String(steps.indexOf(step) + 1) }),
+            node('div', {},
+              node('strong', { text: step.id || 'Brak ID' }),
+              node('small', { text: step.label })),
+            invalid ? badge('Sprawdź', 'danger') : badge('OK', 'ok')),
+          dependencies,
+          duplicate ? node('small', { class: 'form-error', text: 'ID kroku występuje więcej niż raz.' }) : '',
+          missing.length ? node('small', { class: 'form-error', text: 'Brak kroków: ' + missing.join(', ') }) : '');
+        });
+        columns.push(node('div', { class: 'workflow-dag-column' },
+          node('div', { class: 'workflow-dag-level', text: `Etap ${level + 1}` }),
+          ...cards));
+      }
+      workflowGraph.replaceChildren(
+        node('div', { class: 'workflow-dag-header' },
+          node('div', {},
+            node('strong', { text: 'Mapa workflow' }),
+            node('small', { text: `${steps.length} kroków · ${columns.length} poziomów zależności` })),
+          node('span', { class: 'muted', text: 'Kliknij kartę, aby przejść do edycji kroku.' })),
+        node('div', { class: 'workflow-dag-columns' }, ...columns));
+    };
+
+    const moveWorkflowRow = (row, direction) => {
+      if (direction < 0 && row.previousElementSibling) {
+        workflowList.insertBefore(row, row.previousElementSibling);
+      } else if (direction > 0 && row.nextElementSibling) {
+        workflowList.insertBefore(row.nextElementSibling, row);
+      }
+      syncWorkflowGraph();
+    };
 
     const addVariable = (key = '', definition = {}) => {
       variableCounter += 1;
@@ -568,16 +668,28 @@ async function blueprintForm(item = null) {
             tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? jsonValue(step.conditions) : '',
             help: 'Zaawansowane warunki wykonania kroku.',
           })));
-      const row = node('div', { class: 'editor-card', 'data-workflow-row': String(workflowCounter) },
+      const row = node('div', { class: 'editor-card workflow-editor-card', 'data-workflow-row': String(workflowCounter) });
+      const controls = node('div', { class: 'workflow-step-controls' },
+        button('↑', () => moveWorkflowRow(row, -1), 'ghost'),
+        button('↓', () => moveWorkflowRow(row, 1), 'ghost'),
+        button('Usuń', () => { row.remove(); syncWorkflowGraph(); }, 'danger'));
+      row.append(
         node('div', { class: 'editor-card-header' },
-          node('strong', { text: 'Krok workflow' }),
-          button('Usuń', () => row.remove(), 'danger')),
+          node('div', {},
+            node('strong', { text: 'Krok workflow' }),
+            node('small', { class: 'muted', text: 'Kolejność wizualna nie zastępuje depends_on — zależności pozostają źródłem prawdy.' })),
+          controls),
         node('div', { class: 'form-grid' },
           field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
           selectField('Akcja', 'workflow_type', workflowTypes.map(([value, label]) => ({ value, label })), step.type || 'terraform_apply', { required: true }),
           field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), wide: true, help: 'Kilka ID oddziel przecinkami.' }),
           advanced));
+      row.querySelectorAll('input,select,textarea').forEach(control => {
+        control.addEventListener('input', syncWorkflowGraph);
+        control.addEventListener('change', syncWorkflowGraph);
+      });
       workflowList.append(row);
+      syncWorkflowGraph();
     };
 
     const defaultVariables = item?.variables_schema || {
@@ -786,9 +898,12 @@ async function blueprintForm(item = null) {
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
           ansibleSection)),
-      formSection('Workflow', 'Kroki są wykonywane zgodnie z zależnościami. ID kroku musi być unikalne.',
-        workflowList,
-        node('div', { class: 'editor-add-row' }, button('Dodaj krok', () => addWorkflowStep({ type: 'terraform_apply' }), 'primary'))));
+      formSection('Workflow', 'Kroki są wykonywane zgodnie z zależnościami. Mapa DAG aktualizuje się podczas edycji i wskazuje błędne zależności.',
+        workflowGraph,
+        node('details', { class: 'workflow-editor-details wide', open: true },
+          node('summary', { text: 'Edytuj kroki workflow' }),
+          workflowList,
+          node('div', { class: 'editor-add-row' }, button('Dodaj krok', () => addWorkflowStep({ type: 'terraform_apply' }), 'primary')))));
 
     refreshDeploymentTemplate();
 
