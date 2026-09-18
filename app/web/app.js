@@ -1283,7 +1283,13 @@ async function openVmManager(item) {
     dom.modalBody.replaceChildren(node('div', { class: 'stack' }, statusPanel, node('h3', { text: 'Snapshoty' }), snapshotTable));
     const actions = [button('Zamknij', closeModal)];
     if (allowed('vms.power')) {
-      for (const action of ['start', 'shutdown', 'reboot', 'stop']) actions.push(button(action, () => vmPower(item, action), action === 'stop' ? 'danger' : 'ghost'));
+      const powerActions = [
+        ['start', 'Start'], ['shutdown', 'Shutdown'], ['reboot', 'Reboot'],
+        ['suspend', 'Suspend'], ['resume', 'Resume'], ['reset', 'Reset'], ['stop', 'Stop'],
+      ];
+      for (const [action, label] of powerActions) {
+        actions.push(button(label, () => vmPower(item, action), ['stop', 'reset'].includes(action) ? 'danger' : 'ghost'));
+      }
     }
     if (allowed('snapshots.create')) actions.push(button('Snapshot', () => createVmSnapshot(item)));
     if (allowed('backups.create')) actions.push(button('Backup', () => backupVm(item)));
@@ -1299,10 +1305,7 @@ async function openVmManager(item) {
       await api(`${base}/template`, { method: 'POST', idempotent: true });
       closeModal(); toast('Konwersja uruchomiona.');
     })));
-    if (allowed('vms.delete')) actions.push(button('Usuń VM', () => confirmAction('Usuń VM', 'VM zostanie usunięta bezpośrednio w Proxmox. Dla Terraform-managed używaj Destroy deploymentu.', async () => {
-      await api(base, { method: 'DELETE', idempotent: true });
-      closeModal(); navigate('inventory');
-    }), 'danger'));
+    if (allowed('vms.delete')) actions.push(button('Usuń VM', () => deleteVm(item), 'danger'));
     dom.modalActions.replaceChildren(...actions);
     if (!dom.modal.open) dom.modal.showModal();
   } catch (error) { toast(error.message, 'error'); }
@@ -1312,6 +1315,27 @@ async function vmPower(item, action) {
   await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
   toast(`Polecenie ${action} wysłane.`);
   closeModal();
+}
+
+function deleteVm(item) {
+  const fields = node('div', { class: 'form-grid' },
+    node('p', { class: 'wide field-help', text: 'Operacja usuwa VM bezpośrednio w Proxmox. Dla zasobów zarządzanych przez Terraform używaj Destroy deploymentu.' }),
+    checkboxField('Purge z konfiguracji HA/backup/replication', 'purge'),
+    checkboxField('Usuń niepodpięte dyski', 'destroy_unreferenced_disks'));
+  openModal({
+    title: 'Usuń VM', eyebrow: `${item.node} / VMID ${item.vm_id}`, body: fields,
+    submitLabel: 'Usuń VM', danger: true,
+    onSubmit: async data => {
+      const query = new URLSearchParams({
+        purge: data.has('purge') ? 'true' : 'false',
+        destroy_unreferenced_disks: data.has('destroy_unreferenced_disks') ? 'true' : 'false',
+      });
+      await api(`${vmBase(item)}?${query.toString()}`, { method: 'DELETE', idempotent: true });
+      closeModal();
+      toast('Usuwanie VM uruchomione.');
+      navigate('inventory');
+    },
+  });
 }
 
 function createVmSnapshot(item) {
