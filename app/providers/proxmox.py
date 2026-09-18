@@ -1,12 +1,100 @@
 import ipaddress
 import re
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from fastapi import HTTPException
 
 from app.providers.base import InfrastructureProvider
 from app.security.core import decrypt_secret
+
+
+def _certificate_verification_failed(error):
+    current = error
+    while current is not None:
+        message = str(current).lower()
+        if 'certificate_verify_failed' in message or 'certificate verify failed' in message:
+            return True
+        current = getattr(current, '__cause__', None)
+    return False
+
+
+def _canonical_proxmox_endpoint(endpoint, scheme=None):
+    raw = endpoint.strip().rstrip('/')
+    if not raw:
+        raise HTTPException(422, 'Proxmox endpoint is required')
+    explicit_scheme = '://' in raw
+    if not explicit_scheme:
+        try:
+            address = ipaddress.ip_address(raw)
+            if address.version == 6:
+                raw = f'[{raw}]'
+        except ValueError:
+            pass
+        if scheme is None:
+            raise HTTPException(422, 'Proxmox endpoint protocol could not be determined')
+        raw = f'{scheme}://{raw}'
+
+    parsed = urlsplit(raw)
+    if (
+        parsed.scheme not in {'http', 'https'}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path
+    ):
+        raise HTTPException(
+            422,
+            'Proxmox endpoint must use HTTP or HTTPS and contain only host/IP and optional port',
+        )
+    try:
+        port = parsed.port
+    except ValueError:
+        raise HTTPException(422, 'Invalid Proxmox endpoint port') from None
+    if port is None and not explicit_scheme:
+        port = 8006
+    host = parsed.hostname
+    if ':' in host:
+        host = f'[{host}]'
+    authority = host + (f':{port}' if port is not None else '')
+    return f'{parsed.scheme}://{authority}'
+
+
+def resolve_proxmox_endpoint(endpoint, *, verify_ssl=True):
+    raw = endpoint.strip().rstrip('/')
+    if '://' in raw:
+        return _canonical_proxmox_endpoint(raw)
+
+    certificate_error = False
+    failures = []
+    for scheme in ('https', 'http'):
+        candidate = _canonical_proxmox_endpoint(raw, scheme)
+        try:
+            with httpx.Client(
+                verify=verify_ssl if scheme == 'https' else True,
+                timeout=httpx.Timeout(5, connect=3),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                client.get(candidate + '/api2/json/version')
+            return candidate
+        except httpx.TransportError as error:
+            certificate_error = certificate_error or _certificate_verification_failed(error)
+            failures.append(f'{scheme}: {error.__class__.__name__}')
+
+    if certificate_error:
+        raise HTTPException(
+            502,
+            'TLS certificate verification failed while detecting the Proxmox endpoint. '
+            'Enable acceptance of an untrusted/self-signed certificate and try again.',
+        )
+    raise HTTPException(
+        502,
+        'Unable to detect the Proxmox protocol. Verify the IP/hostname and port (default 8006), '
+        'or enter http:// or https:// explicitly.',
+    )
 
 
 def create_api_token(endpoint, username, password, token_name, *, verify_ssl=True, privilege_separation=True):
@@ -46,10 +134,21 @@ def create_api_token(endpoint, username, password, token_name, *, verify_ssl=Tru
                 'token_id': data.get('full-tokenid') or f'{username}!{token_name}',
                 'token_secret': token_secret,
             }
-    except (httpx.HTTPError, KeyError, ValueError):
+    except httpx.HTTPError as error:
+        if _certificate_verification_failed(error):
+            raise HTTPException(
+                502,
+                'Proxmox TLS certificate verification failed. '
+                'Enable acceptance of an untrusted/self-signed certificate and try again.',
+            ) from None
         raise HTTPException(
             502,
-            'Proxmox API token creation failed; verify endpoint, TLS, password and user-management permissions',
+            'Proxmox API token creation failed; verify endpoint, protocol, password and user-management permissions',
+        ) from None
+    except (KeyError, ValueError):
+        raise HTTPException(
+            502,
+            'Proxmox API token creation failed; verify endpoint, protocol, password and user-management permissions',
         ) from None
 
 
@@ -87,10 +186,21 @@ class ProxmoxProvider(InfrastructureProvider):
                 response.raise_for_status()
                 body = response.json()
                 return body.get('data')
-        except (httpx.HTTPError, KeyError, ValueError):
+        except httpx.HTTPError as error:
+            if _certificate_verification_failed(error):
+                raise HTTPException(
+                    502,
+                    'Proxmox TLS certificate verification failed. '
+                    'Enable acceptance of an untrusted/self-signed certificate and try again.',
+                ) from None
             raise HTTPException(
                 502,
-                'Proxmox connection or authentication failed; verify endpoint, TLS and credential permissions',
+                'Proxmox connection or authentication failed; verify endpoint, protocol and credential permissions',
+            ) from None
+        except (KeyError, ValueError):
+            raise HTTPException(
+                502,
+                'Proxmox connection or authentication failed; verify endpoint, protocol and credential permissions',
             ) from None
 
     def _get(self, path):
@@ -302,11 +412,15 @@ class ProxmoxProvider(InfrastructureProvider):
 
     def console_websocket_url(self, node, vm_id, port, ticket):
         origin = self.endpoint.removesuffix('/api2/json')
-        if not origin.startswith('https://'):
-            raise HTTPException(502, 'Proxmox console requires an HTTPS endpoint')
+        if origin.startswith('https://'):
+            websocket_origin = 'wss://' + origin[len('https://'):]
+        elif origin.startswith('http://'):
+            websocket_origin = 'ws://' + origin[len('http://'):]
+        else:
+            raise HTTPException(502, 'Unsupported Proxmox endpoint protocol')
         path = f'/api2/json/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncwebsocket'
         query = urlencode({'port': int(port), 'vncticket': ticket})
-        return 'wss://' + origin[len('https://'):] + path + '?' + query
+        return websocket_origin + path + '?' + query
 
     def novnc_asset(self, asset):
         asset = asset.lstrip('/')

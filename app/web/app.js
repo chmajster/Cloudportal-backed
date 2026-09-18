@@ -2,7 +2,8 @@
 
 const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
-const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null };
+const THEME_KEY = 'cloudportal.console.theme';
+const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
 
 const dom = {
   loginView: document.querySelector('#login-view'),
@@ -16,6 +17,10 @@ const dom = {
   currentUser: document.querySelector('#current-user'),
   currentRoles: document.querySelector('#current-roles'),
   apiStatus: document.querySelector('#api-status'),
+  sidebar: document.querySelector('#sidebar'),
+  sidebarBackdrop: document.querySelector('#sidebar-backdrop'),
+  menuToggle: document.querySelector('#menu-toggle'),
+  refreshView: document.querySelector('#refresh-view'),
   modal: document.querySelector('#modal'),
   modalTitle: document.querySelector('#modal-title'),
   modalEyebrow: document.querySelector('#modal-eyebrow'),
@@ -29,14 +34,14 @@ const routes = [
   { id: 'users', label: 'Użytkownicy', icon: 'U', permission: 'users.read' },
   { id: 'roles', label: 'Role i RBAC', icon: 'R', permission: 'roles.read' },
   { id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read' },
-  { id: 'credentials', label: 'Credentiale', icon: 'K', permission: 'credentials.read' },
-  { id: 'providers', label: 'Providery', icon: 'P', permission: 'providers.read' },
+  { id: 'credentials', label: 'Dane dostępowe', icon: 'K', permission: 'credentials.read' },
+  { id: 'providers', label: 'Platformy', icon: 'P', permission: 'providers.read' },
   { id: 'catalog', label: 'Katalog IaC', icon: 'C', permission: 'terraform.read' },
   { id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read' },
-  { id: 'hostnames', label: 'Hostname Manager', icon: 'H', permission: 'hostnames.read' },
+  { id: 'hostnames', label: 'Nazwy hostów', icon: 'H', permission: 'hostnames.read' },
   { id: 'ipam', label: 'IPAM', icon: 'I', permission: 'ipam.read' },
-  { id: 'inventory', label: 'Inventory', icon: 'V', permission: 'inventory.read' },
-  { id: 'deployments', label: 'Deploymenty', icon: 'D', permission: 'deployments.read' },
+  { id: 'inventory', label: 'Zasoby', icon: 'V', permission: 'inventory.read' },
+  { id: 'deployments', label: 'Wdrożenia', icon: 'D', permission: 'deployments.read' },
   { id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read' },
   { id: 'schedules', label: 'Harmonogramy', icon: 'S', permission: 'schedules.read' },
   { id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhooks.read' },
@@ -70,10 +75,96 @@ function node(tag, attributes = {}, ...children) {
   return element;
 }
 
+const VALIDATION_FIELD_LABELS = {
+  name: 'Nazwa', username: 'Użytkownik', password: 'Hasło', email: 'E-mail',
+  endpoint: 'Adres', type: 'Typ', credentials_id: 'Dane dostępowe', provider_id: 'Platforma',
+  template: 'Szablon', executor: 'Silnik IaC', variables: 'Parametry', operation: 'Operacja',
+  deployment_id: 'Wdrożenie', next_run_at: 'Termin uruchomienia', interval_seconds: 'Interwał',
+  pattern: 'Wzorzec', hostname: 'Hostname', resource_id: 'Zasób', address: 'Adres IP',
+  preferred_address: 'Preferowany adres', cidr: 'CIDR', gateway: 'Brama', verify_ssl: 'Weryfikacja TLS',
+  token_name: 'Nazwa tokenu', scopes: 'Zakres uprawnień', expires_at: 'Data wygaśnięcia',
+};
+
+function friendlyApiText(value) {
+  let message = String(value || 'Operacja nie powiodła się.').replace(/^Value error,\s*/i, '');
+  const exact = new Map([
+    ['Field required', 'Pole jest wymagane.'],
+    ['Resource not found', 'Nie znaleziono zasobu.'],
+    ['Only a reserved hostname can be assigned', 'Można przypisać tylko zarezerwowany hostname.'],
+    ['Only a reserved address can be assigned', 'Można przypisać tylko zarezerwowany adres IP.'],
+    ['Address is already released', 'Adres IP został już zwolniony.'],
+    ['Hostname is already released', 'Hostname został już zwolniony.'],
+    ['Hostname scheme has reservation history; disable it instead', 'Schemat ma historię rezerwacji. Zamiast usuwać, wyłącz go.'],
+    ['Provider has active deployments; create another provider', 'Platforma ma aktywne wdrożenia. Utwórz nowe połączenie zamiast zmieniać dane dostępowe.'],
+    ['Provider has deployment history', 'Platforma ma historię wdrożeń i nie może zostać usunięta.'],
+    ['Selected infrastructure provider does not match the Terraform template', 'Wybrana platforma nie pasuje do szablonu Terraform.'],
+    ['Credential does not belong to the selected provider', 'Wybrane dane dostępowe nie należą do tej platformy.'],
+    ['Missing execution or deployment permissions', 'Brak uprawnień wymaganych do wykonania tej operacji.'],
+  ]);
+  if (exact.has(message)) return exact.get(message);
+  message = message
+    .replace(/^String should have at least (\d+) characters?$/i, 'Wartość musi mieć co najmniej $1 znaków.')
+    .replace(/^String should have at most (\d+) characters?$/i, 'Wartość może mieć maksymalnie $1 znaków.')
+    .replace(/^Input should be greater than or equal to (.+)$/i, 'Wartość musi być większa lub równa $1.')
+    .replace(/^Input should be less than or equal to (.+)$/i, 'Wartość musi być mniejsza lub równa $1.');
+  return message;
+}
+
 function errorMessage(data) {
   const detail = data && data.detail;
-  if (Array.isArray(detail)) return detail.map(item => item.msg || String(item)).join('; ');
-  return detail || 'Operacja nie powiodła się.';
+  if (Array.isArray(detail)) {
+    return detail.map(item => {
+      const path = Array.isArray(item?.loc) ? item.loc.filter(part => part !== 'body') : [];
+      const rawField = path.at(-1);
+      const location = rawField ? (VALIDATION_FIELD_LABELS[rawField] || String(rawField).replaceAll('_', ' ')) : '';
+      const message = friendlyApiText(item?.msg || item || 'Błąd walidacji');
+      return location ? `${location}: ${message}` : message;
+    }).join('; ');
+  }
+  if (typeof detail === 'string') return friendlyApiText(detail);
+  if (detail && typeof detail === 'object') return friendlyApiText(detail.message || JSON.stringify(detail));
+  return 'Operacja nie powiodła się.';
+}
+
+function updateThemeControls() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  document.querySelectorAll('[data-theme-toggle]').forEach(control => {
+    const label = dark ? 'Włącz jasny motyw' : 'Włącz ciemny motyw';
+    control.textContent = dark ? '☀' : '☾';
+    control.setAttribute('aria-label', label);
+    control.setAttribute('title', label);
+    control.setAttribute('aria-pressed', String(dark));
+  });
+}
+
+function setTheme(theme, persist = true) {
+  const selected = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = selected;
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, selected); } catch { /* Storage may be disabled. */ }
+  }
+  updateThemeControls();
+}
+
+function loadTheme() {
+  let selected = 'light';
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === 'light' || stored === 'dark') selected = stored;
+  } catch { /* Use the light default when storage is unavailable. */ }
+  setTheme(selected, false);
+}
+
+function toggleTheme() {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+}
+
+function setMobileMenu(open) {
+  const active = Boolean(open);
+  dom.sidebar.classList.toggle('open', active);
+  dom.appView.classList.toggle('menu-open', active);
+  dom.menuToggle.setAttribute('aria-expanded', String(active));
+  dom.menuToggle.setAttribute('aria-label', active ? 'Zamknij menu' : 'Otwórz menu');
 }
 
 function loadSession() {
@@ -149,15 +240,35 @@ function allowed(permission) {
 }
 
 function toast(message, type = '') {
-  const item = node('div', { class: `toast ${type}`, text: message });
+  const item = node('div', {
+    class: `toast ${type}`,
+    role: type === 'error' ? 'alert' : 'status',
+    'aria-live': type === 'error' ? 'assertive' : 'polite',
+  },
+  node('span', { class: 'toast-message', text: message }),
+  node('button', {
+    class: 'toast-close',
+    type: 'button',
+    'aria-label': 'Zamknij komunikat',
+    title: 'Zamknij',
+    onClick: () => item.remove(),
+  }, '×'));
   dom.toastRegion.append(item);
-  window.setTimeout(() => item.remove(), 5000);
+  window.setTimeout(() => item.remove(), type === 'error' ? 12000 : 5000);
 }
 
 function formatDate(value) {
   if (!value) return '—';
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? String(value) : new Intl.DateTimeFormat('pl-PL', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+}
+
+function toDateTimeLocal(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
 }
 
 function short(value, length = 12) {
@@ -191,16 +302,54 @@ function table(columns, rows, actions) {
   columns.forEach(column => head.append(node('th', { text: column.label })));
   if (actions) head.append(node('th', { text: 'Akcje' }));
   const body = node('tbody');
+  const renderedRows = [];
   rows.forEach(row => {
     const tr = node('tr');
     columns.forEach(column => {
       const value = column.value(row);
-      tr.append(node('td', { class: column.class || '' }, value instanceof Node ? value : String(value ?? '—')));
+      const cell = node('td', { class: column.class || '' }, value instanceof Node ? value : String(value ?? '—'));
+      tr.append(cell);
     });
     if (actions) tr.append(node('td', {}, node('div', { class: 'row-actions' }, actions(row))));
+    tr.dataset.search = JSON.stringify(row).toLocaleLowerCase('pl-PL');
+    renderedRows.push(tr);
     body.append(tr);
   });
-  return node('div', { class: 'table-wrap' }, node('table', {}, node('thead', {}, head), body));
+  const noResults = node('tr', { class: 'table-search-empty', hidden: true },
+    node('td', { colspan: columns.length + (actions ? 1 : 0), class: 'empty', text: 'Brak wyników wyszukiwania.' }));
+  body.append(noResults);
+  const tableElement = node('table', {}, node('thead', {}, head), body);
+  const scroll = node('div', { class: 'table-scroll' }, tableElement);
+  const wrapper = node('div', { class: 'table-wrap' }, scroll);
+  if (rows.length < 8) return wrapper;
+
+  wrapper.classList.add('searchable-table');
+  const count = node('span', { class: 'table-count', text: `${rows.length} pozycji`, 'aria-live': 'polite' });
+  const search = node('input', {
+    class: 'table-search',
+    type: 'search',
+    placeholder: 'Szukaj w tabeli…',
+    'aria-label': 'Szukaj w tabeli',
+  });
+  search.addEventListener('input', () => {
+    const phrase = search.value.trim().toLocaleLowerCase('pl-PL');
+    let visible = 0;
+    renderedRows.forEach(row => {
+      const matches = !phrase || row.dataset.search.includes(phrase);
+      row.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    count.textContent = phrase ? `${visible} z ${rows.length} pozycji` : `${rows.length} pozycji`;
+    noResults.hidden = !phrase || visible > 0;
+  });
+  wrapper.prepend(node('div', { class: 'table-toolbar' }, search, count));
+  return wrapper;
+}
+
+function formFieldLabel(labelText, required = false) {
+  return node('span', { class: 'field-label' },
+    labelText,
+    required ? node('span', { class: 'required-mark', 'aria-hidden': 'true', text: ' *' }) : null);
 }
 
 function field(labelText, name, options = {}) {
@@ -210,7 +359,7 @@ function field(labelText, name, options = {}) {
     placeholder: options.placeholder, step: options.step,
   });
   if (options.tag === 'textarea') input.textContent = options.value ?? '';
-  const label = node('label', {}, labelText, input);
+  const label = node('label', {}, formFieldLabel(labelText, Boolean(options.required)), input);
   if (options.help) label.append(node('span', { class: 'field-help', text: options.help }));
   if (options.wide) label.classList.add('wide');
   return label;
@@ -220,7 +369,7 @@ function selectField(labelText, name, choices, value, options = {}) {
   const select = node('select', { name, required: options.required });
   if (options.placeholder) select.append(node('option', { value: '', text: options.placeholder }));
   choices.forEach(choice => select.append(node('option', { value: choice.value, text: choice.label, selected: String(choice.value) === String(value) })));
-  const label = node('label', {}, labelText, select);
+  const label = node('label', {}, formFieldLabel(labelText, Boolean(options.required)), select);
   if (options.wide) label.classList.add('wide');
   return label;
 }
@@ -229,12 +378,456 @@ function checkboxField(labelText, name, checked = false) {
   return node('label', { class: 'checkbox' }, node('input', { type: 'checkbox', name, checked }), labelText);
 }
 
+function multiCheckboxField(labelText, name, choices, selectedValues = [], options = {}) {
+  const selected = new Set((selectedValues || []).map(value => String(value)));
+  const grid = node('div', { class: 'choice-grid' });
+  choices.forEach(choice => grid.append(node('label', { class: 'choice-option' },
+    node('input', { type: 'checkbox', name, value: choice.value, checked: selected.has(String(choice.value)) }),
+    node('span', { text: choice.label }))));
+  const wrapper = node('fieldset', { class: `choice-fieldset ${options.wide ? 'wide' : ''}` },
+    node('legend', { text: labelText }),
+    choices.length ? grid : node('p', { class: 'muted', text: options.empty || 'Brak dostępnych pozycji.' }));
+  if (options.help) wrapper.append(node('span', { class: 'field-help', text: options.help }));
+  return wrapper;
+}
+
+function formSection(title, description, ...children) {
+  return node('section', { class: 'form-section wide' },
+    node('div', { class: 'form-section-header' },
+      node('h3', { text: title }),
+      description ? node('p', { text: description }) : null),
+    ...children);
+}
+
+const STATUS_LABELS = {
+  ok: 'OK', active: 'Aktywny', inactive: 'Nieaktywny', configured: 'Skonfigurowany', locked: 'Zablokowany',
+  revoked: 'Unieważniony', expired: 'Wygasły', queued: 'W kolejce', running: 'W trakcie',
+  successful: 'Zakończony', failed: 'Błąd', cancelled: 'Anulowany', destroyed: 'Usunięty',
+  degraded: 'Ograniczony', missing: 'Brak', present: 'Dostępny', defined: 'Zdefiniowany',
+  released: 'Zwolniony', reserved: 'Zarezerwowany', assigned: 'Przypisany', disabled: 'Wyłączony',
+  stopped: 'Zatrzymany', started: 'Uruchomiony', available: 'Dostępny', external: 'Zewnętrzny',
+  terraform: 'Terraform', pending: 'Oczekuje', delivered: 'Dostarczony', retrying: 'Ponawianie',
+  success: 'Sukces', failure: 'Błąd', critical: 'Krytyczny', warning: 'Ostrzeżenie', down: 'Niedostępny',
+};
+
+const OPERATION_LABELS = {
+  'terraform.plan': 'Terraform: plan',
+  'terraform.apply': 'Terraform: zastosuj',
+  'terraform.destroy': 'Terraform: usuń',
+  'terraform.import': 'Terraform: import',
+  'ansible.execute': 'Ansible: wykonaj',
+};
+
+function statusLabel(value) {
+  const key = String(value || '').toLowerCase();
+  return STATUS_LABELS[key] || value || '—';
+}
+
+function operationLabel(value) {
+  return OPERATION_LABELS[value] || value || '—';
+}
+
+const WEBHOOK_EVENT_LABELS = {
+  'job.successful': 'Zadanie zakończone',
+  'job.failed': 'Zadanie zakończone błędem',
+  'job.cancelled': 'Zadanie anulowane',
+  'recovery.queued': 'Odzyskiwanie dodane do kolejki',
+  'recovery.successful': 'Odzyskiwanie zakończone',
+  'recovery.failed': 'Odzyskiwanie zakończone błędem',
+  'system.alert': 'Alert systemowy',
+};
+
+function webhookEventLabel(value) {
+  return WEBHOOK_EVENT_LABELS[value] || value || '—';
+}
+
+const AUDIT_RESOURCE_LABELS = {
+  users: 'Użytkownik', roles: 'Rola', tokens: 'Token', credentials: 'Dane dostępowe',
+  providers: 'Platforma', deployments: 'Wdrożenie', jobs: 'Zadanie', blueprints: 'Blueprint',
+  hostnames: 'Hostname', hostname_schemes: 'Schemat hostname', ip_pools: 'Pula IPAM',
+  ip_allocations: 'Adres IP', managed_vms: 'VM', schedules: 'Harmonogram', webhooks: 'Webhook',
+  vms: 'VM',
+};
+
+const AUDIT_VERB_LABELS = {
+  created: 'utworzono', updated: 'zaktualizowano', deleted: 'usunięto', revoked: 'unieważniono',
+  assigned: 'przypisano', released: 'zwolniono', reserved: 'zarezerwowano', disabled: 'wyłączono',
+  enabled: 'włączono', unlocked: 'odblokowano', tested: 'przetestowano', generated: 'wygenerowano',
+  executed: 'uruchomiono', cancelled: 'anulowano', retried: 'ponowiono', migrated: 'zmigrowano',
+  cloned: 'sklonowano', restored: 'przywrócono', started: 'uruchomiono', stopped: 'zatrzymano',
+};
+
+function auditActionLabel(value) {
+  const parts = String(value || '').split('.');
+  const verb = AUDIT_VERB_LABELS[parts.at(-1)];
+  if (!verb) return value || '—';
+  const resourceKey = parts.slice(0, -1).join('_') || parts[0];
+  const resource = AUDIT_RESOURCE_LABELS[resourceKey] || AUDIT_RESOURCE_LABELS[parts[0]] || parts[0];
+  return `${resource}: ${verb}`;
+}
+
+const PERMISSION_GROUP_LABELS = {
+  users: 'Użytkownicy', roles: 'Role i RBAC', tokens: 'Tokeny API', credentials: 'Dane dostępowe',
+  providers: 'Platformy', deployments: 'Wdrożenia', jobs: 'Zadania', terraform: 'Terraform / OpenTofu',
+  ansible: 'Ansible', blueprints: 'Blueprinty', hostnames: 'Hostname Manager', ipam: 'IPAM',
+  inventory: 'Zasoby', vms: 'Maszyny wirtualne', snapshots: 'Snapshoty', backups: 'Backupy',
+  schedules: 'Harmonogramy', webhooks: 'Webhooki', metrics: 'Monitoring', audit: 'Audyt',
+  portal: 'Portal', catalog: 'Katalog',
+};
+
+const PERMISSION_ACTION_LABELS = {
+  read: 'Odczyt', create: 'Tworzenie', update: 'Edycja', delete: 'Usuwanie', execute: 'Wykonywanie',
+  assign: 'Przypisywanie', revoke: 'Unieważnianie', test: 'Testowanie połączenia', rotate: 'Rotacja',
+  destroy: 'Usuwanie zasobów', adopt: 'Przejmowanie zasobów', approve: 'Akceptowanie',
+  allocate: 'Przydzielanie', release: 'Zwalnianie', console: 'Konsola', power: 'Zasilanie',
+  configure: 'Konfiguracja', snapshot: 'Snapshot', restore: 'Przywracanie', clone: 'Klonowanie',
+  migrate: 'Migracja', resize: 'Zmiana rozmiaru', backup: 'Backup',
+};
+
+function permissionLabel(permission) {
+  const [group, action, ...rest] = String(permission).split('.');
+  const readableAction = PERMISSION_ACTION_LABELS[action] || action || permission;
+  return rest.length ? `${readableAction} · ${rest.join('.')}` : readableAction;
+}
+
+function permissionPicker(permissions, selectedValues = [], name = 'permission') {
+  const selected = new Set((selectedValues || []).map(String));
+  const grouped = new Map();
+  permissions.forEach(permission => {
+    const group = String(permission).split('.')[0] || 'other';
+    if (!grouped.has(group)) grouped.set(group, []);
+    grouped.get(group).push(permission);
+  });
+  const wrapper = node('div', { class: 'permission-groups wide' });
+  [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, 'pl')).forEach(([group, values]) => {
+    const grid = node('div', { class: 'permission-grid' });
+    values.sort((a, b) => a.localeCompare(b, 'pl')).forEach(permission => {
+      grid.append(node('label', {},
+        node('input', { type: 'checkbox', name, value: permission, checked: selected.has(permission) }),
+        node('span', {}, node('strong', { text: permissionLabel(permission) }), node('small', { class: 'muted mono', text: permission }))));
+    });
+    wrapper.append(node('details', { class: 'permission-group', open: true },
+      node('summary', {},
+        node('span', { text: PERMISSION_GROUP_LABELS[group] || group }),
+        badge(String(values.length), 'info')),
+      grid));
+  });
+  return wrapper;
+}
+
+function permissionSummary(permissions) {
+  if (!permissions?.length) return node('p', { class: 'muted', text: 'Brak uprawnień.' });
+  const grouped = new Map();
+  permissions.forEach(permission => {
+    const group = String(permission).split('.')[0] || 'other';
+    if (!grouped.has(group)) grouped.set(group, []);
+    grouped.get(group).push(permission);
+  });
+  const wrapper = node('div', { class: 'permission-groups permission-summary' });
+  [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, 'pl')).forEach(([group, values]) => {
+    wrapper.append(node('details', { class: 'permission-group', open: true },
+      node('summary', {},
+        node('span', { text: PERMISSION_GROUP_LABELS[group] || group }),
+        badge(String(values.length), 'info')),
+      node('div', { class: 'permission-chip-list' },
+        ...values.sort((a, b) => a.localeCompare(b, 'pl')).map(permission =>
+          node('span', { class: 'permission-chip', title: permission, text: permissionLabel(permission) })))));
+  });
+  return wrapper;
+}
+
+function showPermissionSummary(title, permissions) {
+  dom.modal.classList.remove('modal-console');
+  dom.modal.classList.add('modal-wide');
+  dom.modalTitle.textContent = title;
+  dom.modalEyebrow.textContent = 'Uprawnienia';
+  dom.modalBody.replaceChildren(permissionSummary(permissions));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
+function displayValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'Tak' : 'Nie';
+  if (Array.isArray(value)) return value.map(displayValue).join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  let amount = bytes;
+  let unit = -1;
+  do { amount /= 1024; unit += 1; } while (amount >= 1024 && unit < units.length - 1);
+  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+function formatDuration(value) {
+  let seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  seconds = Math.floor(seconds);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days) return `${days} d ${hours} h`;
+  if (hours) return `${hours} h ${minutes} min`;
+  if (minutes) return `${minutes} min`;
+  return `${seconds} s`;
+}
+
+const FIELD_LABELS = {
+  name: 'Nazwa',
+  node: 'Węzeł / lokalizacja',
+  template_id: 'VMID szablonu',
+  template_node: 'Węzeł szablonu',
+  cpu: 'CPU',
+  cores: 'Rdzenie CPU',
+  memory: 'RAM (MiB)',
+  disk: 'Dysk (GiB)',
+  network: 'Sieć / bridge',
+  storage: 'Storage',
+  vlan_id: 'VLAN ID',
+  ssh_username: 'Użytkownik SSH',
+  ssh_public_key: 'Klucz publiczny SSH',
+  ipv4_address: 'Adres IPv4 z maską',
+  ipv4_gateway: 'Brama IPv4',
+  region: 'Region',
+  ami: 'AMI',
+  instance_type: 'Typ instancji',
+  subnet_id: 'Subnet ID',
+  security_group_ids: 'Security Group IDs',
+  key_name: 'Nazwa klucza',
+  root_volume_size: 'Dysk systemowy (GiB)',
+  associate_public_ip: 'Publiczny adres IP',
+  location: 'Lokalizacja',
+  resource_group: 'Resource Group',
+  vm_size: 'Rozmiar VM',
+  admin_username: 'Administrator',
+  image_publisher: 'Wydawca obrazu',
+  image_offer: 'Oferta obrazu',
+  image_sku: 'SKU obrazu',
+  image_version: 'Wersja obrazu',
+  os_disk_size_gb: 'Dysk systemowy (GiB)',
+  image_name: 'Obraz',
+  flavor_name: 'Flavor',
+  network_name: 'Sieć',
+  key_pair: 'Key pair',
+  security_groups: 'Security groups',
+  datacenter: 'Datacenter',
+  datastore: 'Datastore',
+  cluster: 'Klaster',
+  template: 'Szablon',
+  folder: 'Folder',
+  vmid: 'VMID',
+  status: 'Status',
+  type: 'Typ',
+  mem: 'Użycie RAM',
+  maxmem: 'RAM',
+  disk: 'Użycie dysku',
+  maxdisk: 'Dysk',
+  maxcpu: 'Maks. CPU',
+  uptime: 'Czas działania',
+  iface: 'Interfejs',
+  bridge_ports: 'Porty bridge',
+  content: 'Zawartość',
+  nodes: 'Węzły',
+  shared: 'Współdzielony',
+  active: 'Aktywny',
+  enabled: 'Włączony',
+  used: 'Użyte',
+  avail: 'Wolne',
+  total: 'Pojemność',
+  poolid: 'Pula',
+  comment: 'Opis',
+};
+
+function schemaVariant(spec = {}) {
+  if (spec.type) return spec;
+  if (Array.isArray(spec.anyOf)) return spec.anyOf.find(item => item.type && item.type !== 'null') || spec.anyOf[0] || spec;
+  return spec;
+}
+
+function schemaType(spec = {}) {
+  return schemaVariant(spec).type || 'string';
+}
+
+function schemaEnum(spec = {}) {
+  return spec.enum || schemaVariant(spec).enum || null;
+}
+
+function templateVariableField(name, spec, value, required = false, options = {}) {
+  const base = schemaVariant(spec);
+  const type = schemaType(spec);
+  const label = FIELD_LABELS[name] || spec.title || name;
+  const hasValue = value !== undefined && value !== null;
+  const current = hasValue ? value : spec.default;
+  const helpParts = [];
+  if (spec.description) helpParts.push(spec.description);
+  if (base.minimum !== undefined || base.maximum !== undefined) {
+    helpParts.push(`Zakres: ${base.minimum ?? '—'} – ${base.maximum ?? '—'}`);
+  }
+  const help = helpParts.join(' · ');
+  const choices = schemaEnum(spec);
+  let wrapper;
+  if (choices) {
+    wrapper = selectField(label, name, choices.map(item => ({ value: item, label: String(item) })), current ?? '', { required });
+  } else if (type === 'boolean') {
+    wrapper = checkboxField(label, name, Boolean(current));
+  } else if (type === 'array') {
+    const values = Array.isArray(current) ? current.join('\n') : (current || '');
+    wrapper = field(label, name, { tag: 'textarea', value: values, required, wide: true, help: help || 'Jedna wartość w wierszu lub wartości oddzielone przecinkami.' });
+  } else {
+    const isLong = ['ssh_public_key', 'subnet_id'].includes(name);
+    wrapper = field(label, name, {
+      type: type === 'integer' || type === 'number' ? 'number' : 'text',
+      value: current ?? '',
+      required,
+      min: base.minimum,
+      max: base.maximum,
+      step: type === 'number' ? 'any' : undefined,
+      wide: isLong,
+      help,
+      placeholder: options.placeholder,
+    });
+  }
+  wrapper.dataset.templateVariable = name;
+  return wrapper;
+}
+
+function renderTemplateVariables(container, template, values = {}) {
+  const schema = template?.variables_schema || {};
+  const properties = schema.properties || {};
+  const required = new Set(schema.required || []);
+  container.replaceChildren();
+  Object.entries(properties).forEach(([name, spec]) => {
+    container.append(templateVariableField(name, spec, values[name], required.has(name)));
+  });
+  if (!Object.keys(properties).length) {
+    container.append(node('p', { class: 'muted wide', text: 'Ten szablon nie definiuje zmiennych konfiguracyjnych.' }));
+  }
+}
+
+function readTemplateVariables(form, template) {
+  const result = {};
+  const schema = template?.variables_schema || {};
+  const properties = schema.properties || {};
+  const required = new Set(schema.required || []);
+  for (const [name, spec] of Object.entries(properties)) {
+    const control = form.elements[name];
+    if (!control) continue;
+    const type = schemaType(spec);
+    if (type === 'boolean') {
+      result[name] = control.checked;
+      continue;
+    }
+    const raw = String(control.value ?? '').trim();
+    if (!raw) {
+      if (required.has(name) && spec.default === undefined) throw new Error(`Uzupełnij pole „${FIELD_LABELS[name] || spec.title || name}”.`);
+      continue;
+    }
+    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
+    else if (type === 'number') result[name] = Number(raw);
+    else if (type === 'array') result[name] = splitValues(raw);
+    else result[name] = raw;
+  }
+  return result;
+}
+
+function blueprintTemplateVariableField(name, spec, value) {
+  const type = schemaType(spec);
+  const label = FIELD_LABELS[name] || spec.title || name;
+  const current = value ?? spec.default ?? '';
+  const help = `Typ: ${type}. Możesz użyć wartości lub placeholdera, np. {{ cpu }}.`;
+  const wrapper = field(label, `deployment_var_${name}`, {
+    tag: type === 'array' ? 'textarea' : 'input',
+    value: Array.isArray(current) ? current.join('\n') : String(current),
+    wide: type === 'array' || ['ssh_public_key', 'subnet_id'].includes(name),
+    help,
+  });
+  wrapper.dataset.blueprintTemplateVariable = name;
+  return wrapper;
+}
+
+function readBlueprintTemplateVariables(root, template) {
+  const result = {};
+  const properties = template?.variables_schema?.properties || {};
+  for (const [name, spec] of Object.entries(properties)) {
+    const control = root.elements?.[`deployment_var_${name}`] || root.querySelector?.(`[name="deployment_var_${name}"]`);
+    if (!control) continue;
+    const raw = String(control.value ?? '').trim();
+    if (!raw) continue;
+    if (/{{\s*[^}]+\s*}}/.test(raw)) {
+      result[name] = raw;
+      continue;
+    }
+    const type = schemaType(spec);
+    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
+    else if (type === 'number') result[name] = Number(raw);
+    else if (type === 'boolean') result[name] = ['true', '1', 'tak', 'yes'].includes(raw.toLowerCase());
+    else if (type === 'array') result[name] = splitValues(raw);
+    else result[name] = raw;
+  }
+  return result;
+}
+
+const HOSTNAME_TOKEN_LABELS = {
+  location: 'Lokalizacja',
+  environment: 'Środowisko',
+  env: 'Środowisko (skrót)',
+  application: 'Aplikacja',
+  service: 'Usługa',
+  role: 'Rola serwera',
+  os: 'System operacyjny',
+  cluster: 'Klaster',
+  site: 'Site',
+};
+
+function hostnameTokens(pattern = '') {
+  return [...new Set([...String(pattern).matchAll(/{([a-z]+)}/g)].map(match => match[1]))]
+    .filter(token => !['number', 'random', 'year'].includes(token));
+}
+
+function hostnameValueFields(pattern, values = {}, required = true) {
+  const wrapper = node('div', { class: 'form-grid hostname-values wide' });
+  const tokens = hostnameTokens(pattern);
+  tokens.forEach(token => {
+    const item = field(HOSTNAME_TOKEN_LABELS[token] || token, `hostname_${token}`, {
+      value: values[token] || '',
+      required,
+    });
+    item.dataset.hostnameToken = token;
+    wrapper.append(item);
+  });
+  if (!tokens.length) wrapper.append(node('p', { class: 'muted wide', text: 'Ten wzorzec nie wymaga dodatkowych wartości.' }));
+  return wrapper;
+}
+
+function readHostnameValues(form) {
+  const result = {};
+  form.querySelectorAll('[data-hostname-token]').forEach(wrapper => {
+    const token = wrapper.dataset.hostnameToken;
+    const input = wrapper.querySelector('input,select,textarea');
+    if (input?.value) result[token] = input.value.trim();
+  });
+  return result;
+}
+
+function stopTaskPolling() {
+  if (state.taskPollTimer) window.clearTimeout(state.taskPollTimer);
+  state.taskPollTimer = null;
+  state.taskPollNonce += 1;
+}
+
 function closeModal() {
+  stopTaskPolling();
   if (state.consoleRfb) {
     try { state.consoleRfb.disconnect(); } catch { /* Session may already be disconnected. */ }
     state.consoleRfb = null;
   }
-  dom.modal.classList.remove('modal-console');
+  dom.modal.classList.remove('modal-console', 'modal-wide');
   if (dom.modal.open) dom.modal.close();
 }
 
@@ -245,7 +838,8 @@ function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit
   dom.modalBody.replaceChildren();
   dom.modalActions.replaceChildren();
   const form = node('form', { id: 'modal-form', class: 'stack' });
-  form.append(body);
+  const formError = node('div', { class: 'form-error modal-form-error', role: 'alert', hidden: true });
+  form.append(formError, body);
   dom.modalBody.append(form);
   dom.modalActions.append(button('Anuluj', closeModal));
   if (onSubmit) {
@@ -253,12 +847,20 @@ function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit
     dom.modalActions.append(submit);
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      formError.hidden = true;
+      formError.textContent = '';
       submit.disabled = true;
       try {
         const shouldClose = await onSubmit(new FormData(form), form);
         if (shouldClose !== false) closeModal();
       }
-      catch (error) { toast(error.message, 'error'); }
+      catch (error) {
+        const message = error?.message || 'Operacja nie powiodła się.';
+        formError.textContent = message;
+        formError.hidden = false;
+        formError.scrollIntoView({ block: 'nearest' });
+        toast(message, 'error');
+      }
       finally { submit.disabled = false; }
     });
   }
@@ -266,10 +868,32 @@ function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit
   window.setTimeout(() => form.querySelector('input,select,textarea')?.focus(), 30);
 }
 
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch { /* Fall back for HTTP/insecure contexts or denied clipboard access. */ }
+  }
+  const fallback = node('textarea', { class: 'clipboard-fallback', 'aria-hidden': 'true', tabindex: '-1' });
+  fallback.value = value;
+  document.body.append(fallback);
+  fallback.focus();
+  fallback.select();
+  const copied = document.execCommand('copy');
+  fallback.remove();
+  if (!copied) throw new Error('Przeglądarka zablokowała kopiowanie do schowka.');
+}
+
 function showSecret(title, value, note = 'Ta wartość jest wyświetlana tylko raz. Skopiuj ją teraz.') {
+  dom.modal.classList.remove('modal-console', 'modal-wide');
   const copy = button('Kopiuj', async () => {
-    await navigator.clipboard.writeText(value);
-    toast('Skopiowano do schowka.');
+    try {
+      await copyText(value);
+      toast('Skopiowano do schowka.');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
   }, 'primary');
   dom.modalTitle.textContent = title;
   dom.modalEyebrow.textContent = 'Sekret jednorazowy';
@@ -282,12 +906,18 @@ function confirmAction(title, message, action) {
   openModal({ title, eyebrow: 'Potwierdzenie', body: node('p', { text: message }), submitLabel: 'Potwierdź', danger: true, onSubmit: action });
 }
 
-function showLogin(message = '') {
+function setLoginMessage(message = '', type = 'error') {
+  dom.loginError.textContent = message;
+  dom.loginError.hidden = !message;
+  dom.loginError.classList.toggle('success', Boolean(message) && type === 'success');
+}
+
+function showLogin(message = '', type = 'error') {
   clearSession();
+  setMobileMenu(false);
   dom.appView.hidden = true;
   dom.loginView.hidden = false;
-  dom.loginError.hidden = !message;
-  dom.loginError.textContent = message;
+  setLoginMessage(message, type);
   dom.loginForm.querySelector('[name="password"]').value = '';
   dom.loginForm.querySelector('[name="username"]').focus();
 }
@@ -321,7 +951,7 @@ async function navigate(view) {
   dom.pageTitle.textContent = route.label;
   dom.pageEyebrow.textContent = route.id === 'dashboard' ? 'Stan systemu' : 'Zarządzanie lokalne';
   dom.navigation.querySelectorAll('.nav-link').forEach(item => item.classList.toggle('active', item.dataset.route === route.id));
-  document.querySelector('.sidebar').classList.remove('open');
+  setMobileMenu(false);
   loading();
   try { await views[route.id](); }
   catch (error) {
@@ -335,28 +965,47 @@ async function dashboardView() {
     ['users', 'users.read', '/users'], ['credentials', 'credentials.read', '/credentials'],
     ['deployments', 'deployments.read', '/deployments'], ['jobs', 'jobs.read', '/jobs'],
   ];
-  const health = await api('/health', { auth: false, allow: [503] });
+  const [health, systemInfo] = await Promise.all([
+    api('/health', { auth: false, allow: [503] }),
+    allowed('portal.connect') ? api('/info') : Promise.resolve(null),
+  ]);
   const counts = {};
   await Promise.all(resources.map(async ([key, permission, path]) => {
     if (!allowed(permission)) return;
     try { counts[key] = (await api(`${path}?limit=200`)).items.length; } catch { counts[key] = '—'; }
   }));
   const metrics = node('div', { class: 'metrics' },
-    metric('Stan backendu', health.status === 'ok' ? 'OK' : 'Degraded', `${health.checks.workers.online}/${health.checks.workers.expected} workerów`),
+    metric('Stan backendu', statusLabel(health.status), `${health.checks.workers.online}/${health.checks.workers.expected} workerów`),
     metric('Użytkownicy', counts.users ?? '—', allowed('users.read') ? 'widoczne konta' : 'brak uprawnienia'),
-    metric('Deploymenty', counts.deployments ?? '—', 'łącznie'),
+    metric('Wdrożenia', counts.deployments ?? '—', 'łącznie'),
     metric('Zadania', counts.jobs ?? '—', 'ostatnie 200'),
   );
+  const checkLabels = {
+    api: 'API', database: 'Baza danych', queue: 'Kolejka Redis', dispatcher: 'Dispatcher',
+    workers: 'Workery', terraform: 'Terraform', ansible: 'Ansible', disk: 'Miejsce na dysku', encryption: 'Szyfrowanie',
+  };
   const checks = node('div', { class: 'checks' });
   Object.entries(health.checks).forEach(([name, value]) => {
     const ok = typeof value === 'object' ? value.online >= value.expected : Boolean(value);
-    checks.append(node('div', { class: 'check' }, node('span', { text: name }), node('strong', { text: ok ? 'OK' : 'Problem' })));
+    const detail = typeof value === 'object' ? `${value.online}/${value.expected}` : (ok ? 'OK' : 'Problem');
+    checks.append(node('div', { class: 'check' }, node('span', { text: checkLabels[name] || name }), node('strong', { text: detail })));
   });
   const recent = allowed('jobs.read') ? (await api('/jobs?limit=8')).items : [];
+  const componentPanel = node('section', { class: 'panel' },
+    node('div', { class: 'panel-header' }, node('h2', { text: 'Komponenty' }), badge(statusLabel(health.status), statusKind(health.status))),
+    checks);
+  if (systemInfo) componentPanel.append(node('p', {
+    class: 'muted system-version',
+    text: `Cloudportal-backed ${systemInfo.version} · API ${systemInfo.api_version} · ${systemInfo.providers.length} platform`,
+  }));
   dom.content.replaceChildren(metrics, node('div', { class: 'panels' },
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Ostatnie zadania' }), button('Wszystkie', () => navigate('jobs'))),
-      recent.length ? table([{ label: 'Operacja', value: row => row.operation }, { label: 'Status', value: row => badge(row.status, statusKind(row.status)) }, { label: 'Utworzono', value: row => formatDate(row.created_at) }], recent) : node('div', { class: 'empty', text: 'Brak dostępnych zadań.' })),
-    node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Komponenty' }), badge(health.status, statusKind(health.status))), checks),
+      recent.length ? table([
+        { label: 'Operacja', value: row => operationLabel(row.operation) },
+        { label: 'Status', value: row => badge(statusLabel(row.status), statusKind(row.status)) },
+        { label: 'Utworzono', value: row => formatDate(row.created_at) },
+      ], recent) : node('div', { class: 'empty', text: 'Brak dostępnych zadań.' })),
+    componentPanel,
   ));
   setApiStatus(health.status === 'ok');
 }
@@ -373,7 +1022,7 @@ async function usersView() {
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
       { label: 'Typ', value: user => badge(user.is_service_account ? 'serwisowe' : 'osobowe', user.is_service_account ? 'info' : '') },
-      { label: 'Status', value: user => badge(user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive', statusKind(user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive')) },
+      { label: 'Status', value: user => { const status = user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive'; return badge(statusLabel(status), statusKind(status)); } },
       { label: 'Ostatnie logowanie', value: user => formatDate(user.last_login_at) },
     ], users, user => userActions(user)));
 }
@@ -444,8 +1093,8 @@ function resetUserPassword(user) {
 async function rolesView() {
   const roles = (await api('/roles?limit=200')).items;
   const actions = allowed('roles.create') ? [button('Dodaj rolę', () => roleForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Role grupują granularne permissions. System chroni ostatniego aktywnego administratora.', actions),
-    table([{ label: 'Rola', value: role => node('strong', { text: role.name }) }, { label: 'Uprawnienia', value: role => node('span', { class: 'muted', text: role.permissions.join(', ') || 'Brak' }) }], roles, role => {
+  dom.content.replaceChildren(heading('Role grupują uprawnienia do poszczególnych modułów. System chroni ostatniego aktywnego administratora.', actions),
+    table([{ label: 'Rola', value: role => node('strong', { text: role.name }) }, { label: 'Uprawnienia', value: role => badge(`${role.permissions.length} uprawnień`, role.permissions.length ? 'info' : '') }], roles, role => {
       const actions = [];
       if (allowed('roles.update')) actions.push(button('Edytuj', () => roleForm(role)));
       if (allowed('roles.delete')) actions.push(button('Usuń', () => confirmAction('Usuń rolę', `Rola ${role.name} zostanie trwale usunięta.`, async () => { await api(`/roles/${role.id}`, { method: 'DELETE' }); toast('Rola usunięta.'); navigate('roles'); }), 'danger'));
@@ -456,42 +1105,73 @@ async function rolesView() {
 async function roleForm(role = null) {
   try {
     const permissions = (await api('/permissions')).items;
-    const grid = node('div', { class: 'permission-grid wide' });
-    permissions.forEach(permission => grid.append(node('label', {}, node('input', { type: 'checkbox', name: 'permission', value: permission, checked: role?.permissions.includes(permission) }), permission)));
-    const fields = node('div', { class: 'form-grid' }, field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true }), grid);
-    openModal({ title: role ? 'Edytuj rolę' : 'Nowa rola', eyebrow: 'RBAC', body: fields, submitLabel: role ? 'Zapisz' : 'Utwórz', onSubmit: async (_data, form) => {
+    const picker = permissionPicker(permissions, role?.permissions || [], 'permission');
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true }),
+      formSection('Uprawnienia', 'Uprawnienia są pogrupowane według modułów. Zaznacz tylko zakres potrzebny tej roli.', picker));
+    openModal({ title: role ? 'Edytuj rolę' : 'Nowa rola', eyebrow: 'RBAC', body: fields, submitLabel: role ? 'Zapisz' : 'Utwórz', wide: true, onSubmit: async (_data, form) => {
       const payload = { name: form.elements.name.value, permissions: [...form.querySelectorAll('[name="permission"]:checked')].map(input => input.value) };
-      await api(role ? `/roles/${role.id}` : '/roles', { method: role ? 'PUT' : 'POST', body: payload }); toast('Rola zapisana.'); navigate('roles');
+      await api(role ? `/roles/${role.id}` : '/roles', { method: role ? 'PUT' : 'POST', body: payload });
+      toast('Rola zapisana.');
+      navigate('roles');
     }});
   } catch (error) { toast(error.message, 'error'); }
 }
 
 async function tokensView() {
-  const tokens = (await api('/tokens?limit=200')).items;
+  const [tokenResult, userResult] = await Promise.all([
+    api('/tokens?limit=200'),
+    allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const tokens = tokenResult.items;
+  const users = new Map(userResult.items.map(user => [Number(user.id), user.username]));
   const actions = allowed('tokens.create') ? [button('Utwórz token', createToken, 'primary')] : [];
-  dom.content.replaceChildren(heading('Tokeny API mają jawny, ograniczony scope. Sekret jest dostępny wyłącznie po utworzeniu.', actions),
+  dom.content.replaceChildren(heading('Tokeny API mają jawny, ograniczony zakres. Sekret jest dostępny wyłącznie po utworzeniu.', actions),
     table([
       { label: 'Nazwa', value: token => node('div', {}, node('strong', { text: token.name }), node('div', { class: 'mono muted', text: token.token_prefix })) },
-      { label: 'Użytkownik ID', value: token => token.user_id },
-      { label: 'Scopes', value: token => node('span', { class: 'muted', text: token.scopes.join(', ') }) },
-      { label: 'Status', value: token => badge(token.revoked_at ? 'revoked' : token.expires_at && new Date(token.expires_at) < new Date() ? 'expired' : 'active', token.revoked_at ? 'danger' : 'ok') },
+      { label: 'Właściciel', value: token => users.get(Number(token.user_id)) || `Użytkownik #${token.user_id}` },
+      { label: 'Zakres', value: token => badge(`${token.scopes.length} uprawnień`, token.scopes.length ? 'info' : '') },
+      { label: 'Status', value: token => { const status = token.revoked_at ? 'revoked' : token.expires_at && new Date(token.expires_at) < new Date() ? 'expired' : 'active'; return badge(statusLabel(status), status === 'active' ? 'ok' : 'danger'); } },
       { label: 'Ostatnio użyty', value: token => formatDate(token.last_used_at) },
-    ], tokens, token => allowed('tokens.revoke') && !token.revoked_at ? [button('Unieważnij', () => confirmAction('Unieważnij token', `Token ${token.name} natychmiast przestanie działać.`, async () => { await api(`/tokens/${token.id}/revoke`, { method: 'POST' }); toast('Token unieważniony.'); navigate('tokens'); }), 'danger')] : []));
+    ], tokens, token => {
+      const result = [button('Zakres', () => showPermissionSummary(`Zakres: ${token.name}`, token.scopes))];
+      if (allowed('tokens.revoke') && !token.revoked_at) result.push(button('Unieważnij', () => confirmAction('Unieważnij token', `Token ${token.name} natychmiast przestanie działać.`, async () => {
+        await api(`/tokens/${token.id}/revoke`, { method: 'POST' });
+        toast('Token unieważniony.');
+        navigate('tokens');
+      }), 'danger'));
+      return result;
+    }));
 }
 
 async function createToken() {
   try {
-    let permissions = state.identity.permissions;
-    if (allowed('roles.read')) permissions = (await api('/permissions')).items.filter(permission => allowed(permission));
-    const grid = node('div', { class: 'permission-grid wide' });
-    permissions.forEach(permission => grid.append(node('label', {}, node('input', { type: 'checkbox', name: 'scope', value: permission }), permission)));
-    const fields = node('div', { class: 'form-grid' }, field('Nazwa', 'name', { required: true }), field('Użytkownik ID (opcjonalnie)', 'user_id', { type: 'number', min: 1 }), field('Wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', wide: true }), grid);
-    openModal({ title: 'Nowy token API', eyebrow: 'Dostęp programowy', body: fields, submitLabel: 'Utwórz token', onSubmit: async (_data, form) => {
-      const payload = { name: form.elements.name.value, scopes: [...form.querySelectorAll('[name="scope"]:checked')].map(input => input.value) };
-      if (form.elements.user_id.value) payload.user_id = Number(form.elements.user_id.value);
+    const [permissionResult, userResult] = await Promise.all([
+      allowed('roles.read') ? api('/permissions') : Promise.resolve({ items: state.identity.permissions }),
+      allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
+    ]);
+    const permissions = permissionResult.items.filter(permission => allowed(permission));
+    const picker = permissionPicker(permissions, [], 'scope');
+
+    const ownerChoices = [{ value: '', label: 'Moje konto' }].concat(userResult.items.map(user => ({
+      value: user.id,
+      label: `${user.username}${user.email ? ' · ' + user.email : ''}`,
+    })));
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa tokenu', 'name', { required: true, placeholder: 'np. Terraform CI' }),
+      selectField('Właściciel', 'user_id', ownerChoices, '', { required: false }),
+      field('Wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', wide: true }),
+      formSection('Zakres uprawnień', 'Zaznacz tylko uprawnienia potrzebne tej integracji.', picker));
+
+    openModal({ title: 'Nowy token API', eyebrow: 'Dostęp programowy', body: fields, submitLabel: 'Utwórz token', wide: true, onSubmit: async (_data, form) => {
+      const scopes = [...form.querySelectorAll('[name="scope"]:checked')].map(input => input.value);
+      if (!scopes.length) throw new Error('Wybierz co najmniej jedno uprawnienie dla tokenu.');
+      const payload = { name: form.elements.name.value, scopes };
+      if (form.elements.user_id?.value) payload.user_id = Number(form.elements.user_id.value);
       if (form.elements.expires_at.value) payload.expires_at = new Date(form.elements.expires_at.value).toISOString();
       const result = await api('/tokens', { method: 'POST', body: payload });
-      showSecret('Nowy token API', result.token); navigate('tokens');
+      navigate('tokens');
+      showSecret('Nowy token API', result.token);
       return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
@@ -500,8 +1180,13 @@ async function createToken() {
 const CREDENTIAL_TYPE_CONFIG = {
   proxmox: {
     label: 'Proxmox VE',
-    description: 'Połączenie z API Proxmox VE. Preferowany jest dedykowany API Token z minimalnym zakresem uprawnień.',
-    endpoint: { label: 'Endpoint Proxmox HTTPS', placeholder: 'https://pve.example.com:8006', required: true },
+    description: 'Połączenie z API Proxmox VE. Adres może być samym IP/hostem albo jawnym URL HTTP/HTTPS.',
+    endpoint: {
+      label: 'Adres Proxmox (IP / host / URL)',
+      placeholder: '192.168.1.10',
+      required: true,
+      help: 'Bez http:// lub https:// backend najpierw sprawdzi HTTPS, potem HTTP. Dla samego IP/hosta używany jest domyślny port 8006.',
+    },
     username: { label: 'Użytkownik / realm', placeholder: 'root@pam', required: true },
     tls: true,
     defaultAuth: 'token',
@@ -531,8 +1216,8 @@ const CREDENTIAL_TYPE_CONFIG = {
   },
   ssh: {
     label: 'SSH / Linux',
-    description: 'Credential do Ansible i SSH. Weryfikacja known_hosts jest obowiązkowa.',
-    endpoint: { label: 'Endpoint SSH (opcjonalnie)', placeholder: 'ssh://server.example.com:22', required: false, help: 'Używany przez Testuj; workflow Ansible korzysta z inventory.' },
+    description: 'Dane dostępowe do Ansible i SSH. Weryfikacja known_hosts jest obowiązkowa.',
+    endpoint: { label: 'Endpoint SSH (opcjonalnie)', placeholder: 'ssh://server.example.com:22', required: false, help: 'Używany przez Testuj; workflow Ansible korzysta z listy wykrytych hostów.' },
     username: { label: 'Użytkownik SSH', placeholder: 'clouduser', required: true },
     tls: false, defaultAuth: 'private_key',
     authModes: {
@@ -548,7 +1233,7 @@ const CREDENTIAL_TYPE_CONFIG = {
   },
   winrm: {
     label: 'WinRM / Windows',
-    description: 'Credential do Windows przez WinRM/NTLM.',
+    description: 'Dane dostępowe do Windows przez WinRM/NTLM.',
     endpoint: { label: 'Endpoint WinRM HTTPS', placeholder: 'https://server.example.com:5986/wsman', required: true },
     username: { label: 'Użytkownik', placeholder: 'DOMAIN\\svc-cloudportal', required: true },
     tls: true, defaultAuth: 'password',
@@ -639,7 +1324,11 @@ function renderCredentialDynamic(container, type, item) {
   if (config.username) identity.append(field(config.username.label, 'username', {
     value: sameType ? item.username : '', required: config.username.required, placeholder: config.username.placeholder,
   }));
-  if (config.tls) identity.append(checkboxField('Weryfikuj certyfikat TLS', 'verify_ssl', sameType ? item.verify_ssl : true));
+  if (config.tls) {
+    identity.append(node('div', { class: 'credential-tls-control' },
+      checkboxField('Akceptuj certyfikat self-signed / niezaufany', 'accept_untrusted_tls', sameType ? !item.verify_ssl : false),
+      node('div', { class: 'field-help', text: 'Włączenie tej opcji wyłącza weryfikację CA i nazwy hosta dla tych danych dostępowych.' })));
+  }
 
   const typeCard = node('div', { class: 'credential-type-card' },
     node('div', {}, node('strong', { text: config.label }), badge(type, 'info')),
@@ -675,7 +1364,7 @@ function renderCredentialDynamic(container, type, item) {
 
 async function credentialsView() {
   const credentials = (await api('/credentials?limit=200')).items;
-  const actions = allowed('credentials.create') ? [button('Dodaj credential', () => credentialForm(), 'primary')] : [];
+  const actions = allowed('credentials.create') ? [button('Dodaj dane dostępowe', () => credentialForm(), 'primary')] : [];
   dom.content.replaceChildren(heading('Sekrety są szyfrowane i nigdy nie wracają do przeglądarki.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -698,8 +1387,8 @@ function credentialActions(item) {
     } catch (error) { toast(error.message, 'error'); }
   }));
   if (allowed('credentials.update')) actions.push(button('Edytuj', () => credentialForm(item)));
-  if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń credential', 'Credential ' + item.name + ' zostanie trwale usunięty.', async () => {
-    await api('/credentials/' + item.id, { method: 'DELETE' }); toast('Credential usunięty.'); navigate('credentials');
+  if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń dane dostępowe', 'Pozycja „' + item.name + '” zostanie trwale usunięta.', async () => {
+    await api('/credentials/' + item.id, { method: 'DELETE' }); toast('Dane dostępowe usunięte.'); navigate('credentials');
   }), 'danger'));
   return actions;
 }
@@ -709,8 +1398,8 @@ function credentialForm(item = null) {
   const typeField = selectField('Typ', 'type', credentialTypeChoices(), item?.type || 'proxmox', { required: true });
   const fields = node('div', { class: 'form-grid' },
     field('Nazwa', 'name', { required: true, value: item?.name || '' }), typeField,
-    field('Credential wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', value: item?.expires_at ? new Date(item.expires_at).toISOString().slice(0, 16) : '' }),
-    field('Rotacja wymagana do (opcjonalnie)', 'rotation_due_at', { type: 'datetime-local', value: item?.rotation_due_at ? new Date(item.rotation_due_at).toISOString().slice(0, 16) : '' }),
+    field('Dane dostępowe wygasają (opcjonalnie)', 'expires_at', { type: 'datetime-local', value: item?.expires_at ? toDateTimeLocal(item.expires_at) : '' }),
+    field('Rotacja wymagana do (opcjonalnie)', 'rotation_due_at', { type: 'datetime-local', value: item?.rotation_due_at ? toDateTimeLocal(item.rotation_due_at) : '' }),
     dynamic);
   if (allowed('credentials.test')) fields.append(checkboxField('Po zapisaniu przetestuj połączenie', 'test_after_save', false));
 
@@ -720,16 +1409,16 @@ function credentialForm(item = null) {
   render();
 
   openModal({
-    title: item ? 'Edytuj credential: ' + item.name : 'Nowy credential',
+    title: item ? 'Edytuj dane dostępowe: ' + item.name : 'Nowe dane dostępowe',
     eyebrow: 'Sekrety infrastruktury', body: fields,
-    submitLabel: item ? 'Zapisz zmiany' : 'Dodaj credential', wide: true,
+    submitLabel: item ? 'Zapisz zmiany' : 'Dodaj dane dostępowe', wide: true,
     onSubmit: async (data, form) => {
       const type = data.get('type');
       const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
       const sameType = Boolean(item && item.type === type);
       const endpoint = form.elements.endpoint ? form.elements.endpoint.value : (sameType ? item.endpoint : '');
       const username = form.elements.username ? form.elements.username.value : (sameType ? item.username : '');
-      const verifySsl = config.tls ? data.has('verify_ssl') : (sameType ? item.verify_ssl : true);
+      const verifySsl = config.tls ? !data.has('accept_untrusted_tls') : (sameType ? item.verify_ssl : true);
       const replaceSecrets = !item || !sameType || data.has('replace_secrets');
       const identityChanged = Boolean(item && (item.type !== type || item.endpoint !== endpoint || item.username !== username || item.verify_ssl !== verifySsl));
       if (identityChanged && !replaceSecrets) throw new Error('Zmiana typu, endpointu, użytkownika lub TLS wymaga zastąpienia sekretów.');
@@ -770,30 +1459,35 @@ function credentialForm(item = null) {
       if (data.has('test_after_save') && type !== 'other' && (type !== 'ssh' || endpoint)) {
         try {
           const result = await api('/credentials/' + saved.id + '/test', { method: 'POST' });
-          toast('Credential zapisany. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
-        } catch (error) { toast('Credential zapisany, ale test nie powiódł się: ' + error.message, 'error'); }
-      } else toast('Credential zapisany.');
+          toast('Dane dostępowe zapisane. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
+        } catch (error) { toast('Dane dostępowe zapisane, ale test nie powiódł się: ' + error.message, 'error'); }
+      } else toast('Dane dostępowe zapisane.');
       navigate('credentials');
     },
   });
 }
 
 async function providersView() {
-  const providers = (await api('/providers?limit=200')).items;
-  const actions = allowed('providers.create') ? [button('Dodaj provider', () => providerForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Providery wiążą zatwierdzony typ infrastruktury z konkretnym zaszyfrowanym credentialem.', actions),
+  const [providerResult, credentialResult] = await Promise.all([
+    api('/providers?limit=200'),
+    allowed('credentials.read') ? api('/credentials?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const providers = providerResult.items;
+  const credentialNames = new Map(credentialResult.items.map(item => [Number(item.id), item.name]));
+  const actions = allowed('providers.create') && allowed('credentials.read') ? [button('Dodaj platformę', () => providerForm(), 'primary')] : [];
+  dom.content.replaceChildren(heading('Połączenia z platformami infrastruktury. Każda platforma korzysta z przypisanych, zaszyfrowanych danych dostępowych.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-      { label: 'Typ', value: item => badge(item.type, 'info') },
-      { label: 'Credential ID', value: item => item.credentials_id },
+      { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type, 'info') },
+      { label: 'Dane dostępowe', value: item => credentialNames.get(Number(item.credentials_id)) || `#${item.credentials_id}` },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
       const actions = [];
-      actions.push(button('Discovery', () => discoverProvider(item)));
-      if (allowed('providers.update')) actions.push(button('Edytuj', () => providerForm(item)));
-      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń provider', 'Provider ' + item.name + ' zostanie usunięty.', async () => {
+      actions.push(button('Przeglądaj zasoby', () => discoverProvider(item)));
+      if (allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => providerForm(item)));
+      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Platforma „${item.name}” zostanie usunięta. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
-        toast('Provider usunięty.');
+        toast('Platforma usunięta.');
         navigate('providers');
       }), 'danger'));
       return actions;
@@ -804,11 +1498,11 @@ async function providerForm(item = null) {
   try {
     const credentials = (await api('/credentials?limit=200')).items;
     const providerTypes = ['proxmox', 'vmware', 'aws', 'azure', 'openstack'];
-    const typeField = selectField('Typ providera', 'type', providerTypes.map(value => ({
+    const typeField = selectField('Typ platformy', 'type', providerTypes.map(value => ({
       value, label: CREDENTIAL_TYPE_CONFIG[value]?.label || value,
     })), item?.type || 'proxmox', { required: true });
-    const credentialField = selectField('Credential', 'credentials_id', [], item?.credentials_id || '', {
-      required: true, placeholder: 'Wybierz credential tego samego typu',
+    const credentialField = selectField('Dane dostępowe', 'credentials_id', [], item?.credentials_id || '', {
+      required: true, placeholder: 'Wybierz dane dostępowe tego samego typu',
     });
     const credentialSelect = credentialField.querySelector('select');
     const typeSelect = typeField.querySelector('select');
@@ -817,13 +1511,13 @@ async function providerForm(item = null) {
       const selectedType = typeSelect.value;
       const matching = credentials.filter(value => value.type === selectedType);
       const previous = String(item?.credentials_id || credentialSelect.value || '');
-      credentialSelect.replaceChildren(node('option', { value: '', text: 'Wybierz credential' }));
+      credentialSelect.replaceChildren(node('option', { value: '', text: 'Wybierz dane dostępowe' }));
       matching.forEach(value => credentialSelect.append(node('option', {
         value: value.id,
         text: value.name + ' (#' + value.id + ')',
         selected: String(value.id) === previous,
       })));
-      if (!matching.length) credentialSelect.append(node('option', { value: '', text: 'Brak credentiali tego typu', disabled: true }));
+      if (!matching.length) credentialSelect.append(node('option', { value: '', text: 'Brak danych dostępowych tego typu', disabled: true }));
     };
     typeSelect.addEventListener('change', refreshCredentials);
     refreshCredentials();
@@ -832,15 +1526,15 @@ async function providerForm(item = null) {
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
       typeField,
       credentialField,
-      node('div', { class: 'wide field-help', text: 'Provider i credential muszą mieć ten sam typ. Providery mają read-only discovery; provisioning wielochmurowy jest wykonywany przez zatwierdzony katalog Terraform.' })
+      node('div', { class: 'wide field-help', text: 'Platforma i dane dostępowe muszą mieć ten sam typ. Przegląd zasobów jest tylko do odczytu, a provisioning wykonuje zatwierdzony katalog Terraform.' })
     );
 
     openModal({
-      title: item ? 'Edytuj provider' : 'Nowy provider',
+      title: item ? 'Edytuj platformę' : 'Nowa platforma',
       eyebrow: 'Infrastruktura',
       body: fields,
       onSubmit: async data => {
-        if (!data.get('credentials_id')) throw new Error('Wybierz credential zgodny z typem providera.');
+        if (!data.get('credentials_id')) throw new Error('Wybierz dane dostępowe zgodne z typem platformy.');
         await api(item ? '/providers/' + item.id : '/providers', {
           method: item ? 'PUT' : 'POST',
           body: {
@@ -849,7 +1543,7 @@ async function providerForm(item = null) {
             credentials_id: Number(data.get('credentials_id')),
           },
         });
-        toast('Provider zapisany.');
+        toast('Platforma zapisana.');
         navigate('providers');
       },
     });
@@ -857,109 +1551,382 @@ async function providerForm(item = null) {
 }
 
 async function discoverProvider(provider) {
-  const resources = [
-    { value: 'vms', label: 'VM / instances' }, { value: 'templates', label: 'Templates / images' },
-    { value: 'networks', label: 'Networks' }, { value: 'storages', label: 'Storage / volumes' },
-    { value: 'nodes', label: 'Nodes / locations' }, { value: 'pools', label: 'Pools / groups' },
+  const allResources = [
+    { value: 'vms', label: 'Maszyny / instancje' },
+    { value: 'templates', label: 'Szablony / obrazy' },
+    { value: 'networks', label: 'Sieci' },
+    { value: 'storages', label: 'Storage / wolumeny' },
+    { value: 'nodes', label: 'Węzły / lokalizacje' },
+    { value: 'pools', label: 'Pule / grupy' },
   ];
+  const unsupported = provider.type === 'openstack' ? new Set(['nodes', 'pools']) : new Set();
+  const resources = allResources.filter(item => !unsupported.has(item.value));
   const fields = node('div', { class: 'form-grid' },
-    selectField('Zasób', 'resource', resources, provider.type === 'proxmox' ? 'nodes' : 'vms', { required: true }));
+    selectField('Typ zasobu', 'resource', resources, provider.type === 'proxmox' ? 'nodes' : 'vms', { required: true }));
   if (provider.type === 'aws') fields.append(field('Region AWS', 'node', { value: 'eu-central-1', required: true, placeholder: 'eu-central-1' }));
+
   openModal({
-    title: 'Discovery: ' + provider.name, eyebrow: provider.type, body: fields, submitLabel: 'Pobierz',
+    title: 'Zasoby: ' + provider.name,
+    eyebrow: CREDENTIAL_TYPE_CONFIG[provider.type]?.label || provider.type,
+    body: fields,
+    submitLabel: 'Pobierz zasoby',
+    wide: true,
     onSubmit: async data => {
       const resource = data.get('resource');
       const scope = data.get('node');
       const suffix = scope ? '?node=' + encodeURIComponent(scope) : '';
       const rows = (await api('/providers/' + provider.id + '/' + resource + suffix)).items;
-      const columns = Object.keys(rows[0] || { id: '' }).slice(0, 8).map(key => ({ label: key, value: row => String(row[key] ?? '—') }));
+      const preferred = ['name', 'id', 'vmid', 'node', 'status', 'type', 'cidr', 'storage', 'total', 'avail', 'active'];
+      const keys = [...new Set(rows.flatMap(row => Object.keys(row)))];
+      keys.sort((a, b) => {
+        const ai = preferred.indexOf(a), bi = preferred.indexOf(b);
+        return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
+      });
+      const columns = keys.slice(0, 8).map(key => ({
+        label: FIELD_LABELS[key] || key.replaceAll('_', ' '),
+        value: row => {
+          if (['total', 'used', 'avail', 'size', 'mem', 'maxmem', 'disk', 'maxdisk'].includes(key) && Number.isFinite(Number(row[key]))) return formatBytes(row[key]);
+          if (key === 'uptime') return formatDuration(row[key]);
+          if (key === 'status') return badge(statusLabel(row[key]), statusKind(row[key]));
+          return displayValue(row[key]);
+        },
+      }));
       dom.modalTitle.textContent = 'Zasoby: ' + provider.name;
-      dom.modalEyebrow.textContent = resource + (scope ? ' / ' + scope : '');
-      dom.modalBody.replaceChildren(rows.length ? table(columns, rows) : node('p', { class: 'muted', text: 'Brak zasobów.' }));
+      dom.modalEyebrow.textContent = resources.find(item => item.value === resource)?.label || resource;
+      dom.modalBody.replaceChildren(rows.length
+        ? table(columns, rows)
+        : node('div', { class: 'empty', text: 'Nie znaleziono zasobów tego typu.' }));
       dom.modalActions.replaceChildren(button('Zamknij', closeModal));
       return false;
     },
   });
 }
+
 async function deploymentsView() {
-  const deployments = (await api('/deployments?limit=200')).items;
-  const actions = allowed('deployments.create') ? [button('Nowy deployment', createDeployment, 'primary')] : [];
+  const [deploymentResult, providerResult] = await Promise.all([
+    api('/deployments?limit=200'),
+    allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const deployments = deploymentResult.items;
+  const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
+  const actions = allowed('deployments.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')
+    ? [button('Nowe wdrożenie', createDeployment, 'primary')] : [];
   dom.content.replaceChildren(heading('Kontrolowane wdrożenia Terraform/OpenTofu. Każda operacja tworzy audytowalne zadanie.', actions),
     table([
       { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
-      { label: 'Provider', value: item => `${item.provider} #${item.provider_id}` }, { label: 'Executor', value: item => badge(item.executor, 'info') },
-      { label: 'Status', value: item => badge(item.status, statusKind(item.status)) }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+      { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || `#${item.provider_id}` }, { label: 'Silnik IaC', value: item => badge(item.executor, 'info') },
+      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], deployments, item => deploymentActions(item)));
 }
 
 function deploymentActions(item) {
-  const actions = [];
+  const actions = [button('Szczegóły', () => showDeploymentDetails(item))];
   if (allowed('jobs.execute') && allowed('terraform.execute') && !item.active_job_id && item.status !== 'destroyed') {
     actions.push(button('Plan', () => createTerraformJob(item, 'terraform.plan')));
-    actions.push(button('Apply', () => createTerraformJob(item, 'terraform.apply')));
+    actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
   }
-  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Destroy', () => confirmAction('Zniszcz deployment', `Terraform zniszczy zasoby deploymentu ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Zadanie destroy utworzone.'); navigate('deployments'); }), 'danger'));
+  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate('deployments'); }), 'danger'));
   return actions;
 }
 
+function showDeploymentDetails(item) {
+  const variableRows = Object.entries(item.variables || {}).map(([key, value]) => ({ key, value }));
+  const workflow = item.workflow || {};
+  const overview = node('div', { class: 'checks' },
+    info('Status', statusLabel(item.status)),
+    info('Platforma', CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider),
+    info('Szablon', item.template),
+    info('Silnik IaC', item.executor),
+    info('Utworzono', formatDate(item.created_at)),
+    info('Aktualizacja', formatDate(item.updated_at)));
+  const content = node('div', { class: 'stack' },
+    overview,
+    node('section', { class: 'detail-section' },
+      node('h3', { text: 'Parametry wdrożenia' }),
+      variableRows.length ? table([
+        { label: 'Pole', value: row => FIELD_LABELS[row.key] || row.key.replaceAll('_', ' ') },
+        { label: 'Wartość', value: row => displayValue(row.value) },
+      ], variableRows) : node('p', { class: 'muted', text: 'Brak parametrów.' })));
+  if (workflow.ansible) {
+    content.append(node('section', { class: 'detail-section' },
+      node('h3', { text: 'Konfiguracja Ansible' }),
+      node('div', { class: 'checks' },
+        info('Playbook', workflow.ansible.playbook),
+        info('Dane dostępowe', `#${workflow.ansible.credentials_id}`))));
+  }
+  dom.modal.classList.add('modal-wide');
+  dom.modalTitle.textContent = item.name;
+  dom.modalEyebrow.textContent = `Wdrożenie · ${short(item.id, 18)}`;
+  dom.modalBody.replaceChildren(content);
+  const actions = [button('Zamknij', closeModal)];
+  if (item.active_job_id && allowed('jobs.read')) actions.unshift(button('Przejdź do zadań', () => { closeModal(); navigate('jobs'); }, 'primary'));
+  dom.modalActions.replaceChildren(...actions);
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
 async function createTerraformJob(item, operation) {
-  try { await api('/jobs', { method: 'POST', body: { operation, deployment_id: item.id }, idempotent: true }); toast(`Zadanie ${operation} utworzone.`); navigate('jobs'); }
+  try { await api('/jobs', { method: 'POST', body: { operation, deployment_id: item.id }, idempotent: true }); toast(`Utworzono zadanie: ${operationLabel(operation)}.`); navigate('jobs'); }
   catch (error) { toast(error.message, 'error'); }
 }
 
 async function createDeployment() {
   try {
-    const [providers, credentials, templates] = await Promise.all([
-      api('/providers?limit=200'), api('/credentials?limit=200'), api('/templates'),
+    const [providerResult, credentialResult, templateResult, playbookResult] = await Promise.all([
+      api('/providers?limit=200'),
+      api('/credentials?limit=200'),
+      api('/templates'),
+      allowed('ansible.execute') && allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
     ]);
-    const defaultVariables = {
-      name: 'vm01', node: 'pve01', template_id: 9000, cpu: 2, memory: 4096,
-      disk: 40, network: 'vmbr0', storage: 'local-lvm', ssh_username: 'clouduser',
-    };
+    const providers = providerResult.items;
+    const credentials = credentialResult.items;
+    const templates = templateResult.items;
+    const playbooks = playbookResult.items;
+    if (!providers.length) throw new Error('Najpierw dodaj provider infrastruktury.');
+    if (!credentials.length) throw new Error('Najpierw dodaj credential infrastruktury.');
+    if (!templates.length) throw new Error('Katalog nie zawiera żadnego szablonu wdrożenia.');
+
+    const templateField = selectField('Szablon', 'template', templates.map(item => ({
+      value: item.id, label: `${item.name} · v${item.version} · ${CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider}`,
+    })), templates[0].id, { required: true });
+    const providerField = selectField('Platforma', 'provider_id', [], '', { required: true });
+    const credentialField = selectField('Dane dostępowe', 'credentials_id', [], '', { required: true });
+    const variableFields = node('div', { class: 'form-grid wide template-variable-grid' });
+    const ansibleFields = node('div', { class: 'form-grid wide ansible-fields' });
+    const ansibleToggle = checkboxField('Po utworzeniu skonfiguruj system przez Ansible', 'ansible_enabled', false);
+    const ansibleSection = formSection('Konfiguracja po wdrożeniu', 'Opcjonalny, zatwierdzony playbook uruchamiany po uzyskaniu adresu VM.', ansibleToggle, ansibleFields);
+
     const fields = node('div', { class: 'form-grid' },
-      field('Nazwa deploymentu', 'name', { required: true }),
-      selectField('Provider', 'provider_id', providers.items.map(item => ({ value: item.id, label: `${item.name} [${item.type}] (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
-      selectField('Credential', 'credentials_id', credentials.items.map(item => ({ value: item.id, label: `${item.name} [${item.type}] (#${item.id})` })), '', { required: true, placeholder: 'Wybierz credential' }),
-      selectField('Template', 'template', templates.items.map(item => ({ value: item.id, label: `${item.name} · v${item.version} [${item.provider}]` })), 'proxmox-vm', { required: true }),
-      selectField('Executor', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'),
-      field('Zmienne template JSON', 'variables', { tag: 'textarea', required: true, wide: true, value: jsonValue(defaultVariables), help: 'Schemat wymaganych pól sprawdzisz w zakładce Katalog IaC.' }));
-    openModal({ title: 'Nowy deployment', eyebrow: 'Terraform / OpenTofu', body: fields, submitLabel: 'Utwórz i uruchom', onSubmit: async data => {
-      await api('/deployments', { method: 'POST', idempotent: true, body: {
-        name: data.get('name'),
-        provider_id: Number(data.get('provider_id')),
-        template: data.get('template'),
-        credentials_id: Number(data.get('credentials_id')),
-        executor: data.get('executor'),
-        variables: parseObject(data.get('variables'), 'Zmienne template'),
-      } });
-      toast('Deployment i zadanie apply zostały utworzone.');
-      navigate('deployments');
-    }});
+      formSection('Podstawowe informacje', 'Wybierz szablon i miejsce wdrożenia.',
+        node('div', { class: 'form-grid' },
+          field('Nazwa wdrożenia', 'name', { required: true, placeholder: 'np. web-prod-01' }),
+          templateField,
+          providerField,
+          credentialField,
+          selectField('Silnik IaC', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'))),
+      formSection('Konfiguracja zasobu', 'Pola są generowane automatycznie ze schematu wybranego szablonu.', variableFields),
+      ansibleSection);
+
+    const templateSelect = templateField.querySelector('select');
+    const providerSelect = providerField.querySelector('select');
+    const credentialSelect = credentialField.querySelector('select');
+
+    const currentTemplate = () => templates.find(item => item.id === templateSelect.value);
+    const refill = (select, rows, placeholder) => {
+      const previous = select.value;
+      select.replaceChildren(node('option', { value: '', text: placeholder }));
+      rows.forEach(row => select.append(node('option', { value: row.id, text: row.label, selected: String(row.id) === String(previous) })));
+      if (!select.value && rows.length === 1) select.value = String(rows[0].id);
+    };
+
+    const refreshCredentials = () => {
+      const provider = providers.find(item => String(item.id) === String(providerSelect.value));
+      const matching = provider
+        ? credentials.filter(item => Number(item.id) === Number(provider.credentials_id)).map(item => ({ id: item.id, label: item.name }))
+        : [];
+      refill(credentialSelect, matching, matching.length ? 'Dane dostępowe platformy' : 'Wybierz provider');
+    };
+
+    const renderAnsible = () => {
+      const template = currentTemplate();
+      const supported = template?.provider === 'proxmox' && playbooks.length > 0;
+      ansibleSection.hidden = !supported;
+      if (!supported) {
+        ansibleToggle.querySelector('input').checked = false;
+        ansibleFields.replaceChildren();
+        return;
+      }
+      const enabled = ansibleToggle.querySelector('input').checked;
+      const playbookField = selectField('Playbook', 'ansible_playbook', playbooks.map(playbook => ({
+        value: playbook.id,
+        label: `${playbook.name} · v${playbook.version}`,
+      })), playbooks[0]?.id || '', { required: enabled });
+      const credentialField = selectField('Systemowe dane dostępowe', 'ansible_credentials_id', [], '', { required: enabled });
+      const variablesContainer = node('div', { class: 'form-grid wide' });
+      ansibleFields.replaceChildren(playbookField, credentialField, variablesContainer);
+      ansibleFields.querySelectorAll('input,select,textarea').forEach(control => { control.disabled = !enabled; });
+
+      const refreshPlaybook = () => {
+        const playbook = playbooks.find(value => value.id === playbookField.querySelector('select').value) || playbooks[0];
+        const matchingCredentials = credentials.filter(value => value.type === playbook?.transport);
+        const select = credentialField.querySelector('select');
+        refill(select, matchingCredentials.map(value => ({ id: value.id, label: `${value.name} · ${credentialTypeLabel(value.type)}` })),
+          matchingCredentials.length ? 'Wybierz systemowe dane dostępowe' : `Brak danych dostępowych typu ${playbook?.transport || ''}`);
+        variablesContainer.replaceChildren();
+        (playbook?.variables || []).forEach(name => variablesContainer.append(
+          field(FIELD_LABELS[name] || name.replaceAll('_', ' '), `ansible_var_${name}`, {
+            help: 'Opcjonalna zmienna zatwierdzonego playbooka.',
+          })));
+      };
+      playbookField.querySelector('select').addEventListener('change', refreshPlaybook);
+      refreshPlaybook();
+    };
+
+    const refreshTemplate = () => {
+      const template = currentTemplate();
+      if (!template) return;
+      const matchingProviders = providers.filter(item => item.type === template.provider).map(item => ({ id: item.id, label: item.name }));
+      refill(providerSelect, matchingProviders, matchingProviders.length ? 'Wybierz provider' : 'Brak połączenia z tą platformą');
+      refreshCredentials();
+      renderTemplateVariables(variableFields, template);
+      renderAnsible();
+    };
+
+    templateSelect.addEventListener('change', refreshTemplate);
+    providerSelect.addEventListener('change', refreshCredentials);
+    ansibleToggle.querySelector('input').addEventListener('change', renderAnsible);
+    refreshTemplate();
+
+    openModal({
+      title: 'Nowe wdrożenie',
+      eyebrow: 'Terraform / OpenTofu',
+      body: fields,
+      submitLabel: 'Utwórz i uruchom',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const template = currentTemplate();
+        if (!providerSelect.value) throw new Error('Brak providera zgodnego z wybranym szablonem.');
+        if (!credentialSelect.value) throw new Error('Brak credentiala zgodnego z wybraną platformą.');
+        const body = {
+          name: form.elements.name.value,
+          provider_id: Number(providerSelect.value),
+          template: template.id,
+          credentials_id: Number(credentialSelect.value),
+          executor: form.elements.executor.value,
+          variables: readTemplateVariables(form, template),
+        };
+        if (form.elements.ansible_enabled?.checked) {
+          const playbook = playbooks.find(value => value.id === form.elements.ansible_playbook?.value);
+          if (!playbook) throw new Error('Wybierz playbook Ansible.');
+          if (!form.elements.ansible_credentials_id?.value) throw new Error('Wybierz systemowe dane dostępowe dla Ansible.');
+          const variables = {};
+          (playbook.variables || []).forEach(name => {
+            const value = form.elements[`ansible_var_${name}`]?.value?.trim();
+            if (value) variables[name] = value;
+          });
+          body.ansible = {
+            playbook: playbook.id,
+            credentials_id: Number(form.elements.ansible_credentials_id.value),
+            variables,
+          };
+        }
+        await api('/deployments', { method: 'POST', idempotent: true, body });
+        toast('Wdrożenie zostało utworzone i uruchomiono zastosowanie konfiguracji.');
+        navigate('deployments');
+      },
+    });
   } catch (error) { toast(error.message, 'error'); }
 }
 
 async function jobsView() {
   const jobs = (await api('/jobs?limit=200')).items;
-  dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.'),
+  const actions = [];
+  if (allowed('jobs.execute') && allowed('ansible.execute') && allowed('ansible.read') && allowed('credentials.read')) {
+    actions.push(button('Uruchom Ansible', runStandaloneAnsible, 'primary'));
+  }
+  dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.', actions),
     table([
-      { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => item.operation },
-      { label: 'Status', value: item => badge(item.status, statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 14) },
+      { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => operationLabel(item.operation) },
+      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 14) },
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
       const actions = [button('Logi', () => showJobLogs(item))];
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(item.status)) actions.push(button('Anuluj', () => confirmAction('Anuluj zadanie', `Zadanie ${short(item.id)} otrzyma żądanie anulowania.`, async () => { await api(`/jobs/${item.id}/cancel`, { method: 'POST' }); toast('Zadanie anulowane.'); navigate('jobs'); }), 'danger'));
-      if (allowed('jobs.execute') && ['failed', 'cancelled'].includes(item.status)) actions.push(button('Retry', async () => {
+      if (allowed('jobs.execute') && ['failed', 'cancelled'].includes(item.status)) actions.push(button('Ponów', async () => {
         await api(`/jobs/${item.id}/retry`, { method: 'POST', idempotent: true });
-        toast('Utworzono retry job.');
+        toast('Utworzono ponowienie zadania.');
         navigate('jobs');
       }));
       return actions;
     }));
 }
 
+async function runStandaloneAnsible() {
+  try {
+    const [playbookResult, credentialResult] = await Promise.all([
+      api('/ansible/playbooks'),
+      api('/credentials?limit=200'),
+    ]);
+    const playbooks = playbookResult.items;
+    const credentials = credentialResult.items;
+    if (!playbooks.length) throw new Error('Katalog nie zawiera playbooków Ansible.');
+
+    const playbookField = selectField('Playbook', 'playbook', playbooks.map(playbook => ({
+      value: playbook.id,
+      label: `${playbook.name} · v${playbook.version}`,
+    })), playbooks[0].id, { required: true });
+    const credentialField = selectField('Dane dostępowe hosta', 'credentials_id', [], '', { required: true });
+    const variables = node('div', { class: 'form-grid wide' });
+    const fields = node('div', { class: 'form-grid' },
+      formSection('Cel', 'Podaj adresy IP hostów, na których ma zostać uruchomiony zatwierdzony playbook.',
+        node('div', { class: 'form-grid' },
+          playbookField,
+          credentialField,
+          field('Adresy IP hostów', 'hosts', {
+            tag: 'textarea',
+            required: true,
+            wide: true,
+            placeholder: '10.0.0.10\n10.0.0.11',
+            help: 'Jeden adres IPv4/IPv6 w wierszu lub adresy oddzielone przecinkami.',
+          }))),
+      formSection('Zmienne playbooka', 'Puste pola opcjonalne nie są wysyłane.', variables));
+
+    const refresh = () => {
+      const playbook = playbooks.find(value => value.id === playbookField.querySelector('select').value) || playbooks[0];
+      const matching = credentials.filter(value => value.type === playbook.transport);
+      const select = credentialField.querySelector('select');
+      select.replaceChildren(node('option', { value: '', text: matching.length ? 'Wybierz dane dostępowe' : `Brak danych typu ${playbook.transport}` }));
+      matching.forEach(value => select.append(node('option', { value: value.id, text: value.name })));
+      if (matching.length === 1) select.value = String(matching[0].id);
+      variables.replaceChildren();
+      (playbook.variables || []).forEach(name => variables.append(field(
+        FIELD_LABELS[name] || name.replaceAll('_', ' '),
+        `ansible_job_var_${name}`,
+        { help: 'Zmienna zatwierdzonego playbooka.' },
+      )));
+    };
+    playbookField.querySelector('select').addEventListener('change', refresh);
+    refresh();
+
+    openModal({
+      title: 'Uruchom Ansible',
+      eyebrow: 'Zadanie jednorazowe',
+      body: fields,
+      submitLabel: 'Dodaj do kolejki',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const playbook = playbooks.find(value => value.id === form.elements.playbook.value);
+        if (!playbook) throw new Error('Wybierz playbook.');
+        if (!form.elements.credentials_id.value) throw new Error('Wybierz dane dostępowe do hosta.');
+        const hosts = splitValues(form.elements.hosts.value);
+        if (!hosts.length) throw new Error('Podaj co najmniej jeden adres IP hosta.');
+        const jobVariables = {};
+        (playbook.variables || []).forEach(name => {
+          const value = form.elements[`ansible_job_var_${name}`]?.value?.trim();
+          if (value) jobVariables[name] = value;
+        });
+        await api('/jobs', {
+          method: 'POST',
+          idempotent: true,
+          body: {
+            operation: 'ansible.execute',
+            ansible: {
+              playbook: playbook.id,
+              credentials_id: Number(form.elements.credentials_id.value),
+              inventory: { hosts },
+              variables: jobVariables,
+            },
+          },
+        });
+        toast('Zadanie Ansible zostało dodane do kolejki.');
+        navigate('jobs');
+      },
+    });
+  } catch (error) { toast(error.message, 'error'); }
+}
+
 async function showJobLogs(job) {
   dom.modalTitle.textContent = `Logi ${short(job.id, 18)}`;
-  dom.modalEyebrow.textContent = job.operation;
+  dom.modalEyebrow.textContent = operationLabel(job.operation);
   dom.modalBody.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner' })));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   dom.modal.showModal();
@@ -975,28 +1942,29 @@ async function auditView(requestId = '') {
   const search = node('form', { class: 'action-group', onSubmit: event => { event.preventDefault(); auditView(event.currentTarget.elements.request_id.value.trim()); } }, field('Request ID', 'request_id', { value: requestId, placeholder: 'UUID korelacji' }), node('button', { class: 'button primary', type: 'submit' }, 'Filtruj'));
   dom.content.replaceChildren(heading('Niezmienna historia operacji bezpieczeństwa i infrastruktury.', [search]),
     table([
-      { label: 'Czas', value: item => formatDate(item.timestamp) }, { label: 'Akcja', value: item => node('strong', { text: item.action }) },
-      { label: 'Zasób', value: item => `${item.resource || '—'} ${item.resource_id || ''}` }, { label: 'Źródło', value: item => item.source }, { label: 'Wynik', value: item => badge(item.result, item.result === 'success' ? 'ok' : 'danger') },
+      { label: 'Czas', value: item => formatDate(item.timestamp) }, { label: 'Akcja', value: item => node('strong', { text: auditActionLabel(item.action) }) },
+      { label: 'Zasób', value: item => `${AUDIT_RESOURCE_LABELS[item.resource] || item.resource || '—'} ${item.resource_id || ''}` }, { label: 'Źródło', value: item => item.source }, { label: 'Wynik', value: item => badge(item.result, item.result === 'success' ? 'ok' : 'danger') },
       { label: 'Użytkownik', value: item => item.user_id ?? '—' }, { label: 'Request ID', class: 'mono', value: item => short(item.request_id, 18) },
     ], result.items));
 }
 
 async function blueprintsView() {
   const blueprints = (await api('/blueprints?limit=200')).items;
-  const actions = allowed('blueprints.create') ? [button('Nowy Blueprint', () => blueprintForm(), 'primary')] : [];
+  const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
+  const actions = allowed('blueprints.create') && canDesignBlueprint ? [button('Nowy Blueprint', () => blueprintForm(), 'primary')] : [];
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
       { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
-      { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
-      { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => key).join(', ') || '—' },
+      { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
+      { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => ({ backend: 'Backend', cloudportal: 'CloudPortal', api: 'API' }[key] || key)).join(', ') || '—' },
       { label: 'Kroki', value: item => item.workflow.length },
-      { label: 'Governance', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('approval', 'warning') : badge('standard', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('auto-cleanup', 'danger') : badge('preserve', 'info')) },
+      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Wymaga akceptacji', 'warning') : badge('Bez akceptacji', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
       if (allowed('blueprints.execute') && (!item.requires_approval || allowed('blueprints.approve')) && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
-      if (allowed('blueprints.update')) result.push(button('Edytuj', () => blueprintForm(item)));
-      if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące deploymenty zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
+      if (allowed('blueprints.update') && canDesignBlueprint) result.push(button('Edytuj', () => blueprintForm(item)));
+      if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
 }
@@ -1011,68 +1979,570 @@ function parseArray(value, label) {
   catch { throw new Error(`${label} musi zawierać poprawną tablicę JSON.`); }
 }
 
-function blueprintForm(item = null) {
-  const exampleVariables = { environment: { type: 'select', required: true, options: ['dev', 'test', 'prod'] }, cpu: { type: 'integer', default: 2, min: 1, max: 8 } };
-  const exampleDeployment = { name: '{{ hostname }}', provider_id: 1, credentials_id: 1, hostname_scheme_id: 1, template: 'proxmox-vm', executor: 'terraform', variables: { name: '{{ hostname }}', node: 'pve', template_id: 9000, cpu: '{{ cpu }}', memory: 4096, disk: 40, network: 'vmbr0', storage: 'local-lvm', ssh_username: 'clouduser' } };
-  const exampleWorkflow = [{ id: 'hostname', type: 'generate_hostname' }, { id: 'clone', type: 'clone_vm', depends_on: ['hostname'] }, { id: 'apply', type: 'terraform_apply', depends_on: ['clone'] }];
-  const fields = node('div', { class: 'form-grid' },
-    field('Slug', 'slug', { required: true, value: item?.slug || '' }), field('Nazwa', 'name', { required: true, value: item?.name || '' }),
-    field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
-    checkboxField('Aktywny', 'is_active', item?.is_active ?? true), checkboxField('Dostępny w panelu backendu', 'visibility_backend', item?.visibility.backend ?? true),
-    checkboxField('Dostępny w CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false), checkboxField('Dostępny przez API', 'visibility_api', item?.visibility.api ?? true),
-    checkboxField('Wymaga blueprints.approve przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
-    selectField('Recovery policy', 'recovery_policy', [{ value: 'preserve', label: 'Preserve state/resources' }, { value: 'destroy_on_failure', label: 'Destroy on failed apply' }], item?.recovery_policy || 'preserve'),
-    field('Dozwolone role ID (przecinki, puste = wszyscy)', 'role_ids', { value: (item?.allowed_role_ids || []).join(',') }),
-    field('Dozwoleni użytkownicy ID (przecinki)', 'user_ids', { value: (item?.allowed_user_ids || []).join(',') }),
-    field('Schemat zmiennych JSON', 'variables_schema', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.variables_schema || exampleVariables) }),
-    field('Definicja deploymentu JSON', 'deployment', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.deployment || exampleDeployment) }),
-    field('Workflow DAG JSON', 'workflow', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.workflow || exampleWorkflow) }));
-  openModal({ title: item ? `Edytuj ${item.name}` : 'Nowy Blueprint', eyebrow: 'Automation Designer', body: fields, submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz', onSubmit: async data => {
-    const ids = value => value.split(',').map(part => part.trim()).filter(Boolean).map(Number);
-    const payload = { slug: data.get('slug'), name: data.get('name'), description: data.get('description'), is_active: data.has('is_active'),
-      visibility: { backend: data.has('visibility_backend'), cloudportal: data.has('visibility_cloudportal'), api: data.has('visibility_api') },
-      allowed_role_ids: ids(data.get('role_ids')), allowed_user_ids: ids(data.get('user_ids')),
-      variables_schema: parseObject(data.get('variables_schema'), 'Schemat zmiennych'), deployment: parseObject(data.get('deployment'), 'Deployment'), workflow: parseArray(data.get('workflow'), 'Workflow'),
-      requires_approval: data.has('requires_approval'), recovery_policy: data.get('recovery_policy') };
-    await api(item ? `/blueprints/${item.id}` : '/blueprints', { method: item ? 'PUT' : 'POST', body: payload });
-    toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint utworzony.'); navigate('blueprints');
-  }});
+async function blueprintForm(item = null) {
+  try {
+    const [providerResult, credentialResult, templateResult, schemeResult, poolResult, roleResult, userResult, playbookResult] = await Promise.all([
+      api('/providers?limit=200'),
+      api('/credentials?limit=200'),
+      api('/templates'),
+      allowed('hostnames.read') ? api('/hostname-schemes?limit=200') : Promise.resolve({ items: [] }),
+      allowed('ipam.read') ? api('/ipam/pools?limit=200') : Promise.resolve({ items: [] }),
+      allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
+      allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
+      allowed('ansible.execute') && allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
+    ]);
+    const providers = providerResult.items;
+    const credentials = credentialResult.items;
+    const templates = templateResult.items;
+    const schemes = schemeResult.items;
+    const pools = poolResult.items;
+    const playbooks = playbookResult.items;
+    if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
+
+    const variableList = node('div', { class: 'editor-list wide' });
+    const workflowList = node('div', { class: 'editor-list wide' });
+    let variableCounter = 0;
+    let workflowCounter = 0;
+
+    const addVariable = (key = '', definition = {}) => {
+      variableCounter += 1;
+      const row = node('div', { class: 'editor-card', 'data-variable-row': String(variableCounter) });
+      const typeChoices = [
+        { value: 'string', label: 'Tekst' },
+        { value: 'integer', label: 'Liczba całkowita' },
+        { value: 'select', label: 'Lista wyboru' },
+        { value: 'boolean', label: 'Tak / nie' },
+      ];
+      const typeField = selectField('Typ', 'variable_type', typeChoices, definition.type || 'string', { required: true });
+      const optionsField = field('Opcje (przecinki lub nowe linie)', 'variable_options', {
+        tag: 'textarea', value: (definition.options || []).join('\n'), wide: true,
+      });
+      const minField = field('Minimum', 'variable_min', { type: 'number', value: definition.min ?? '' });
+      const maxField = field('Maksimum', 'variable_max', { type: 'number', value: definition.max ?? '' });
+      const refresh = () => {
+        const type = typeField.querySelector('select').value;
+        optionsField.hidden = type !== 'select';
+        minField.hidden = type !== 'integer';
+        maxField.hidden = type !== 'integer';
+      };
+      typeField.querySelector('select').addEventListener('change', refresh);
+      row.append(
+        node('div', { class: 'editor-card-header' },
+          node('strong', { text: 'Zmienna wejściowa' }),
+          button('Usuń', () => row.remove(), 'danger')),
+        node('div', { class: 'form-grid' },
+          field('Klucz', 'variable_key', { required: true, value: key, placeholder: 'np. cpu' }),
+          field('Etykieta dla użytkownika', 'variable_label', { value: definition.label || '', placeholder: 'np. Liczba CPU' }),
+          typeField,
+          field('Wartość domyślna', 'variable_default', {
+            value: definition.default === undefined || definition.default === null ? '' : String(definition.default),
+          }),
+          minField,
+          maxField,
+          optionsField,
+          checkboxField('Pole wymagane', 'variable_required', Boolean(definition.required))));
+      variableList.append(row);
+      refresh();
+    };
+
+    const workflowTypes = [
+      ['generate_hostname', 'Wygeneruj hostname'], ['allocate_ip', 'Przydziel IP'], ['release_ip', 'Zwolnij IP'],
+      ['create_vm', 'Utwórz VM'], ['clone_vm', 'Sklonuj VM'], ['configure_vm', 'Skonfiguruj VM'],
+      ['cloud_init', 'Cloud-init'], ['start_vm', 'Uruchom VM'], ['wait_for_vm', 'Czekaj na VM'],
+      ['wait_for_agent', 'Czekaj na guest agent'], ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
+      ['set_hostname', 'Ustaw hostname'], ['run_ansible_playbook', 'Uruchom Ansible'], ['terraform_plan', 'Terraform plan'],
+      ['terraform_apply', 'Terraform apply'], ['create_snapshot', 'Utwórz snapshot'], ['health_check', 'Health check'],
+      ['condition', 'Warunek'], ['approval', 'Akceptacja'], ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
+    ];
+    const addWorkflowStep = (step = {}) => {
+      workflowCounter += 1;
+      const advanced = node('details', { class: 'advanced-options wide' },
+        node('summary', { text: 'Opcje zaawansowane' }),
+        node('div', { class: 'form-grid advanced-options-body' },
+          field('Liczba ponowień', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
+          field('Limit czasu (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
+          field('Krok cofania — ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
+          field('Warunki — JSON (opcjonalnie)', 'workflow_conditions', {
+            tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? jsonValue(step.conditions) : '',
+            help: 'Zaawansowane warunki wykonania kroku.',
+          })));
+      const row = node('div', { class: 'editor-card', 'data-workflow-row': String(workflowCounter) },
+        node('div', { class: 'editor-card-header' },
+          node('strong', { text: 'Krok workflow' }),
+          button('Usuń', () => row.remove(), 'danger')),
+        node('div', { class: 'form-grid' },
+          field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
+          selectField('Akcja', 'workflow_type', workflowTypes.map(([value, label]) => ({ value, label })), step.type || 'terraform_apply', { required: true }),
+          field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), wide: true, help: 'Kilka ID oddziel przecinkami.' }),
+          advanced));
+      workflowList.append(row);
+    };
+
+    const defaultVariables = item?.variables_schema || {
+      environment: { type: 'select', label: 'Środowisko', required: true, options: ['dev', 'test', 'prod'], default: 'dev' },
+      cpu: { type: 'integer', label: 'CPU', required: true, default: 2, min: 1, max: 8 },
+    };
+    Object.entries(defaultVariables).forEach(([key, definition]) => addVariable(key, definition));
+    const defaultWorkflow = item?.workflow || [
+      { id: 'hostname', type: 'generate_hostname' },
+      { id: 'clone', type: 'clone_vm', depends_on: ['hostname'] },
+      { id: 'apply', type: 'terraform_apply', depends_on: ['clone'] },
+    ];
+    defaultWorkflow.forEach(addWorkflowStep);
+
+    const deployment = item?.deployment || {};
+    const initialTemplate = templates.find(template => template.id === (deployment.template || 'proxmox-vm')) || templates[0];
+    const templateField = selectField('Szablon IaC', 'deployment_template', templates.map(template => ({
+      value: template.id,
+      label: `${template.name} · v${template.version} · ${CREDENTIAL_TYPE_CONFIG[template.provider]?.label || template.provider}`,
+    })), initialTemplate.id, { required: true });
+    const providerField = selectField('Platforma', 'deployment_provider_id', [], deployment.provider_id || '', { required: true });
+    const credentialField = selectField('Dane dostępowe', 'deployment_credentials_id', [], deployment.credentials_id || '', { required: true });
+    const templateVariables = node('div', { class: 'form-grid wide template-variable-grid' });
+    const variableState = new Map([[initialTemplate.id, { ...(deployment.variables || {}) }]]);
+    let currentTemplateId = initialTemplate.id;
+    let deploymentVariablesReady = false;
+
+    const currentTemplate = () => templates.find(template => template.id === templateField.querySelector('select').value) || templates[0];
+    const refill = (select, values, placeholder, selectedValue) => {
+      select.replaceChildren(node('option', { value: '', text: placeholder }));
+      values.forEach(value => select.append(node('option', {
+        value: value.id,
+        text: value.label,
+        selected: String(value.id) === String(selectedValue),
+      })));
+      if (!select.value && values.length === 1) select.value = String(values[0].id);
+    };
+
+    const saveDeploymentVariables = () => {
+      if (!deploymentVariablesReady) return;
+      const previousTemplate = templates.find(template => template.id === currentTemplateId);
+      if (previousTemplate) variableState.set(currentTemplateId, readBlueprintTemplateVariables(templateVariables, previousTemplate));
+    };
+
+    const refreshCredentialChoices = () => {
+      const providerId = providerField.querySelector('select').value;
+      const provider = providers.find(value => String(value.id) === String(providerId));
+      const matches = provider
+        ? credentials.filter(value => Number(value.id) === Number(provider.credentials_id)).map(value => ({ id: value.id, label: value.name }))
+        : [];
+      refill(credentialField.querySelector('select'), matches,
+        matches.length ? 'Dane dostępowe platformy' : 'Wybierz provider',
+        deployment.credentials_id);
+    };
+
+    const existingAnsible = deployment.ansible || null;
+    const ansibleToggle = checkboxField('Po wdrożeniu uruchom zatwierdzony playbook Ansible', 'deployment_ansible_enabled', Boolean(existingAnsible));
+    const ansibleFields = node('div', { class: 'form-grid wide ansible-fields' });
+    const ansibleSection = formSection(
+      'Konfiguracja systemu po wdrożeniu',
+      'Opcjonalny krok Ansible uruchamiany po utworzeniu VM i wykryciu jej adresu.',
+      ansibleToggle,
+      ansibleFields,
+    );
+
+    const renderBlueprintAnsible = () => {
+      const template = currentTemplate();
+      const supported = template.provider === 'proxmox';
+      ansibleSection.hidden = !supported;
+      if (!supported) {
+        ansibleFields.replaceChildren();
+        return;
+      }
+      const enabled = ansibleToggle.querySelector('input').checked;
+      if (!allowed('ansible.execute')) {
+        ansibleToggle.querySelector('input').disabled = true;
+        ansibleFields.replaceChildren(node('p', {
+          class: 'muted wide',
+          text: existingAnsible
+            ? 'Istniejąca konfiguracja Ansible zostanie zachowana. Brak uprawnienia ansible.execute do jej edycji.'
+            : 'Brak uprawnienia ansible.execute — konfiguracja Ansible jest niedostępna.',
+        }));
+        return;
+      }
+      ansibleToggle.querySelector('input').disabled = false;
+      if (!enabled) {
+        ansibleFields.replaceChildren(node('p', { class: 'muted wide', text: 'Ansible nie zostanie uruchomiony po wdrożeniu.' }));
+        return;
+      }
+      const choices = [...playbooks];
+      if (existingAnsible?.playbook && !choices.some(value => value.id === existingAnsible.playbook)) {
+        choices.unshift({
+          id: existingAnsible.playbook,
+          name: existingAnsible.playbook + ' (zapisany)',
+          version: '?',
+          transport: credentials.find(value => Number(value.id) === Number(existingAnsible.credentials_id))?.type || 'ssh',
+          variables: Object.keys(existingAnsible.variables || {}),
+        });
+      }
+      if (!choices.length) {
+        ansibleFields.replaceChildren(node('p', { class: 'form-error wide', text: 'Katalog nie zawiera dostępnych playbooków Ansible.' }));
+        return;
+      }
+      const playbookField = selectField('Playbook', 'deployment_ansible_playbook', choices.map(value => ({
+        value: value.id, label: `${value.name} · v${value.version}`,
+      })), existingAnsible?.playbook || choices[0].id, { required: true });
+      const systemCredentialField = selectField('Systemowe dane dostępowe', 'deployment_ansible_credentials_id', [], existingAnsible?.credentials_id || '', { required: true });
+      const variableFields = node('div', { class: 'form-grid wide' });
+      ansibleFields.replaceChildren(playbookField, systemCredentialField, variableFields);
+
+      const refreshPlaybook = () => {
+        const playbook = choices.find(value => value.id === playbookField.querySelector('select').value) || choices[0];
+        const matching = credentials.filter(value => value.type === playbook.transport).map(value => ({ id: value.id, label: value.name }));
+        refill(
+          systemCredentialField.querySelector('select'),
+          matching,
+          matching.length ? 'Wybierz systemowe dane dostępowe' : `Brak danych dostępowych typu ${playbook.transport}`,
+          existingAnsible?.credentials_id,
+        );
+        variableFields.replaceChildren();
+        (playbook.variables || []).forEach(name => variableFields.append(field(
+          FIELD_LABELS[name] || name.replaceAll('_', ' '),
+          `deployment_ansible_var_${name}`,
+          { value: existingAnsible?.variables?.[name] || '', help: 'Opcjonalna zmienna zatwierdzonego playbooka.' },
+        )));
+      };
+      playbookField.querySelector('select').addEventListener('change', refreshPlaybook);
+      refreshPlaybook();
+    };
+
+    const refreshDeploymentTemplate = () => {
+      saveDeploymentVariables();
+      const template = currentTemplate();
+      currentTemplateId = template.id;
+      const matches = providers.filter(value => value.type === template.provider).map(value => ({ id: value.id, label: value.name }));
+      refill(providerField.querySelector('select'), matches,
+        matches.length ? 'Wybierz provider' : 'Brak połączenia z tą platformą',
+        deployment.provider_id);
+      refreshCredentialChoices();
+      templateVariables.replaceChildren();
+      const values = variableState.get(template.id) || {};
+      Object.entries(template.variables_schema?.properties || {}).forEach(([name, spec]) => {
+        templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
+      });
+      deploymentVariablesReady = true;
+      renderBlueprintAnsible();
+    };
+    templateField.querySelector('select').addEventListener('change', refreshDeploymentTemplate);
+    providerField.querySelector('select').addEventListener('change', refreshCredentialChoices);
+    ansibleToggle.querySelector('input').addEventListener('change', renderBlueprintAnsible);
+
+    const roleChoices = roleResult.items.map(role => ({ value: role.id, label: role.name }));
+    (item?.allowed_role_ids || []).forEach(id => {
+      if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
+    });
+    const userChoices = userResult.items.map(user => ({ value: user.id, label: user.username + (user.email ? ' · ' + user.email : '') }));
+    (item?.allowed_user_ids || []).forEach(id => {
+      if (!userChoices.some(choice => Number(choice.value) === Number(id))) userChoices.push({ value: id, label: `Użytkownik #${id}` });
+    });
+
+    const schemeChoices = [{ value: '', label: 'Bez automatycznego hostname' }].concat(schemes.filter(value => value.is_active || Number(value.id) === Number(deployment.hostname_scheme_id)).map(value => ({
+      value: value.id, label: `${value.name} · ${value.pattern}`,
+    })));
+    const poolChoices = [{ value: '', label: 'Bez automatycznego IPAM' }].concat(pools.filter(value => value.is_active || Number(value.id) === Number(deployment.ipam_pool_id)).map(value => ({
+      value: value.id, label: `${value.name} · ${value.cidr}`,
+    })));
+
+    const fields = node('div', { class: 'form-grid blueprint-designer' },
+      formSection('Blueprint', 'Nazwa, identyfikator i krótki opis widoczny dla użytkownika.',
+        node('div', { class: 'form-grid' },
+          field('Slug', 'slug', { required: true, value: item?.slug || '', placeholder: 'np. ubuntu-web' }),
+          field('Nazwa', 'name', { required: true, value: item?.name || '', placeholder: 'np. Ubuntu Web Server' }),
+          field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
+          checkboxField('Aktywny', 'is_active', item?.is_active ?? true))),
+      formSection('Widoczność i bezpieczeństwo', 'Określ gdzie Blueprint jest dostępny i co ma się stać po nieudanym wdrożeniu.',
+        node('div', { class: 'form-grid' },
+          checkboxField('Panel backendu', 'visibility_backend', item?.visibility?.backend ?? true),
+          checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
+          checkboxField('API', 'visibility_api', item?.visibility?.api ?? true),
+          checkboxField('Wymaga akceptacji przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
+          selectField('Po błędzie wdrożenia', 'recovery_policy', [
+            { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
+            { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
+          ], item?.recovery_policy || 'preserve'))),
+      formSection('Dostęp', 'Puste listy oznaczają brak dodatkowego ograniczenia.',
+        node('div', { class: 'form-grid' },
+          multiCheckboxField('Dozwolone role', 'allowed_role_ids', roleChoices, item?.allowed_role_ids || [], {
+            help: 'Brak zaznaczeń oznacza brak dodatkowego ograniczenia roli.',
+            empty: 'Brak ról dostępnych do wyboru.',
+          }),
+          multiCheckboxField('Dozwoleni użytkownicy', 'allowed_user_ids', userChoices, item?.allowed_user_ids || [], {
+            help: 'Brak zaznaczeń oznacza brak dodatkowego ograniczenia użytkownika.',
+            empty: 'Brak użytkowników dostępnych do wyboru.',
+          }))),
+      formSection('Pola self-service', 'Z tych definicji portal buduje formularz uruchomienia Blueprintu.',
+        variableList,
+        node('div', { class: 'editor-add-row' }, button('Dodaj pole', () => addVariable('', { type: 'string' }), 'primary'))),
+      formSection('Wdrożenie', 'Wybierz platformę i wartości przekazywane do zatwierdzonego szablonu IaC.',
+        node('div', { class: 'form-grid' },
+          field('Nazwa wdrożenia', 'deployment_name', { required: true, value: deployment.name || '{{ hostname }}', wide: true, help: 'Możesz użyć {{ hostname }}.' }),
+          templateField,
+          providerField,
+          credentialField,
+          selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
+          selectField('Schemat hostname', 'deployment_hostname_scheme_id', schemeChoices, deployment.hostname_scheme_id || ''),
+          selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
+          formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
+          ansibleSection)),
+      formSection('Workflow', 'Kroki są wykonywane zgodnie z zależnościami. ID kroku musi być unikalne.',
+        workflowList,
+        node('div', { class: 'editor-add-row' }, button('Dodaj krok', () => addWorkflowStep({ type: 'terraform_apply' }), 'primary'))));
+
+    refreshDeploymentTemplate();
+
+    openModal({
+      title: item ? `Edytuj ${item.name}` : 'Nowy Blueprint',
+      eyebrow: 'Automation Designer',
+      body: fields,
+      submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz Blueprint',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        saveDeploymentVariables();
+        const variablesSchema = {};
+        form.querySelectorAll('[data-variable-row]').forEach(row => {
+          const key = row.querySelector('[name="variable_key"]').value.trim();
+          if (!key) throw new Error('Każde pole self-service musi mieć klucz.');
+          if (variablesSchema[key]) throw new Error(`Klucz „${key}” występuje więcej niż raz.`);
+          const type = row.querySelector('[name="variable_type"]').value;
+          const definition = {
+            type,
+            label: row.querySelector('[name="variable_label"]').value.trim() || null,
+            required: row.querySelector('[name="variable_required"]').checked,
+          };
+          const defaultRaw = row.querySelector('[name="variable_default"]').value.trim();
+          if (defaultRaw !== '') {
+            if (type === 'integer') definition.default = Number.parseInt(defaultRaw, 10);
+            else if (type === 'boolean') definition.default = ['true', '1', 'tak', 'yes'].includes(defaultRaw.toLowerCase());
+            else definition.default = defaultRaw;
+          }
+          if (type === 'integer') {
+            const min = row.querySelector('[name="variable_min"]').value;
+            const max = row.querySelector('[name="variable_max"]').value;
+            if (min !== '') definition.min = Number(min);
+            if (max !== '') definition.max = Number(max);
+          }
+          if (type === 'select') {
+            definition.options = splitValues(row.querySelector('[name="variable_options"]').value);
+            if (!definition.options.length) throw new Error(`Pole „${key}” typu lista wymaga co najmniej jednej opcji.`);
+          }
+          variablesSchema[key] = definition;
+        });
+
+        const workflow = [...form.querySelectorAll('[data-workflow-row]')].map(row => {
+          const step = {
+            id: row.querySelector('[name="workflow_id"]').value.trim(),
+            type: row.querySelector('[name="workflow_type"]').value,
+            depends_on: splitValues(row.querySelector('[name="workflow_depends"]').value),
+            retry: Number(row.querySelector('[name="workflow_retry"]').value || 0),
+            timeout: Number(row.querySelector('[name="workflow_timeout"]').value || 600),
+            conditions: row.querySelector('[name="workflow_conditions"]').value.trim()
+              ? parseObject(row.querySelector('[name="workflow_conditions"]').value, 'Warunki kroku')
+              : {},
+          };
+          const rollback = row.querySelector('[name="workflow_rollback"]').value.trim();
+          if (rollback) step.rollback = rollback;
+          return step;
+        });
+        if (!workflow.length) throw new Error('Blueprint musi zawierać co najmniej jeden krok workflow.');
+        if (workflow.some(step => !step.id)) throw new Error('Każdy krok workflow musi mieć ID.');
+
+        const template = currentTemplate();
+        const deploymentPayload = {
+          name: form.elements.deployment_name.value,
+          provider_id: Number(form.elements.deployment_provider_id.value),
+          credentials_id: Number(form.elements.deployment_credentials_id.value),
+          template: template.id,
+          executor: form.elements.deployment_executor.value,
+          variables: variableState.get(template.id) || readBlueprintTemplateVariables(form, template),
+        };
+        if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
+        if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
+        if (form.elements.deployment_hostname_scheme_id.value) deploymentPayload.hostname_scheme_id = Number(form.elements.deployment_hostname_scheme_id.value);
+        if (form.elements.deployment_ipam_pool_id.value) deploymentPayload.ipam_pool_id = Number(form.elements.deployment_ipam_pool_id.value);
+
+        if (!allowed('ansible.execute') && existingAnsible) {
+          deploymentPayload.ansible = existingAnsible;
+        } else if (currentTemplate().provider === 'proxmox' && form.elements.deployment_ansible_enabled?.checked) {
+          const playbook = playbooks.find(value => value.id === form.elements.deployment_ansible_playbook?.value)
+            || (existingAnsible?.playbook === form.elements.deployment_ansible_playbook?.value
+              ? { id: existingAnsible.playbook, variables: Object.keys(existingAnsible.variables || {}) }
+              : null);
+          if (!playbook) throw new Error('Wybierz playbook Ansible dla Blueprintu.');
+          if (!form.elements.deployment_ansible_credentials_id?.value) throw new Error('Wybierz systemowe dane dostępowe dla Ansible.');
+          const variables = {};
+          (playbook.variables || []).forEach(name => {
+            const value = form.elements[`deployment_ansible_var_${name}`]?.value?.trim();
+            if (value) variables[name] = value;
+          });
+          deploymentPayload.ansible = {
+            playbook: playbook.id,
+            credentials_id: Number(form.elements.deployment_ansible_credentials_id.value),
+            variables,
+          };
+        }
+
+        const selectedIds = name => [...form.querySelectorAll(`[name="${name}"]:checked`)].map(input => Number(input.value));
+        const payload = {
+          slug: form.elements.slug.value,
+          name: form.elements.name.value,
+          description: form.elements.description.value,
+          is_active: form.elements.is_active.checked,
+          visibility: {
+            backend: form.elements.visibility_backend.checked,
+            cloudportal: form.elements.visibility_cloudportal.checked,
+            api: form.elements.visibility_api.checked,
+          },
+          allowed_role_ids: selectedIds('allowed_role_ids'),
+          allowed_user_ids: selectedIds('allowed_user_ids'),
+          variables_schema: variablesSchema,
+          deployment: deploymentPayload,
+          workflow,
+          requires_approval: form.elements.requires_approval.checked,
+          recovery_policy: form.elements.recovery_policy.value,
+        };
+        await api(item ? `/blueprints/${item.id}` : '/blueprints', {
+          method: item ? 'PUT' : 'POST',
+          body: payload,
+        });
+        toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint utworzony.');
+        navigate('blueprints');
+      },
+    });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
-function executeBlueprint(item) {
-  const fields = node('div', { class: 'form-grid' });
-  for (const [name, definition] of Object.entries(item.variables_schema)) {
-    if (definition.type === 'select') fields.append(selectField(definition.label || name, name, definition.options.map(value => ({ value, label: value })), definition.default, { required: definition.required }));
-    else if (definition.type === 'boolean') fields.append(checkboxField(definition.label || name, name, Boolean(definition.default)));
-    else fields.append(field(definition.label || name, name, { type: definition.type === 'integer' ? 'number' : 'text', value: definition.default ?? '', min: definition.min, max: definition.max, required: definition.required }));
-  }
-  fields.append(field('Wartości hostname JSON', 'hostname_values', { tag: 'textarea', wide: true, value: '{}', help: 'Np. {"location":"wro","env":"prod","role":"web"}' }));
-  openModal({ title: `Uruchom ${item.name}`, eyebrow: `Blueprint v${item.version}`, body: fields, submitLabel: 'Utwórz serwer', onSubmit: async (data, form) => {
-    const variables = {};
-    for (const [name, definition] of Object.entries(item.variables_schema)) {
-      const control = form.elements[name];
-      if (definition.type === 'boolean') variables[name] = control.checked;
-      else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
+async function executeBlueprint(item) {
+  try {
+    const fields = node('div', { class: 'form-grid' });
+    for (const [name, definition] of Object.entries(item.variables_schema || {})) {
+      if (definition.type === 'select') {
+        fields.append(selectField(definition.label || name, name, (definition.options || []).map(value => ({ value, label: value })), definition.default, { required: definition.required }));
+      } else if (definition.type === 'boolean') {
+        fields.append(checkboxField(definition.label || name, name, Boolean(definition.default)));
+      } else {
+        fields.append(field(definition.label || name, name, {
+          type: definition.type === 'integer' ? 'number' : 'text',
+          value: definition.default ?? '',
+          min: definition.min,
+          max: definition.max,
+          required: definition.required,
+        }));
+      }
     }
-    const result = await api(`/blueprints/${item.id}/execute`, { method: 'POST', idempotent: true, body: { variables, hostname_values: parseObject(data.get('hostname_values') || '{}', 'Wartości hostname') } });
-    toast(`Deployment ${result.name} utworzony. Zadanie ${short(result.job.id)}.`); navigate('jobs');
-  }});
+
+    let scheme = null;
+    if (item.deployment?.hostname_scheme_id && allowed('hostnames.read')) {
+      const result = await api('/hostname-schemes?limit=200');
+      scheme = result.items.find(value => Number(value.id) === Number(item.deployment.hostname_scheme_id)) || null;
+    }
+    if (scheme) {
+      fields.append(formSection('Nazwa hosta', `Wzorzec: ${scheme.pattern}`, hostnameValueFields(scheme.pattern)));
+    } else if (item.deployment?.hostname_scheme_id) {
+      const allTokens = Object.keys(HOSTNAME_TOKEN_LABELS).map(token => `{${token}}`).join('-');
+      fields.append(formSection('Nazwa hosta', 'Uzupełnij tylko wartości używane przez skonfigurowany schemat hostname.',
+        hostnameValueFields(allTokens, {}, false)));
+    }
+
+    openModal({
+      title: `Uruchom ${item.name}`,
+      eyebrow: `Blueprint v${item.version}`,
+      body: fields,
+      submitLabel: 'Utwórz serwer',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const variables = {};
+        for (const [name, definition] of Object.entries(item.variables_schema || {})) {
+          const control = form.elements[name];
+          if (definition.type === 'boolean') variables[name] = control.checked;
+          else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
+        }
+        const result = await api(`/blueprints/${item.id}/execute`, {
+          method: 'POST',
+          idempotent: true,
+          body: { variables, hostname_values: readHostnameValues(form) },
+        });
+        toast(`Utworzono „${result.name}”. Zadanie ${short(result.job.id)} zostało dodane do kolejki.`);
+        navigate('jobs');
+      },
+    });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 async function hostnamesView() {
   const [schemes, reservations] = await Promise.all([api('/hostname-schemes?limit=200'), api('/hostnames?limit=200')]);
   const actions = [];
   if (allowed('hostnames.create')) actions.push(button('Nowy schemat', hostnameSchemeForm, 'primary'));
-  if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => generateHostname(schemes.items)));
+  if (allowed('hostnames.reserve')) actions.push(button('Generuj nazwę', () => generateHostname(schemes.items)));
   dom.content.replaceChildren(heading('Centralne generowanie nazw z blokadą sekwencji, wykrywaniem kolizji i historią rezerwacji.', actions),
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Schematy' })), table([
       { label: 'Nazwa', value: item => item.name }, { label: 'Wzorzec', value: item => node('span', { class: 'mono', text: item.pattern }) },
-      { label: 'Następny numer', value: item => item.next_number }, { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
-    ], schemes.items, item => allowed('hostnames.update') ? [button('Edytuj', () => hostnameSchemeForm(item))] : [])),
+      { label: 'Następny numer', value: item => item.next_number }, { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
+    ], schemes.items, item => {
+      const result = [];
+      if (allowed('hostnames.update')) result.push(button('Edytuj', () => hostnameSchemeForm(item)));
+      if (allowed('hostnames.delete')) result.push(button('Usuń', () => confirmAction(
+        'Usuń schemat hostname',
+        `Schemat „${item.name}” zostanie usunięty, jeśli nie ma historii rezerwacji.`,
+        async () => {
+          await api(`/hostname-schemes/${item.id}`, { method: 'DELETE' });
+          toast('Schemat hostname usunięty.');
+          navigate('hostnames');
+        },
+      ), 'danger'));
+      return result;
+    })),
     node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Rezerwacje' })), table([
-      { label: 'Hostname', value: item => node('strong', { class: 'mono', text: item.hostname }) }, { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
+      { label: 'Nazwa hosta', value: item => node('strong', { class: 'mono', text: item.hostname }) }, { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
       { label: 'Zasób', value: item => short(item.resource_id, 18) }, { label: 'Utworzono', value: item => formatDate(item.created_at) },
-    ], reservations.items, item => allowed('hostnames.release') && item.status !== 'released' ? [button('Zwolnij', () => confirmAction('Zwolnij hostname', `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`, async () => { await api(`/hostnames/${item.id}/release`, { method: 'POST' }); navigate('hostnames'); }), 'danger')] : [])));
+    ], reservations.items, item => {
+      const result = [];
+      if (allowed('hostnames.reserve') && item.status === 'reserved') result.push(button('Przypisz', () => assignHostname(item), 'primary'));
+      if (allowed('hostnames.release') && item.status !== 'released') result.push(button('Zwolnij', () => confirmAction('Zwolnij nazwę hosta', `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`, async () => {
+        await api(`/hostnames/${item.id}/release`, { method: 'POST' });
+        toast('Nazwa hosta zwolniona.');
+        navigate('hostnames');
+      }), 'danger'));
+      return result;
+    })));
+}
+
+async function assignHostname(item) {
+  try {
+    const [deploymentResult, resourceResult] = await Promise.all([
+      allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
+      allowed('inventory.read') ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
+    ]);
+    const choices = [
+      ...deploymentResult.items.map(row => ({ value: row.id, label: `Wdrożenie: ${row.name}` })),
+      ...resourceResult.items.map(row => ({ value: row.id, label: `Zasób: ${row.name || row.external_id}` })),
+    ];
+    const fields = node('div', { class: 'form-grid' });
+    if (choices.length) {
+      fields.append(selectField('Zasób', 'known_resource_id', [{ value: '', label: 'Inny identyfikator' }, ...choices], ''));
+    }
+    fields.append(field('Identyfikator zasobu', 'resource_id', {
+      required: !choices.length,
+      wide: true,
+      help: choices.length ? 'Wybierz zasób z listy albo wpisz własny identyfikator.' : 'Podaj ID wdrożenia lub innego zasobu.',
+    }));
+    openModal({
+      title: `Przypisz ${item.hostname}`,
+      eyebrow: 'Hostname Manager',
+      body: fields,
+      submitLabel: 'Przypisz',
+      onSubmit: async data => {
+        const resourceId = data.get('known_resource_id') || data.get('resource_id')?.trim();
+        if (!resourceId) throw new Error('Wybierz lub podaj identyfikator zasobu.');
+        await api(`/hostnames/${item.id}/assign?resource_id=${encodeURIComponent(resourceId)}`, { method: 'POST' });
+        toast('Nazwa hosta przypisana.');
+        navigate('hostnames');
+      },
+    });
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function hostnameSchemeForm(item = null) {
@@ -1084,18 +2554,88 @@ function hostnameSchemeForm(item = null) {
 }
 
 function generateHostname(schemes) {
-  const fields = node('div', { class: 'form-grid' }, selectField('Schemat', 'scheme_id', schemes.filter(item => item.is_active).map(item => ({ value: item.id, label: `${item.name} — ${item.pattern}` })), '', { required: true, placeholder: 'Wybierz schemat' }), field('Wartości JSON', 'values', { tag: 'textarea', wide: true, required: true, value: '{"location":"wro","env":"prod","role":"web"}' }), checkboxField('Zarezerwuj nazwę', 'reserve', true));
-  openModal({ title: 'Generuj hostname', eyebrow: 'Hostname Manager', body: fields, submitLabel: 'Generuj', onSubmit: async data => {
-    const result = await api('/hostnames/generate', { method: 'POST', body: { scheme_id: Number(data.get('scheme_id')), values: parseObject(data.get('values'), 'Wartości'), reserve: data.has('reserve') } });
-    toast(`Wygenerowano ${result.hostname}.`); navigate('hostnames');
-  }});
+  const active = schemes.filter(item => item.is_active);
+  if (!active.length) {
+    toast('Brak aktywnego schematu hostname.', 'error');
+    return;
+  }
+  const schemeField = selectField('Schemat', 'scheme_id', active.map(item => ({
+    value: item.id, label: `${item.name} — ${item.pattern}`,
+  })), active[0].id, { required: true });
+  const valuesContainer = node('div', { class: 'wide' });
+  const fields = node('div', { class: 'form-grid' },
+    schemeField,
+    checkboxField('Zarezerwuj nazwę', 'reserve', true),
+    formSection('Składniki nazwy', 'Pola wynikają automatycznie z wybranego wzorca.', valuesContainer));
+  const render = () => {
+    const scheme = active.find(item => String(item.id) === String(schemeField.querySelector('select').value));
+    valuesContainer.replaceChildren(hostnameValueFields(scheme?.pattern || ''));
+  };
+  schemeField.querySelector('select').addEventListener('change', render);
+  render();
+
+  openModal({
+    title: 'Generuj hostname',
+    eyebrow: 'Hostname Manager',
+    body: fields,
+    submitLabel: 'Generuj',
+    onSubmit: async (_data, form) => {
+      const result = await api('/hostnames/generate', {
+        method: 'POST',
+        body: {
+          scheme_id: Number(form.elements.scheme_id.value),
+          values: readHostnameValues(form),
+          reserve: form.elements.reserve.checked,
+        },
+      });
+      toast(`Wygenerowano ${result.hostname}.`);
+      navigate('hostnames');
+    },
+  });
 }
 
-
-function showJson(title, value, eyebrow = 'Szczegóły') {
+function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
+  const rows = Object.entries(value || {}).map(([key, item]) => ({ key, value: item }));
   dom.modalTitle.textContent = title;
   dom.modalEyebrow.textContent = eyebrow;
-  dom.modalBody.replaceChildren(node('pre', { class: 'log-output mono', text: JSON.stringify(value, null, 2) }));
+  dom.modalBody.replaceChildren(rows.length ? table([
+    { label: 'Pole', value: row => node('strong', { text: FIELD_LABELS[row.key] || row.key.replaceAll('_', ' ') }) },
+    { label: 'Wartość', value: row => node('span', { class: typeof row.value === 'string' && row.value.length > 40 ? 'mono' : '', text: displayValue(row.value) }) },
+  ], rows) : node('p', { class: 'muted', text: 'Brak dodatkowych danych.' }));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
+function showTemplateFields(template) {
+  const schema = template.variables_schema || {};
+  const required = new Set(schema.required || []);
+  const rows = Object.entries(schema.properties || {}).map(([name, spec]) => {
+    const base = schemaVariant(spec);
+    const type = schemaType(spec);
+    const enums = schemaEnum(spec);
+    let constraints = '—';
+    if (enums?.length) constraints = enums.join(', ');
+    else if (base.minimum !== undefined || base.maximum !== undefined) constraints = `${base.minimum ?? '—'} – ${base.maximum ?? '—'}`;
+    return {
+      name,
+      label: FIELD_LABELS[name] || spec.title || name,
+      type,
+      required: required.has(name),
+      default: spec.default,
+      constraints,
+    };
+  });
+  const typeLabels = { string: 'Tekst', integer: 'Liczba całkowita', number: 'Liczba', boolean: 'Tak / nie', array: 'Lista' };
+  dom.modal.classList.add('modal-wide');
+  dom.modalTitle.textContent = `Pola: ${template.name}`;
+  dom.modalEyebrow.textContent = `Szablon v${template.version}`;
+  dom.modalBody.replaceChildren(rows.length ? table([
+    { label: 'Pole', value: row => node('div', {}, node('strong', { text: row.label }), node('div', { class: 'mono muted', text: row.name })) },
+    { label: 'Typ', value: row => typeLabels[row.type] || row.type },
+    { label: 'Wymagane', value: row => row.required ? badge('Tak', 'warning') : 'Nie' },
+    { label: 'Domyślnie', value: row => displayValue(row.default) },
+    { label: 'Opcje / zakres', value: row => row.constraints },
+  ], rows) : node('p', { class: 'muted', text: 'Szablon nie ma parametrów wejściowych.' }));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   if (!dom.modal.open) dom.modal.showModal();
 }
@@ -1105,27 +2645,33 @@ function splitValues(value) {
 }
 
 async function catalogView() {
-  const [templates, playbooks] = await Promise.all([api('/templates'), api('/ansible/playbooks')]);
-  dom.content.replaceChildren(
-    heading('Zatwierdzony, wersjonowany katalog IaC. API nie przyjmuje arbitralnego HCL ani dowolnych playbooków.'),
-    node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Terraform / OpenTofu templates' })),
+  const [templates, playbooks] = await Promise.all([
+    api('/templates'),
+    allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
+  ]);
+  const sections = [    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Szablony Terraform / OpenTofu' })),
       table([
-        { label: 'Template', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
-        { label: 'Provider', value: item => badge(item.provider, 'info') },
+        { label: 'Szablon', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
+        { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider, 'info') },
         { label: 'Wersja', value: item => `v${item.version}` },
-        { label: 'Import', value: item => badge(item.importable ? 'importable' : 'create-only', item.importable ? 'ok' : 'info') },
-      ], templates.items, item => [button('Schema', () => showJson(`Schema ${item.id}`, item.variables_schema, `Template v${item.version}`))])
+        { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
+      ], templates.items, item => [button('Pola', () => showTemplateFields(item))])
     ),
-    node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Approved Ansible playbooks' })),
+  ];
+  if (allowed('ansible.read')) {
+    sections.push(node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Zatwierdzone playbooki Ansible' })),
       table([
         { label: 'Playbook', value: item => node('strong', { text: item.name }) },
         { label: 'ID', class: 'mono', value: item => item.id },
         { label: 'Transport', value: item => badge(item.transport, 'info') },
-        { label: 'Zmienne', value: item => item.variables.join(', ') || '—' },
-      ], playbooks.items)
-    )
+        { label: 'Zmienne', value: item => item.variables.map(name => FIELD_LABELS[name] || name.replaceAll('_', ' ')).join(', ') || '—' },
+      ], playbooks.items)));
+  }
+  dom.content.replaceChildren(
+    heading('Zatwierdzony, wersjonowany katalog IaC. API nie przyjmuje arbitralnego HCL ani dowolnych playbooków.'),
+    ...sections,
   );
 }
 
@@ -1136,7 +2682,7 @@ async function ipamView() {
   ]);
   const actions = allowed('ipam.create') ? [button('Nowa pula', () => ipamPoolForm(), 'primary')] : [];
   dom.content.replaceChildren(
-    heading('Centralne pule IPv4, rezerwacje i przypisania do deploymentów.', actions),
+    heading('Centralne pule IPv4, rezerwacje i przypisania do wdrożeń.', actions),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Pule adresowe' })),
       table([
@@ -1144,7 +2690,7 @@ async function ipamView() {
         { label: 'CIDR', class: 'mono', value: item => item.cidr },
         { label: 'Gateway', class: 'mono', value: item => item.gateway || '—' },
         { label: 'DNS', value: item => (item.dns_servers || []).join(', ') || '—' },
-        { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
+        { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
       ], pools.items, item => {
         const result = [];
         if (allowed('ipam.allocate') && item.is_active) result.push(button('Przydziel IP', () => allocateIp(item), 'primary'));
@@ -1160,18 +2706,59 @@ async function ipamView() {
       node('div', { class: 'panel-header' }, node('h2', { text: 'Alokacje' })),
       table([
         { label: 'Adres', class: 'mono', value: item => `${item.address}/${item.prefix_length}` },
-        { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
-        { label: 'Hostname', value: item => item.hostname || '—' },
+        { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
+        { label: 'Nazwa hosta', value: item => item.hostname || '—' },
         { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
         { label: 'Utworzono', value: item => formatDate(item.created_at) },
-      ], allocations.items, item => allowed('ipam.release') && item.status !== 'released'
-        ? [button('Zwolnij', () => confirmAction('Zwolnij adres', `${item.address} wróci do puli.`, async () => {
-            await api(`/ipam/allocations/${item.id}/release`, { method: 'POST' });
-            navigate('ipam');
-          }), 'danger')]
-        : [])
+      ], allocations.items, item => {
+        const result = [];
+        if (allowed('ipam.allocate') && item.status === 'reserved') result.push(button('Przypisz', () => assignIpAllocation(item), 'primary'));
+        if (allowed('ipam.release') && item.status !== 'released') result.push(button('Zwolnij', () => confirmAction('Zwolnij adres', `${item.address} wróci do puli.`, async () => {
+          await api(`/ipam/allocations/${item.id}/release`, { method: 'POST' });
+          toast('Adres IP zwolniony.');
+          navigate('ipam');
+        }), 'danger'));
+        return result;
+      })
     )
   );
+}
+
+async function assignIpAllocation(item) {
+  try {
+    const [deploymentResult, resourceResult] = await Promise.all([
+      allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
+      allowed('inventory.read') ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
+    ]);
+    const choices = [
+      ...deploymentResult.items.map(row => ({ value: row.id, label: `Wdrożenie: ${row.name}` })),
+      ...resourceResult.items.map(row => ({ value: row.id, label: `Zasób: ${row.name || row.external_id}` })),
+    ];
+    const fields = node('div', { class: 'form-grid' });
+    if (choices.length) fields.append(selectField('Zasób', 'known_resource_id', [{ value: '', label: 'Inny identyfikator' }, ...choices], ''));
+    fields.append(
+      field('Identyfikator zasobu', 'resource_id', {
+        required: !choices.length,
+        help: choices.length ? 'Wybierz z listy albo wpisz własny identyfikator.' : 'Podaj identyfikator zasobu.',
+      }),
+      field('Hostname (opcjonalnie)', 'hostname', { value: item.hostname || '' }));
+    openModal({
+      title: `Przypisz ${item.address}`,
+      eyebrow: 'IPAM',
+      body: fields,
+      submitLabel: 'Przypisz adres',
+      onSubmit: async data => {
+        const resourceId = data.get('known_resource_id') || data.get('resource_id')?.trim();
+        if (!resourceId) throw new Error('Wybierz lub podaj identyfikator zasobu.');
+        await api(`/ipam/allocations/${item.id}/assign`, {
+          method: 'POST',
+          body: { resource_id: resourceId, hostname: data.get('hostname')?.trim() || null },
+        });
+        toast('Adres IP przypisany.');
+        navigate('ipam');
+      },
+    });
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function ipamPoolForm(item = null) {
@@ -1210,33 +2797,35 @@ function allocateIp(pool) {
 }
 
 async function inventoryView() {
-  const [vms, resources] = await Promise.all([
+  const [vms, resources, providerResult] = await Promise.all([
     api('/inventory/vms?refresh=true&limit=200'),
     api('/inventory/resources?limit=200'),
+    allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
   ]);
-  const actions = allowed('inventory.import') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
+  const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
+  const actions = allowed('inventory.import') && allowed('providers.read') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
   dom.content.replaceChildren(
-    heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Adoption jest zawsze import + plan-only.', actions),
+    heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego zastosowania zmian.', actions),
     node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Proxmox VM inventory' })),
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Maszyny Proxmox' })),
       table([
         { label: 'VM', value: item => node('div', {}, node('strong', { text: item.name || `VM ${item.vm_id}` }), node('div', { class: 'mono muted', text: `${item.node}/${item.vm_id}` })) },
-        { label: 'Tryb', value: item => badge(item.management_mode, item.management_mode === 'terraform' ? 'ok' : 'info') },
-        { label: 'Lifecycle', value: item => badge(item.lifecycle_status, statusKind(item.lifecycle_status)) },
-        { label: 'Provider', value: item => `#${item.provider_id}` },
-        { label: 'Live', value: item => item.live ? badge(item.live.status || 'present', statusKind(item.live.status)) : badge('missing', 'danger') },
+        { label: 'Tryb', value: item => badge(statusLabel(item.management_mode), item.management_mode === 'terraform' ? 'ok' : 'info') },
+        { label: 'Stan', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
+        { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || `#${item.provider_id}` },
+        { label: 'Stan w platformie', value: item => item.live ? badge(statusLabel(item.live.status || 'present'), statusKind(item.live.status)) : badge(statusLabel('missing'), 'danger') },
       ], vms.items, item => inventoryVmActions(item))
     ),
     node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Managed resources' })),
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Zasoby zarządzane' })),
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-        { label: 'Provider', value: item => badge(item.provider, 'info') },
+        { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider, 'info') },
         { label: 'External ID', class: 'mono', value: item => short(item.external_id, 26) },
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
-        { label: 'Status', value: item => badge(item.lifecycle_status, statusKind(item.lifecycle_status)) },
-        { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
-      ], resources.items, item => [button('Metadata', () => showJson(item.name, item.metadata_json || {}, 'Managed resource'))])
+        { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
+        { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
+      ], resources.items, item => [button('Szczegóły', () => showObjectDetails(item.name, item.metadata_json || {}, 'Zasób zarządzany'))])
     )
   );
 }
@@ -1244,13 +2833,13 @@ async function inventoryView() {
 function inventoryVmActions(item) {
   const actions = [];
   if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('VM', () => openVmManager(item), 'primary'));
-  if (allowed('inventory.update')) actions.push(button('Reconcile', async () => {
+  if (allowed('inventory.update')) actions.push(button('Odśwież stan', async () => {
     await api(`/inventory/vms/${item.id}/reconcile`, { method: 'POST' });
-    toast('Inventory odświeżone.');
+    toast('Stan zasobu odświeżony.');
     navigate('inventory');
   }));
-  if (allowed('deployments.adopt') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Adopt', () => adoptInventoryVm(item)));
-  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Unmanage', () => confirmAction('Usuń z inventory', 'Zasób nie zostanie usunięty z providera.', async () => {
+  if (allowed('deployments.adopt') && allowed('terraform.read') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => adoptInventoryVm(item)));
+  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z platformy źródłowej.', async () => {
     await api(`/inventory/vms/${item.id}`, { method: 'DELETE' });
     navigate('inventory');
   }), 'danger'));
@@ -1260,38 +2849,144 @@ function inventoryVmActions(item) {
 async function importInventoryVm() {
   const providers = (await api('/providers?limit=200')).items.filter(item => item.type === 'proxmox');
   const fields = node('div', { class: 'form-grid' },
-    selectField('Provider Proxmox', 'provider_id', providers.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
+    selectField('Platforma Proxmox', 'provider_id', providers.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz platformę' }),
     field('VMID', 'vm_id', { type: 'number', min: 100, required: true }));
-  openModal({ title: 'Importuj istniejącą VM', eyebrow: 'Inventory', body: fields, submitLabel: 'Dodaj do katalogu', onSubmit: async data => {
+  openModal({ title: 'Importuj istniejącą VM', eyebrow: 'Zasoby', body: fields, submitLabel: 'Dodaj do katalogu', onSubmit: async data => {
     await api('/inventory/vms/import', { method: 'POST', idempotent: true, body: {
       provider_id: Number(data.get('provider_id')), vm_id: Number(data.get('vm_id')),
     } });
-    toast('VM dodana jako external.');
+    toast('VM dodana do katalogu jako zasób zewnętrzny.');
     navigate('inventory');
   }});
 }
 
 async function adoptInventoryVm(item) {
   try {
-    const preview = await api(`/inventory/vms/${item.id}/adoption-preview`);
+    const [preview, templateResult] = await Promise.all([
+      api(`/inventory/vms/${item.id}/adoption-preview`),
+      api('/templates'),
+    ]);
+    const template = templateResult.items.find(value => value.id === preview.template.id);
+    if (!template) throw new Error('Szablon wymagany do adopcji nie jest dostępny w katalogu.');
+
+    const variables = node('div', { class: 'form-grid wide template-variable-grid' });
+    renderTemplateVariables(variables, template, preview.suggested_variables || {});
+    const liveEntries = Object.entries(preview.live || {}).slice(0, 16);
+    const liveGrid = node('div', { class: 'checks wide' },
+      ...liveEntries.map(([key, value]) => info(FIELD_LABELS[key] || key.replaceAll('_', ' '), displayValue(value))));
+
     const fields = node('div', { class: 'form-grid' },
-      field('Template', 'template', { value: preview.template.id, required: true }),
-      selectField('Executor', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'),
-      field('Desired variables JSON', 'variables', { tag: 'textarea', wide: true, required: true, value: jsonValue(preview.suggested_variables), help: 'Import wykona wyłącznie plan. Apply wymaga osobnej decyzji po analizie driftu.' }),
-      field('Live config', 'live', { tag: 'textarea', wide: true, value: jsonValue(preview.live) }));
-    fields.querySelector('[name="live"]').disabled = true;
-    openModal({ title: `Adopt ${item.name || item.vm_id}`, eyebrow: 'Terraform import + plan only', body: fields, submitLabel: 'Importuj state i wykonaj plan', onSubmit: async data => {
-      const result = await api(`/inventory/vms/${item.id}/adopt`, { method: 'POST', idempotent: true, body: {
-        template: data.get('template'), executor: data.get('executor'), variables: parseObject(data.get('variables'), 'Desired variables'),
-      } });
-      toast(`Utworzono import job ${short(result.job.id)}.`);
-      navigate('jobs');
-    }});
+      formSection('Import do Terraform', 'Operacja wykona import do Terraform oraz plan. Zastosowanie zmian nie zostanie uruchomione automatycznie.',
+        node('div', { class: 'form-grid' },
+          field('Szablon', 'template', { value: template.name + ' · v' + template.version, wide: true }),
+          selectField('Silnik IaC', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'))),
+      formSection('Stan docelowy', 'Sprawdź wartości przed importem. Po planie będzie można ocenić drift.', variables),
+      formSection('Aktualna konfiguracja', 'Podgląd odczytany bezpośrednio z Proxmox.', liveGrid));
+    fields.querySelector('[name="template"]').readOnly = true;
+
+    openModal({
+      title: `Przejmij zarządzanie: ${item.name || item.vm_id}`,
+      eyebrow: 'Terraform import + plan',
+      body: fields,
+      submitLabel: 'Importuj stan i wykonaj plan',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const result = await api(`/inventory/vms/${item.id}/adopt`, {
+          method: 'POST',
+          idempotent: true,
+          body: {
+            template: template.id,
+            executor: form.elements.executor.value,
+            variables: readTemplateVariables(form, template),
+          },
+        });
+        toast(`Utworzono zadanie importu ${short(result.job.id)}.`);
+        navigate('jobs');
+      },
+    });
   } catch (error) { toast(error.message, 'error'); }
 }
 
 function vmBase(item) {
   return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
+}
+
+async function showProxmoxTask(item, result, title) {
+  if (!result?.task) {
+    toast(`${title}: operacja została przyjęta.`);
+    return;
+  }
+
+  stopTaskPolling();
+  const nonce = state.taskPollNonce;
+  const statusValue = node('strong', { text: 'Uruchamianie…' });
+  const exitValue = node('strong', { text: '—' });
+  const typeValue = node('strong', { text: '—' });
+  const startedValue = node('strong', { text: '—' });
+  const progress = node('div', { class: 'task-progress' },
+    node('div', { class: 'spinner', 'aria-hidden': 'true' }),
+    node('span', { text: 'Oczekiwanie na status zadania Proxmox…' }));
+
+  dom.modal.classList.remove('modal-console');
+  dom.modalTitle.textContent = title;
+  dom.modalEyebrow.textContent = item.name || `${item.node} / VMID ${item.vm_id}`;
+  dom.modalBody.replaceChildren(
+    progress,
+    node('div', { class: 'checks task-checks' },
+      node('div', { class: 'check' }, node('span', { text: 'Status' }), statusValue),
+      node('div', { class: 'check' }, node('span', { text: 'Wynik' }), exitValue),
+      node('div', { class: 'check' }, node('span', { text: 'Typ operacji' }), typeValue),
+      node('div', { class: 'check' }, node('span', { text: 'Start' }), startedValue)),
+    node('details', { class: 'task-id-details' },
+      node('summary', { text: 'Identyfikator zadania' }),
+      node('div', { class: 'secret-box mono', text: String(result.task) })));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+
+  const poll = async () => {
+    if (nonce !== state.taskPollNonce || !dom.modal.open) return;
+    try {
+      const task = await api(`/providers/${item.provider_id}/tasks/${encodeURIComponent(item.node)}/${encodeURIComponent(String(result.task))}`);
+      const stopped = task.status === 'stopped' || Boolean(task.exitstatus);
+      statusValue.textContent = stopped ? 'Zakończone' : statusLabel(task.status || 'running');
+      exitValue.textContent = task.exitstatus || (stopped ? '—' : 'W trakcie');
+      typeValue.textContent = task.type || '—';
+      startedValue.textContent = task.starttime ? new Date(task.starttime * 1000).toLocaleString('pl-PL') : '—';
+
+      if (stopped) {
+        const success = !task.exitstatus || task.exitstatus === 'OK';
+        progress.replaceChildren(
+          badge(success ? 'Zakończono pomyślnie' : 'Operacja zakończona błędem', success ? 'ok' : 'danger'));
+        if (success) toast(`${title}: zakończono.`);
+        else toast(`${title}: ${task.exitstatus || 'błąd operacji'}.`, 'error');
+        state.taskPollTimer = null;
+        return;
+      }
+      state.taskPollTimer = window.setTimeout(poll, 1500);
+    } catch (error) {
+      progress.replaceChildren(node('span', { class: 'form-error', text: 'Nie udało się odświeżyć statusu: ' + error.message }));
+      state.taskPollTimer = window.setTimeout(poll, 4000);
+    }
+  };
+
+  await poll();
+}
+
+async function discoverVmOptions(item, resource, node = null) {
+  if (!allowed('providers.read')) return [];
+  try {
+    const query = node ? '?node=' + encodeURIComponent(node) : '';
+    return (await api(`/providers/${item.provider_id}/${resource}${query}`)).items || [];
+  } catch {
+    return [];
+  }
+}
+
+function storageLabel(storage) {
+  const parts = [storage.storage || storage.id || 'storage'];
+  if (storage.avail !== undefined) parts.push(`wolne ${formatBytes(storage.avail)}`);
+  if (storage.content) parts.push(Array.isArray(storage.content) ? storage.content.join(', ') : String(storage.content));
+  return parts.join(' · ');
 }
 
 async function openVmManager(item) {
@@ -1302,27 +2997,28 @@ async function openVmManager(item) {
     dom.modalTitle.textContent = item.name || `VM ${item.vm_id}`;
     dom.modalEyebrow.textContent = `${item.node} / VMID ${item.vm_id}`;
     const statusPanel = node('div', { class: 'checks' },
-      info('Status', status.status || '—'), info('CPU', status.cpus ?? status.cpu ?? '—'),
+      info('Status', statusLabel(status.status || '—')), info('CPU', status.cpus ?? status.cpu ?? '—'),
       info('RAM', status.mem && status.maxmem ? `${Math.round(status.mem / 1024 / 1024)} / ${Math.round(status.maxmem / 1024 / 1024)} MiB` : '—'),
-      info('Uptime', status.uptime ?? '—'));
+      info('Czas działania', formatDuration(status.uptime)));
     const snapshotTable = allowed('snapshots.read') ? table([
       { label: 'Snapshot', value: snap => snap.name },
       { label: 'Opis', value: snap => snap.description || '—' },
       { label: 'RAM', value: snap => snap.vmstate ? 'Tak' : 'Nie' },
     ], snapshots, snap => allowed('snapshots.delete') && snap.name !== 'current' ? [button('Usuń', () => confirmAction('Usuń snapshot', snap.name, async () => {
-      await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
-      openVmManager(item);
-    }), 'danger'), ...(allowed('snapshots.rollback') ? [button('Rollback', () => confirmAction('Rollback snapshot', `VM zostanie przywrócona do ${snap.name}.`, async () => {
-      await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
-      toast('Rollback uruchomiony.');
-      closeModal();
+      const result = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
+      await showProxmoxTask(item, result, 'Usuwanie snapshotu');
+      return false;
+    }), 'danger'), ...(allowed('snapshots.rollback') ? [button('Przywróć', () => confirmAction('Przywróć snapshot', `VM zostanie przywrócona do snapshotu ${snap.name}.`, async () => {
+      const result = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
+      await showProxmoxTask(item, result, 'Przywracanie snapshotu');
+      return false;
     }), 'danger')] : [])] : []) : node('p', { class: 'muted', text: 'Brak uprawnienia do snapshotów.' });
     dom.modalBody.replaceChildren(node('div', { class: 'stack' }, statusPanel, node('h3', { text: 'Snapshoty' }), snapshotTable));
     const actions = [button('Zamknij', closeModal)];
     if (allowed('vms.power')) {
       const powerActions = [
-        ['start', 'Start'], ['shutdown', 'Shutdown'], ['reboot', 'Reboot'],
-        ['suspend', 'Suspend'], ['resume', 'Resume'], ['reset', 'Reset'], ['stop', 'Stop'],
+        ['start', 'Uruchom'], ['shutdown', 'Wyłącz bezpiecznie'], ['reboot', 'Restart'],
+        ['suspend', 'Wstrzymaj'], ['resume', 'Wznów'], ['reset', 'Twardy reset'], ['stop', 'Wymuś stop'],
       ];
       for (const [action, label] of powerActions) {
         actions.push(button(label, () => vmPower(item, action), ['stop', 'reset'].includes(action) ? 'danger' : 'ghost'));
@@ -1337,10 +3033,11 @@ async function openVmManager(item) {
       actions.push(button('Dysk +', () => resizeVmDisk(item)));
     }
     if (allowed('vms.migrate')) actions.push(button('Migracja', () => migrateVm(item)));
-    if (allowed('vms.clone')) actions.push(button('Clone', () => cloneVm(item)));
-    if (allowed('vms.template')) actions.push(button('→ Template', () => confirmAction('Konwertuj do template', 'Operacja zmieni VM w template.', async () => {
-      await api(`${base}/template`, { method: 'POST', idempotent: true });
-      closeModal(); toast('Konwersja uruchomiona.');
+    if (allowed('vms.clone')) actions.push(button('Klonuj', () => cloneVm(item)));
+    if (allowed('vms.template')) actions.push(button('→ Szablon', () => confirmAction('Konwertuj do szablonu', 'Operacja zmieni VM w szablon.', async () => {
+      const result = await api(`${base}/template`, { method: 'POST', idempotent: true });
+      await showProxmoxTask(item, result, 'Konwersja VM do szablonu');
+      return false;
     })));
     if (allowed('vms.delete')) actions.push(button('Usuń VM', () => deleteVm(item), 'danger'));
     dom.modalActions.replaceChildren(...actions);
@@ -1349,14 +3046,19 @@ async function openVmManager(item) {
 }
 
 async function vmPower(item, action) {
-  await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
-  toast(`Polecenie ${action} wysłane.`);
-  closeModal();
+  const labels = {
+    start: 'Uruchamianie VM', shutdown: 'Bezpieczne wyłączanie VM', reboot: 'Restart VM',
+    suspend: 'Wstrzymywanie VM', resume: 'Wznawianie VM', reset: 'Twardy reset VM', stop: 'Zatrzymywanie VM',
+  };
+  try {
+    const result = await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
+    await showProxmoxTask(item, result, labels[action] || 'Operacja zasilania');
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function deleteVm(item) {
   const fields = node('div', { class: 'form-grid' },
-    node('p', { class: 'wide field-help', text: 'Operacja usuwa VM bezpośrednio w Proxmox. Dla zasobów zarządzanych przez Terraform używaj Destroy deploymentu.' }),
+    node('p', { class: 'wide field-help', text: 'Operacja usuwa VM bezpośrednio w Proxmox. Dla zasobów zarządzanych przez Terraform używaj akcji „Usuń zasoby” na wdrożeniu.' }),
     checkboxField('Purge z konfiguracji HA/backup/replication', 'purge'),
     checkboxField('Usuń niepodpięte dyski', 'destroy_unreferenced_disks'));
   openModal({
@@ -1367,10 +3069,9 @@ function deleteVm(item) {
         purge: data.has('purge') ? 'true' : 'false',
         destroy_unreferenced_disks: data.has('destroy_unreferenced_disks') ? 'true' : 'false',
       });
-      await api(`${vmBase(item)}?${query.toString()}`, { method: 'DELETE', idempotent: true });
-      closeModal();
-      toast('Usuwanie VM uruchomione.');
-      navigate('inventory');
+      const result = await api(`${vmBase(item)}?${query.toString()}`, { method: 'DELETE', idempotent: true });
+      await showProxmoxTask(item, result, 'Usuwanie VM');
+      return false;
     },
   });
 }
@@ -1381,57 +3082,77 @@ function createVmSnapshot(item) {
     field('Opis', 'description', { wide: true }),
     checkboxField('Dołącz stan RAM', 'include_ram'));
   openModal({ title: 'Nowy snapshot', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
+    const result = await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
       snapname: data.get('snapname'), description: data.get('description'), include_ram: data.has('include_ram'),
     } });
-    toast('Snapshot uruchomiony.');
-  }});
-}
-
-function backupVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Storage backup', 'storage', { required: true }),
-    selectField('Tryb', 'mode', [{ value: 'snapshot', label: 'snapshot' }, { value: 'suspend', label: 'suspend' }, { value: 'stop', label: 'stop' }], 'snapshot'),
-    selectField('Kompresja', 'compress', [{ value: 'zstd', label: 'zstd' }, { value: 'lzo', label: 'lzo' }, { value: 'gzip', label: 'gzip' }], 'zstd'),
-    field('Notatka', 'notes', { wide: true }));
-  openModal({ title: 'Backup VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom backup', onSubmit: async data => {
-    await api(`${vmBase(item)}/backups`, { method: 'POST', idempotent: true, body: {
-      storage: data.get('storage'), mode: data.get('mode'), compress: data.get('compress'), notes: data.get('notes') || null,
-    } });
-    toast('Backup uruchomiony.');
-  }});
-}
-
-function listVmBackups(item) {
-  openModal({ title: 'Pokaż backupy', eyebrow: item.name || String(item.vm_id), body: field('Storage backup', 'storage', { required: true }), submitLabel: 'Pokaż', onSubmit: async data => {
-    const storage = data.get('storage');
-    const result = await api(`${vmBase(item)}/backups?storage=${encodeURIComponent(storage)}`);
-    dom.modalTitle.textContent = 'Backupy VM';
-    dom.modalEyebrow.textContent = storage;
-    const rows = result.items || [];
-    const backupTable = table([
-      { label: 'Volume', value: backup => node('span', { class: 'mono', text: backup.volid || '—' }) },
-      { label: 'Format', value: backup => backup.format || '—' },
-      { label: 'Rozmiar', value: backup => backup.size ? String(backup.size) : '—' },
-      { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString() : '—' },
-      { label: 'Protected', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
-    ], rows, backup => allowed('backups.restore') ? [button('Restore', () => restoreVmFromBackup(item, backup), 'primary')] : []);
-    dom.modalBody.replaceChildren(rows.length ? backupTable : node('p', { class: 'muted', text: 'Brak backupów dla tej VM.' }));
-    dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+    await showProxmoxTask(item, result, 'Tworzenie snapshotu');
     return false;
   }});
+}
+
+async function backupVm(item) {
+  try {
+    const storages = (await discoverVmOptions(item, 'storages', item.node))
+      .filter(storage => storage.active !== 0 && storage.enabled !== 0 && String(storage.content || '').includes('backup'));
+    const storageField = storages.length
+      ? selectField('Miejsce backupu', 'storage', storages.map(storage => ({ value: storage.storage, label: storageLabel(storage) })), storages[0].storage, { required: true })
+      : field('Miejsce backupu', 'storage', { required: true, help: 'Nie udało się pobrać listy storage — wpisz nazwę ręcznie.' });
+    const fields = node('div', { class: 'form-grid' },
+      storageField,
+      selectField('Tryb backupu', 'mode', [
+        { value: 'snapshot', label: 'Snapshot — bez przestoju, jeśli wspierany' },
+        { value: 'suspend', label: 'Wstrzymaj VM na czas backupu' },
+        { value: 'stop', label: 'Zatrzymaj VM na czas backupu' },
+      ], 'snapshot'),
+      selectField('Kompresja', 'compress', [{ value: 'zstd', label: 'Zstandard (zalecane)' }, { value: 'lzo', label: 'LZO' }, { value: 'gzip', label: 'Gzip' }], 'zstd'),
+      field('Notatka', 'notes', { wide: true }));
+    openModal({ title: 'Utwórz backup VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom backup', onSubmit: async data => {
+      const result = await api(`${vmBase(item)}/backups`, { method: 'POST', idempotent: true, body: {
+        storage: data.get('storage'), mode: data.get('mode'), compress: data.get('compress'), notes: data.get('notes') || null,
+      } });
+      await showProxmoxTask(item, result, 'Tworzenie backupu');
+      return false;
+    }});
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+async function listVmBackups(item) {
+  try {
+    const storages = (await discoverVmOptions(item, 'storages', item.node))
+      .filter(storage => storage.active !== 0 && String(storage.content || '').includes('backup'));
+    const storageField = storages.length
+      ? selectField('Miejsce backupu', 'storage', storages.map(storage => ({ value: storage.storage, label: storageLabel(storage) })), storages[0].storage, { required: true })
+      : field('Miejsce backupu', 'storage', { required: true, help: 'Nie udało się pobrać listy storage — wpisz nazwę ręcznie.' });
+    openModal({ title: 'Backupy VM', eyebrow: item.name || String(item.vm_id), body: storageField, submitLabel: 'Pokaż backupy', onSubmit: async data => {
+      const storage = data.get('storage');
+      const result = await api(`${vmBase(item)}/backups?storage=${encodeURIComponent(storage)}`);
+      dom.modalTitle.textContent = 'Backupy VM';
+      dom.modalEyebrow.textContent = storage;
+      const rows = result.items || [];
+      const backupTable = table([
+        { label: 'Wolumen', value: backup => node('span', { class: 'mono', text: backup.volid || '—' }) },
+        { label: 'Format', value: backup => backup.format || '—' },
+        { label: 'Rozmiar', value: backup => formatBytes(backup.size) },
+        { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString('pl-PL') : '—' },
+        { label: 'Chroniony', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
+      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => restoreVmFromBackup(item, backup), 'primary')] : []);
+      dom.modalBody.replaceChildren(rows.length ? backupTable : node('p', { class: 'muted', text: 'Brak backupów dla tej VM.' }));
+      dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+      return false;
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function restoreVmFromBackup(item, backup) {
   if (!backup?.volid) { toast('Backup nie ma identyfikatora volume.', 'error'); return; }
   const fields = node('div', { class: 'form-grid' },
-    field('Backup volume', 'archive', { value: backup.volid, required: true, wide: true }),
+    field('Wolumen backupu', 'archive', { value: backup.volid, required: true, wide: true }),
     field('Nowy VMID', 'vm_id', { type: 'number', min: 100, required: true }),
-    field('Storage docelowy (opcjonalnie)', 'storage'),
+    field('Docelowy storage (opcjonalnie)', 'storage'),
     checkboxField('Nadaj unikalne parametry urządzeń / MAC', 'unique', true));
   fields.querySelector('[name="archive"]').readOnly = true;
   openModal({
-    title: 'Restore VM z backupu', eyebrow: item.node, body: fields, submitLabel: 'Uruchom restore',
+    title: 'Przywróć VM z backupu', eyebrow: item.node, body: fields, submitLabel: 'Uruchom przywracanie',
     onSubmit: async data => {
       const payload = {
         vm_id: Number(data.get('vm_id')),
@@ -1439,11 +3160,11 @@ function restoreVmFromBackup(item, backup) {
         unique: data.has('unique'),
       };
       if (data.get('storage')) payload.storage = data.get('storage');
-      await api(`/providers/${item.provider_id}/restore/${encodeURIComponent(item.node)}`, {
+      const result = await api(`/providers/${item.provider_id}/restore/${encodeURIComponent(item.node)}`, {
         method: 'POST', idempotent: true, body: payload,
       });
-      toast(`Restore VMID ${payload.vm_id} uruchomiony.`);
-      closeModal();
+      await showProxmoxTask(item, result, `Przywracanie VMID ${payload.vm_id}`);
+      return false;
     },
   });
 }
@@ -1492,24 +3213,33 @@ async function showVmConsole(item) {
   }
 }
 
-function configureVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Nazwa (opcjonalnie)', 'name'),
-    field('CPU cores', 'cores', { type: 'number', min: 1 }),
-    field('RAM MiB', 'memory', { type: 'number', min: 512 }),
-    field('Tagi', 'tags'),
-    selectField('On boot', 'onboot', [{ value: '', label: 'bez zmiany' }, { value: 'true', label: 'włącz' }, { value: 'false', label: 'wyłącz' }], ''));
-  openModal({ title: 'Konfiguracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    const payload = {};
-    if (data.get('name')) payload.name = data.get('name');
-    if (data.get('cores')) payload.cores = Number(data.get('cores'));
-    if (data.get('memory')) payload.memory = Number(data.get('memory'));
-    if (data.get('tags')) payload.tags = data.get('tags');
-    if (data.get('onboot')) payload.onboot = data.get('onboot') === 'true';
-    if (!Object.keys(payload).length) throw new Error('Podaj co najmniej jedną zmianę.');
-    await api(`${vmBase(item)}/config`, { method: 'PUT', idempotent: true, body: payload });
-    toast('Zmiana konfiguracji uruchomiona.');
-  }});
+async function configureVm(item) {
+  try {
+    const status = await api(`${vmBase(item)}/status`);
+    const fields = node('div', { class: 'form-grid' },
+      field('Nazwa VM', 'name', { value: status.name || item.name || '' }),
+      field('Rdzenie CPU', 'cores', { type: 'number', min: 1, value: status.cpus ?? '' }),
+      field('RAM (MiB)', 'memory', { type: 'number', min: 512, value: status.maxmem ? Math.round(status.maxmem / 1024 / 1024) : '' }),
+      field('Tagi', 'tags', { value: status.tags || '' }),
+      selectField('Startuj automatycznie z hostem', 'onboot', [
+        { value: '', label: 'Bez zmiany' },
+        { value: 'true', label: 'Tak' },
+        { value: 'false', label: 'Nie' },
+      ], ''));
+    openModal({ title: 'Konfiguracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
+      const payload = {};
+      if (data.get('name') && data.get('name') !== status.name) payload.name = data.get('name');
+      if (data.get('cores') && Number(data.get('cores')) !== Number(status.cpus)) payload.cores = Number(data.get('cores'));
+      const currentMemory = status.maxmem ? Math.round(status.maxmem / 1024 / 1024) : null;
+      if (data.get('memory') && Number(data.get('memory')) !== currentMemory) payload.memory = Number(data.get('memory'));
+      if (data.get('tags') !== (status.tags || '')) payload.tags = data.get('tags');
+      if (data.get('onboot')) payload.onboot = data.get('onboot') === 'true';
+      if (!Object.keys(payload).length) throw new Error('Nie wykryto żadnej zmiany.');
+      const result = await api(`${vmBase(item)}/config`, { method: 'PUT', idempotent: true, body: payload });
+      await showProxmoxTask(item, result, 'Zmiana konfiguracji VM');
+      return false;
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 function resizeVmDisk(item) {
@@ -1517,57 +3247,108 @@ function resizeVmDisk(item) {
     field('Dysk', 'disk', { value: 'scsi0', required: true }),
     field('Powiększ o GiB', 'grow_gib', { type: 'number', min: 1, required: true }));
   openModal({ title: 'Powiększ dysk', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk: data.get('disk'), grow_gib: Number(data.get('grow_gib')) } });
-    toast('Resize uruchomiony.');
+    const result = await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk: data.get('disk'), grow_gib: Number(data.get('grow_gib')) } });
+    await showProxmoxTask(item, result, 'Powiększanie dysku');
+    return false;
   }});
 }
 
-function migrateVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Docelowy node', 'target', { required: true }),
-    checkboxField('Online migration', 'online'),
-    checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
-  openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
-      target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
-    } });
-    toast('Migracja uruchomiona.');
-  }});
+async function migrateVm(item) {
+  try {
+    const nodes = (await discoverVmOptions(item, 'nodes')).filter(node => node.node && node.node !== item.node);
+    const targetField = nodes.length
+      ? selectField('Docelowy węzeł', 'target', nodes.map(node => ({
+        value: node.node,
+        label: `${node.node}${node.status ? ' · ' + statusLabel(node.status) : ''}`,
+      })), '', { required: true, placeholder: 'Wybierz węzeł' })
+      : field('Docelowy węzeł', 'target', { required: true, help: 'Nie udało się pobrać listy węzłów — wpisz nazwę ręcznie.' });
+    const fields = node('div', { class: 'form-grid' },
+      targetField,
+      checkboxField('Migracja online', 'online'),
+      checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
+    openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom migrację', onSubmit: async data => {
+      const result = await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
+        target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
+      } });
+      await showProxmoxTask(item, result, 'Migracja VM');
+      return false;
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
-function cloneVm(item) {
-  const fields = node('div', { class: 'form-grid' },
-    field('Nowy VMID', 'new_vm_id', { type: 'number', min: 100, required: true }),
-    field('Nazwa', 'name', { required: true }),
-    field('Docelowy node', 'target'),
-    field('Storage', 'storage'),
-    field('Pool', 'pool'),
-    checkboxField('Full clone', 'full', true));
-  openModal({ title: 'Clone VM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
-      new_vm_id: Number(data.get('new_vm_id')), name: data.get('name'), target: data.get('target') || null,
-      storage: data.get('storage') || null, pool: data.get('pool') || null, full: data.has('full'),
-    } });
-    toast('Clone uruchomiony.');
-  }});
+async function cloneVm(item) {
+  try {
+    const [nodes, pools] = await Promise.all([
+      discoverVmOptions(item, 'nodes'),
+      discoverVmOptions(item, 'pools'),
+    ]);
+    const targetField = nodes.length
+      ? selectField('Docelowy węzeł', 'target', [{ value: '', label: `Bez zmiany — ${item.node}` }].concat(nodes.map(node => ({
+        value: node.node, label: `${node.node}${node.status ? ' · ' + statusLabel(node.status) : ''}`,
+      }))), '')
+      : field('Docelowy węzeł (opcjonalnie)', 'target');
+    const storageHolder = node('div', { class: 'wide' });
+    const poolField = pools.length
+      ? selectField('Pula (opcjonalnie)', 'pool', [{ value: '', label: 'Bez puli' }].concat(pools.map(pool => ({
+        value: pool.poolid, label: pool.comment ? `${pool.poolid} · ${pool.comment}` : pool.poolid,
+      }))), '')
+      : field('Pula (opcjonalnie)', 'pool');
+
+    const fields = node('div', { class: 'form-grid' },
+      field('Nowy VMID', 'new_vm_id', { type: 'number', min: 100, required: true }),
+      field('Nazwa nowej VM', 'name', { required: true, value: item.name ? item.name + '-clone' : '' }),
+      targetField,
+      storageHolder,
+      poolField,
+      checkboxField('Pełny klon', 'full', true));
+
+    const targetControl = targetField.querySelector('select,input');
+    const refreshStorages = async () => {
+      const target = targetControl.value || item.node;
+      const storages = (await discoverVmOptions(item, 'storages', target)).filter(storage => storage.active !== 0 && storage.enabled !== 0);
+      if (storages.length) {
+        storageHolder.replaceChildren(selectField('Docelowy storage (opcjonalnie)', 'storage',
+          [{ value: '', label: 'Domyślny' }].concat(storages.map(storage => ({ value: storage.storage, label: storageLabel(storage) }))), ''));
+      } else {
+        storageHolder.replaceChildren(field('Docelowy storage (opcjonalnie)', 'storage', {
+          help: 'Lista storage jest niedostępna — pole można zostawić puste.',
+        }));
+      }
+    };
+    targetControl.addEventListener('change', () => { refreshStorages(); });
+    await refreshStorages();
+
+    openModal({ title: 'Klonuj VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom klonowanie', onSubmit: async data => {
+      const result = await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
+        new_vm_id: Number(data.get('new_vm_id')),
+        name: data.get('name'),
+        target: data.get('target') || null,
+        storage: data.get('storage') || null,
+        pool: data.get('pool') || null,
+        full: data.has('full'),
+      } });
+      await showProxmoxTask(item, result, 'Klonowanie VM');
+      return false;
+    }});
+  } catch (error) { toast(error.message, 'error'); }
 }
 
 async function schedulesView() {
   const schedules = (await api('/schedules?limit=200')).items;
-  const actions = allowed('schedules.create') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą permissions.', actions),
+  const actions = allowed('schedules.create') && allowed('deployments.read') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
+  dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą uprawnień.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-      { label: 'Operacja', value: item => item.operation },
-      { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
+      { label: 'Operacja', value: item => operationLabel(item.operation) },
+      { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
       { label: 'Następne', value: item => formatDate(item.next_run_at) },
-      { label: 'Interwał', value: item => item.interval_seconds ? `${item.interval_seconds}s` : 'jednorazowo' },
-      { label: 'Status', value: item => badge(item.is_active ? 'active' : 'disabled', item.is_active ? 'ok' : 'info') },
+      { label: 'Interwał', value: item => item.interval_seconds ? formatDuration(item.interval_seconds) : 'Jednorazowo' },
+      { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'disabled'), item.is_active ? 'ok' : 'info') },
       { label: 'Błąd', value: item => item.last_error || '—' },
     ], schedules, item => {
       const result = [];
       if (allowed('schedules.update')) {
-        result.push(button('Edytuj', () => scheduleForm(item)));
+        if (allowed('deployments.read')) result.push(button(item.is_active ? 'Edytuj' : 'Włącz i edytuj', () => scheduleForm(item)));
         if (item.is_active) result.push(button('Wyłącz', async () => { await api(`/schedules/${item.id}/disable`, { method: 'POST' }); navigate('schedules'); }));
       }
       if (allowed('schedules.delete')) result.push(button('Usuń', () => confirmAction('Usuń harmonogram', item.name, async () => {
@@ -1580,18 +3361,46 @@ async function schedulesView() {
 async function scheduleForm(item = null) {
   try {
     const deployments = (await api('/deployments?limit=200')).items.filter(row => row.status !== 'destroyed');
-    const dateValue = item?.next_run_at ? new Date(item.next_run_at).toISOString().slice(0, 16) : new Date(Date.now() + 3600000).toISOString().slice(0, 16);
+    const dateValue = toDateTimeLocal(item?.next_run_at || new Date(Date.now() + 3600000));
+    const commonIntervals = new Set([3600, 21600, 43200, 86400, 604800]);
+    const currentInterval = Number(item?.interval_seconds || 0);
+    const presetValue = currentInterval && !commonIntervals.has(currentInterval) ? 'custom' : String(currentInterval || '');
+    const recurrenceField = selectField('Powtarzanie', 'interval_preset', [
+      { value: '', label: 'Jednorazowo' },
+      { value: '3600', label: 'Co godzinę' },
+      { value: '21600', label: 'Co 6 godzin' },
+      { value: '43200', label: 'Co 12 godzin' },
+      { value: '86400', label: 'Codziennie' },
+      { value: '604800', label: 'Co tydzień' },
+      { value: 'custom', label: 'Własny interwał' },
+    ], presetValue);
+    const customInterval = field('Własny interwał (sekundy)', 'interval_seconds', {
+      type: 'number', min: 60, value: presetValue === 'custom' ? currentInterval : '',
+      help: 'Minimum 60 sekund.',
+    });
+    const refreshRecurrence = () => { customInterval.hidden = recurrenceField.querySelector('select').value !== 'custom'; };
+    recurrenceField.querySelector('select').addEventListener('change', refreshRecurrence);
+    refreshRecurrence();
+
     const fields = node('div', { class: 'form-grid' },
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
-      selectField('Deployment', 'deployment_id', deployments.map(row => ({ value: row.id, label: `${row.name} · ${short(row.id, 10)}` })), item?.deployment_id || '', { required: true, placeholder: 'Wybierz deployment' }),
-      selectField('Operacja', 'operation', [{ value: 'terraform.plan', label: 'Plan' }, { value: 'terraform.apply', label: 'Apply' }, { value: 'terraform.destroy', label: 'Destroy' }], item?.operation || 'terraform.plan'),
+      selectField('Wdrożenie', 'deployment_id', deployments.map(row => ({ value: row.id, label: `${row.name} · ${short(row.id, 10)}` })), item?.deployment_id || '', { required: true, placeholder: 'Wybierz wdrożenie' }),
+      selectField('Operacja', 'operation', [{ value: 'terraform.plan', label: 'Plan' }, { value: 'terraform.apply', label: 'Zastosuj' }, { value: 'terraform.destroy', label: 'Usuń zasoby' }], item?.operation || 'terraform.plan'),
       field('Następne uruchomienie', 'next_run_at', { type: 'datetime-local', required: true, value: dateValue }),
-      field('Interwał sekund (puste = raz)', 'interval_seconds', { type: 'number', min: 60, value: item?.interval_seconds || '' }));
-    openModal({ title: item ? 'Edytuj harmonogram' : 'Nowy harmonogram', eyebrow: 'Scheduler', body: fields, onSubmit: async data => {
+      recurrenceField,
+      customInterval);
+    openModal({ title: item ? 'Edytuj harmonogram' : 'Nowy harmonogram', eyebrow: 'Harmonogram', body: fields, onSubmit: async data => {
+      const preset = data.get('interval_preset');
+      const intervalSeconds = preset === 'custom'
+        ? Number(data.get('interval_seconds'))
+        : (preset ? Number(preset) : null);
+      if (preset === 'custom' && (!Number.isFinite(intervalSeconds) || intervalSeconds < 60)) {
+        throw new Error('Własny interwał musi mieć co najmniej 60 sekund.');
+      }
       await api(item ? `/schedules/${item.id}` : '/schedules', { method: item ? 'PUT' : 'POST', body: {
         name: data.get('name'), deployment_id: data.get('deployment_id'), operation: data.get('operation'),
         next_run_at: new Date(data.get('next_run_at')).toISOString(),
-        interval_seconds: data.get('interval_seconds') ? Number(data.get('interval_seconds')) : null,
+        interval_seconds: intervalSeconds,
       } });
       toast('Harmonogram zapisany.');
       navigate('schedules');
@@ -1608,7 +3417,7 @@ async function webhooksView() {
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
         { label: 'URL', class: 'mono', value: item => short(item.url, 48) },
-        { label: 'Eventy', value: item => item.events.join(', ') },
+        { label: 'Zdarzenia', value: item => item.events.map(webhookEventLabel).join(', ') },
         { label: 'Status', value: item => badge(item.is_active ? 'active' : 'inactive', item.is_active ? 'ok' : 'danger') },
       ], hooks.items, item => {
         const result = [];
@@ -1628,7 +3437,7 @@ async function webhooksView() {
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Dostawy' })),
       table([
-        { label: 'Event', value: item => item.event },
+        { label: 'Zdarzenie', value: item => webhookEventLabel(item.event) },
         { label: 'Zasób', class: 'mono', value: item => short(item.resource_id, 18) },
         { label: 'Status', value: item => badge(item.status, statusKind(item.status)) },
         { label: 'Próby', value: item => item.attempts },
@@ -1644,13 +3453,13 @@ function webhookForm(item = null) {
   const fields = node('div', { class: 'form-grid' },
     field('Nazwa', 'name', { required: true, value: item?.name || '' }),
     field('HTTPS URL', 'url', { required: true, value: item?.url || '', wide: true }),
-    checkboxField('job.successful', 'event_job_successful', events.includes('job.successful')),
-    checkboxField('job.failed', 'event_job_failed', events.includes('job.failed')),
-    checkboxField('job.cancelled', 'event_job_cancelled', events.includes('job.cancelled')),
-    checkboxField('recovery.queued', 'event_recovery_queued', events.includes('recovery.queued')),
-    checkboxField('recovery.successful', 'event_recovery_successful', events.includes('recovery.successful')),
-    checkboxField('recovery.failed', 'event_recovery_failed', events.includes('recovery.failed')),
-    checkboxField('system.alert', 'event_system_alert', events.includes('system.alert')),
+    checkboxField('Zadanie zakończone', 'event_job_successful', events.includes('job.successful')),
+    checkboxField('Zadanie zakończone błędem', 'event_job_failed', events.includes('job.failed')),
+    checkboxField('Zadanie anulowane', 'event_job_cancelled', events.includes('job.cancelled')),
+    checkboxField('Odzyskiwanie dodane do kolejki', 'event_recovery_queued', events.includes('recovery.queued')),
+    checkboxField('Odzyskiwanie zakończone', 'event_recovery_successful', events.includes('recovery.successful')),
+    checkboxField('Odzyskiwanie zakończone błędem', 'event_recovery_failed', events.includes('recovery.failed')),
+    checkboxField('Alert systemowy', 'event_system_alert', events.includes('system.alert')),
     checkboxField('Aktywny', 'is_active', item?.is_active ?? true));
   openModal({ title: item ? 'Edytuj webhook' : 'Nowy webhook', eyebrow: 'Signed HMAC', body: fields, onSubmit: async data => {
     const selected = [];
@@ -1663,8 +3472,13 @@ function webhookForm(item = null) {
         name: data.get('name'), url: data.get('url'), events: selected, is_active: data.has('is_active'),
       },
     });
-    if (!item && result.secret) showSecret('Webhook secret', result.secret);
-    else { toast('Webhook zapisany.'); navigate('webhooks'); }
+    if (!item && result.secret) {
+      navigate('webhooks');
+      showSecret('Webhook secret', result.secret);
+    } else {
+      toast('Webhook zapisany.');
+      navigate('webhooks');
+    }
     return item ? true : false;
   }});
 }
@@ -1677,16 +3491,16 @@ async function observabilityView() {
   ]);
   const items = alerts.items || [];
   dom.content.replaceChildren(
-    heading('Stan control plane, alerty oraz surowe metryki w formacie Prometheus.'),
+    heading('Stan platformy, alerty oraz surowe metryki w formacie Prometheus.'),
     node('div', { class: 'metrics' },
-      metric('Backend', health.status, 'health'),
-      metric('Workers', `${health.checks.workers.online}/${health.checks.workers.expected}`, 'online/expected'),
+      metric('Backend', statusLabel(health.status), 'health'),
+      metric('Workery', `${health.checks.workers.online}/${health.checks.workers.expected}`, 'online/expected'),
       metric('Alerty', items.length, 'aktywne'),
-      metric('Dispatcher', health.checks.dispatcher ? 'OK' : 'DOWN', 'heartbeat')),
+      metric('Dispatcher', health.checks.dispatcher ? 'OK' : 'Niedostępny', 'heartbeat')),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Alerty' })),
       table([
-        { label: 'Severity', value: item => badge(item.severity, item.severity === 'critical' ? 'danger' : 'warning') },
+        { label: 'Ważność', value: item => badge(statusLabel(item.severity), item.severity === 'critical' ? 'danger' : 'warning') },
         { label: 'Kod', class: 'mono', value: item => item.code },
         { label: 'Zasób', class: 'mono', value: item => item.resource_id || '—' },
         { label: 'Opis', value: item => item.message },
@@ -1707,7 +3521,12 @@ async function accountView() {
     ? 'Konto używa początkowego hasła admin. Zmień je, aby odblokować panel administracyjny.'
     : 'Zmiana hasła unieważnia wszystkie sesje i tokeny resetu. Po zapisaniu wymagane jest ponowne logowanie.';
   const security = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Bezpieczeństwo konta' }), user.must_change_password ? badge('wymagana zmiana', 'warning') : ''), node('p', { class: user.must_change_password ? 'form-error' : 'muted', text: passwordMessage }), button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary'));
-  dom.content.replaceChildren(heading('Twoja sesja i skuteczne uprawnienia.'), node('div', { class: 'panels' }, details, security), node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Permissions' })), node('p', { class: 'mono muted', text: state.identity.permissions.join(' · ') || 'Brak uprawnień' })));
+  dom.content.replaceChildren(
+    heading('Twoja sesja i skuteczne uprawnienia.'),
+    node('div', { class: 'panels' }, details, security),
+    node('section', { class: 'panel' },
+      node('div', { class: 'panel-header' }, node('h2', { text: 'Uprawnienia' }), badge(`${state.identity.permissions.length}`, 'info')),
+      permissionSummary(state.identity.permissions)));
 }
 
 function info(label, value) { return node('div', { class: 'check' }, node('span', { text: label }), node('strong', { text: value })); }
@@ -1717,7 +3536,7 @@ function changePassword(required = false) {
   openModal({ title: required ? 'Zmień hasło początkowe' : 'Zmień hasło', eyebrow: 'Moje konto', body: fields, submitLabel: 'Zmień hasło', onSubmit: async data => {
     if (data.get('password') !== data.get('confirm')) throw new Error('Nowe hasła nie są identyczne.');
     await api('/auth/change-password', { method: 'POST', body: { current_password: data.get('current_password'), password: data.get('password') } });
-    showLogin('Hasło zmienione. Zaloguj się ponownie.');
+    showLogin('Hasło zmienione. Zaloguj się ponownie.', 'success');
   }});
 }
 
@@ -1737,7 +3556,7 @@ dom.loginForm.addEventListener('submit', async event => {
   event.preventDefault();
   const submit = dom.loginForm.querySelector('button[type="submit"]');
   submit.disabled = true;
-  dom.loginError.hidden = true;
+  setLoginMessage();
   try {
     const data = new FormData(dom.loginForm);
     const pair = await api('/auth/login', { method: 'POST', auth: false, body: { username: data.get('username'), password: data.get('password') } }, false);
@@ -1745,8 +3564,7 @@ dom.loginForm.addEventListener('submit', async event => {
     state.identity = { user: pair.user, roles: pair.roles, permissions: pair.permissions, token_type: 'session' };
     showApp();
   } catch (error) {
-    dom.loginError.textContent = error.message;
-    dom.loginError.hidden = false;
+    setLoginMessage(error.message);
   } finally { submit.disabled = false; }
 });
 
@@ -1755,19 +3573,39 @@ document.querySelector('#reset-open').addEventListener('click', () => {
   openModal({ title: 'Ustaw nowe hasło', eyebrow: 'Reset hasła', body: fields, submitLabel: 'Zapisz hasło', onSubmit: async data => {
     if (data.get('password') !== data.get('confirm')) throw new Error('Hasła nie są identyczne.');
     await api('/auth/reset-password', { method: 'POST', auth: false, body: { token: data.get('token'), password: data.get('password') } }, false);
-    dom.loginError.textContent = 'Hasło zostało zmienione. Możesz się zalogować.';
-    dom.loginError.hidden = false;
+    setLoginMessage('Hasło zostało zmienione. Możesz się zalogować.', 'success');
   }});
 });
 
 document.querySelector('#logout').addEventListener('click', async () => {
   try { await api('/auth/logout', { method: 'POST' }); } catch { /* Local logout still clears the session. */ }
-  showLogin('Wylogowano.');
+  showLogin('Wylogowano.', 'success');
 });
-document.querySelector('#menu-toggle').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
-dom.modal.querySelector('header .icon-button').addEventListener('click', closeModal);
+document.querySelectorAll('[data-theme-toggle]').forEach(control => control.addEventListener('click', toggleTheme));
+dom.refreshView.addEventListener('click', async () => {
+  dom.refreshView.disabled = true;
+  dom.refreshView.classList.add('is-refreshing');
+  try { await navigate(state.view); }
+  finally {
+    dom.refreshView.disabled = false;
+    dom.refreshView.classList.remove('is-refreshing');
+  }
+});
+dom.menuToggle.addEventListener('click', () => setMobileMenu(!dom.appView.classList.contains('menu-open')));
+dom.sidebarBackdrop.addEventListener('click', () => setMobileMenu(false));
+document.querySelector('#modal-close').addEventListener('click', closeModal);
+dom.modal.addEventListener('cancel', event => {
+  event.preventDefault();
+  closeModal();
+});
 dom.modal.addEventListener('click', event => { if (event.target === dom.modal) closeModal(); });
+window.addEventListener('resize', () => { if (window.innerWidth > 760) setMobileMenu(false); });
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !dom.modal.open && dom.appView.classList.contains('menu-open')) setMobileMenu(false);
+});
 window.addEventListener('hashchange', () => { if (!dom.appView.hidden && location.hash.slice(1) !== state.view) navigate(location.hash.slice(1)); });
+
+loadTheme();
 
 (async function boot() {
   loadSession();

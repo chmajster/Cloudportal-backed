@@ -386,10 +386,12 @@ async def console_websocket(websocket: WebSocket, session_id: str):
         upstream_url = proxmox.console_websocket_url(
             record['node'], record['vmid'], record['port'], record['ticket']
         )
-        tls = ssl.create_default_context()
-        if not proxmox.verify_ssl:
-            tls.check_hostname = False
-            tls.verify_mode = ssl.CERT_NONE
+        tls = None
+        if upstream_url.startswith('wss://'):
+            tls = ssl.create_default_context()
+            if not proxmox.verify_ssl:
+                tls.check_hostname = False
+                tls.verify_mode = ssl.CERT_NONE
 
         requested = {
             value.strip()

@@ -90,16 +90,35 @@ class CredentialInput(Input):
     @field_validator('endpoint')
     @classmethod
     def endpoint_valid(cls, value):
-        if value:
-            parsed = urlsplit(value)
-            if parsed.scheme not in {'https', 'ssh'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-                raise ValueError('Endpoint must be HTTPS (or ssh:// for SSH) without credentials, query or fragment')
-        return value.rstrip('/')
+        value = value.strip().rstrip('/')
+        if not value:
+            return value
+        if '://' not in value:
+            if any(ch in value for ch in '/?#@') or value.startswith(':'):
+                raise ValueError('Endpoint must be a host/IP or URL without credentials, query or fragment')
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme not in {'http', 'https', 'ssh'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('Endpoint must be HTTP/HTTPS (or ssh:// for SSH) without credentials, query or fragment')
+        return value
 
     @model_validator(mode='after')
     def endpoint_scheme(self):
-        if self.endpoint.startswith('ssh:') and self.type != 'ssh':
-            raise ValueError('ssh:// endpoint is only valid for SSH credentials')
+        if not self.endpoint:
+            return self
+        if self.type == 'proxmox':
+            if '://' in self.endpoint:
+                parsed = urlsplit(self.endpoint)
+                if parsed.scheme not in {'http', 'https'} or parsed.path:
+                    raise ValueError('Proxmox endpoint must use HTTP or HTTPS and contain only host/IP and optional port')
+            return self
+        if self.type == 'ssh':
+            if not self.endpoint.startswith('ssh://'):
+                raise ValueError('SSH credential endpoint must use ssh://')
+            return self
+        parsed = urlsplit(self.endpoint)
+        if parsed.scheme != 'https' or not parsed.hostname:
+            raise ValueError('This credential type requires an HTTPS endpoint')
         return self
 
     @field_validator('secrets')
@@ -134,10 +153,17 @@ class ProxmoxTokenBootstrapInput(Input):
     @field_validator('endpoint')
     @classmethod
     def proxmox_endpoint_valid(cls, value):
+        value = value.strip().rstrip('/')
+        if not value:
+            raise ValueError('Proxmox endpoint is required')
+        if '://' not in value:
+            if any(ch in value for ch in '/?#@') or value.startswith(':'):
+                raise ValueError('Proxmox endpoint must be a host/IP or HTTP/HTTPS URL without credentials, query or fragment')
+            return value
         parsed = urlsplit(value)
-        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError('Proxmox endpoint must be HTTPS without credentials, query or fragment')
-        return value.rstrip('/')
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path:
+            raise ValueError('Proxmox endpoint must use HTTP or HTTPS and contain only host/IP and optional port')
+        return value
 
     @field_validator('expires_at', 'rotation_due_at')
     @classmethod

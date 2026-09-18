@@ -13,7 +13,7 @@ from app.credentials.testing import test_connection
 from app.database import get_db
 from app.models import Credential, Deployment, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
-from app.providers.proxmox import create_api_token
+from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint
 from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
@@ -65,8 +65,9 @@ def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('c
 @router.post('/credentials/proxmox/bootstrap', status_code=201, response_model=CredentialOutput)
 def bootstrap_proxmox_credential(data: ProxmoxTokenBootstrapInput, request: Request,
                                  actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
+    endpoint = resolve_proxmox_endpoint(data.endpoint, verify_ssl=data.verify_ssl)
     secret = create_api_token(
-        data.endpoint,
+        endpoint,
         data.username,
         data.password,
         data.token_name,
@@ -76,7 +77,7 @@ def bootstrap_proxmox_credential(data: ProxmoxTokenBootstrapInput, request: Requ
     credential = Credential(
         name=data.name,
         type='proxmox',
-        endpoint=data.endpoint,
+        endpoint=endpoint,
         username=data.username,
         verify_ssl=data.verify_ssl,
         expires_at=data.expires_at,
@@ -97,6 +98,9 @@ def credential(id: int, actor=Depends(require('credentials.read')), db=Depends(g
 
 @router.post('/credentials', status_code=201, response_model=CredentialOutput)
 def create_credential(data: CredentialInput, request: Request, actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
+    if data.type == 'proxmox':
+        data.endpoint = resolve_proxmox_endpoint(data.endpoint, verify_ssl=data.verify_ssl)
+
     def create():
         c = Credential(**data.model_dump(exclude={'secrets'}), encrypted_secret=b'')
         db.add(c)
@@ -109,6 +113,9 @@ def create_credential(data: CredentialInput, request: Request, actor=Depends(req
 
 @router.put('/credentials/{id}', response_model=CredentialOutput)
 def update_credential(id: int, data: CredentialInput, request: Request, actor=Depends(require('credentials.update')), db=Depends(get_db, scope='function')):
+    if data.type == 'proxmox':
+        data.endpoint = resolve_proxmox_endpoint(data.endpoint, verify_ssl=data.verify_ssl)
+
     c = locked_credential(db, id)
     if credential_in_use(db, id, pending_only=True):
         raise HTTPException(409, 'Credential is used by a queued or running job; finish or cancel the job first')
