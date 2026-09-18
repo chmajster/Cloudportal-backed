@@ -538,5 +538,6 @@ async function cloneVm(item) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
+registerCommand('inventory.openVm', openVmManager);
 registerView({ id: 'inventory', label: 'Zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
 })();
