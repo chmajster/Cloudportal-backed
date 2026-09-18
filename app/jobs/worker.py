@@ -10,7 +10,7 @@ from app.database import session
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
-from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedVM, Token, now
+from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, Token, now
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
 
@@ -127,6 +127,46 @@ def register_managed_vm(context, workspace):
     return vm_id
 
 
+
+def register_managed_resource(context, workspace):
+    try:
+        state = json.loads((workspace / 'terraform.tfstate').read_text())
+    except (OSError, ValueError, TypeError):
+        raise ExecutionFailed('Terraform state could not be read for resource inventory') from None
+    outputs = state.get('outputs', {})
+    external_id = outputs.get('resource_id', {}).get('value')
+    if external_id is None:
+        external_id = outputs.get('vm_id', {}).get('value')
+    if external_id is None:
+        raise ExecutionFailed('Managed resource identity is missing from Terraform state')
+    primary_ip = outputs.get('primary_ip', {}).get('value')
+    with session() as db:
+        deployment = db.get(Deployment, context.deployment.id)
+        row = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == deployment.id
+        ))
+        if row is None:
+            row = ManagedResource(
+                deployment_id=deployment.id,
+                provider_id=deployment.provider_id,
+                provider=deployment.provider,
+                resource_type='vm',
+                external_id=str(external_id),
+                name=deployment.name,
+                primary_ip=str(primary_ip) if primary_ip else None,
+                lifecycle_status='active',
+                metadata_json={},
+                created_by=deployment.created_by,
+            )
+            db.add(row)
+        else:
+            row.external_id = str(external_id)
+            row.name = deployment.name
+            row.primary_ip = str(primary_ip) if primary_ip else None
+            row.lifecycle_status = 'active'
+            row.destroyed_at = None
+        db.commit()
+
 def wait_for_vm(context, workspace):
     vm_id = vm_id_from_state(workspace)
     provider = provider_for(context.credential)
@@ -170,6 +210,7 @@ def execute(job_id):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             workspace = executor.execute(job.operation, context)
             if job.operation == 'terraform.apply':
+                register_managed_resource(context, workspace)
                 if context.deployment.provider == 'proxmox':
                     register_managed_vm(context, workspace)
                 if context.ansible:
@@ -209,6 +250,9 @@ def execute(job_id):
                 ).values(status='released', released_at=released_at))
                 db.execute(update(ManagedVM).where(
                     ManagedVM.deployment_id == deployment.id,
+                ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+                db.execute(update(ManagedResource).where(
+                    ManagedResource.deployment_id == deployment.id,
                 ).values(lifecycle_status='destroyed', destroyed_at=released_at))
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))
         db.add(Audit(user_id=job.created_by, token_id=job.token_id, ip=job.ip, action='job.' + status,
