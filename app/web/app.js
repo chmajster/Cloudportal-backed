@@ -234,6 +234,7 @@ function closeModal() {
     try { state.consoleRfb.disconnect(); } catch { /* Session may already be disconnected. */ }
     state.consoleRfb = null;
   }
+  dom.modal.classList.remove('modal-console');
   if (dom.modal.open) dom.modal.close();
 }
 
