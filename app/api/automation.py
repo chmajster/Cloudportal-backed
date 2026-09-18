@@ -192,10 +192,12 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         for credential_id in sorted({parsed.credentials_id} | ({parsed.ansible.credentials_id} if parsed.ansible else set())):
             locked_credential(db, credential_id)
         if parsed.ansible:
+            if provider.type != 'proxmox':
+                raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
             if 'ansible.execute' not in request.state.permissions:
                 raise HTTPException(403, 'ansible.execute required by blueprint')
             validate_ansible(db, parsed.ansible)
-        deployment = Deployment(name=parsed.name, provider_id=provider.id, template=parsed.template,
+        deployment = Deployment(name=parsed.name, provider_id=provider.id, provider=provider.type, template=parsed.template,
                                 credentials_id=parsed.credentials_id, variables=parsed.variables,
                                 workflow={'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
