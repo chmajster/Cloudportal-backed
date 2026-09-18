@@ -2356,10 +2356,48 @@ function generateHostname(schemes) {
   });
 }
 
-function showJson(title, value, eyebrow = 'Szczegóły') {
+function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
+  const rows = Object.entries(value || {}).map(([key, item]) => ({ key, value: item }));
   dom.modalTitle.textContent = title;
   dom.modalEyebrow.textContent = eyebrow;
-  dom.modalBody.replaceChildren(node('pre', { class: 'log-output mono', text: JSON.stringify(value, null, 2) }));
+  dom.modalBody.replaceChildren(rows.length ? table([
+    { label: 'Pole', value: row => node('strong', { text: FIELD_LABELS[row.key] || row.key.replaceAll('_', ' ') }) },
+    { label: 'Wartość', value: row => node('span', { class: typeof row.value === 'string' && row.value.length > 40 ? 'mono' : '', text: displayValue(row.value) }) },
+  ], rows) : node('p', { class: 'muted', text: 'Brak dodatkowych danych.' }));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
+function showTemplateFields(template) {
+  const schema = template.variables_schema || {};
+  const required = new Set(schema.required || []);
+  const rows = Object.entries(schema.properties || {}).map(([name, spec]) => {
+    const base = schemaVariant(spec);
+    const type = schemaType(spec);
+    const enums = schemaEnum(spec);
+    let constraints = '—';
+    if (enums?.length) constraints = enums.join(', ');
+    else if (base.minimum !== undefined || base.maximum !== undefined) constraints = `${base.minimum ?? '—'} – ${base.maximum ?? '—'}`;
+    return {
+      name,
+      label: FIELD_LABELS[name] || spec.title || name,
+      type,
+      required: required.has(name),
+      default: spec.default,
+      constraints,
+    };
+  });
+  const typeLabels = { string: 'Tekst', integer: 'Liczba całkowita', number: 'Liczba', boolean: 'Tak / nie', array: 'Lista' };
+  dom.modal.classList.add('modal-wide');
+  dom.modalTitle.textContent = `Pola: ${template.name}`;
+  dom.modalEyebrow.textContent = `Szablon v${template.version}`;
+  dom.modalBody.replaceChildren(rows.length ? table([
+    { label: 'Pole', value: row => node('div', {}, node('strong', { text: row.label }), node('div', { class: 'mono muted', text: row.name })) },
+    { label: 'Typ', value: row => typeLabels[row.type] || row.type },
+    { label: 'Wymagane', value: row => row.required ? badge('Tak', 'warning') : 'Nie' },
+    { label: 'Domyślnie', value: row => displayValue(row.default) },
+    { label: 'Opcje / zakres', value: row => row.constraints },
+  ], rows) : node('p', { class: 'muted', text: 'Szablon nie ma parametrów wejściowych.' }));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   if (!dom.modal.open) dom.modal.showModal();
 }
@@ -2379,7 +2417,7 @@ async function catalogView() {
         { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider, 'info') },
         { label: 'Wersja', value: item => `v${item.version}` },
         { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
-      ], templates.items, item => [button('Pola', () => showJson(`Pola ${item.id}`, item.variables_schema, `Szablon v${item.version}`))])
+      ], templates.items, item => [button('Pola', () => showTemplateFields(item))])
     ),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Zatwierdzone playbooki Ansible' })),
@@ -2502,7 +2540,7 @@ async function inventoryView() {
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
         { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
         { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
-      ], resources.items, item => [button('Szczegóły', () => showJson(item.name, item.metadata_json || {}, 'Zasób zarządzany'))])
+      ], resources.items, item => [button('Szczegóły', () => showObjectDetails(item.name, item.metadata_json || {}, 'Zasób zarządzany'))])
     )
   );
 }
