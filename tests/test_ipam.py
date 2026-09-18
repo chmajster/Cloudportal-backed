@@ -171,6 +171,9 @@ def test_blueprint_ipam_injects_static_ip_and_releases_after_destroy(client, hea
     assert len(allocations) == 1 and allocations[0]['status'] == 'assigned'
     assert allocations[0]['hostname'] == 'lab-web-01'
 
+    (tmp_path / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":321}}}'
+    )
     monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: tmp_path)
     execute(body['job']['id'])
     assert client.get(f"/api/v1/jobs/{body['job']['id']}", headers=headers).json()['status'] == 'successful'
