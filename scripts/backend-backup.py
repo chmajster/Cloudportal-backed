@@ -4,7 +4,8 @@ import hashlib
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.engine import make_url
@@ -70,7 +71,10 @@ def main():
     parser = argparse.ArgumentParser(description='Create a Cloudportal-backed database backup.')
     parser.add_argument('--output', default='/var/backups/cloudportal-backed')
     parser.add_argument('--env-file', default=str(DEFAULT_ENV))
+    parser.add_argument('--retention-days', type=int, default=14)
     args = parser.parse_args()
+    if args.retention_days < 1 or args.retention_days > 3650:
+        raise SystemExit('--retention-days must be between 1 and 3650')
 
     if os.geteuid() != 0:
         raise SystemExit('Run the backup command as root')
@@ -113,6 +117,19 @@ def main():
     metadata_file = destination / 'metadata.json'
     metadata_file.write_text(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
     os.chmod(metadata_file, 0o600)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=args.retention_days)
+    root = Path(args.output)
+    for entry in root.iterdir():
+        if entry == destination or not entry.is_dir():
+            continue
+        try:
+            created = datetime.strptime(entry.name, '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if created < cutoff:
+            shutil.rmtree(entry)
+
     print(destination)
 
 
