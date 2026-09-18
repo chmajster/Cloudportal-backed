@@ -331,6 +331,15 @@ server {
 EOF
 nginx -t
 ln -sfn "$release" "$app_root/current"
+cat > /usr/local/sbin/cloudportal-backup <<'EOF'
+#!/bin/sh
+exec /opt/cloudportal-backed/current/.venv/bin/python /opt/cloudportal-backed/current/scripts/backend-backup.py "$@"
+EOF
+cat > /usr/local/sbin/cloudportal-restore <<'EOF'
+#!/bin/sh
+exec /opt/cloudportal-backed/current/.venv/bin/python /opt/cloudportal-backed/current/scripts/backend-restore.py "$@"
+EOF
+chmod 0750 /usr/local/sbin/cloudportal-backup /usr/local/sbin/cloudportal-restore
 printf 'host=%s\nport=%s\n' "$backend_host" "$backend_port" > "$config/public.conf"
 systemctl daemon-reload
 systemctl enable --now cloudportal-redis
