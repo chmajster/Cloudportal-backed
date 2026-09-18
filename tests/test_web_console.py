@@ -62,6 +62,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function assignHostname(' in script.text
     assert 'function assignIpAllocation(' in script.text
     assert 'function showProxmoxTask(' in script.text
+    assert "selectField('Powtarzanie', 'interval_preset'" in script.text
+    assert "class: 'advanced-options wide'" in script.text
     assert 'function stopTaskPolling(' in script.text
     assert 'Zmienne template JSON' not in script.text
     assert 'Schemat zmiennych JSON' not in script.text
@@ -104,6 +106,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.choice-grid' in stylesheet.text
     assert '.detail-section' in stylesheet.text
     assert '.task-progress' in stylesheet.text
+    assert '.advanced-options' in stylesheet.text
     assert '.task-id-details' in stylesheet.text
     assert '.editor-card' in stylesheet.text
     assert '.table-toolbar' in stylesheet.text
