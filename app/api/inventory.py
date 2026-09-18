@@ -8,7 +8,7 @@ from app.api.administration import Limit, Offset
 from app.api.common import find, idempotent
 from app.api.schemas import Input
 from app.database import get_db
-from app.models import Credential, ManagedVM, Provider
+from app.models import Credential, ManagedResource, ManagedVM, Provider
 from app.providers.registry import provider_for
 from app.security.core import audit, require
 
@@ -157,3 +157,32 @@ def unmanage_vm(id: str, request: Request, actor=Depends(require('inventory.dele
     db.delete(row)
     audit(db, request, 'inventory.vm_unmanaged', 'managed_vms', id)
     return {'deleted': True}
+
+
+
+@router.get('/resources')
+def managed_resources(provider: Annotated[str | None, Query(max_length=32)] = None,
+                      lifecycle_status: Annotated[Literal['active', 'destroyed'] | None, Query()] = None,
+                      limit: Limit = 100, offset: Offset = 0,
+                      actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
+    query = select(ManagedResource)
+    if provider:
+        query = query.where(ManagedResource.provider == provider)
+    if lifecycle_status:
+        query = query.where(ManagedResource.lifecycle_status == lifecycle_status)
+    rows = db.scalars(query.order_by(ManagedResource.created_at.desc()).offset(offset).limit(limit)).all()
+    fields = (
+        'id deployment_id provider_id provider resource_type external_id name primary_ip '
+        'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
+    )
+    return {'items': [{field: getattr(row, field) for field in fields.split()} for row in rows]}
+
+
+@router.get('/resources/{id}')
+def managed_resource(id: str, actor=Depends(require('inventory.read')), db=Depends(get_db, scope='function')):
+    row = find(db, ManagedResource, id)
+    fields = (
+        'id deployment_id provider_id provider resource_type external_id name primary_ip '
+        'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
+    )
+    return {field: getattr(row, field) for field in fields.split()}
