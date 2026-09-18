@@ -120,7 +120,7 @@ class ProxmoxTokenBootstrapInput(Input):
     password: Annotated[str, Field(min_length=1, max_length=1024, json_schema_extra={'writeOnly': True})]
     token_name: Annotated[str, Field(min_length=1, max_length=63)] = 'cloudportal'
     verify_ssl: bool = True
-    privilege_separation: bool = True
+    privilege_separation: bool = False
     expires_at: datetime | None = None
     rotation_due_at: datetime | None = None
 
