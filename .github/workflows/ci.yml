@@ -45,6 +45,7 @@ jobs:
         with: {python-version: '3.12'}
       - run: pip install -r requirements-dev.txt
       - run: python -m compileall -q app migrations scripts/backend-backup.py scripts/backend-restore.py
+      - run: node --check app/web/app.js
       - run: bash -n install.sh scripts/install.sh
       - run: scripts/test-installer-platforms.sh
       - run: pytest -q --tb=short
