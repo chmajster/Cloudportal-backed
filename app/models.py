@@ -141,6 +141,8 @@ class Job(Timestamp, Base):
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime)
     error: Mapped[str | None] = mapped_column(Text)
+    retry_of: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class JobLog(Base):
