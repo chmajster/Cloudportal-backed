@@ -75,17 +75,54 @@ function node(tag, attributes = {}, ...children) {
   return element;
 }
 
+const VALIDATION_FIELD_LABELS = {
+  name: 'Nazwa', username: 'Użytkownik', password: 'Hasło', email: 'E-mail',
+  endpoint: 'Adres', type: 'Typ', credentials_id: 'Dane dostępowe', provider_id: 'Platforma',
+  template: 'Szablon', executor: 'Silnik IaC', variables: 'Parametry', operation: 'Operacja',
+  deployment_id: 'Wdrożenie', next_run_at: 'Termin uruchomienia', interval_seconds: 'Interwał',
+  pattern: 'Wzorzec', hostname: 'Hostname', resource_id: 'Zasób', address: 'Adres IP',
+  preferred_address: 'Preferowany adres', cidr: 'CIDR', gateway: 'Brama', verify_ssl: 'Weryfikacja TLS',
+  token_name: 'Nazwa tokenu', scopes: 'Zakres uprawnień', expires_at: 'Data wygaśnięcia',
+};
+
+function friendlyApiText(value) {
+  let message = String(value || 'Operacja nie powiodła się.').replace(/^Value error,\s*/i, '');
+  const exact = new Map([
+    ['Field required', 'Pole jest wymagane.'],
+    ['Resource not found', 'Nie znaleziono zasobu.'],
+    ['Only a reserved hostname can be assigned', 'Można przypisać tylko zarezerwowany hostname.'],
+    ['Only a reserved address can be assigned', 'Można przypisać tylko zarezerwowany adres IP.'],
+    ['Address is already released', 'Adres IP został już zwolniony.'],
+    ['Hostname is already released', 'Hostname został już zwolniony.'],
+    ['Hostname scheme has reservation history; disable it instead', 'Schemat ma historię rezerwacji. Zamiast usuwać, wyłącz go.'],
+    ['Provider has active deployments; create another provider', 'Platforma ma aktywne wdrożenia. Utwórz nowe połączenie zamiast zmieniać dane dostępowe.'],
+    ['Provider has deployment history', 'Platforma ma historię wdrożeń i nie może zostać usunięta.'],
+    ['Selected infrastructure provider does not match the Terraform template', 'Wybrana platforma nie pasuje do szablonu Terraform.'],
+    ['Credential does not belong to the selected provider', 'Wybrane dane dostępowe nie należą do tej platformy.'],
+    ['Missing execution or deployment permissions', 'Brak uprawnień wymaganych do wykonania tej operacji.'],
+  ]);
+  if (exact.has(message)) return exact.get(message);
+  message = message
+    .replace(/^String should have at least (\d+) characters?$/i, 'Wartość musi mieć co najmniej $1 znaków.')
+    .replace(/^String should have at most (\d+) characters?$/i, 'Wartość może mieć maksymalnie $1 znaków.')
+    .replace(/^Input should be greater than or equal to (.+)$/i, 'Wartość musi być większa lub równa $1.')
+    .replace(/^Input should be less than or equal to (.+)$/i, 'Wartość musi być mniejsza lub równa $1.');
+  return message;
+}
+
 function errorMessage(data) {
   const detail = data && data.detail;
   if (Array.isArray(detail)) {
     return detail.map(item => {
-      const location = Array.isArray(item?.loc) ? item.loc.filter(part => part !== 'body').join('.') : '';
-      const message = String(item?.msg || item || 'Błąd walidacji').replace(/^Value error,\s*/i, '');
+      const path = Array.isArray(item?.loc) ? item.loc.filter(part => part !== 'body') : [];
+      const rawField = path.at(-1);
+      const location = rawField ? (VALIDATION_FIELD_LABELS[rawField] || String(rawField).replaceAll('_', ' ')) : '';
+      const message = friendlyApiText(item?.msg || item || 'Błąd walidacji');
       return location ? `${location}: ${message}` : message;
     }).join('; ');
   }
-  if (typeof detail === 'string') return detail.replace(/^Value error,\s*/i, '');
-  if (detail && typeof detail === 'object') return detail.message || JSON.stringify(detail);
+  if (typeof detail === 'string') return friendlyApiText(detail);
+  if (detail && typeof detail === 'object') return friendlyApiText(detail.message || JSON.stringify(detail));
   return 'Operacja nie powiodła się.';
 }
 
