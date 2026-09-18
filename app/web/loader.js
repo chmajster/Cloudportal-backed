@@ -28,6 +28,9 @@ function loadFeatureScript(path) {
   const manifest = await response.json();
 
   await Promise.all((manifest.styles || []).map(loadFeatureStyle));
+  for (const path of manifest.shared || []) {
+    await loadFeatureScript(path);
+  }
   for (const path of manifest.scripts || []) {
     await loadFeatureScript(path);
   }
