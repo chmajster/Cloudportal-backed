@@ -6,6 +6,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.api.outputs import HealthOutput, InfoOutput
 from app.catalog import list_templates
+from app.catalog import list_templates
 from app.database import session
 from app.security.core import encryption_key, redis_client, require
 
