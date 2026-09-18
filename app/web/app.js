@@ -365,10 +365,10 @@ function operationLabel(value) {
 }
 
 const PERMISSION_GROUP_LABELS = {
-  users: 'Użytkownicy', roles: 'Role i RBAC', tokens: 'Tokeny API', credentials: 'Credentiale',
-  providers: 'Providery', deployments: 'Wdrożenia', jobs: 'Zadania', terraform: 'Terraform / OpenTofu',
+  users: 'Użytkownicy', roles: 'Role i RBAC', tokens: 'Tokeny API', credentials: 'Dane dostępowe',
+  providers: 'Platformy', deployments: 'Wdrożenia', jobs: 'Zadania', terraform: 'Terraform / OpenTofu',
   ansible: 'Ansible', blueprints: 'Blueprinty', hostnames: 'Hostname Manager', ipam: 'IPAM',
-  inventory: 'Inventory', vms: 'Maszyny wirtualne', snapshots: 'Snapshoty', backups: 'Backupy',
+  inventory: 'Zasoby', vms: 'Maszyny wirtualne', snapshots: 'Snapshoty', backups: 'Backupy',
   schedules: 'Harmonogramy', webhooks: 'Webhooki', metrics: 'Monitoring', audit: 'Audyt',
   portal: 'Portal', catalog: 'Katalog',
 };
