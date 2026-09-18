@@ -1,0 +1,193 @@
+name: Live Infrastructure Acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Acceptance scenario
+        required: true
+        type: choice
+        options:
+          - proxmox-provision
+          - proxmox-operations
+          - terraform-provider
+      backend_url:
+        description: Cloudportal-backed HTTPS URL
+        required: true
+        type: string
+      provider_id:
+        description: Backend provider ID
+        required: true
+        type: string
+      credential_id:
+        description: Backend provider credential ID
+        required: false
+        type: string
+      template:
+        description: Terraform catalog template for terraform-provider
+        required: false
+        type: string
+      variables_json:
+        description: Non-secret Terraform variables JSON for terraform-provider
+        required: false
+        type: string
+        default: '{}'
+      pve_node:
+        description: Proxmox node
+        required: false
+        type: string
+      pve_template_id:
+        description: Proxmox template VMID
+        required: false
+        type: string
+      pve_storage:
+        description: Proxmox VM storage
+        required: false
+        type: string
+      pve_network:
+        description: Proxmox bridge
+        required: false
+        default: vmbr0
+        type: string
+      ssh_credential_id:
+        description: Backend SSH credential ID for Proxmox provision scenario
+        required: false
+        type: string
+      test_vmid:
+        description: Existing test VMID for Proxmox operations
+        required: false
+        type: string
+      backup_storage:
+        description: Proxmox backup storage
+        required: false
+        type: string
+      restore_vmid:
+        description: Free VMID used only for restore acceptance
+        required: false
+        type: string
+      restore_storage:
+        description: Optional target storage for restore
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: live-infrastructure-acceptance
+  cancel-in-progress: false
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    environment: live-infrastructure
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install client dependencies
+        run: pip install httpx
+      - name: Prepare secret files
+        shell: bash
+        env:
+          BACKEND_TOKEN: ${{ secrets.LIVE_BACKEND_TOKEN }}
+          BACKEND_CA_PEM: ${{ secrets.LIVE_BACKEND_CA_PEM }}
+          SSH_PUBLIC_KEY: ${{ secrets.LIVE_SSH_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$BACKEND_TOKEN" || { echo 'LIVE_BACKEND_TOKEN is required' >&2; exit 2; }
+          printf '%s' "$BACKEND_TOKEN" > /tmp/backend.token
+          if [ -n "$BACKEND_CA_PEM" ]; then printf '%s\n' "$BACKEND_CA_PEM" > /tmp/backend-ca.pem; fi
+          if [ -n "$SSH_PUBLIC_KEY" ]; then printf '%s\n' "$SSH_PUBLIC_KEY" > /tmp/ssh-public-key.pub; fi
+          chmod 600 /tmp/backend.token /tmp/backend-ca.pem /tmp/ssh-public-key.pub 2>/dev/null || true
+      - name: Validate inputs
+        shell: bash
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+          CREDENTIAL_ID: ${{ inputs.credential_id }}
+          TEMPLATE: ${{ inputs.template }}
+          PVE_NODE: ${{ inputs.pve_node }}
+          PVE_TEMPLATE_ID: ${{ inputs.pve_template_id }}
+          PVE_STORAGE: ${{ inputs.pve_storage }}
+          SSH_CREDENTIAL_ID: ${{ inputs.ssh_credential_id }}
+          TEST_VMID: ${{ inputs.test_vmid }}
+          BACKUP_STORAGE: ${{ inputs.backup_storage }}
+          RESTORE_VMID: ${{ inputs.restore_vmid }}
+        run: |
+          set -euo pipefail
+          case "$SCENARIO" in
+            proxmox-provision)
+              test -n "$CREDENTIAL_ID" && test -n "$PVE_NODE" && test -n "$PVE_TEMPLATE_ID" && test -n "$PVE_STORAGE" && test -n "$SSH_CREDENTIAL_ID"
+              test -s /tmp/ssh-public-key.pub
+              ;;
+            proxmox-operations)
+              test -n "$PVE_NODE" && test -n "$TEST_VMID" && test -n "$BACKUP_STORAGE" && test -n "$RESTORE_VMID"
+              ;;
+            terraform-provider)
+              test -n "$CREDENTIAL_ID" && test -n "$TEMPLATE"
+              ;;
+          esac
+      - name: Write provider variables
+        if: ${{ inputs.scenario == 'terraform-provider' }}
+        env:
+          VARIABLES_JSON: ${{ inputs.variables_json }}
+        run: |
+          umask 077
+          printf '%s' "$VARIABLES_JSON" > /tmp/variables.json
+          python -m json.tool /tmp/variables.json >/dev/null
+      - name: Proxmox create workflow destroy
+        if: ${{ inputs.scenario == 'proxmox-provision' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --url ${{ inputs.backend_url }}
+            --token-file /tmp/backend.token
+            --provider-id ${{ inputs.provider_id }}
+            --credential-id ${{ inputs.credential_id }}
+            --template-id ${{ inputs.pve_template_id }}
+            --node ${{ inputs.pve_node }}
+            --storage ${{ inputs.pve_storage }}
+            --network ${{ inputs.pve_network }}
+            --ssh-credential-id ${{ inputs.ssh_credential_id }}
+            --ssh-public-key-file /tmp/ssh-public-key.pub
+            --allow-create-and-destroy
+          )
+          [ ! -s /tmp/backend-ca.pem ] || args+=(--ca-file /tmp/backend-ca.pem)
+          python scripts/e2e-proxmox.py "${args[@]}"
+      - name: Proxmox console backup restore cleanup
+        if: ${{ inputs.scenario == 'proxmox-operations' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --url ${{ inputs.backend_url }}
+            --token-file /tmp/backend.token
+            --provider-id ${{ inputs.provider_id }}
+            --node ${{ inputs.pve_node }}
+            --vmid ${{ inputs.test_vmid }}
+            --backup-storage ${{ inputs.backup_storage }}
+            --restore-vmid ${{ inputs.restore_vmid }}
+            --allow-backup-restore-and-delete
+          )
+          [ -z '${{ inputs.restore_storage }}' ] || args+=(--restore-storage '${{ inputs.restore_storage }}')
+          [ ! -s /tmp/backend-ca.pem ] || args+=(--ca-file /tmp/backend-ca.pem)
+          python scripts/e2e-proxmox-operations.py "${args[@]}"
+      - name: Terraform provider create destroy
+        if: ${{ inputs.scenario == 'terraform-provider' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --url ${{ inputs.backend_url }}
+            --token-file /tmp/backend.token
+            --provider-id ${{ inputs.provider_id }}
+            --credential-id ${{ inputs.credential_id }}
+            --template ${{ inputs.template }}
+            --variables-file /tmp/variables.json
+            --allow-create-and-destroy
+          )
+          [ ! -s /tmp/backend-ca.pem ] || args+=(--ca-file /tmp/backend-ca.pem)
+          python scripts/e2e-terraform-provider.py "${args[@]}"
+      - name: Remove secret files
+        if: always()
+        run: rm -f /tmp/backend.token /tmp/backend-ca.pem /tmp/ssh-public-key.pub /tmp/variables.json
