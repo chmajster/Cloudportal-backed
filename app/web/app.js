@@ -315,13 +315,16 @@ function table(columns, rows, actions) {
     renderedRows.push(tr);
     body.append(tr);
   });
+  const noResults = node('tr', { class: 'table-search-empty', hidden: true },
+    node('td', { colspan: columns.length + (actions ? 1 : 0), class: 'empty', text: 'Brak wyników wyszukiwania.' }));
+  body.append(noResults);
   const tableElement = node('table', {}, node('thead', {}, head), body);
   const scroll = node('div', { class: 'table-scroll' }, tableElement);
   const wrapper = node('div', { class: 'table-wrap' }, scroll);
   if (rows.length < 8) return wrapper;
 
   wrapper.classList.add('searchable-table');
-  const count = node('span', { class: 'table-count', text: `${rows.length} pozycji` });
+  const count = node('span', { class: 'table-count', text: `${rows.length} pozycji`, 'aria-live': 'polite' });
   const search = node('input', {
     class: 'table-search',
     type: 'search',
@@ -337,6 +340,7 @@ function table(columns, rows, actions) {
       if (matches) visible += 1;
     });
     count.textContent = phrase ? `${visible} z ${rows.length} pozycji` : `${rows.length} pozycji`;
+    noResults.hidden = !phrase || visible > 0;
   });
   wrapper.prepend(node('div', { class: 'table-toolbar' }, search, count));
   return wrapper;
