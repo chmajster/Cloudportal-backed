@@ -20,6 +20,14 @@ check_supported debian 13 debian redis-server python3
 check_supported rhel 9.6 rhel redis python3.12
 check_supported rhel 10.1 rhel valkey python3
 
+help_long=$("$repo_root/install.sh" --gui --help)
+help_short=$("$repo_root/install.sh" -gui --help)
+grep -Fq -- '--gui|-gui' <<< "$help_long"
+grep -Fq -- '--gui|-gui' <<< "$help_short"
+grep -Fq 'GUI mode requires an interactive TTY.' "$repo_root/install.sh"
+grep -Fq 'dialog --stdout' "$repo_root/install.sh"
+grep -Fq '</dev/tty' "$repo_root/install.sh"
+
 # GitHub installation tokens may contain dots and hyphens. Keep quotes and
 # control characters forbidden because the value is written to curl config.
 grep -Fq '^[A-Za-z0-9._-]{20,512}$' "$repo_root/install.sh"

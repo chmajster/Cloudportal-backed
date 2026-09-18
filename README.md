@@ -24,6 +24,19 @@ Instalacja unattended / własny host i port:
 curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --non-interactive --host backend.example.com --port 8443 --workers 3
 ```
 
+Instalacja z interfejsem terminalowym `dialog` jest uruchamiana jawnie przez `--gui` lub alias `-gui`. Działa również przy `curl | sudo bash`, ponieważ formularze czytają wejście bezpośrednio z `/dev/tty`. GUI pozwala ustawić host, port HTTPS, liczbę workerów, backup i retencję, a przed zmianami pokazuje podsumowanie:
+
+```bash
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --gui
+```
+
+Równoważny alias:
+
+```bash
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- -gui
+```
+
+
 Opcjonalny automatyczny backup PostgreSQL można włączyć podczas instalacji. Timer systemd uruchamia backup codziennie, a retencja usuwa wyłącznie katalogi backupów starsze niż wskazany limit:
 
 ```bash
