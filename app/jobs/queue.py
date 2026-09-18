@@ -11,7 +11,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import session
 from app.models import Deployment, Job, JobLog, now
-from app.operations.service import deliver_webhooks_once, materialize_scheduled_jobs
+from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs
 from app.security.core import redis_client
 
 
@@ -55,6 +55,7 @@ def dispatch_once():
             db.add(JobLog(job_id=job.id, message=job.error))
         db.commit()
     deliver_webhooks_once()
+    cleanup_retention_once()
     redis_client().set('cp:dispatcher:heartbeat', 'alive', ex=30)
 
 
