@@ -110,6 +110,8 @@ def resolve_template_source(template_id):
 def _playbook_catalog(source_dir):
     root = Path(source_dir) / 'ansible' / 'playbooks'
     document = _read_json(root / 'catalog.json')
+    if not isinstance(document.get('version'), int) or document['version'] < 1:
+        raise RuntimeError('Ansible catalog version is invalid')
     items = document.get('playbooks')
     if not isinstance(items, list):
         raise RuntimeError('Ansible catalog must contain a playbooks list')
@@ -118,6 +120,9 @@ def _playbook_catalog(source_dir):
         identifier = str(item.get('id', ''))
         filename = str(item.get('file', ''))
         transport = item.get('transport')
+        version = item.get('version')
+        if not isinstance(version, int) or version < 1:
+            raise RuntimeError('Invalid Ansible playbook version')
         if not SLUG.fullmatch(identifier) or not PLAYBOOK_FILE.fullmatch(filename):
             raise RuntimeError('Invalid Ansible catalog identifier or filename')
         if transport not in {'ssh', 'winrm'} or identifier in result:
@@ -152,6 +157,7 @@ def playbook_public(playbook_id):
     return {
         'id': item['id'],
         'name': item['name'],
+        'version': item['version'],
         'variables': list(item.get('variables', {}).keys()),
         'transport': item['transport'],
     }
