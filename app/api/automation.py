@@ -1,3 +1,4 @@
+import re
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
@@ -29,6 +30,11 @@ def portal_source(value):
 @router.get('/hostname-schemes', response_model=Items[HostnameSchemeOutput])
 def hostname_schemes(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('hostnames.read')), db=Depends(get_db, scope='function')):
     return {'items': [scheme_public(row) for row in paginate(db, HostnameScheme, offset, limit)]}
+
+
+@router.get('/hostname-schemes/{id}', response_model=HostnameSchemeOutput)
+def hostname_scheme(id: int, actor=Depends(require('hostnames.read')), db=Depends(get_db, scope='function')):
+    return scheme_public(find(db, HostnameScheme, id))
 
 
 @router.post('/hostname-schemes', status_code=201, response_model=HostnameSchemeOutput)
@@ -107,7 +113,17 @@ def validate_blueprint_references(db, data):
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
     if data.deployment.hostname_scheme_id:
-        find(db, HostnameScheme, data.deployment.hostname_scheme_id)
+        scheme = find(db, HostnameScheme, data.deployment.hostname_scheme_id)
+        if not scheme.is_active:
+            raise HTTPException(422, 'Blueprint hostname scheme must be active')
+        pattern_tokens = set(re.findall(r'{([a-z]+)}', scheme.pattern))
+        unknown_defaults = set(data.deployment.hostname_values) - pattern_tokens
+        if unknown_defaults:
+            raise HTTPException(
+                422,
+                'Blueprint hostname defaults contain tokens not used by the selected pattern: '
+                + ', '.join(sorted(unknown_defaults)),
+            )
     if data.deployment.ipam_pool_id:
         pool = find(db, IPPool, data.deployment.ipam_pool_id)
         if not pool.is_active:
