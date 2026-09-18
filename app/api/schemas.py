@@ -174,7 +174,101 @@ class VMVariables(Input):
 
 class AWSVariables(Input):
     name: Slug
-    region: Annotated[str, Field(pattern=r'^[a-z]{2}(?:-gov)?-[a-z]+-\d
+    region: Annotated[str, Field(min_length=9, max_length=32)]
+    ami: Annotated[str, Field(min_length=12, max_length=40)]
+    instance_type: Slug = 't3.micro'
+    subnet_id: Annotated[str, Field(min_length=15, max_length=48)]
+    security_group_ids: Annotated[list[str], Field(min_length=1, max_length=20)]
+    key_name: Name | None = None
+    root_volume_size: int = Field(default=20, ge=8, le=16384)
+    associate_public_ip: bool = False
+
+    @field_validator('region')
+    @classmethod
+    def aws_region(cls, value):
+        import re
+        if not re.fullmatch(r'[a-z]{2}(?:-gov)?-[a-z]+-[0-9]', value):
+            raise ValueError('Invalid AWS region')
+        return value
+
+    @field_validator('ami')
+    @classmethod
+    def aws_ami(cls, value):
+        import re
+        if not re.fullmatch(r'ami-[0-9a-fA-F]{8,32}', value):
+            raise ValueError('Invalid AWS AMI ID')
+        return value
+
+    @field_validator('subnet_id')
+    @classmethod
+    def aws_subnet(cls, value):
+        import re
+        if not re.fullmatch(r'subnet-[0-9a-fA-F]{8,32}', value):
+            raise ValueError('Invalid AWS subnet ID')
+        return value
+
+    @field_validator('security_group_ids')
+    @classmethod
+    def security_groups(cls, values):
+        import re
+        if any(not re.fullmatch(r'sg-[0-9a-fA-F]{8,32}', value) for value in values):
+            raise ValueError('Invalid AWS security group ID')
+        return values
+
+
+class AzureVariables(Input):
+    name: Slug
+    location: Name
+    resource_group: Name
+    subnet_id: Annotated[str, Field(min_length=10, max_length=2048)]
+    vm_size: Slug = 'Standard_B2s'
+    admin_username: Slug = 'clouduser'
+    ssh_public_key: Annotated[str, Field(min_length=32, max_length=8192)]
+    image_publisher: Slug = 'Canonical'
+    image_offer: Slug = 'ubuntu-24_04-lts'
+    image_sku: Slug = 'server'
+    image_version: Slug = 'latest'
+    os_disk_size_gb: int = Field(default=30, ge=30, le=32768)
+
+    @field_validator('subnet_id')
+    @classmethod
+    def azure_subnet(cls, value):
+        if not value.startswith('/subscriptions/') or '/subnets/' not in value or any(ch.isspace() for ch in value):
+            raise ValueError('Invalid Azure subnet resource ID')
+        return value
+
+    @field_validator('ssh_public_key')
+    @classmethod
+    def azure_ssh_key(cls, value):
+        if not value.startswith(('ssh-ed25519 ', 'ssh-rsa ', 'ecdsa-sha2-')) or '\n' in value:
+            raise ValueError('Expected a single SSH public key')
+        return value
+
+
+class OpenStackVariables(Input):
+    name: Slug
+    region: Annotated[str, Field(min_length=1, max_length=100)] = 'RegionOne'
+    image_name: Name
+    flavor_name: Name
+    network_name: Name
+    key_pair: Name | None = None
+    security_groups: Annotated[list[Name], Field(max_length=20)] = Field(default_factory=list)
+
+
+class VMwareVariables(Input):
+    name: Slug
+    datacenter: Name
+    datastore: Name
+    cluster: Name
+    network: Name
+    template: Name
+    folder: Annotated[str | None, Field(max_length=255)] = None
+    cpu: int = Field(default=2, ge=1, le=128)
+    memory: int = Field(default=4096, ge=512, le=1048576)
+    disk: int = Field(default=40, ge=1, le=65536)
+
+
+class Inventory(Input):
     hosts: Annotated[list[str], Field(min_length=1, max_length=100)]
 
     @field_validator('hosts')
