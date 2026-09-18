@@ -33,14 +33,14 @@ const routes = [
   { id: 'users', label: 'Użytkownicy', icon: 'U', permission: 'users.read' },
   { id: 'roles', label: 'Role i RBAC', icon: 'R', permission: 'roles.read' },
   { id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read' },
-  { id: 'credentials', label: 'Credentiale', icon: 'K', permission: 'credentials.read' },
-  { id: 'providers', label: 'Providery', icon: 'P', permission: 'providers.read' },
+  { id: 'credentials', label: 'Dane dostępowe', icon: 'K', permission: 'credentials.read' },
+  { id: 'providers', label: 'Platformy', icon: 'P', permission: 'providers.read' },
   { id: 'catalog', label: 'Katalog IaC', icon: 'C', permission: 'terraform.read' },
   { id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read' },
-  { id: 'hostnames', label: 'Hostname Manager', icon: 'H', permission: 'hostnames.read' },
+  { id: 'hostnames', label: 'Nazwy hostów', icon: 'H', permission: 'hostnames.read' },
   { id: 'ipam', label: 'IPAM', icon: 'I', permission: 'ipam.read' },
-  { id: 'inventory', label: 'Inventory', icon: 'V', permission: 'inventory.read' },
-  { id: 'deployments', label: 'Deploymenty', icon: 'D', permission: 'deployments.read' },
+  { id: 'inventory', label: 'Zasoby', icon: 'V', permission: 'inventory.read' },
+  { id: 'deployments', label: 'Wdrożenia', icon: 'D', permission: 'deployments.read' },
   { id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read' },
   { id: 'schedules', label: 'Harmonogramy', icon: 'S', permission: 'schedules.read' },
   { id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhooks.read' },
@@ -1034,7 +1034,7 @@ const CREDENTIAL_TYPE_CONFIG = {
   },
   ssh: {
     label: 'SSH / Linux',
-    description: 'Credential do Ansible i SSH. Weryfikacja known_hosts jest obowiązkowa.',
+    description: 'Dane dostępowe do Ansible i SSH. Weryfikacja known_hosts jest obowiązkowa.',
     endpoint: { label: 'Endpoint SSH (opcjonalnie)', placeholder: 'ssh://server.example.com:22', required: false, help: 'Używany przez Testuj; workflow Ansible korzysta z inventory.' },
     username: { label: 'Użytkownik SSH', placeholder: 'clouduser', required: true },
     tls: false, defaultAuth: 'private_key',
@@ -1051,7 +1051,7 @@ const CREDENTIAL_TYPE_CONFIG = {
   },
   winrm: {
     label: 'WinRM / Windows',
-    description: 'Credential do Windows przez WinRM/NTLM.',
+    description: 'Dane dostępowe do Windows przez WinRM/NTLM.',
     endpoint: { label: 'Endpoint WinRM HTTPS', placeholder: 'https://server.example.com:5986/wsman', required: true },
     username: { label: 'Użytkownik', placeholder: 'DOMAIN\\svc-cloudportal', required: true },
     tls: true, defaultAuth: 'password',
@@ -1182,7 +1182,7 @@ function renderCredentialDynamic(container, type, item) {
 
 async function credentialsView() {
   const credentials = (await api('/credentials?limit=200')).items;
-  const actions = allowed('credentials.create') ? [button('Dodaj credential', () => credentialForm(), 'primary')] : [];
+  const actions = allowed('credentials.create') ? [button('Dodaj dane dostępowe', () => credentialForm(), 'primary')] : [];
   dom.content.replaceChildren(heading('Sekrety są szyfrowane i nigdy nie wracają do przeglądarki.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -1205,8 +1205,8 @@ function credentialActions(item) {
     } catch (error) { toast(error.message, 'error'); }
   }));
   if (allowed('credentials.update')) actions.push(button('Edytuj', () => credentialForm(item)));
-  if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń credential', 'Credential ' + item.name + ' zostanie trwale usunięty.', async () => {
-    await api('/credentials/' + item.id, { method: 'DELETE' }); toast('Credential usunięty.'); navigate('credentials');
+  if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń dane dostępowe', 'Dane dostępowe ' + item.name + ' zostanie trwale usunięty.', async () => {
+    await api('/credentials/' + item.id, { method: 'DELETE' }); toast('Dane dostępowe usunięte.'); navigate('credentials');
   }), 'danger'));
   return actions;
 }
@@ -1216,7 +1216,7 @@ function credentialForm(item = null) {
   const typeField = selectField('Typ', 'type', credentialTypeChoices(), item?.type || 'proxmox', { required: true });
   const fields = node('div', { class: 'form-grid' },
     field('Nazwa', 'name', { required: true, value: item?.name || '' }), typeField,
-    field('Credential wygasa (opcjonalnie)', 'expires_at', { type: 'datetime-local', value: item?.expires_at ? new Date(item.expires_at).toISOString().slice(0, 16) : '' }),
+    field('Dane dostępowe wygasają (opcjonalnie)', 'expires_at', { type: 'datetime-local', value: item?.expires_at ? new Date(item.expires_at).toISOString().slice(0, 16) : '' }),
     field('Rotacja wymagana do (opcjonalnie)', 'rotation_due_at', { type: 'datetime-local', value: item?.rotation_due_at ? new Date(item.rotation_due_at).toISOString().slice(0, 16) : '' }),
     dynamic);
   if (allowed('credentials.test')) fields.append(checkboxField('Po zapisaniu przetestuj połączenie', 'test_after_save', false));
@@ -1227,9 +1227,9 @@ function credentialForm(item = null) {
   render();
 
   openModal({
-    title: item ? 'Edytuj credential: ' + item.name : 'Nowy credential',
+    title: item ? 'Edytuj dane dostępowe: ' + item.name : 'Nowe dane dostępowe',
     eyebrow: 'Sekrety infrastruktury', body: fields,
-    submitLabel: item ? 'Zapisz zmiany' : 'Dodaj credential', wide: true,
+    submitLabel: item ? 'Zapisz zmiany' : 'Dodaj dane dostępowe', wide: true,
     onSubmit: async (data, form) => {
       const type = data.get('type');
       const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
@@ -1277,9 +1277,9 @@ function credentialForm(item = null) {
       if (data.has('test_after_save') && type !== 'other' && (type !== 'ssh' || endpoint)) {
         try {
           const result = await api('/credentials/' + saved.id + '/test', { method: 'POST' });
-          toast('Credential zapisany. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
-        } catch (error) { toast('Credential zapisany, ale test nie powiódł się: ' + error.message, 'error'); }
-      } else toast('Credential zapisany.');
+          toast('Dane dostępowe zapisane. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
+        } catch (error) { toast('Dane dostępowe zapisane, ale test nie powiódł się: ' + error.message, 'error'); }
+      } else toast('Dane dostępowe zapisane.');
       navigate('credentials');
     },
   });
@@ -1292,8 +1292,8 @@ async function providersView() {
   ]);
   const providers = providerResult.items;
   const credentialNames = new Map(credentialResult.items.map(item => [Number(item.id), item.name]));
-  const actions = allowed('providers.create') ? [button('Dodaj provider', () => providerForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Połączenia z platformami infrastruktury. Każdy provider korzysta z przypisanego, zaszyfrowanego credentiala.', actions),
+  const actions = allowed('providers.create') ? [button('Dodaj platformę', () => providerForm(), 'primary')] : [];
+  dom.content.replaceChildren(heading('Połączenia z platformami infrastruktury. Każda platforma korzysta z przypisanych, zaszyfrowanych danych dostępowych.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
       { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type, 'info') },
@@ -1303,9 +1303,9 @@ async function providersView() {
       const actions = [];
       actions.push(button('Przeglądaj zasoby', () => discoverProvider(item)));
       if (allowed('providers.update')) actions.push(button('Edytuj', () => providerForm(item)));
-      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń provider', `Provider „${item.name}” zostanie usunięty. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
+      if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Provider „${item.name}” zostanie usunięty. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
-        toast('Provider usunięty.');
+        toast('Platforma usunięta.');
         navigate('providers');
       }), 'danger'));
       return actions;
@@ -1316,7 +1316,7 @@ async function providerForm(item = null) {
   try {
     const credentials = (await api('/credentials?limit=200')).items;
     const providerTypes = ['proxmox', 'vmware', 'aws', 'azure', 'openstack'];
-    const typeField = selectField('Typ providera', 'type', providerTypes.map(value => ({
+    const typeField = selectField('Typ platformy', 'type', providerTypes.map(value => ({
       value, label: CREDENTIAL_TYPE_CONFIG[value]?.label || value,
     })), item?.type || 'proxmox', { required: true });
     const credentialField = selectField('Credential', 'credentials_id', [], item?.credentials_id || '', {
@@ -1344,11 +1344,11 @@ async function providerForm(item = null) {
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
       typeField,
       credentialField,
-      node('div', { class: 'wide field-help', text: 'Provider i credential muszą mieć ten sam typ. Providery mają read-only discovery; provisioning wielochmurowy jest wykonywany przez zatwierdzony katalog Terraform.' })
+      node('div', { class: 'wide field-help', text: 'Platforma i dane dostępowe muszą mieć ten sam typ. Przegląd zasobów jest tylko do odczytu, a provisioning wykonuje zatwierdzony katalog Terraform.' })
     );
 
     openModal({
-      title: item ? 'Edytuj provider' : 'Nowy provider',
+      title: item ? 'Edytuj platformę' : 'Nowa platforma',
       eyebrow: 'Infrastruktura',
       body: fields,
       onSubmit: async data => {
@@ -1361,7 +1361,7 @@ async function providerForm(item = null) {
             credentials_id: Number(data.get('credentials_id')),
           },
         });
-        toast('Provider zapisany.');
+        toast('Platforma zapisana.');
         navigate('providers');
       },
     });
@@ -1436,7 +1436,7 @@ function deploymentActions(item) {
     actions.push(button('Plan', () => createTerraformJob(item, 'terraform.plan')));
     actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
   }
-  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform zniszczy zasoby deploymentu ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate('deployments'); }), 'danger'));
+  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate('deployments'); }), 'danger'));
   return actions;
 }
 
@@ -1499,7 +1499,7 @@ async function createDeployment() {
       const matching = provider
         ? credentials.filter(item => Number(item.id) === Number(provider.credentials_id)).map(item => ({ id: item.id, label: item.name }))
         : [];
-      refill(credentialSelect, matching, matching.length ? 'Credential providera' : 'Wybierz provider');
+      refill(credentialSelect, matching, matching.length ? 'Dane dostępowe providera' : 'Wybierz provider');
     };
 
     const renderAnsible = () => {
@@ -1516,7 +1516,7 @@ async function createDeployment() {
         value: playbook.id,
         label: `${playbook.name} · v${playbook.version}`,
       })), playbooks[0]?.id || '', { required: enabled });
-      const credentialField = selectField('Credential systemowy', 'ansible_credentials_id', [], '', { required: enabled });
+      const credentialField = selectField('Dane dostępowe systemowy', 'ansible_credentials_id', [], '', { required: enabled });
       const variablesContainer = node('div', { class: 'form-grid wide' });
       ansibleFields.replaceChildren(playbookField, credentialField, variablesContainer);
       ansibleFields.querySelectorAll('input,select,textarea').forEach(control => { control.disabled = !enabled; });
@@ -1586,7 +1586,7 @@ async function createDeployment() {
           };
         }
         await api('/deployments', { method: 'POST', idempotent: true, body });
-        toast('Wdrożenie zostało utworzone i uruchomiono zadanie apply.');
+        toast('Wdrożenie zostało utworzone i uruchomiono zastosowanie konfiguracji.');
         navigate('deployments');
       },
     });
@@ -1598,7 +1598,7 @@ async function jobsView() {
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.'),
     table([
       { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => operationLabel(item.operation) },
-      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 14) },
+      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 14) },
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
       const actions = [button('Logi', () => showJobLogs(item))];
@@ -1651,7 +1651,7 @@ async function blueprintsView() {
       const result = [];
       if (allowed('blueprints.execute') && (!item.requires_approval || allowed('blueprints.approve')) && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
       if (allowed('blueprints.update')) result.push(button('Edytuj', () => blueprintForm(item)));
-      if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące deploymenty zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
+      if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
 }
@@ -1751,10 +1751,10 @@ async function blueprintForm(item = null) {
           field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
           selectField('Akcja', 'workflow_type', workflowTypes.map(([value, label]) => ({ value, label })), step.type || 'terraform_apply', { required: true }),
           field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), help: 'Kilka ID oddziel przecinkami.' }),
-          field('Retry', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
-          field('Timeout (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
-          field('Rollback step ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
-          field('Warunki JSON (opcjonalnie)', 'workflow_conditions', {
+          field('Liczba ponowień', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
+          field('Limit czasu (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
+          field('Krok cofania — ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
+          field('Warunki — zaawansowane JSON (opcjonalnie)', 'workflow_conditions', {
             tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? jsonValue(step.conditions) : '',
             help: 'Pozostaw puste, jeśli krok nie ma dodatkowych warunków.',
           })));
@@ -1810,7 +1810,7 @@ async function blueprintForm(item = null) {
         ? credentials.filter(value => Number(value.id) === Number(provider.credentials_id)).map(value => ({ id: value.id, label: value.name }))
         : [];
       refill(credentialField.querySelector('select'), matches,
-        matches.length ? 'Credential providera' : 'Wybierz provider',
+        matches.length ? 'Dane dostępowe providera' : 'Wybierz provider',
         deployment.credentials_id);
     };
 
@@ -1865,7 +1865,7 @@ async function blueprintForm(item = null) {
       const playbookField = selectField('Playbook', 'deployment_ansible_playbook', choices.map(value => ({
         value: value.id, label: `${value.name} · v${value.version}`,
       })), existingAnsible?.playbook || choices[0].id, { required: true });
-      const systemCredentialField = selectField('Credential systemowy', 'deployment_ansible_credentials_id', [], existingAnsible?.credentials_id || '', { required: true });
+      const systemCredentialField = selectField('Dane dostępowe systemowy', 'deployment_ansible_credentials_id', [], existingAnsible?.credentials_id || '', { required: true });
       const variableFields = node('div', { class: 'form-grid wide' });
       ansibleFields.replaceChildren(playbookField, systemCredentialField, variableFields);
 
@@ -1956,7 +1956,7 @@ async function blueprintForm(item = null) {
         node('div', { class: 'editor-add-row' }, button('Dodaj pole', () => addVariable('', { type: 'string' }), 'primary'))),
       formSection('Wdrożenie', 'Wybierz platformę i wartości przekazywane do zatwierdzonego szablonu IaC.',
         node('div', { class: 'form-grid' },
-          field('Nazwa deploymentu', 'deployment_name', { required: true, value: deployment.name || '{{ hostname }}', wide: true, help: 'Możesz użyć {{ hostname }}.' }),
+          field('Nazwa wdrożenia', 'deployment_name', { required: true, value: deployment.name || '{{ hostname }}', wide: true, help: 'Możesz użyć {{ hostname }}.' }),
           templateField,
           providerField,
           credentialField,
@@ -2262,7 +2262,7 @@ async function ipamView() {
   ]);
   const actions = allowed('ipam.create') ? [button('Nowa pula', () => ipamPoolForm(), 'primary')] : [];
   dom.content.replaceChildren(
-    heading('Centralne pule IPv4, rezerwacje i przypisania do deploymentów.', actions),
+    heading('Centralne pule IPv4, rezerwacje i przypisania do wdrożeń.', actions),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Pule adresowe' })),
       table([
@@ -2342,7 +2342,7 @@ async function inventoryView() {
   ]);
   const actions = allowed('inventory.import') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
   dom.content.replaceChildren(
-    heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Adoption jest zawsze import + plan-only.', actions),
+    heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego apply.', actions),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Maszyny Proxmox' })),
       table([
@@ -2361,7 +2361,7 @@ async function inventoryView() {
         { label: 'External ID', class: 'mono', value: item => short(item.external_id, 26) },
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
         { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
-        { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
+        { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
       ], resources.items, item => [button('Szczegóły', () => showJson(item.name, item.metadata_json || {}, 'Zasób zarządzany'))])
     )
   );
@@ -2376,7 +2376,7 @@ function inventoryVmActions(item) {
     navigate('inventory');
   }));
   if (allowed('deployments.adopt') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => adoptInventoryVm(item)));
-  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z providera.', async () => {
+  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z platformy źródłowej.', async () => {
     await api(`/inventory/vms/${item.id}`, { method: 'DELETE' });
     navigate('inventory');
   }), 'danger'));
@@ -2388,7 +2388,7 @@ async function importInventoryVm() {
   const fields = node('div', { class: 'form-grid' },
     selectField('Provider Proxmox', 'provider_id', providers.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz provider' }),
     field('VMID', 'vm_id', { type: 'number', min: 100, required: true }));
-  openModal({ title: 'Importuj istniejącą VM', eyebrow: 'Inventory', body: fields, submitLabel: 'Dodaj do katalogu', onSubmit: async data => {
+  openModal({ title: 'Importuj istniejącą VM', eyebrow: 'Zasoby', body: fields, submitLabel: 'Dodaj do katalogu', onSubmit: async data => {
     await api('/inventory/vms/import', { method: 'POST', idempotent: true, body: {
       provider_id: Number(data.get('provider_id')), vm_id: Number(data.get('vm_id')),
     } });
@@ -2510,7 +2510,7 @@ async function vmPower(item, action) {
 
 function deleteVm(item) {
   const fields = node('div', { class: 'form-grid' },
-    node('p', { class: 'wide field-help', text: 'Operacja usuwa VM bezpośrednio w Proxmox. Dla zasobów zarządzanych przez Terraform używaj Destroy deploymentu.' }),
+    node('p', { class: 'wide field-help', text: 'Operacja usuwa VM bezpośrednio w Proxmox. Dla zasobów zarządzanych przez Terraform używaj akcji „Usuń zasoby” na wdrożeniu.' }),
     checkboxField('Purge z konfiguracji HA/backup/replication', 'purge'),
     checkboxField('Usuń niepodpięte dyski', 'destroy_unreferenced_disks'));
   openModal({
@@ -2709,11 +2709,11 @@ function cloneVm(item) {
 async function schedulesView() {
   const schedules = (await api('/schedules?limit=200')).items;
   const actions = allowed('schedules.create') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
-  dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą permissions.', actions),
+  dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą uprawnień.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
       { label: 'Operacja', value: item => operationLabel(item.operation) },
-      { label: 'Deployment', class: 'mono', value: item => short(item.deployment_id, 18) },
+      { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
       { label: 'Następne', value: item => formatDate(item.next_run_at) },
       { label: 'Interwał', value: item => item.interval_seconds ? `${item.interval_seconds}s` : 'jednorazowo' },
       { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'disabled'), item.is_active ? 'ok' : 'info') },
@@ -2737,7 +2737,7 @@ async function scheduleForm(item = null) {
     const dateValue = item?.next_run_at ? new Date(item.next_run_at).toISOString().slice(0, 16) : new Date(Date.now() + 3600000).toISOString().slice(0, 16);
     const fields = node('div', { class: 'form-grid' },
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
-      selectField('Deployment', 'deployment_id', deployments.map(row => ({ value: row.id, label: `${row.name} · ${short(row.id, 10)}` })), item?.deployment_id || '', { required: true, placeholder: 'Wybierz deployment' }),
+      selectField('Wdrożenie', 'deployment_id', deployments.map(row => ({ value: row.id, label: `${row.name} · ${short(row.id, 10)}` })), item?.deployment_id || '', { required: true, placeholder: 'Wybierz wdrożenie' }),
       selectField('Operacja', 'operation', [{ value: 'terraform.plan', label: 'Plan' }, { value: 'terraform.apply', label: 'Zastosuj' }, { value: 'terraform.destroy', label: 'Usuń zasoby' }], item?.operation || 'terraform.plan'),
       field('Następne uruchomienie', 'next_run_at', { type: 'datetime-local', required: true, value: dateValue }),
       field('Interwał sekund (puste = raz)', 'interval_seconds', { type: 'number', min: 60, value: item?.interval_seconds || '' }));
@@ -2836,7 +2836,7 @@ async function observabilityView() {
   ]);
   const items = alerts.items || [];
   dom.content.replaceChildren(
-    heading('Stan control plane, alerty oraz surowe metryki w formacie Prometheus.'),
+    heading('Stan platformy, alerty oraz surowe metryki w formacie Prometheus.'),
     node('div', { class: 'metrics' },
       metric('Backend', statusLabel(health.status), 'health'),
       metric('Workery', `${health.checks.workers.online}/${health.checks.workers.expected}`, 'online/expected'),
