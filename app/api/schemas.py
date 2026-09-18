@@ -185,33 +185,29 @@ class Inventory(Input):
 
 
 class AnsibleInput(Input):
-    playbook: Literal['bootstrap-linux', 'validate-linux', 'validate-windows']
+    playbook: Slug
     credentials_id: int = Field(gt=0)
     inventory: Inventory | None = None
     variables: dict = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def safe_variables(self):
-        # No arbitrary Ansible variables (connection plugins/ansible_* allow code execution).
-        if self.playbook == 'bootstrap-linux':
-            if not set(self.variables) <= {'hostname', 'timezone'}:
-                raise ValueError('Only hostname and timezone are permitted')
-            import re
-            for key, value in self.variables.items():
-                pattern = r'[A-Za-z0-9][A-Za-z0-9.-]{0,62}' if key == 'hostname' else r'[A-Za-z_]+(?:/[A-Za-z_+-]+){0,2}'
-                if not isinstance(value, str) or not re.fullmatch(pattern, value):
-                    raise ValueError('Invalid playbook variable')
-        elif self.variables:
-            raise ValueError('This playbook does not accept variables')
+        # Catalog manifests are shipped with the root-owned release; API callers cannot add paths/code.
+        from app.catalog import validate_playbook_variables
+        from fastapi import HTTPException
+        try:
+            self.variables = validate_playbook_variables(self.playbook, self.variables)
+        except HTTPException as error:
+            raise ValueError(str(error.detail)) from None
         return self
 
 
 class DeploymentInput(Input):
     name: Name
     provider_id: int = Field(gt=0)
-    template: Literal['proxmox-vm'] = 'proxmox-vm'
+    template: Slug = 'proxmox-vm'
     credentials_id: int = Field(gt=0)
-    variables: VMVariables
+    variables: dict[str, Any]
     executor: Literal['terraform', 'opentofu'] = 'terraform'
     ansible: AnsibleInput | None = None
 
@@ -319,7 +315,7 @@ class BlueprintDeployment(Input):
     name: Annotated[str, Field(min_length=1, max_length=100)]
     provider_id: int = Field(gt=0)
     credentials_id: int = Field(gt=0)
-    template: Literal['proxmox-vm'] = 'proxmox-vm'
+    template: Slug = 'proxmox-vm'
     variables: dict[str, Any]
     executor: Literal['terraform', 'opentofu'] = 'terraform'
     ansible: dict[str, Any] | None = None
