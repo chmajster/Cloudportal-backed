@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 async function usersView() {
   const users = (await api('/users?limit=200')).items;
   const actions = [];
@@ -194,3 +195,4 @@ registerView({ id: 'users', label: 'Użytkownicy', icon: 'U', permission: 'users
 registerView({ id: 'roles', label: 'Role i RBAC', icon: 'R', permission: 'roles.read', order: 20 }, rolesView);
 registerView({ id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read', order: 30 }, tokensView);
 registerView({ id: 'account', label: 'Moje konto', icon: 'M', order: 170 }, accountView);
+})();
