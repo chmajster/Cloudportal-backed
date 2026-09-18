@@ -430,6 +430,8 @@ class BlueprintInput(Input):
     variables_schema: Annotated[dict[Slug, BlueprintVariable], Field(max_length=100)] = Field(default_factory=dict)
     deployment: BlueprintDeployment
     workflow: Annotated[list[BlueprintStep], Field(min_length=1, max_length=100)]
+    requires_approval: bool = False
+    recovery_policy: Literal['preserve', 'destroy_on_failure'] = 'preserve'
 
     @model_validator(mode='after')
     def dag(self):
