@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
 from app.api.schemas import AnsibleInput, VMVariables
+from app.ipam.service import allocate_address
 from app.models import Blueprint, HostnameReservation, HostnameScheme, now
 
 
@@ -133,14 +134,27 @@ def render_template(value: Any, variables: dict[str, Any]):
 def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
+    ip_allocation = None
     deployment = deepcopy(blueprint.deployment)
     scheme_id = deployment.pop('hostname_scheme_id', None)
+    ipam_pool_id = deployment.pop('ipam_pool_id', None)
     if scheme_id:
         hostname, reservation = generate_hostname(db, scheme_id, hostname_values, actor_id, reserve=True)
         variables['hostname'] = hostname
+    if ipam_pool_id:
+        ip_allocation = allocate_address(
+            db, ipam_pool_id, actor_id, hostname=variables.get('hostname')
+        )
+        variables['ip_address'] = ip_allocation.address
+        variables['ip_prefix_length'] = ip_allocation.prefix_length
+        variables['ip_address_cidr'] = f'{ip_allocation.address}/{ip_allocation.prefix_length}'
+        variables['ip_gateway'] = ip_allocation.gateway
+        deployment.setdefault('variables', {})
+        deployment['variables'].setdefault('ipv4_address', '{{ ip_address_cidr }}')
+        deployment['variables'].setdefault('ipv4_gateway', '{{ ip_gateway }}')
     rendered = render_template(deployment, variables)
     rendered['variables'] = VMVariables.model_validate(rendered['variables'])
     if rendered.get('ansible'):
         rendered['ansible'] = AnsibleInput.model_validate(rendered['ansible'])
     rendered['blueprint_variables'] = variables
-    return rendered, reservation
+    return rendered, reservation, ip_allocation
