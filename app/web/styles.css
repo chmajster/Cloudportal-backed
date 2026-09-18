@@ -143,6 +143,25 @@ tbody tr:hover { background: #ffffff05; }
 .toast { max-width: 380px; padding: 13px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--surface-2); box-shadow: var(--shadow); font-size: .82rem; }
 .toast.error { border-left-color: var(--danger); }
 
+.modal.modal-wide { width: min(900px, calc(100vw - 28px)); }
+.credential-dynamic { display: grid; gap: 16px; }
+.credential-type-card { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid #72b7ff2f; border-radius: 12px; background: #72b7ff0a; }
+.credential-type-card > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.credential-type-card strong { font-size: .9rem; }
+.credential-type-card p { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.55; }
+.credential-identity { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #0b1418aa; }
+.credential-tls { align-self: end; min-height: 44px; padding: 0 4px 4px; }
+.credential-secret-panel { display: grid; gap: 14px; padding: 16px; border: 1px solid #5ee6ae38; border-radius: 12px; background: #5ee6ae08; }
+.credential-secret-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.credential-secret-header strong { font-size: .9rem; }
+.credential-secret-header p { margin: 5px 0 0; max-width: 650px; color: var(--muted); font-size: .74rem; line-height: 1.5; font-weight: 400; }
+.credential-replace, .credential-test-after { padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: #0b1418; }
+.credential-secret-grid { margin-top: 2px; }
+.credential-secret-field textarea { min-height: 132px; }
+.credential-secret-field input:disabled,
+.credential-secret-field textarea:disabled,
+.credential-secret-panel select:disabled { opacity: .52; cursor: not-allowed; }
+
 @media (max-width: 1050px) {
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .panels { grid-template-columns: 1fr; }
