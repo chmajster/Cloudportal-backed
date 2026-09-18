@@ -154,7 +154,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
         deployment['variables'].setdefault('ipv4_address', '{{ ip_address_cidr }}')
         deployment['variables'].setdefault('ipv4_gateway', '{{ ip_gateway }}')
     rendered = render_template(deployment, variables)
-    rendered['variables'] = VMVariables.model_validate(rendered['variables'])
+    rendered['variables'] = validate_template_variables(rendered.get('template', 'proxmox-vm'), rendered['variables']).model_dump(mode='json')
     if rendered.get('ansible'):
         rendered['ansible'] = AnsibleInput.model_validate(rendered['ansible'])
     rendered['blueprint_variables'] = variables
