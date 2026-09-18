@@ -10,7 +10,7 @@ from app.database import session
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
-from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Token, now
+from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedVM, Token, now
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
 
@@ -82,12 +82,53 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job permissions have been revoked')
 
 
-def wait_for_vm(context, workspace):
+def vm_id_from_state(workspace):
     # State is internal, never sent to PHP or returned by API.
-    state = json.loads((workspace / 'terraform.tfstate').read_text())
-    vm_id = state.get('outputs', {}).get('vm_id', {}).get('value')
+    try:
+        state = json.loads((workspace / 'terraform.tfstate').read_text())
+        vm_id = state.get('outputs', {}).get('vm_id', {}).get('value')
+    except (OSError, ValueError, TypeError):
+        raise ExecutionFailed('Terraform state could not be read') from None
     if not vm_id:
         raise ExecutionFailed('VM ID missing from Terraform state')
+    return int(vm_id)
+
+
+def register_managed_vm(context, workspace):
+    vm_id = vm_id_from_state(workspace)
+    with session() as db:
+        deployment = db.get(Deployment, context.deployment.id)
+        existing = db.scalar(select(ManagedVM).where(
+            ManagedVM.provider_id == deployment.provider_id,
+            ManagedVM.vm_id == vm_id,
+        ))
+        if existing and existing.deployment_id not in {None, deployment.id}:
+            raise ExecutionFailed('VM identity is already linked to another deployment')
+        if existing is None:
+            existing = ManagedVM(
+                provider_id=deployment.provider_id,
+                deployment_id=deployment.id,
+                node=deployment.variables['node'],
+                vm_id=vm_id,
+                name=deployment.name,
+                management_mode='terraform',
+                lifecycle_status='active',
+                created_by=deployment.created_by,
+            )
+            db.add(existing)
+        else:
+            existing.deployment_id = deployment.id
+            existing.node = deployment.variables['node']
+            existing.name = deployment.name
+            existing.management_mode = 'terraform'
+            existing.lifecycle_status = 'active'
+            existing.destroyed_at = None
+        db.commit()
+    return vm_id
+
+
+def wait_for_vm(context, workspace):
+    vm_id = vm_id_from_state(workspace)
     provider = provider_for(context.credential)
     context.stage('workflow.wait_for_vm')
     deadline = time.monotonic() + 600
@@ -128,9 +169,11 @@ def execute(job_id):
         if job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             workspace = executor.execute(job.operation, context)
-            if job.operation == 'terraform.apply' and context.ansible:
-                context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
-                AnsibleExecutor().execute('ansible.execute', context)
+            if job.operation == 'terraform.apply':
+                register_managed_vm(context, workspace)
+                if context.ansible:
+                    context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
+                    AnsibleExecutor().execute('ansible.execute', context)
         else:
             AnsibleExecutor().execute(job.operation, context)
         context.check()
@@ -163,6 +206,9 @@ def execute(job_id):
                     IPAllocation.resource_id == deployment.id,
                     IPAllocation.status != 'released',
                 ).values(status='released', released_at=released_at))
+                db.execute(update(ManagedVM).where(
+                    ManagedVM.deployment_id == deployment.id,
+                ).values(lifecycle_status='destroyed', destroyed_at=released_at))
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))
         db.add(Audit(user_id=job.created_by, token_id=job.token_id, ip=job.ip, action='job.' + status,
                      source=job.source,
