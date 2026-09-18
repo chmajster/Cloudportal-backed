@@ -1351,8 +1351,21 @@ function listVmBackups(item) {
 
 async function showVmConsole(item) {
   try {
+    const consoleWindow = window.open('about:blank', '_blank');
     const result = await api(`${vmBase(item)}/console`, { method: 'POST' });
-    showSecret('Ephemeral VNC console', JSON.stringify(result, null, 2), 'To jest krótkotrwały bilet konsoli Proxmox. Credential providera nie jest ujawniany ani zapisywany.');
+    if (!result.viewer_url || !result.viewer_url.startsWith('https://')) throw new Error('Backend nie zwrócił bezpiecznego adresu noVNC.');
+    if (consoleWindow) {
+      consoleWindow.opener = null;
+      consoleWindow.location.replace(result.viewer_url);
+      toast('Konsola noVNC została otwarta w nowej karcie.');
+    } else {
+      const link = node('a', { href: result.viewer_url, target: '_blank', rel: 'noopener noreferrer', text: 'Otwórz konsolę noVNC' });
+      dom.modalTitle.textContent = 'Konsola noVNC';
+      dom.modalEyebrow.textContent = item.name || String(item.vm_id);
+      dom.modalBody.replaceChildren(node('p', { text: 'Przeglądarka zablokowała nowe okno. Użyj poniższego jednorazowego linku.' }), link);
+      dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+      dom.modal.showModal();
+    }
   } catch (error) { toast(error.message, 'error'); }
 }
 
