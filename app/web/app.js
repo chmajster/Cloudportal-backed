@@ -533,11 +533,11 @@ function blueprintTemplateVariableField(name, spec, value) {
   return wrapper;
 }
 
-function readBlueprintTemplateVariables(form, template) {
+function readBlueprintTemplateVariables(root, template) {
   const result = {};
   const properties = template?.variables_schema?.properties || {};
   for (const [name, spec] of Object.entries(properties)) {
-    const control = form.elements[`deployment_var_${name}`];
+    const control = root.elements?.[`deployment_var_${name}`] || root.querySelector?.(`[name="deployment_var_${name}"]`);
     if (!control) continue;
     const raw = String(control.value ?? '').trim();
     if (!raw) continue;
@@ -572,13 +572,13 @@ function hostnameTokens(pattern = '') {
     .filter(token => !['number', 'random', 'year'].includes(token));
 }
 
-function hostnameValueFields(pattern, values = {}) {
+function hostnameValueFields(pattern, values = {}, required = true) {
   const wrapper = node('div', { class: 'form-grid hostname-values wide' });
   const tokens = hostnameTokens(pattern);
   tokens.forEach(token => {
     const item = field(HOSTNAME_TOKEN_LABELS[token] || token, `hostname_${token}`, {
       value: values[token] || '',
-      required: true,
+      required,
     });
     item.dataset.hostnameToken = token;
     wrapper.append(item);
@@ -1530,52 +1530,387 @@ function parseArray(value, label) {
   catch { throw new Error(`${label} musi zawierać poprawną tablicę JSON.`); }
 }
 
-function blueprintForm(item = null) {
-  const exampleVariables = { environment: { type: 'select', required: true, options: ['dev', 'test', 'prod'] }, cpu: { type: 'integer', default: 2, min: 1, max: 8 } };
-  const exampleDeployment = { name: '{{ hostname }}', provider_id: 1, credentials_id: 1, hostname_scheme_id: 1, template: 'proxmox-vm', executor: 'terraform', variables: { name: '{{ hostname }}', node: 'pve', template_id: 9000, cpu: '{{ cpu }}', memory: 4096, disk: 40, network: 'vmbr0', storage: 'local-lvm', ssh_username: 'clouduser' } };
-  const exampleWorkflow = [{ id: 'hostname', type: 'generate_hostname' }, { id: 'clone', type: 'clone_vm', depends_on: ['hostname'] }, { id: 'apply', type: 'terraform_apply', depends_on: ['clone'] }];
-  const fields = node('div', { class: 'form-grid' },
-    field('Slug', 'slug', { required: true, value: item?.slug || '' }), field('Nazwa', 'name', { required: true, value: item?.name || '' }),
-    field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
-    checkboxField('Aktywny', 'is_active', item?.is_active ?? true), checkboxField('Dostępny w panelu backendu', 'visibility_backend', item?.visibility.backend ?? true),
-    checkboxField('Dostępny w CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false), checkboxField('Dostępny przez API', 'visibility_api', item?.visibility.api ?? true),
-    checkboxField('Wymaga blueprints.approve przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
-    selectField('Recovery policy', 'recovery_policy', [{ value: 'preserve', label: 'Preserve state/resources' }, { value: 'destroy_on_failure', label: 'Destroy on failed apply' }], item?.recovery_policy || 'preserve'),
-    field('Dozwolone role ID (przecinki, puste = wszyscy)', 'role_ids', { value: (item?.allowed_role_ids || []).join(',') }),
-    field('Dozwoleni użytkownicy ID (przecinki)', 'user_ids', { value: (item?.allowed_user_ids || []).join(',') }),
-    field('Schemat zmiennych JSON', 'variables_schema', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.variables_schema || exampleVariables) }),
-    field('Definicja deploymentu JSON', 'deployment', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.deployment || exampleDeployment) }),
-    field('Workflow DAG JSON', 'workflow', { tag: 'textarea', required: true, wide: true, value: jsonValue(item?.workflow || exampleWorkflow) }));
-  openModal({ title: item ? `Edytuj ${item.name}` : 'Nowy Blueprint', eyebrow: 'Automation Designer', body: fields, submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz', onSubmit: async data => {
-    const ids = value => value.split(',').map(part => part.trim()).filter(Boolean).map(Number);
-    const payload = { slug: data.get('slug'), name: data.get('name'), description: data.get('description'), is_active: data.has('is_active'),
-      visibility: { backend: data.has('visibility_backend'), cloudportal: data.has('visibility_cloudportal'), api: data.has('visibility_api') },
-      allowed_role_ids: ids(data.get('role_ids')), allowed_user_ids: ids(data.get('user_ids')),
-      variables_schema: parseObject(data.get('variables_schema'), 'Schemat zmiennych'), deployment: parseObject(data.get('deployment'), 'Deployment'), workflow: parseArray(data.get('workflow'), 'Workflow'),
-      requires_approval: data.has('requires_approval'), recovery_policy: data.get('recovery_policy') };
-    await api(item ? `/blueprints/${item.id}` : '/blueprints', { method: item ? 'PUT' : 'POST', body: payload });
-    toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint utworzony.'); navigate('blueprints');
-  }});
+async function blueprintForm(item = null) {
+  try {
+    const [providerResult, credentialResult, templateResult, schemeResult, poolResult, roleResult, userResult] = await Promise.all([
+      api('/providers?limit=200'),
+      api('/credentials?limit=200'),
+      api('/templates'),
+      allowed('hostnames.read') ? api('/hostname-schemes?limit=200') : Promise.resolve({ items: [] }),
+      allowed('ipam.read') ? api('/ipam/pools?limit=200') : Promise.resolve({ items: [] }),
+      allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
+      allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
+    ]);
+    const providers = providerResult.items;
+    const credentials = credentialResult.items;
+    const templates = templateResult.items;
+    const schemes = schemeResult.items;
+    const pools = poolResult.items;
+    if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
+
+    const variableList = node('div', { class: 'editor-list wide' });
+    const workflowList = node('div', { class: 'editor-list wide' });
+    let variableCounter = 0;
+    let workflowCounter = 0;
+
+    const addVariable = (key = '', definition = {}) => {
+      variableCounter += 1;
+      const row = node('div', { class: 'editor-card', 'data-variable-row': String(variableCounter) });
+      const typeChoices = [
+        { value: 'string', label: 'Tekst' },
+        { value: 'integer', label: 'Liczba całkowita' },
+        { value: 'select', label: 'Lista wyboru' },
+        { value: 'boolean', label: 'Tak / nie' },
+      ];
+      const typeField = selectField('Typ', 'variable_type', typeChoices, definition.type || 'string', { required: true });
+      const optionsField = field('Opcje (przecinki lub nowe linie)', 'variable_options', {
+        tag: 'textarea', value: (definition.options || []).join('\n'), wide: true,
+      });
+      const minField = field('Minimum', 'variable_min', { type: 'number', value: definition.min ?? '' });
+      const maxField = field('Maksimum', 'variable_max', { type: 'number', value: definition.max ?? '' });
+      const refresh = () => {
+        const type = typeField.querySelector('select').value;
+        optionsField.hidden = type !== 'select';
+        minField.hidden = type !== 'integer';
+        maxField.hidden = type !== 'integer';
+      };
+      typeField.querySelector('select').addEventListener('change', refresh);
+      row.append(
+        node('div', { class: 'editor-card-header' },
+          node('strong', { text: 'Zmienna wejściowa' }),
+          button('Usuń', () => row.remove(), 'danger')),
+        node('div', { class: 'form-grid' },
+          field('Klucz', 'variable_key', { required: true, value: key, placeholder: 'np. cpu' }),
+          field('Etykieta dla użytkownika', 'variable_label', { value: definition.label || '', placeholder: 'np. Liczba CPU' }),
+          typeField,
+          field('Wartość domyślna', 'variable_default', {
+            value: definition.default === undefined || definition.default === null ? '' : String(definition.default),
+          }),
+          minField,
+          maxField,
+          optionsField,
+          checkboxField('Pole wymagane', 'variable_required', Boolean(definition.required))));
+      variableList.append(row);
+      refresh();
+    };
+
+    const workflowTypes = [
+      ['generate_hostname', 'Wygeneruj hostname'], ['allocate_ip', 'Przydziel IP'], ['release_ip', 'Zwolnij IP'],
+      ['create_vm', 'Utwórz VM'], ['clone_vm', 'Sklonuj VM'], ['configure_vm', 'Skonfiguruj VM'],
+      ['cloud_init', 'Cloud-init'], ['start_vm', 'Uruchom VM'], ['wait_for_vm', 'Czekaj na VM'],
+      ['wait_for_agent', 'Czekaj na guest agent'], ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
+      ['set_hostname', 'Ustaw hostname'], ['run_ansible_playbook', 'Uruchom Ansible'], ['terraform_plan', 'Terraform plan'],
+      ['terraform_apply', 'Terraform apply'], ['create_snapshot', 'Utwórz snapshot'], ['health_check', 'Health check'],
+      ['condition', 'Warunek'], ['approval', 'Akceptacja'], ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
+    ];
+    const addWorkflowStep = (step = {}) => {
+      workflowCounter += 1;
+      const row = node('div', { class: 'editor-card', 'data-workflow-row': String(workflowCounter) },
+        node('div', { class: 'editor-card-header' },
+          node('strong', { text: 'Krok workflow' }),
+          button('Usuń', () => row.remove(), 'danger')),
+        node('div', { class: 'form-grid' },
+          field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
+          selectField('Akcja', 'workflow_type', workflowTypes.map(([value, label]) => ({ value, label })), step.type || 'terraform_apply', { required: true }),
+          field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), help: 'Kilka ID oddziel przecinkami.' }),
+          field('Retry', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
+          field('Timeout (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
+          field('Rollback step ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
+          field('Warunki JSON (opcjonalnie)', 'workflow_conditions', {
+            tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? jsonValue(step.conditions) : '',
+            help: 'Pozostaw puste, jeśli krok nie ma dodatkowych warunków.',
+          })));
+      workflowList.append(row);
+    };
+
+    const defaultVariables = item?.variables_schema || {
+      environment: { type: 'select', label: 'Środowisko', required: true, options: ['dev', 'test', 'prod'], default: 'dev' },
+      cpu: { type: 'integer', label: 'CPU', required: true, default: 2, min: 1, max: 8 },
+    };
+    Object.entries(defaultVariables).forEach(([key, definition]) => addVariable(key, definition));
+    const defaultWorkflow = item?.workflow || [
+      { id: 'hostname', type: 'generate_hostname' },
+      { id: 'clone', type: 'clone_vm', depends_on: ['hostname'] },
+      { id: 'apply', type: 'terraform_apply', depends_on: ['clone'] },
+    ];
+    defaultWorkflow.forEach(addWorkflowStep);
+
+    const deployment = item?.deployment || {};
+    const initialTemplate = templates.find(template => template.id === (deployment.template || 'proxmox-vm')) || templates[0];
+    const templateField = selectField('Szablon IaC', 'deployment_template', templates.map(template => ({
+      value: template.id,
+      label: `${template.name} · v${template.version} · ${CREDENTIAL_TYPE_CONFIG[template.provider]?.label || template.provider}`,
+    })), initialTemplate.id, { required: true });
+    const providerField = selectField('Provider', 'deployment_provider_id', [], deployment.provider_id || '', { required: true });
+    const credentialField = selectField('Credential', 'deployment_credentials_id', [], deployment.credentials_id || '', { required: true });
+    const templateVariables = node('div', { class: 'form-grid wide template-variable-grid' });
+    const variableState = new Map([[initialTemplate.id, { ...(deployment.variables || {}) }]]);
+    let currentTemplateId = initialTemplate.id;
+
+    const currentTemplate = () => templates.find(template => template.id === templateField.querySelector('select').value) || templates[0];
+    const refill = (select, values, placeholder, selectedValue) => {
+      select.replaceChildren(node('option', { value: '', text: placeholder }));
+      values.forEach(value => select.append(node('option', {
+        value: value.id,
+        text: value.label,
+        selected: String(value.id) === String(selectedValue),
+      })));
+      if (!select.value && values.length === 1) select.value = String(values[0].id);
+    };
+
+    const saveDeploymentVariables = () => {
+      const previousTemplate = templates.find(template => template.id === currentTemplateId);
+      if (previousTemplate) variableState.set(currentTemplateId, readBlueprintTemplateVariables(templateVariables, previousTemplate));
+    };
+
+    const refreshCredentialChoices = () => {
+      const template = currentTemplate();
+      const providerId = providerField.querySelector('select').value;
+      const provider = providers.find(value => String(value.id) === String(providerId));
+      const type = provider?.type || template.provider;
+      const matches = credentials.filter(value => value.type === type).map(value => ({ id: value.id, label: value.name }));
+      refill(credentialField.querySelector('select'), matches,
+        matches.length ? 'Wybierz credential' : 'Brak credentiala dla tej platformy',
+        deployment.credentials_id);
+    };
+
+    const refreshDeploymentTemplate = () => {
+      saveDeploymentVariables();
+      const template = currentTemplate();
+      currentTemplateId = template.id;
+      const matches = providers.filter(value => value.type === template.provider).map(value => ({ id: value.id, label: value.name }));
+      refill(providerField.querySelector('select'), matches,
+        matches.length ? 'Wybierz provider' : 'Brak providera dla tej platformy',
+        deployment.provider_id);
+      refreshCredentialChoices();
+      templateVariables.replaceChildren();
+      const values = variableState.get(template.id) || {};
+      Object.entries(template.variables_schema?.properties || {}).forEach(([name, spec]) => {
+        templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
+      });
+    };
+    templateField.querySelector('select').addEventListener('change', refreshDeploymentTemplate);
+    providerField.querySelector('select').addEventListener('change', refreshCredentialChoices);
+
+    const roleChoices = roleResult.items.map(role => ({ value: role.id, label: role.name }));
+    (item?.allowed_role_ids || []).forEach(id => {
+      if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
+    });
+    const userChoices = userResult.items.map(user => ({ value: user.id, label: user.username + (user.email ? ' · ' + user.email : '') }));
+    (item?.allowed_user_ids || []).forEach(id => {
+      if (!userChoices.some(choice => Number(choice.value) === Number(id))) userChoices.push({ value: id, label: `Użytkownik #${id}` });
+    });
+
+    const schemeChoices = [{ value: '', label: 'Bez automatycznego hostname' }].concat(schemes.filter(value => value.is_active || Number(value.id) === Number(deployment.hostname_scheme_id)).map(value => ({
+      value: value.id, label: `${value.name} · ${value.pattern}`,
+    })));
+    const poolChoices = [{ value: '', label: 'Bez automatycznego IPAM' }].concat(pools.filter(value => value.is_active || Number(value.id) === Number(deployment.ipam_pool_id)).map(value => ({
+      value: value.id, label: `${value.name} · ${value.cidr}`,
+    })));
+
+    const fields = node('div', { class: 'form-grid blueprint-designer' },
+      formSection('Blueprint', 'Nazwa, identyfikator i krótki opis widoczny dla użytkownika.',
+        node('div', { class: 'form-grid' },
+          field('Slug', 'slug', { required: true, value: item?.slug || '', placeholder: 'np. ubuntu-web' }),
+          field('Nazwa', 'name', { required: true, value: item?.name || '', placeholder: 'np. Ubuntu Web Server' }),
+          field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
+          checkboxField('Aktywny', 'is_active', item?.is_active ?? true))),
+      formSection('Widoczność i bezpieczeństwo', 'Określ gdzie Blueprint jest dostępny i co ma się stać po nieudanym wdrożeniu.',
+        node('div', { class: 'form-grid' },
+          checkboxField('Panel backendu', 'visibility_backend', item?.visibility.backend ?? true),
+          checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility.cloudportal ?? false),
+          checkboxField('API', 'visibility_api', item?.visibility.api ?? true),
+          checkboxField('Wymaga akceptacji przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
+          selectField('Po błędzie wdrożenia', 'recovery_policy', [
+            { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
+            { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
+          ], item?.recovery_policy || 'preserve'))),
+      formSection('Dostęp', 'Puste listy oznaczają brak dodatkowego ograniczenia.',
+        node('div', { class: 'form-grid' },
+          multiSelectField('Dozwolone role', 'allowed_role_ids', roleChoices, item?.allowed_role_ids || [], {
+            help: roleChoices.length ? 'Ctrl/Cmd pozwala zaznaczyć wiele pozycji.' : 'Brak dostępu do listy ról — istniejące ID zostaną zachowane.',
+          }),
+          multiSelectField('Dozwoleni użytkownicy', 'allowed_user_ids', userChoices, item?.allowed_user_ids || [], {
+            help: userChoices.length ? 'Ctrl/Cmd pozwala zaznaczyć wiele pozycji.' : 'Brak dostępu do listy użytkowników — istniejące ID zostaną zachowane.',
+          }))),
+      formSection('Pola self-service', 'Z tych definicji portal buduje formularz uruchomienia Blueprintu.',
+        variableList,
+        node('div', { class: 'editor-add-row' }, button('Dodaj pole', () => addVariable('', { type: 'string' }), 'primary'))),
+      formSection('Wdrożenie', 'Wybierz platformę i wartości przekazywane do zatwierdzonego szablonu IaC.',
+        node('div', { class: 'form-grid' },
+          field('Nazwa deploymentu', 'deployment_name', { required: true, value: deployment.name || '{{ hostname }}', wide: true, help: 'Możesz użyć {{ hostname }}.' }),
+          templateField,
+          providerField,
+          credentialField,
+          selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
+          selectField('Schemat hostname', 'deployment_hostname_scheme_id', schemeChoices, deployment.hostname_scheme_id || ''),
+          selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
+          formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables))),
+      formSection('Workflow', 'Kroki są wykonywane zgodnie z zależnościami. ID kroku musi być unikalne.',
+        workflowList,
+        node('div', { class: 'editor-add-row' }, button('Dodaj krok', () => addWorkflowStep({ type: 'terraform_apply' }), 'primary'))));
+
+    refreshDeploymentTemplate();
+
+    openModal({
+      title: item ? `Edytuj ${item.name}` : 'Nowy Blueprint',
+      eyebrow: 'Automation Designer',
+      body: fields,
+      submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz Blueprint',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        saveDeploymentVariables();
+        const variablesSchema = {};
+        form.querySelectorAll('[data-variable-row]').forEach(row => {
+          const key = row.querySelector('[name="variable_key"]').value.trim();
+          if (!key) throw new Error('Każde pole self-service musi mieć klucz.');
+          if (variablesSchema[key]) throw new Error(`Klucz „${key}” występuje więcej niż raz.`);
+          const type = row.querySelector('[name="variable_type"]').value;
+          const definition = {
+            type,
+            label: row.querySelector('[name="variable_label"]').value.trim() || null,
+            required: row.querySelector('[name="variable_required"]').checked,
+          };
+          const defaultRaw = row.querySelector('[name="variable_default"]').value.trim();
+          if (defaultRaw !== '') {
+            if (type === 'integer') definition.default = Number.parseInt(defaultRaw, 10);
+            else if (type === 'boolean') definition.default = ['true', '1', 'tak', 'yes'].includes(defaultRaw.toLowerCase());
+            else definition.default = defaultRaw;
+          }
+          if (type === 'integer') {
+            const min = row.querySelector('[name="variable_min"]').value;
+            const max = row.querySelector('[name="variable_max"]').value;
+            if (min !== '') definition.min = Number(min);
+            if (max !== '') definition.max = Number(max);
+          }
+          if (type === 'select') {
+            definition.options = splitValues(row.querySelector('[name="variable_options"]').value);
+            if (!definition.options.length) throw new Error(`Pole „${key}” typu lista wymaga co najmniej jednej opcji.`);
+          }
+          variablesSchema[key] = definition;
+        });
+
+        const workflow = [...form.querySelectorAll('[data-workflow-row]')].map(row => {
+          const step = {
+            id: row.querySelector('[name="workflow_id"]').value.trim(),
+            type: row.querySelector('[name="workflow_type"]').value,
+            depends_on: splitValues(row.querySelector('[name="workflow_depends"]').value),
+            retry: Number(row.querySelector('[name="workflow_retry"]').value || 0),
+            timeout: Number(row.querySelector('[name="workflow_timeout"]').value || 600),
+            conditions: row.querySelector('[name="workflow_conditions"]').value.trim()
+              ? parseObject(row.querySelector('[name="workflow_conditions"]').value, 'Warunki kroku')
+              : {},
+          };
+          const rollback = row.querySelector('[name="workflow_rollback"]').value.trim();
+          if (rollback) step.rollback = rollback;
+          return step;
+        });
+        if (!workflow.length) throw new Error('Blueprint musi zawierać co najmniej jeden krok workflow.');
+        if (workflow.some(step => !step.id)) throw new Error('Każdy krok workflow musi mieć ID.');
+
+        const template = currentTemplate();
+        const deploymentPayload = {
+          name: form.elements.deployment_name.value,
+          provider_id: Number(form.elements.deployment_provider_id.value),
+          credentials_id: Number(form.elements.deployment_credentials_id.value),
+          template: template.id,
+          executor: form.elements.deployment_executor.value,
+          variables: variableState.get(template.id) || readBlueprintTemplateVariables(form, template),
+        };
+        if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
+        if (!deploymentPayload.credentials_id) throw new Error('Wybierz credential dla Blueprintu.');
+        if (form.elements.deployment_hostname_scheme_id.value) deploymentPayload.hostname_scheme_id = Number(form.elements.deployment_hostname_scheme_id.value);
+        if (form.elements.deployment_ipam_pool_id.value) deploymentPayload.ipam_pool_id = Number(form.elements.deployment_ipam_pool_id.value);
+
+        const selectedIds = name => [...form.querySelectorAll(`[name="${name}"] option:checked`)].map(option => Number(option.value));
+        const payload = {
+          slug: form.elements.slug.value,
+          name: form.elements.name.value,
+          description: form.elements.description.value,
+          is_active: form.elements.is_active.checked,
+          visibility: {
+            backend: form.elements.visibility_backend.checked,
+            cloudportal: form.elements.visibility_cloudportal.checked,
+            api: form.elements.visibility_api.checked,
+          },
+          allowed_role_ids: selectedIds('allowed_role_ids'),
+          allowed_user_ids: selectedIds('allowed_user_ids'),
+          variables_schema: variablesSchema,
+          deployment: deploymentPayload,
+          workflow,
+          requires_approval: form.elements.requires_approval.checked,
+          recovery_policy: form.elements.recovery_policy.value,
+        };
+        await api(item ? `/blueprints/${item.id}` : '/blueprints', {
+          method: item ? 'PUT' : 'POST',
+          body: payload,
+        });
+        toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint utworzony.');
+        navigate('blueprints');
+      },
+    });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
-function executeBlueprint(item) {
-  const fields = node('div', { class: 'form-grid' });
-  for (const [name, definition] of Object.entries(item.variables_schema)) {
-    if (definition.type === 'select') fields.append(selectField(definition.label || name, name, definition.options.map(value => ({ value, label: value })), definition.default, { required: definition.required }));
-    else if (definition.type === 'boolean') fields.append(checkboxField(definition.label || name, name, Boolean(definition.default)));
-    else fields.append(field(definition.label || name, name, { type: definition.type === 'integer' ? 'number' : 'text', value: definition.default ?? '', min: definition.min, max: definition.max, required: definition.required }));
-  }
-  fields.append(field('Wartości hostname JSON', 'hostname_values', { tag: 'textarea', wide: true, value: '{}', help: 'Np. {"location":"wro","env":"prod","role":"web"}' }));
-  openModal({ title: `Uruchom ${item.name}`, eyebrow: `Blueprint v${item.version}`, body: fields, submitLabel: 'Utwórz serwer', onSubmit: async (data, form) => {
-    const variables = {};
-    for (const [name, definition] of Object.entries(item.variables_schema)) {
-      const control = form.elements[name];
-      if (definition.type === 'boolean') variables[name] = control.checked;
-      else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
+async function executeBlueprint(item) {
+  try {
+    const fields = node('div', { class: 'form-grid' });
+    for (const [name, definition] of Object.entries(item.variables_schema || {})) {
+      if (definition.type === 'select') {
+        fields.append(selectField(definition.label || name, name, (definition.options || []).map(value => ({ value, label: value })), definition.default, { required: definition.required }));
+      } else if (definition.type === 'boolean') {
+        fields.append(checkboxField(definition.label || name, name, Boolean(definition.default)));
+      } else {
+        fields.append(field(definition.label || name, name, {
+          type: definition.type === 'integer' ? 'number' : 'text',
+          value: definition.default ?? '',
+          min: definition.min,
+          max: definition.max,
+          required: definition.required,
+        }));
+      }
     }
-    const result = await api(`/blueprints/${item.id}/execute`, { method: 'POST', idempotent: true, body: { variables, hostname_values: parseObject(data.get('hostname_values') || '{}', 'Wartości hostname') } });
-    toast(`Deployment ${result.name} utworzony. Zadanie ${short(result.job.id)}.`); navigate('jobs');
-  }});
+
+    let scheme = null;
+    if (item.deployment?.hostname_scheme_id && allowed('hostnames.read')) {
+      const result = await api('/hostname-schemes?limit=200');
+      scheme = result.items.find(value => Number(value.id) === Number(item.deployment.hostname_scheme_id)) || null;
+    }
+    if (scheme) {
+      fields.append(formSection('Nazwa hosta', `Wzorzec: ${scheme.pattern}`, hostnameValueFields(scheme.pattern)));
+    } else if (item.deployment?.hostname_scheme_id) {
+      const allTokens = Object.keys(HOSTNAME_TOKEN_LABELS).map(token => `{${token}}`).join('-');
+      fields.append(formSection('Nazwa hosta', 'Uzupełnij tylko wartości używane przez skonfigurowany schemat hostname.',
+        hostnameValueFields(allTokens, {}, false)));
+    }
+
+    openModal({
+      title: `Uruchom ${item.name}`,
+      eyebrow: `Blueprint v${item.version}`,
+      body: fields,
+      submitLabel: 'Utwórz serwer',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const variables = {};
+        for (const [name, definition] of Object.entries(item.variables_schema || {})) {
+          const control = form.elements[name];
+          if (definition.type === 'boolean') variables[name] = control.checked;
+          else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
+        }
+        const result = await api(`/blueprints/${item.id}/execute`, {
+          method: 'POST',
+          idempotent: true,
+          body: { variables, hostname_values: readHostnameValues(form) },
+        });
+        toast(`Utworzono „${result.name}”. Zadanie ${short(result.job.id)} zostało dodane do kolejki.`);
+        navigate('jobs');
+      },
+    });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 async function hostnamesView() {
@@ -1603,13 +1938,45 @@ function hostnameSchemeForm(item = null) {
 }
 
 function generateHostname(schemes) {
-  const fields = node('div', { class: 'form-grid' }, selectField('Schemat', 'scheme_id', schemes.filter(item => item.is_active).map(item => ({ value: item.id, label: `${item.name} — ${item.pattern}` })), '', { required: true, placeholder: 'Wybierz schemat' }), field('Wartości JSON', 'values', { tag: 'textarea', wide: true, required: true, value: '{"location":"wro","env":"prod","role":"web"}' }), checkboxField('Zarezerwuj nazwę', 'reserve', true));
-  openModal({ title: 'Generuj hostname', eyebrow: 'Hostname Manager', body: fields, submitLabel: 'Generuj', onSubmit: async data => {
-    const result = await api('/hostnames/generate', { method: 'POST', body: { scheme_id: Number(data.get('scheme_id')), values: parseObject(data.get('values'), 'Wartości'), reserve: data.has('reserve') } });
-    toast(`Wygenerowano ${result.hostname}.`); navigate('hostnames');
-  }});
-}
+  const active = schemes.filter(item => item.is_active);
+  if (!active.length) {
+    toast('Brak aktywnego schematu hostname.', 'error');
+    return;
+  }
+  const schemeField = selectField('Schemat', 'scheme_id', active.map(item => ({
+    value: item.id, label: `${item.name} — ${item.pattern}`,
+  })), active[0].id, { required: true });
+  const valuesContainer = node('div', { class: 'wide' });
+  const fields = node('div', { class: 'form-grid' },
+    schemeField,
+    checkboxField('Zarezerwuj nazwę', 'reserve', true),
+    formSection('Składniki nazwy', 'Pola wynikają automatycznie z wybranego wzorca.', valuesContainer));
+  const render = () => {
+    const scheme = active.find(item => String(item.id) === String(schemeField.querySelector('select').value));
+    valuesContainer.replaceChildren(hostnameValueFields(scheme?.pattern || ''));
+  };
+  schemeField.querySelector('select').addEventListener('change', render);
+  render();
 
+  openModal({
+    title: 'Generuj hostname',
+    eyebrow: 'Hostname Manager',
+    body: fields,
+    submitLabel: 'Generuj',
+    onSubmit: async (_data, form) => {
+      const result = await api('/hostnames/generate', {
+        method: 'POST',
+        body: {
+          scheme_id: Number(form.elements.scheme_id.value),
+          values: readHostnameValues(form),
+          reserve: form.elements.reserve.checked,
+        },
+      });
+      toast(`Wygenerowano ${result.hostname}.`);
+      navigate('hostnames');
+    },
+  });
+}
 
 function showJson(title, value, eyebrow = 'Szczegóły') {
   dom.modalTitle.textContent = title;
@@ -1792,20 +2159,48 @@ async function importInventoryVm() {
 
 async function adoptInventoryVm(item) {
   try {
-    const preview = await api(`/inventory/vms/${item.id}/adoption-preview`);
+    const [preview, templateResult] = await Promise.all([
+      api(`/inventory/vms/${item.id}/adoption-preview`),
+      api('/templates'),
+    ]);
+    const template = templateResult.items.find(value => value.id === preview.template.id);
+    if (!template) throw new Error('Szablon wymagany do adopcji nie jest dostępny w katalogu.');
+
+    const variables = node('div', { class: 'form-grid wide template-variable-grid' });
+    renderTemplateVariables(variables, template, preview.suggested_variables || {});
+    const liveEntries = Object.entries(preview.live || {}).slice(0, 16);
+    const liveGrid = node('div', { class: 'checks wide' },
+      ...liveEntries.map(([key, value]) => info(FIELD_LABELS[key] || key.replaceAll('_', ' '), displayValue(value))));
+
     const fields = node('div', { class: 'form-grid' },
-      field('Template', 'template', { value: preview.template.id, required: true }),
-      selectField('Executor', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'),
-      field('Desired variables JSON', 'variables', { tag: 'textarea', wide: true, required: true, value: jsonValue(preview.suggested_variables), help: 'Import wykona wyłącznie plan. Apply wymaga osobnej decyzji po analizie driftu.' }),
-      field('Live config', 'live', { tag: 'textarea', wide: true, value: jsonValue(preview.live) }));
-    fields.querySelector('[name="live"]').disabled = true;
-    openModal({ title: `Adopt ${item.name || item.vm_id}`, eyebrow: 'Terraform import + plan only', body: fields, submitLabel: 'Importuj state i wykonaj plan', onSubmit: async data => {
-      const result = await api(`/inventory/vms/${item.id}/adopt`, { method: 'POST', idempotent: true, body: {
-        template: data.get('template'), executor: data.get('executor'), variables: parseObject(data.get('variables'), 'Desired variables'),
-      } });
-      toast(`Utworzono import job ${short(result.job.id)}.`);
-      navigate('jobs');
-    }});
+      formSection('Import do Terraform', 'Operacja wykona terraform import oraz plan. Apply nie zostanie uruchomiony automatycznie.',
+        node('div', { class: 'form-grid' },
+          field('Szablon', 'template', { value: template.name + ' · v' + template.version, wide: true }),
+          selectField('Silnik IaC', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'))),
+      formSection('Stan docelowy', 'Sprawdź wartości przed importem. Po planie będzie można ocenić drift.', variables),
+      formSection('Aktualna konfiguracja', 'Podgląd odczytany bezpośrednio z Proxmox.', liveGrid));
+    fields.querySelector('[name="template"]').readOnly = true;
+
+    openModal({
+      title: `Przejmij zarządzanie: ${item.name || item.vm_id}`,
+      eyebrow: 'Terraform import + plan',
+      body: fields,
+      submitLabel: 'Importuj state i wykonaj plan',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const result = await api(`/inventory/vms/${item.id}/adopt`, {
+          method: 'POST',
+          idempotent: true,
+          body: {
+            template: template.id,
+            executor: form.elements.executor.value,
+            variables: readTemplateVariables(form, template),
+          },
+        });
+        toast(`Utworzono zadanie importu ${short(result.job.id)}.`);
+        navigate('jobs');
+      },
+    });
   } catch (error) { toast(error.message, 'error'); }
 }
 
