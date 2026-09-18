@@ -74,7 +74,18 @@ class CredentialInput(Input):
     endpoint: Annotated[str, Field(max_length=2048)] = ''
     username: Annotated[str, Field(max_length=254)] = ''
     verify_ssl: bool = True
+    expires_at: datetime | None = None
+    rotation_due_at: datetime | None = None
     secrets: dict[str, Annotated[str, Field(max_length=32768)]] | None = Field(default=None, json_schema_extra={'writeOnly': True})
+
+    @field_validator('expires_at', 'rotation_due_at')
+    @classmethod
+    def credential_dates_utc(cls, value):
+        if value is None:
+            return value
+        from datetime import timezone
+        candidate = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return candidate.astimezone(timezone.utc).replace(tzinfo=None)
 
     @field_validator('endpoint')
     @classmethod
