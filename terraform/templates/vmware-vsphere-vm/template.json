@@ -1,0 +1,7 @@
+{
+  "id": "vmware-vsphere-vm",
+  "name": "VMware vSphere VM clone",
+  "provider": "vmware",
+  "version": 1,
+  "schema_model": "app.api.schemas:VMwareVariables"
+}

@@ -4,6 +4,7 @@ import hashlib
 import uuid
 from datetime import datetime
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from app.models import Idempotency
@@ -54,5 +55,5 @@ def idempotent(db, request, actor, payload, create, *, required=False):
         return row.response
     result = create()
     # Never persist plaintext token/reset secrets in idempotency records.
-    row.response = {k: v for k, v in result.items() if k not in {'token', 'reset_token'}}
+    row.response = jsonable_encoder({k: v for k, v in result.items() if k not in {'token', 'reset_token', 'secret'}})
     return result

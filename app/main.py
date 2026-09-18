@@ -6,9 +6,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
-from app.api import administration, health, infrastructure
+from app.api import administration, automation, health, infrastructure, inventory, ipam, operations, proxmox_management
 from app.auth import routes as auth
 from app.config import settings
+from app.observability import configure_telemetry
 from app.security.core import throttle
 
 app = FastAPI(title='Cloudportal-backed', version='1.0.0', docs_url='/docs', redoc_url=None)
@@ -74,7 +75,7 @@ async def conflict(request, error):
 # eager and lazy router inclusion in supported FastAPI versions.
 from fastapi.routing import APIRoute
 
-for router in (auth.router, administration.router, infrastructure.router, health.router):
+for router in (auth.router, administration.router, infrastructure.router, automation.router, inventory.router, ipam.router, operations.router, proxmox_management.router, health.router):
     for route in router.routes:
         if not isinstance(route, APIRoute):
             continue
@@ -82,10 +83,11 @@ for router in (auth.router, administration.router, infrastructure.router, health
                        'schema': {'type': 'string', 'format': 'uuid'},
                        'description': 'Correlation ID returned in the response and recorded in jobs and audit.'}]
         is_creation = 'POST' in route.methods and (route.path.rsplit('/', 1)[-1] in
-                      {'users', 'roles', 'tokens', 'credentials', 'providers', 'deployments', 'jobs', 'reset-password', 'destroy'})
+                      {'users', 'roles', 'tokens', 'credentials', 'providers', 'deployments', 'jobs', 'blueprints',
+                       'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy'})
         is_destroy = 'DELETE' in route.methods and route.path == '/deployments/{id}'
         if (is_creation or is_destroy) and route.path != '/auth/reset-password':
-            required = route.path in {'/deployments', '/jobs', '/deployments/{id}/destroy'} or is_destroy
+            required = route.path in {'/deployments', '/jobs', '/blueprints/{id}/execute', '/deployments/{id}/destroy'} or is_destroy
             parameters.append({'name': 'Idempotency-Key', 'in': 'header', 'required': required,
                                'schema': {'type': 'string', 'format': 'uuid'},
                                'description': 'Reuse the same UUID only when retrying the same operation and payload.'})
@@ -99,3 +101,6 @@ def web_console():
 
 
 app.mount('/ui', StaticFiles(directory=Path(__file__).with_name('web'), html=True), name='web-console')
+
+
+configure_telemetry(app)

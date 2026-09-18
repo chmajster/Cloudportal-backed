@@ -20,6 +20,10 @@ check_supported debian 13 debian redis-server python3
 check_supported rhel 9.6 rhel redis python3.12
 check_supported rhel 10.1 rhel valkey python3
 
+# GitHub installation tokens may contain dots and hyphens. Keep quotes and
+# control characters forbidden because the value is written to curl config.
+grep -Fq '^[A-Za-z0-9._-]{20,512}$' "$repo_root/install.sh"
+
 printf 'ID=ubuntu\nVERSION_ID=25.10\nNAME="Unsupported Ubuntu"\n' > "$fixture"
 if CLOUDPORTAL_OS_RELEASE_FILE="$fixture" "$repo_root/install.sh" --check-platform >/dev/null 2>&1; then
   echo 'Unsupported platform was accepted.' >&2

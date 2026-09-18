@@ -49,6 +49,19 @@ def test_portal_setup_login_rbac_and_crud(system, tmp_path):
                 boot=json.loads(re.search(r'<script id="portal-data" type="application/json">(.*?)</script>',dashboard.text,re.S).group(1))
                 auth={'X-CSRF-Token':boot['csrf'],'Accept':'application/json','Idempotency-Key':str(uuid.uuid4())}
                 assert system[2]['token'] not in dashboard.text
+                # The bootstrap administrator must replace the one-time password
+                # before any privileged operation. The password change revokes the
+                # current backend session, so authenticate again afterwards.
+                changed_password='secure-php-admin-password-1234'
+                changed=browser.post('/backend-api/auth/change-password',headers=auth,json={
+                    'current_password':system[2]['password'],'password':changed_password})
+                assert changed.status_code==200,changed.text
+                page=browser.get('/login');csrf_token=re.search(r'name="_csrf" value="([^"]+)"',page.text).group(1)
+                response=browser.post('/login',data={'_csrf':csrf_token,'username':'admin','password':changed_password})
+                assert response.status_code==302,response.text
+                dashboard=browser.get('/')
+                boot=json.loads(re.search(r'<script id="portal-data" type="application/json">(.*?)</script>',dashboard.text,re.S).group(1))
+                auth={'X-CSRF-Token':boot['csrf'],'Accept':'application/json','Idempotency-Key':str(uuid.uuid4())}
                 user=browser.post('/backend-api/users',headers=auth,json={'username':'php-user','email':'php-user@example.com','password':'test-password-1234'})
                 assert user.status_code==201,user.text
                 role=browser.post('/backend-api/roles',headers={**auth,'Idempotency-Key':str(uuid.uuid4())},json={'name':'PHP Reader','permissions':['users.read']})

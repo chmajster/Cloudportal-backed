@@ -36,7 +36,7 @@ def test_connection(credential):
         elif credential.type == 'winrm':
             import winrm
             client = winrm.Session(credential.endpoint, auth=(credential.username, secret['password']),
-                                   transport='ntlm', server_cert_validation='validate', read_timeout_sec=20, operation_timeout_sec=15)
+                                   transport='ntlm', server_cert_validation='validate' if credential.verify_ssl else 'ignore', read_timeout_sec=20, operation_timeout_sec=15)
             result = client.run_ps('Write-Output CloudPortalConnectionTest')
             if result.status_code != 0:
                 raise ValueError('WinRM authentication failed')

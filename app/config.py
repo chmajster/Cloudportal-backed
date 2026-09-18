@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     worker_count: int = Field(default=1, ge=1, le=64)
     execution_timeout: int = 3600
     allow_http: bool = False
+    webhook_allowed_hosts: list[str] = Field(default_factory=list)
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_service_name: str = 'cloudportal-backed'
+    credential_expiry_warning_days: int = Field(default=30, ge=1, le=3650)
+    retention_job_logs_days: int = Field(default=30, ge=1, le=3650)
+    retention_audit_days: int = Field(default=365, ge=1, le=3650)
+    retention_webhook_deliveries_days: int = Field(default=30, ge=1, le=3650)
+    retention_idempotency_days: int = Field(default=7, ge=1, le=3650)
+    retention_released_allocations_days: int = Field(default=90, ge=1, le=3650)
 
 
 @lru_cache

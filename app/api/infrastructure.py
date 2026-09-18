@@ -7,6 +7,7 @@ from app.api.common import find, idempotent, paginate, public
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput)
 from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput
+from app.catalog import list_playbooks, list_templates, playbook_definition, template_definition, template_public, validate_template_variables
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.database import get_db
@@ -15,8 +16,8 @@ from app.providers.registry import provider_for
 from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
-DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
-JOB_FIELDS = 'id deployment_id operation status created_by request_id created_at updated_at cancel_requested error'
+DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace state_location variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
+JOB_FIELDS = 'id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error retry_of attempt'
 
 
 def deployment_public(d):
@@ -35,6 +36,12 @@ def locked_credential(db, id):
     credential = db.scalar(select(Credential).where(Credential.id == id).with_for_update())
     if credential is None:
         raise HTTPException(404, 'Credential not found')
+    return credential
+
+
+def ensure_credential_usable(credential):
+    if credential.expires_at is not None and credential.expires_at <= now():
+        raise HTTPException(409, 'Credential is expired and cannot be used for new infrastructure execution')
     return credential
 
 
@@ -187,28 +194,25 @@ def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templa
 @router.get('/templates', response_model=Items[TemplateOutput])
 @router.get('/terraform/templates', response_model=Items[TemplateOutput])
 def templates(actor=Depends(require('terraform.read'))):
-    from app.api.schemas import VMVariables
-    return {'items': [{'id': 'proxmox-vm', 'name': 'Proxmox VM clone', 'provider': 'proxmox', 'variables_schema': VMVariables.model_json_schema()}]}
+    return {'items': list_templates()}
 
 
 @router.get('/templates/{id}', response_model=TemplateOutput)
 def template(id: str, actor=Depends(require('terraform.read'))):
-    if id != 'proxmox-vm':
-        raise HTTPException(404, 'Template not found')
-    return templates(actor)['items'][0]
+    return template_public(id)
 
 
 @router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
 def playbooks(actor=Depends(require('ansible.read'))):
-    return {'items': [{'id': 'bootstrap-linux', 'name': 'Configure hostname/timezone and guest agent', 'variables': ['hostname', 'timezone'], 'transport': 'ssh'},
-                      {'id': 'validate-linux', 'name': 'Validate Linux connectivity', 'variables': [], 'transport': 'ssh'},
-                      {'id': 'validate-windows', 'name': 'Validate Windows connectivity', 'variables': [], 'transport': 'winrm'}]}
+    return {'items': list_playbooks()}
 
 
 def check_job_permissions(request, operation):
     required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
     if operation == 'terraform.destroy':
         required.add('deployments.destroy')
+    if operation == 'terraform.import':
+        required.add('deployments.adopt')
     if operation == 'terraform.apply':
         required.add('deployments.create')
     if not required <= request.state.permissions:
@@ -216,13 +220,13 @@ def check_job_permissions(request, operation):
 
 
 def validate_ansible(db, data):
-    c = locked_credential(db, data.credentials_id)
-    expected = 'winrm' if data.playbook == 'validate-windows' else 'ssh'
+    c = ensure_credential_usable(locked_credential(db, data.credentials_id))
+    expected = playbook_definition(data.playbook)['transport']
     if c.type != expected:
         raise HTTPException(422, f'Playbook requires {expected} credential')
 
 
-def new_job(db, request, actor, operation, deployment=None, payload=None):
+def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
     check_job_permissions(request, operation)
     if deployment and deployment.workflow.get('ansible') and operation == 'terraform.apply' and 'ansible.execute' not in request.state.permissions:
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
@@ -233,7 +237,8 @@ def new_job(db, request, actor, operation, deployment=None, payload=None):
         job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
               payload=job_payload, created_by=actor.user_id, token_id=actor.id,
-              request_id=request.state.request_id, ip=request.client.host if request.client else '')
+              request_id=request.state.request_id, ip=request.client.host if request.client else '',
+              source=getattr(request.state, 'source', 'API'), retry_of=retry_of, attempt=attempt)
     db.add(job)
     db.flush()
     if deployment:
@@ -247,21 +252,28 @@ def new_job(db, request, actor, operation, deployment=None, payload=None):
 def create_deployment(data: DeploymentInput, request: Request, actor=Depends(require('deployments.create')), db=Depends(get_db, scope='function')):
     check_job_permissions(request, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
+    ensure_credential_usable(find(db, Credential, p.credentials_id))
+    template_meta, _ = template_definition(data.template)
+    if p.type != template_meta['provider']:
+        raise HTTPException(422, 'Selected infrastructure provider does not match the Terraform template')
+    variables = validate_template_variables(data.template, data.variables)
     if p.credentials_id != data.credentials_id:
         raise HTTPException(422, 'Credential does not belong to the selected provider')
     # Share the same row locks with credential mutation/deletion to preserve references.
     for credential_id in sorted({data.credentials_id} | ({data.ansible.credentials_id} if data.ansible else set())):
         locked_credential(db, credential_id)
     if data.ansible:
+        if p.type != 'proxmox':
+            raise HTTPException(422, 'Ansible post-provisioning currently requires the Proxmox guest-agent workflow')
         if 'ansible.execute' not in request.state.permissions:
             raise HTTPException(403, 'ansible.execute required')
         validate_ansible(db, data.ansible)
     def create():
-        d = Deployment(name=data.name, provider_id=p.id, template=data.template, credentials_id=data.credentials_id,
-                       variables=data.variables.model_dump(), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
+        d = Deployment(name=data.name, provider_id=p.id, provider=p.type, template=data.template, credentials_id=data.credentials_id,
+                       variables=variables.model_dump(mode='json'), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
         db.add(d)
         db.flush()
-        d.state_location = f'workspaces/{d.workspace}/terraform.tfstate'
+        d.state_location = f'database://terraform-states/{d.id}'
         job = new_job(db, request, actor, 'terraform.apply', d, {'ansible': data.ansible.model_dump() if data.ansible else None})
         audit(db, request, 'deployment.created', 'deployments', d.id)
         return {**deployment_public(d), 'job': job_public(job)}
@@ -312,6 +324,48 @@ def jobs(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('jobs.rea
 @router.get('/jobs/{id}', response_model=JobOutput)
 def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
     return job_public(find(db, Job, id))
+
+
+@router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)
+def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
+    original = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if original is None:
+        raise HTTPException(404, 'Job not found')
+    if original.status not in {'failed', 'cancelled'}:
+        raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
+    check_job_permissions(request, original.operation)
+    payload = dict(original.payload or {})
+    if original.operation == 'ansible.execute' and payload.get('ansible'):
+        from app.api.schemas import AnsibleInput
+        validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))
+
+    def create():
+        deployment = None
+        if original.deployment_id:
+            deployment = db.scalar(select(Deployment).where(Deployment.id == original.deployment_id).with_for_update())
+            if deployment is None:
+                raise HTTPException(404, 'Deployment not found')
+        new = new_job(
+            db,
+            request,
+            actor,
+            original.operation,
+            deployment,
+            payload,
+            retry_of=original.id,
+            attempt=original.attempt + 1,
+        )
+        audit(db, request, 'job.retried', 'jobs', new.id)
+        return job_public(new)
+
+    return idempotent(
+        db,
+        request,
+        actor,
+        {'retry_of': original.id, 'attempt': original.attempt + 1},
+        create,
+        required=True,
+    )
 
 
 @router.get('/jobs/{id}/logs', response_model=JobLogsOutput)

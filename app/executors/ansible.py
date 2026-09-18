@@ -4,12 +4,10 @@ import shutil
 import tempfile
 import yaml
 from pathlib import Path
+from app.catalog import playbook_definition
 from app.config import settings
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
 from app.security.core import decrypt_secret
-
-APPROVED_PLAYBOOKS = {'bootstrap-linux': 'bootstrap-linux.yml', 'validate-linux': 'validate-linux.yml', 'validate-windows': 'validate-windows.yml'}
-
 
 class UnsafeString(str):
     pass
@@ -25,9 +23,11 @@ InventoryDumper.add_representer(UnsafeString, lambda dumper, value: dumper.repre
 class AnsibleExecutor(Executor):
     def execute(self, operation, context):
         spec = context.ansible
-        filename = APPROVED_PLAYBOOKS.get(spec.playbook)
-        if not filename:
-            raise ExecutionFailed('Unapproved playbook')
+        try:
+            definition = playbook_definition(spec.playbook)
+        except Exception:
+            raise ExecutionFailed('Unapproved playbook') from None
+        filename = definition['file']
         secret = decrypt_secret(context.ansible_credential)
         root = settings().data_dir / 'runs'
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -64,10 +64,9 @@ class AnsibleExecutor(Executor):
             # Values from credentials are data, never Jinja expressions/lookup plugins.
             variables_path.write_text(yaml.dump({key: UnsafeString(v) if isinstance(v, str) else v for key, v in variables.items()}, Dumper=InventoryDumper))
             os.chmod(variables_path, 0o600)
-            context.stage('ansible.wait_for_connection')
-            wait = 'wait-windows.yml' if context.ansible_credential.type == 'winrm' else 'wait-linux.yml'
-            for playbook in (wait, filename, 'validate-windows.yml' if context.ansible_credential.type == 'winrm' else 'validate-linux.yml'):
-                context.stage('ansible.execution:' + playbook)
+            sequence = [definition.get('wait'), filename, definition.get('validate')]
+            for index, playbook in enumerate(item for item in sequence if item):
+                context.stage(('ansible.wait_for_connection' if index == 0 and definition.get('wait') else 'ansible.execution') + ':' + playbook)
                 run_process(['ansible-playbook', '-i', str(workspace / 'inventory.json'),
                              str(settings().source_dir / 'ansible' / 'playbooks' / playbook),
                              '--extra-vars', '@' + str(workspace / 'variables.yml')], workspace, env, context, secret.values())

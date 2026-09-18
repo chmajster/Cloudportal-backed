@@ -4,9 +4,12 @@ import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
+from app.catalog import resolve_template_source, template_definition, template_import_target
 from app.config import settings
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
 from app.security.core import decrypt_secret
+from app.terraform.state import distributed_deployment_lock, persist_state, restore_state
 
 
 @contextmanager
@@ -29,44 +32,100 @@ class TerraformExecutor(Executor):
     def execute(self, operation, context):
         deployment, credential = context.deployment, context.credential
         workspace = settings().data_dir / 'workspaces' / deployment.workspace
-        source = settings().source_dir / 'terraform' / 'templates' / deployment.template
-        if deployment.template != 'proxmox-vm' or source.resolve().parent != (settings().source_dir / 'terraform/templates').resolve():
-            raise ExecutionFailed('Unapproved Terraform template')
+        try:
+            definition, source = template_definition(deployment.template)
+        except Exception:
+            raise ExecutionFailed('Unapproved Terraform template') from None
         secret = decrypt_secret(credential)
         env = execution_environment(workspace)
-        env['PROXMOX_VE_ENDPOINT'] = credential.endpoint.rstrip('/') + '/'
-        env['PROXMOX_VE_INSECURE'] = 'false' if credential.verify_ssl else 'true'
-        if secret.get('token_secret'):
-            token_id = secret['token_id']
-            if '!' not in token_id:
-                token_id = credential.username + '!' + token_id
-            env['PROXMOX_VE_API_TOKEN'] = token_id + '=' + secret['token_secret']
+        provider_type = definition['provider']
+        if credential.type != provider_type:
+            raise ExecutionFailed('Credential type does not match Terraform template provider')
+        if provider_type == 'proxmox':
+            env['PROXMOX_VE_ENDPOINT'] = credential.endpoint.rstrip('/') + '/'
+            env['PROXMOX_VE_INSECURE'] = 'false' if credential.verify_ssl else 'true'
+            if secret.get('token_secret'):
+                token_id = secret['token_id']
+                if '!' not in token_id:
+                    token_id = credential.username + '!' + token_id
+                env['PROXMOX_VE_API_TOKEN'] = token_id + '=' + secret['token_secret']
+            else:
+                env['PROXMOX_VE_USERNAME'] = credential.username
+                env['PROXMOX_VE_PASSWORD'] = secret['password']
+        elif provider_type == 'aws':
+            env['AWS_ACCESS_KEY_ID'] = secret['access_key_id']
+            env['AWS_SECRET_ACCESS_KEY'] = secret['secret_access_key']
+            if secret.get('session_token'):
+                env['AWS_SESSION_TOKEN'] = secret['session_token']
+        elif provider_type == 'azure':
+            env['ARM_TENANT_ID'] = secret['tenant_id']
+            env['ARM_CLIENT_ID'] = secret['client_id']
+            env['ARM_CLIENT_SECRET'] = secret['client_secret']
+            env['ARM_SUBSCRIPTION_ID'] = secret['subscription_id']
+        elif provider_type == 'openstack':
+            env['OS_AUTH_URL'] = credential.endpoint.rstrip('/') + ('' if credential.endpoint.rstrip('/').endswith('/v3') else '/v3')
+            env['OS_USERNAME'] = credential.username
+            env['OS_PASSWORD'] = secret['password']
+            env['OS_PROJECT_NAME'] = secret['project_name']
+            env['OS_USER_DOMAIN_NAME'] = secret.get('domain_name', 'Default')
+            env['OS_PROJECT_DOMAIN_NAME'] = secret.get('domain_name', 'Default')
+            env['OS_INSECURE'] = 'false' if credential.verify_ssl else 'true'
+        elif provider_type == 'vmware':
+            endpoint = urlsplit(credential.endpoint)
+            if not endpoint.hostname:
+                raise ExecutionFailed('VMware endpoint is invalid')
+            env['VSPHERE_SERVER'] = endpoint.hostname
+            env['VSPHERE_USER'] = credential.username
+            env['VSPHERE_PASSWORD'] = secret['password']
+            env['VSPHERE_ALLOW_UNVERIFIED_SSL'] = 'false' if credential.verify_ssl else 'true'
         else:
-            env['PROXMOX_VE_USERNAME'] = credential.username
-            env['PROXMOX_VE_PASSWORD'] = secret['password']
-        with workspace_lock(workspace):
-            # Code is root-owned and approved; keep an existing provider lock on updates.
-            for path in source.glob('*.tf'):
-                shutil.copyfile(path, workspace / path.name)
-            lock_source = source / '.terraform.lock.hcl'
-            if lock_source.exists() and not (workspace / '.terraform.lock.hcl').exists():
-                shutil.copyfile(lock_source, workspace / '.terraform.lock.hcl')
-            variables_path = workspace / 'terraform.tfvars.json'
-            variables_path.write_text(json.dumps(deployment.variables))
-            os.chmod(variables_path, 0o600)
-            context.stage('terraform.init')
-            run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, secret.values())
-            context.stage('terraform.plan')
-            plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
-            if operation == 'terraform.destroy':
-                plan.append('-destroy')
-            try:
-                run_process(plan, workspace, env, context, secret.values())
-                if operation != 'terraform.plan':
-                    context.stage(operation)
-                    run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
-            finally:
-                (workspace / 'execution.tfplan').unlink(missing_ok=True)
+            raise ExecutionFailed('Unsupported Terraform provider')
+        with distributed_deployment_lock(deployment.id):
+            with workspace_lock(workspace):
+                context.stage('terraform.state.restore')
+                restore_state(deployment.id, workspace)
+                # Code is root-owned and approved; keep an existing provider lock on updates.
+                for path in source.glob('*.tf'):
+                    shutil.copyfile(path, workspace / path.name)
+                lock_source = source / '.terraform.lock.hcl'
+                if lock_source.exists() and not (workspace / '.terraform.lock.hcl').exists():
+                    shutil.copyfile(lock_source, workspace / '.terraform.lock.hcl')
+                variables_path = workspace / 'terraform.tfvars.json'
+                variables_path.write_text(json.dumps(deployment.variables))
+                os.chmod(variables_path, 0o600)
+                context.stage('terraform.init')
+                run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, secret.values())
+                try:
+                    if operation == 'terraform.import':
+                        import_values = (context.job.payload or {}).get('import_values') or {}
+                        try:
+                            resource_address, import_id = template_import_target(deployment.template, import_values)
+                        except Exception:
+                            raise ExecutionFailed('Approved Terraform import identity is invalid') from None
+                        context.stage('terraform.import')
+                        run_process(
+                            [self.binary, 'import', '-input=false', '-no-color', '-lock-timeout=30s', resource_address, import_id],
+                            workspace, env, context, secret.values(),
+                        )
+                        context.stage('terraform.plan')
+                        run_process(
+                            [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan'],
+                            workspace, env, context, secret.values(),
+                        )
+                    else:
+                        context.stage('terraform.plan')
+                        plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
+                        if operation == 'terraform.destroy':
+                            plan.append('-destroy')
+                        run_process(plan, workspace, env, context, secret.values())
+                        if operation != 'terraform.plan':
+                            context.stage(operation)
+                            run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
+                finally:
+                    (workspace / 'execution.tfplan').unlink(missing_ok=True)
+                    if (workspace / 'terraform.tfstate').exists():
+                        context.stage('terraform.state.persist')
+                        persist_state(deployment.id, workspace)
         return workspace
 
 

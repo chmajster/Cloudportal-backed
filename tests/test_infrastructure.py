@@ -1,3 +1,4 @@
+import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -8,6 +9,15 @@ from app.security.core import decrypt_secret
 from app.executors.base import ExecutionFailed
 from app.executors.terraform import TerraformExecutor, workspace_lock
 from app.jobs.worker import execute
+
+
+def terraform_state_workspace(tmp_path, vm_id=101):
+    workspace = tmp_path / 'terraform-workspace'
+    workspace.mkdir(exist_ok=True)
+    (workspace / 'terraform.tfstate').write_text(json.dumps({
+        'outputs': {'vm_id': {'value': vm_id}},
+    }))
+    return workspace
 
 
 def resources(client,headers):
@@ -97,6 +107,44 @@ def test_worker_rechecks_revoked_permissions(client,headers,monkeypatch):
     assert not called
 
 
+
+def test_failed_job_can_be_retried_with_lineage(client, headers, monkeypatch, tmp_path):
+    d = deployment(client, headers)
+
+    def fail(*args):
+        raise ExecutionFailed('terraform exited with code 1')
+
+    monkeypatch.setattr(TerraformExecutor, 'execute', fail)
+    execute(d['job']['id'])
+    failed = client.get('/api/v1/jobs/' + d['job']['id'], headers=headers).json()
+    assert failed['status'] == 'failed'
+    assert failed['attempt'] == 1
+    assert failed['retry_of'] is None
+
+    retry = client.post(
+        '/api/v1/jobs/' + failed['id'] + '/retry',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    )
+    assert retry.status_code == 202, retry.text
+    retried = retry.json()
+    assert retried['retry_of'] == failed['id']
+    assert retried['attempt'] == 2
+    assert retried['status'] == 'queued'
+
+    workspace = terraform_state_workspace(tmp_path, vm_id=404)
+    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: workspace)
+    execute(retried['id'])
+    completed = client.get('/api/v1/jobs/' + retried['id'], headers=headers).json()
+    assert completed['status'] == 'successful'
+
+    inventory = client.get('/api/v1/inventory/vms?management_mode=terraform', headers=headers)
+    assert any(row['vm_id'] == 404 and row['deployment_id'] == d['id'] for row in inventory.json()['items'])
+
+    assert client.post(
+        '/api/v1/jobs/' + retried['id'] + '/retry',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    ).status_code == 409
+
 def test_workspace_lock_excludes_second_executor(tmp_path):
     import pytest
     with workspace_lock(tmp_path/'workspace'):
@@ -142,13 +190,14 @@ def test_ansible_failure_is_reported(client,headers,monkeypatch):
     assert client.get('/api/v1/jobs/'+response.json()['id'],headers=headers).json()['status']=='failed'
 
 
-def test_dispatcher_and_rq_execute_durable_job(client,headers,monkeypatch):
+def test_dispatcher_and_rq_execute_durable_job(client,headers,monkeypatch,tmp_path):
     from app.jobs.queue import dispatch_once, queue
     from rq import SimpleWorker
     from rq.serializers import JSONSerializer
     from app.security.core import redis_client
     d=deployment(client,headers)
-    monkeypatch.setattr(TerraformExecutor,'execute',lambda *a:None)
+    workspace=terraform_state_workspace(tmp_path)
+    monkeypatch.setattr(TerraformExecutor,'execute',lambda *a:workspace)
     dispatch_once()
     SimpleWorker([queue()],connection=redis_client(),serializer=JSONSerializer).work(burst=True,logging_level='ERROR')
     assert client.get('/api/v1/jobs/'+d['job']['id'],headers=headers).json()['status']=='successful'
@@ -212,7 +261,8 @@ def test_ansible_secrets_are_unsafe_data(client,headers,monkeypatch,tmp_path):
     monkeypatch.setattr('app.executors.ansible.run_process',inspect)
     context=SimpleNamespace(ansible=AnsibleInput(playbook='validate-linux',credentials_id=c.id,inventory={'hosts':['192.0.2.1']}),ansible_credential=c,stage=lambda _:None)
     AnsibleExecutor().execute('ansible.execute',context)
-    assert len(observed)==3
+    # validate-linux runs controlled wait-for-connection + validation once; no duplicate validation pass.
+    assert len(observed)==2
 
 
 def test_successful_plan_does_not_mark_failed_deployment_as_provisioned(client,headers,monkeypatch):
@@ -256,7 +306,7 @@ def test_pending_standalone_ansible_job_preserves_credential(client, headers):
     assert client.delete(f'/api/v1/credentials/{ssh["id"]}', headers=headers).status_code == 200
 
 
-def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch):
+def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch, tmp_path):
     client, headers, admin = system
     _, _, payload = resources(client, headers)
     with session() as db:
@@ -267,7 +317,11 @@ def test_queued_job_survives_refresh_but_not_logout(system, monkeypatch):
     d = client.post('/api/v1/deployments', headers=actor, json=payload).json()
     rotated = client.post('/api/v1/auth/refresh', json={'refresh_token': pair['refresh_token']}).json()
     calls = []
-    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: calls.append(1))
+    workspace = terraform_state_workspace(tmp_path)
+    def successful_apply(*args):
+        calls.append(1)
+        return workspace
+    monkeypatch.setattr(TerraformExecutor, 'execute', successful_apply)
     execute(d['job']['id'])
     assert client.get(f'/api/v1/jobs/{d["job"]["id"]}', headers=headers).json()['status'] == 'successful'
     actor = {'Authorization': 'Bearer ' + rotated['access_token'], 'Idempotency-Key': str(uuid.uuid4())}

@@ -1,3 +1,4 @@
+import uuid
 import json
 import os
 import time
@@ -10,7 +11,8 @@ from app.database import session
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
-from app.models import Audit, Credential, Deployment, Job, JobLog, Token, now
+from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, Token, now
+from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
 
@@ -47,46 +49,195 @@ class Context:
         self.log(action)
         with session() as db:
             db.add(Audit(user_id=self.job.created_by, token_id=self.job.token_id, ip=self.job.ip,
+                         source=self.job.source,
                          action=action, resource='jobs', resource_id=self.job.id, request_id=self.job.request_id))
             db.commit()
 
 
 def validate_authorization(db, job):
-    token = db.get(Token, job.token_id)
-    if not token or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
-        raise ExecutionFailed('Job authorization has been revoked')
-    if token.kind == 'session':
-        # Normal refresh rotates the access token. Authorize the surviving session family,
-        # while logout, replay detection and password changes revoke the whole family.
-        active_family = db.scalar(select(Token.id).where(
-            Token.family == token.family, Token.kind == 'refresh', Token.revoked_at.is_(None),
-            Token.expires_at > now()).limit(1))
-        if not active_family:
-            raise ExecutionFailed('Job session has ended')
-    elif token.kind != 'api' or token.revoked_at:
-        raise ExecutionFailed('Job authorization has been revoked')
-    permissions = effective_permissions(token.user)
-    if token.kind == 'api':
-        if token.expires_at and token.expires_at <= now():
-            raise ExecutionFailed('Job API token expired')
-        permissions &= set(token.scopes)
+    if job.source in {'Scheduler', 'Recovery'} and job.token_id is None:
+        permissions = scheduler_user_permissions(db, job.created_by)
+        if permissions is None:
+            raise ExecutionFailed('Scheduled job owner is disabled or locked')
+    else:
+        token = db.get(Token, job.token_id)
+        if not token or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
+            raise ExecutionFailed('Job authorization has been revoked')
+        if token.kind == 'session':
+            # Normal refresh rotates the access token. Authorize the surviving session family,
+            # while logout, replay detection and password changes revoke the whole family.
+            active_family = db.scalar(select(Token.id).where(
+                Token.family == token.family, Token.kind == 'refresh', Token.revoked_at.is_(None),
+                Token.expires_at > now()).limit(1))
+            if not active_family:
+                raise ExecutionFailed('Job session has ended')
+        elif token.kind != 'api' or token.revoked_at:
+            raise ExecutionFailed('Job authorization has been revoked')
+        permissions = effective_permissions(token.user)
+        if token.kind == 'api':
+            if token.expires_at and token.expires_at <= now():
+                raise ExecutionFailed('Job API token expired')
+            permissions &= set(token.scopes)
     needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
     if job.operation == 'terraform.apply':
         needed.add('deployments.create')
+        blueprint = job.payload.get('blueprint') or {}
+        if blueprint.get('recovery_policy') == 'destroy_on_failure':
+            needed.add('deployments.destroy')
     if job.operation == 'terraform.destroy':
         needed.add('deployments.destroy')
+    if job.operation == 'terraform.import':
+        needed.add('deployments.adopt')
     if job.payload.get('ansible'):
         needed.add('ansible.execute')
     if not needed <= permissions:
         raise ExecutionFailed('Job permissions have been revoked')
 
 
-def wait_for_vm(context, workspace):
+def ensure_runtime_credential(credential):
+    if credential is None:
+        raise ExecutionFailed('Required credential is missing')
+    if credential.expires_at is not None and credential.expires_at <= now():
+        raise ExecutionFailed('Infrastructure credential expired before job execution')
+    return credential
+
+
+def vm_id_from_state(workspace):
     # State is internal, never sent to PHP or returned by API.
-    state = json.loads((workspace / 'terraform.tfstate').read_text())
-    vm_id = state.get('outputs', {}).get('vm_id', {}).get('value')
+    try:
+        state = json.loads((workspace / 'terraform.tfstate').read_text())
+        vm_id = state.get('outputs', {}).get('vm_id', {}).get('value')
+    except (OSError, ValueError, TypeError):
+        raise ExecutionFailed('Terraform state could not be read') from None
     if not vm_id:
         raise ExecutionFailed('VM ID missing from Terraform state')
+    return int(vm_id)
+
+
+def register_managed_vm(context, workspace):
+    vm_id = vm_id_from_state(workspace)
+    with session() as db:
+        deployment = db.get(Deployment, context.deployment.id)
+        existing = db.scalar(select(ManagedVM).where(
+            ManagedVM.provider_id == deployment.provider_id,
+            ManagedVM.vm_id == vm_id,
+        ))
+        if existing and existing.deployment_id not in {None, deployment.id}:
+            raise ExecutionFailed('VM identity is already linked to another deployment')
+        if existing is None:
+            existing = ManagedVM(
+                provider_id=deployment.provider_id,
+                deployment_id=deployment.id,
+                node=deployment.variables['node'],
+                vm_id=vm_id,
+                name=deployment.name,
+                management_mode='terraform',
+                lifecycle_status='active',
+                created_by=deployment.created_by,
+            )
+            db.add(existing)
+        else:
+            existing.deployment_id = deployment.id
+            existing.node = deployment.variables['node']
+            existing.name = deployment.name
+            existing.management_mode = 'terraform'
+            existing.lifecycle_status = 'active'
+            existing.destroyed_at = None
+        db.commit()
+    return vm_id
+
+
+
+def register_managed_resource(context, workspace):
+    try:
+        state = json.loads((workspace / 'terraform.tfstate').read_text())
+    except (OSError, ValueError, TypeError):
+        raise ExecutionFailed('Terraform state could not be read for resource inventory') from None
+    outputs = state.get('outputs', {})
+    external_id = outputs.get('resource_id', {}).get('value')
+    if external_id is None:
+        external_id = outputs.get('vm_id', {}).get('value')
+    if external_id is None:
+        raise ExecutionFailed('Managed resource identity is missing from Terraform state')
+    primary_ip = outputs.get('primary_ip', {}).get('value')
+    with session() as db:
+        deployment = db.get(Deployment, context.deployment.id)
+        row = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == deployment.id
+        ))
+        if row is None:
+            row = ManagedResource(
+                deployment_id=deployment.id,
+                provider_id=deployment.provider_id,
+                provider=deployment.provider,
+                resource_type='vm',
+                external_id=str(external_id),
+                name=deployment.name,
+                primary_ip=str(primary_ip) if primary_ip else None,
+                lifecycle_status='active',
+                metadata_json={},
+                created_by=deployment.created_by,
+            )
+            db.add(row)
+        else:
+            row.external_id = str(external_id)
+            row.name = deployment.name
+            row.primary_ip = str(primary_ip) if primary_ip else None
+            row.lifecycle_status = 'active'
+            row.destroyed_at = None
+        db.commit()
+
+
+def register_adopted_resource(context):
+    values = (context.job.payload or {}).get('import_values') or {}
+    node = values.get('node')
+    vm_id = values.get('vm_id')
+    if not node or not vm_id:
+        raise ExecutionFailed('Adoption identity is missing')
+    with session() as db:
+        deployment = db.get(Deployment, context.deployment.id)
+        managed_vm = db.scalar(select(ManagedVM).where(
+            ManagedVM.provider_id == deployment.provider_id,
+            ManagedVM.vm_id == int(vm_id),
+        ))
+        if managed_vm is None:
+            raise ExecutionFailed('Imported VM is missing from managed inventory')
+        if managed_vm.deployment_id not in {None, deployment.id}:
+            raise ExecutionFailed('Imported VM is already linked to another deployment')
+        managed_vm.deployment_id = deployment.id
+        managed_vm.node = str(node)
+        managed_vm.name = deployment.name
+        managed_vm.management_mode = 'terraform'
+        managed_vm.lifecycle_status = 'active'
+        managed_vm.destroyed_at = None
+
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == deployment.id
+        ))
+        if resource is None:
+            resource = ManagedResource(
+                deployment_id=deployment.id,
+                provider_id=deployment.provider_id,
+                provider=deployment.provider,
+                resource_type='vm',
+                external_id=str(vm_id),
+                name=deployment.name,
+                primary_ip=None,
+                lifecycle_status='active',
+                metadata_json={'adopted': True, 'node': str(node)},
+                created_by=deployment.created_by,
+            )
+            db.add(resource)
+        else:
+            resource.external_id = str(vm_id)
+            resource.name = deployment.name
+            resource.lifecycle_status = 'active'
+            resource.metadata_json = {'adopted': True, 'node': str(node)}
+            resource.destroyed_at = None
+        db.commit()
+
+def wait_for_vm(context, workspace):
+    vm_id = vm_id_from_state(workspace)
     provider = provider_for(context.credential)
     context.stage('workflow.wait_for_vm')
     deadline = time.monotonic() + 600
@@ -119,17 +270,23 @@ def execute(job_id):
             validate_authorization(db, job)
             if job.deployment_id:
                 context.deployment = db.get(Deployment, job.deployment_id)
-                context.credential = db.get(Credential, context.deployment.credentials_id)
+                context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
             if job.payload.get('ansible'):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
-                context.ansible_credential = db.get(Credential, context.ansible.credentials_id)
+                context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
         context.stage('job.running')
         if job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             workspace = executor.execute(job.operation, context)
-            if job.operation == 'terraform.apply' and context.ansible:
-                context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
-                AnsibleExecutor().execute('ansible.execute', context)
+            if job.operation == 'terraform.import':
+                register_adopted_resource(context)
+            if job.operation == 'terraform.apply':
+                register_managed_resource(context, workspace)
+                if context.deployment.provider == 'proxmox':
+                    register_managed_vm(context, workspace)
+                if context.ansible:
+                    context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
+                    AnsibleExecutor().execute('ansible.execute', context)
         else:
             AnsibleExecutor().execute(job.operation, context)
         context.check()
@@ -151,9 +308,72 @@ def execute(job_id):
             deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
             if current.operation == 'terraform.plan' and status == 'successful':
                 deployment.status = current.payload.get('previous_status', 'failed')
+            if current.operation == 'terraform.import' and status == 'successful':
+                deployment.status = 'imported'
             if deployment.status == 'destroyed':
                 deployment.destroyed_at = now()
+                released_at = now()
+                db.execute(update(HostnameReservation).where(
+                    HostnameReservation.resource_id == deployment.id,
+                    HostnameReservation.status != 'released',
+                ).values(status='released', released_at=released_at))
+                db.execute(update(IPAllocation).where(
+                    IPAllocation.resource_id == deployment.id,
+                    IPAllocation.status != 'released',
+                ).values(status='released', released_at=released_at))
+                db.execute(update(ManagedVM).where(
+                    ManagedVM.deployment_id == deployment.id,
+                ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+                db.execute(update(ManagedResource).where(
+                    ManagedResource.deployment_id == deployment.id,
+                ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+        recovery = None
+        blueprint = (current.payload or {}).get('blueprint') or {}
+        if (
+            status == 'failed'
+            and current.operation == 'terraform.apply'
+            and current.source != 'Recovery'
+            and current.deployment_id
+            and blueprint.get('recovery_policy') == 'destroy_on_failure'
+        ):
+            deployment = db.get(Deployment, current.deployment_id)
+            if deployment is not None and deployment.active_job_id is None:
+                recovery = Job(
+                    id=str(uuid.uuid4()),
+                    operation='terraform.destroy',
+                    deployment_id=deployment.id,
+                    payload={'previous_status': 'failed', 'recovery_of': current.id},
+                    created_by=current.created_by,
+                    token_id=current.token_id,
+                    request_id=str(uuid.uuid4()),
+                    ip=current.ip,
+                    source='Recovery',
+                )
+                db.add(recovery)
+                db.flush()
+                deployment.active_job_id = recovery.id
+                deployment.status = 'recovery_queued'
+                queue_webhook_event(db, 'recovery.queued', recovery.id, {
+                    'recovery': {
+                        'job_id': recovery.id,
+                        'deployment_id': recovery.deployment_id,
+                        'status': 'queued',
+                        'recovery_of': current.id,
+                    }
+                })
+                db.add(Audit(
+                    user_id=current.created_by,
+                    token_id=current.token_id,
+                    ip=current.ip,
+                    source='Recovery',
+                    action='recovery.queued',
+                    resource='jobs',
+                    resource_id=recovery.id,
+                    request_id=recovery.request_id,
+                ))
         db.add(JobLog(job_id=job_id, message='job.' + status + (': ' + error if error else '')))
+        queue_job_webhooks(db, current)
         db.add(Audit(user_id=job.created_by, token_id=job.token_id, ip=job.ip, action='job.' + status,
+                     source=job.source,
                      resource='jobs', resource_id=job.id, result=status, request_id=job.request_id))
         db.commit()

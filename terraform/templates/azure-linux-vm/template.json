@@ -1,0 +1,7 @@
+{
+  "id": "azure-linux-vm",
+  "name": "Azure Linux VM",
+  "provider": "azure",
+  "version": 1,
+  "schema_model": "app.api.schemas:AzureVariables"
+}

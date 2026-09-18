@@ -89,6 +89,9 @@ class CredentialOutput(Output):
     endpoint: str
     username: str
     verify_ssl: bool
+    expires_at: datetime | None
+    rotation_due_at: datetime | None
+    secret_updated_at: datetime | None
     created_at: datetime
     updated_at: datetime
     configured: bool
@@ -98,7 +101,7 @@ class CredentialOutput(Output):
 class ProviderOutput(Output):
     id: int
     name: str
-    type: Literal['proxmox']
+    type: Literal['proxmox', 'vmware', 'aws', 'azure', 'openstack']
     credentials_id: int
     created_at: datetime
     updated_at: datetime
@@ -107,14 +110,17 @@ class ProviderOutput(Output):
 class JobOutput(Output):
     id: str
     deployment_id: str | None
-    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'ansible.execute']
+    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'terraform.import', 'ansible.execute']
     status: Literal['queued', 'running', 'successful', 'failed', 'cancelled']
     created_by: int
     request_id: str
+    source: str
     created_at: datetime
     updated_at: datetime
     cancel_requested: bool
     error: str | None
+    retry_of: str | None
+    attempt: int
 
 
 class DeploymentOutput(Output):
@@ -125,6 +131,7 @@ class DeploymentOutput(Output):
     template: str
     credentials_id: int
     workspace: str
+    state_location: str
     variables: dict[str, Any]
     workflow: dict[str, Any]
     status: str
@@ -158,6 +165,7 @@ class AuditOutput(Output):
     user_id: int | None
     token_id: int | None
     ip: str
+    source: str
     action: str
     resource: str
     resource_id: str | None
@@ -169,12 +177,15 @@ class TemplateOutput(Output):
     id: str
     name: str
     provider: str
+    version: int
+    importable: bool
     variables_schema: dict[str, Any]
 
 
 class PlaybookOutput(Output):
     id: str
     name: str
+    version: int
     variables: list[str]
     transport: Literal['ssh', 'winrm']
 
@@ -232,3 +243,53 @@ class ResetOutput(Output):
 class PasswordChangedOutput(Output):
     changed: bool
     login_required: bool
+
+
+class HostnameSchemeOutput(Output):
+    id: int
+    name: str
+    pattern: str
+    next_number: int
+    padding: int
+    is_active: bool
+    created_by: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class HostnameReservationOutput(Output):
+    id: str
+    scheme_id: int
+    hostname: str
+    values: dict[str, Any]
+    status: Literal['reserved', 'assigned', 'released']
+    resource_id: str | None
+    created_by: int
+    created_at: datetime
+    updated_at: datetime
+    released_at: datetime | None
+
+
+class GeneratedHostnameOutput(Output):
+    hostname: str
+    reservation: HostnameReservationOutput | None
+
+
+class BlueprintOutput(Output):
+    id: int
+    slug: str
+    name: str
+    description: str
+    version: int
+    is_active: bool
+    visibility: dict[str, bool]
+    allowed_role_ids: list[int]
+    allowed_user_ids: list[int]
+    variables_schema: dict[str, Any]
+    deployment: dict[str, Any]
+    workflow: list[dict[str, Any]]
+    requires_approval: bool
+    recovery_policy: Literal['preserve', 'destroy_on_failure']
+    created_by: int
+    created_at: datetime
+    updated_at: datetime

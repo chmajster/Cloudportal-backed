@@ -11,20 +11,24 @@ github_token_file=''
 github_config=''
 cert_file=''
 cert_key=''
+backup_schedule=''
+backup_retention_days=''
 non_interactive=0
 check_platform=0
 while (($#)); do
   case "$1" in
-    --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key)
+    --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing value for $1" >&2; exit 2; }
       case "$1" in
         --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2;; --ref) ref=$2;;
-        --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;;
+        --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2;;
       esac
       shift 2;;
+    --enable-backups) backup_schedule=true; shift;;
+    --disable-backups) backup_schedule=false; shift;;
     --non-interactive) non_interactive=1; shift;;
     --check-platform) check_platform=1; shift;;
-    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--non-interactive] [--check-platform] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
+    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--enable-backups|--disable-backups] [--backup-retention-days 14] [--non-interactive] [--check-platform] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -84,13 +88,20 @@ backend_host=${backend_host:-${previous_host:-$(hostname -f)}}
 backend_port=${backend_port:-${previous_port:-8443}}
 if [[ -r "$config/backend.env" ]]; then
   previous_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$config/backend.env")
+  previous_backup_schedule=$(sed -n 's/^CP_BACKUP_SCHEDULE_ENABLED=//p' "$config/backend.env")
+  previous_backup_retention_days=$(sed -n 's/^CP_BACKUP_RETENTION_DAYS=//p' "$config/backend.env")
 fi
 workers=${workers:-${previous_workers:-1}}
+backup_schedule=${backup_schedule:-${previous_backup_schedule:-false}}
+backup_retention_days=${backup_retention_days:-${previous_backup_retention_days:-14}}
 [[ "$backend_host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]] || { echo 'Invalid host.' >&2; exit 2; }
 [[ "$backend_port" =~ ^[0-9]{1,5}$ ]] && ((10#$backend_port >= 1 && 10#$backend_port <= 65535)) || { echo 'Invalid port.' >&2; exit 2; }
 [[ "$workers" =~ ^[0-9]{1,2}$ ]] && ((10#$workers >= 1 && 10#$workers <= 64)) || { echo 'Invalid workers count.' >&2; exit 2; }
+[[ "$backup_schedule" == true || "$backup_schedule" == false ]] || { echo 'Invalid backup schedule flag.' >&2; exit 2; }
+[[ "$backup_retention_days" =~ ^[0-9]{1,4}$ ]] && ((10#$backup_retention_days >= 1 && 10#$backup_retention_days <= 3650)) || { echo 'Invalid backup retention days.' >&2; exit 2; }
 backend_port=$((10#$backend_port))
 workers=$((10#$workers))
+backup_retention_days=$((10#$backup_retention_days))
 ((backend_port != 6389)) || { echo 'Port 6389 is reserved for the internal Redis/Valkey instance.' >&2; exit 2; }
 [[ -z "$github_token_file" || -z "$github_config" ]] || { echo 'Use either --github-token-file or --github-config.' >&2; exit 2; }
 [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || { echo 'Invalid git ref.' >&2; exit 2; }
@@ -130,7 +141,7 @@ fi
 if [[ -n "$github_token_file" ]]; then
   [[ -r "$github_token_file" && "$(stat -c %a "$github_token_file")" == 600 ]] || { echo 'GitHub token file must be readable with mode 600.' >&2; exit 1; }
   github_token=$(tr -d '\r\n' < "$github_token_file")
-  [[ "$github_token" =~ ^[A-Za-z0-9_]+$ ]] || { echo 'Invalid GitHub token format.' >&2; exit 1; }
+  [[ "$github_token" =~ ^[A-Za-z0-9._-]{20,512}$ ]] || { echo 'Invalid GitHub token format.' >&2; exit 1; }
   printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$tmp/curl.conf"
   unset github_token
   curl_args+=(--config "$tmp/curl.conf")
@@ -176,6 +187,8 @@ CP_REDIS_URL=redis://:$redis_password@127.0.0.1:6389/0
 CP_MASTER_KEY_FILE=$config/master.key
 CP_DATA_DIR=$data
 CP_WORKER_COUNT=$workers
+CP_BACKUP_SCHEDULE_ENABLED=$backup_schedule
+CP_BACKUP_RETENTION_DAYS=$backup_retention_days
 EOF
   cat > "$config/redis.conf" <<EOF
 bind 127.0.0.1
@@ -190,8 +203,18 @@ EOF
 fi
 chown cloudportal:cloudportal "$config/backend.env" "$config/redis.conf"
 chmod 0600 "$config/backend.env" "$config/redis.conf"
-# Update only nonsecret expected worker count; preserve credentials and master key.
+# Update only nonsecret runtime settings; preserve credentials and master key.
 sed -i "s/^CP_WORKER_COUNT=.*/CP_WORKER_COUNT=$workers/" "$config/backend.env"
+if grep -q '^CP_BACKUP_SCHEDULE_ENABLED=' "$config/backend.env"; then
+  sed -i "s/^CP_BACKUP_SCHEDULE_ENABLED=.*/CP_BACKUP_SCHEDULE_ENABLED=$backup_schedule/" "$config/backend.env"
+else
+  printf 'CP_BACKUP_SCHEDULE_ENABLED=%s\n' "$backup_schedule" >> "$config/backend.env"
+fi
+if grep -q '^CP_BACKUP_RETENTION_DAYS=' "$config/backend.env"; then
+  sed -i "s/^CP_BACKUP_RETENTION_DAYS=.*/CP_BACKUP_RETENTION_DAYS=$backup_retention_days/" "$config/backend.env"
+else
+  printf 'CP_BACKUP_RETENTION_DAYS=%s\n' "$backup_retention_days" >> "$config/backend.env"
+fi
 install -d -m 0700 -o cloudportal -g cloudportal "$data/redis"
 cat > /etc/systemd/system/cloudportal-redis.service <<EOF
 [Unit]
@@ -331,12 +354,53 @@ server {
 EOF
 nginx -t
 ln -sfn "$release" "$app_root/current"
+cat > /usr/local/sbin/cloudportal-backup <<'EOF'
+#!/bin/sh
+exec /opt/cloudportal-backed/current/.venv/bin/python /opt/cloudportal-backed/current/scripts/backend-backup.py "$@"
+EOF
+cat > /usr/local/sbin/cloudportal-restore <<'EOF'
+#!/bin/sh
+exec /opt/cloudportal-backed/current/.venv/bin/python /opt/cloudportal-backed/current/scripts/backend-restore.py "$@"
+EOF
+chmod 0755 /usr/local/sbin/cloudportal-backup
+chmod 0750 /usr/local/sbin/cloudportal-restore
+install -d -m 0700 -o cloudportal -g cloudportal /var/backups/cloudportal-backed
+cat > /etc/systemd/system/cloudportal-backup.service <<EOF
+[Unit]
+Description=Cloudportal-backed database backup
+After=postgresql.service
+[Service]
+Type=oneshot
+User=cloudportal
+Group=cloudportal
+ExecStart=/usr/local/sbin/cloudportal-backup --retention-days $backup_retention_days
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/cloudportal-backed
+EOF
+cat > /etc/systemd/system/cloudportal-backup.timer <<'EOF'
+[Unit]
+Description=Daily Cloudportal-backed database backup
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+[Install]
+WantedBy=timers.target
+EOF
 printf 'host=%s\nport=%s\n' "$backend_host" "$backend_port" > "$config/public.conf"
 systemctl daemon-reload
 systemctl enable --now cloudportal-redis
 systemctl enable cloudportal-api cloudportal-dispatcher
 systemctl restart cloudportal-api cloudportal-dispatcher
 for ((i=1;i<=workers;i++)); do systemctl enable "cloudportal-worker@$i"; systemctl restart "cloudportal-worker@$i"; done
+if [[ "$backup_schedule" == true ]]; then
+  systemctl enable --now cloudportal-backup.timer
+else
+  systemctl disable --now cloudportal-backup.timer >/dev/null 2>&1 || true
+fi
 systemctl enable --now nginx
 systemctl reload nginx
 if [[ "$os_family" == rhel ]] && systemctl is-active --quiet firewalld; then

@@ -24,6 +24,14 @@ Instalacja unattended / własny host i port:
 curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --non-interactive --host backend.example.com --port 8443 --workers 3
 ```
 
+Opcjonalny automatyczny backup PostgreSQL można włączyć podczas instalacji. Timer systemd uruchamia backup codziennie, a retencja usuwa wyłącznie katalogi backupów starsze niż wskazany limit:
+
+```bash
+sudo ./install.sh --host backend.example.com --enable-backups --backup-retention-days 14
+```
+
+Ręczne komendy po instalacji: `cloudportal-backup` oraz destrukcyjne `cloudportal-restore --backup KATALOG --yes-replace-database`. Restore weryfikuje SHA-256 dumpa i fingerprint istniejącego master key; master key nie jest kopiowany do katalogu backupu.
+
 Jeżeli repozytorium zostanie przełączone na prywatne, anonimowe pobranie zwróci 404. Wtedy zapisz w `/root/cloudportal-github.conf` (właściciel root, tryb 600) konfigurację curl z tokenem GitHub mającym wyłącznie dostęp Contents: read do tego repozytorium:
 
 ```text
@@ -60,9 +68,9 @@ W powiązanej wersji Cloud Portal:
 4. Wprowadź adres HTTPS, token konta serwisowego i klucz konfiguracji, jeśli to nowa instalacja. `Testuj połączenie` sprawdza `/health` i `/auth/me`.
 5. Zapisz konfigurację, zaloguj się administratorem backendu i unieważnij niepotrzebny Initial Administrator Token.
 
-Operacje interaktywne używają tokena zalogowanego użytkownika, a nie tokena serwisowego. PHP przechowuje tylko własną sesję i konfigurację połączenia. Nie tworzy kopii backendowych kont ani ról. Uprawnienia są odczytywane z `/auth/me` na każdym żądaniu, a API sprawdza je ponownie. Przeglądarka wysyła akcje do proxy `/backend-api` w PHP, które przekazuje JSON, `X-Request-ID`, `Idempotency-Key` i status API. Wyłącznie backend otwiera połączenia z infrastrukturą i wykonuje Terraform/Ansible. Brak backendu oznacza 503; nie uruchamia lokalnego wykonawcy PHP.
+Operacje interaktywne są autoryzowane tokenem zalogowanego użytkownika; token serwisowy potwierdza wyłącznie, że żądanie pochodzi z zaufanej instancji CloudPortal i nie rozszerza permissions użytkownika. PHP przechowuje własną sesję i chronioną konfigurację połączenia. Nie tworzy kopii backendowych kont ani ról. Uprawnienia są odczytywane z `/auth/me` na każdym żądaniu, a API sprawdza je ponownie. Przeglądarka wysyła akcje do proxy `/backend-api` w PHP, które przekazuje JSON, `X-Request-ID`, `Idempotency-Key` i status API. Wyłącznie backend otwiera połączenia z infrastrukturą i wykonuje Terraform/Ansible. Brak backendu oznacza 503; nie uruchamia lokalnego wykonawcy PHP.
 
-Istniejąca baza starego portalu nie jest automatycznie importowana ani kasowana. W trybie centralnym jej konta, RBAC i credentiale są nieaktywne; starsze funkcje projektu (m.in. lokalne projekty/IPAM/konsole) nie są udostępniane przez nowy interfejs. Przed przełączeniem istniejącej instalacji przygotuj konta/role i połączenia w backendzie oraz archiwizuj stare dane zgodnie z polityką retencji. Nowy backend nie przejmuje zarządzania dawnymi VM/state automatycznie.
+Istniejąca baza starego portalu nie jest automatycznie kasowana. Konta, RBAC i credentiale centralnego trybu są źródłem prawdy w backendzie. Nowy panel backendu udostępnia m.in. IPAM, Inventory/ManagedResource, Proxmox lifecycle/snapshot/backup/console, harmonogramy, webhooki oraz monitoring. Istniejące VM mogą zostać najpierw dodane do inventory jako `external`, a następnie przejęte kontrolowanym workflow `adopt`: backend pobiera live config, tworzy desired-state, wykonuje `terraform import` i **plan-only**. Automatyczny apply po adopcji jest zabroniony; operator najpierw ocenia drift.
 
 ## API i bezpieczeństwo
 
@@ -72,7 +80,7 @@ Kontrakt: `/openapi.json` (OpenAPI 3.x), Swagger `/docs`. Prefix `/api/v1`. Mode
 - Sesje: opaque access token 15 minut, rotowany refresh token 8 godzin. Ponowne użycie refresh tokena unieważnia całą rodzinę. Logout, reset i zmiana hasła odwołują odpowiednie tokeny. Konta serwisowe nie logują się hasłem.
 - Tokeny API: zakres jest przecięciem zapisanych scopes i **aktualnych** permissions konta. Osoba nadająca role/tokeny nie może nadać uprawnień spoza własnego zakresu. Nie można usunąć ostatniego aktywnego administratora.
 - Reset hasła: administrator wydaje token ważny 15 minut, wyświetlany raz; użytkownik podaje go formularzem POST `/password-reset` w portalu. Token nie jest umieszczany w URL. Wydanie tokena unieważnia sesje, a realizacja jest atomowa i jednorazowa. Nie ma automatycznej wysyłki e-mail.
-- Credentiale: AES-256-GCM, losowy nonce, AAD z ID credentiala. Klucz 32 bajty w `/etc/cloudportal-backed/master.key`, 0600, właściciel `cloudportal`. API zwraca maskę i flagę `configured`. Pole `secrets` pominięte w PUT zachowuje wartość. Podane `secrets` zastępuje komplet sekretów. Zmiana celu wymaga nowych sekretów; cel używany przez aktywne deploymenty nie może zostać podmieniony.
+- Credentiale: AES-256-GCM, losowy nonce, AAD z ID credentiala. Klucz 32 bajty w `/etc/cloudportal-backed/master.key`, 0600, właściciel `cloudportal`. API zwraca wyłącznie maskę i flagę `configured`. Pole `secrets` pominięte w PUT zachowuje wartość. Podane `secrets` zastępuje komplet sekretów. UI ma typowane formularze dla Proxmox/VMware/SSH/WinRM/AWS/Azure/OpenStack zamiast surowego JSON. Credential może mieć `expires_at` i `rotation_due_at`; worker blokuje wykonanie z wygasłym credentialem, a monitoring generuje alerty o wygaśnięciu/rotacji.
 - Testy credentiali: Proxmox, VMware, SSH z obowiązkowym known_hosts, WinRM z weryfikacją certyfikatu, AWS STS, Azure OAuth, OpenStack Keystone. Typ `other` przechowuje zaszyfrowane dane, ale wymaga osobnego adaptera testującego.
 - Idempotency-Key UUID: obowiązkowy przy tworzeniu deploymentu, tworzeniu joba i niszczeniu VM, opcjonalny dla innych operacji tworzących. PostgreSQL przechowuje atomowy wynik i HMAC requestu; konflikt payloadu daje 409. Sekrety jednorazowe nie są odtwarzane przy powtórzeniu.
 - X-Request-ID UUID łączy request, job, worker, logi i audit. Audit nie zawiera payloadów ani sekretów. Logi wykonawców są redagowane i limitowane.
@@ -83,17 +91,17 @@ Domyślne role to Administrator, Infrastructure Administrator, Operator, Viewer,
 
 ## Provisioning
 
-Pierwszy adapter infrastruktury: Proxmox. `InfrastructureProvider` i registry pozwalają dodawać następne adaptery. Credentiale VMware/AWS/Azure/OpenStack można zapisać i przetestować, ale provisioning tych platform nie jest jeszcze zaimplementowany.
+Provisioning jest katalogowy i wspólny dla wielu providerów. Zatwierdzone manifesty Terraform obejmują: `proxmox-vm`, `aws-ec2`, `azure-linux-vm`, `openstack-vm` i `vmware-vsphere-vm`. Każdy manifest ma jawny `version`, model Pydantic zmiennych oraz provider. CI wykonuje `terraform validate` dla każdego katalogu z `template.json`. Sekrety providerów nigdy nie trafiają do HCL/tfvars — executor tłumaczy zaszyfrowany credential na standardowe zmienne środowiskowe providera.
 
-Zatwierdzony szablon `proxmox-vm` klonuje **istniejący szablon QEMU cloud-init** przez bpg/proxmox 0.111.x. Wymaga storage, bridge, template_id, węzła i działającego DHCP. Template musi mieć działający qemu-guest-agent oraz cloud-init. Rozmiar dysku docelowego nie może być mniejszy niż dysk szablonu. Token PVE musi mieć uprawnienia do klonowania, VM, storage i odczytu guest agent. Sekrety providera przekazywane są w środowisku procesu.
+Szablon `proxmox-vm` klonuje **istniejący szablon QEMU cloud-init** przez bpg/proxmox 0.111.x. Wymaga storage, bridge, template_id i węzła; obsługuje DHCP albo statyczny IPv4 z IPAM. Template musi mieć działający qemu-guest-agent oraz cloud-init. Token PVE musi mieć wymagane uprawnienia do VM/storage/guest-agent.
 
-`POST /deployments` tworzy deployment i trwały job w jednej transakcji. Dispatcher przenosi zadania z PostgreSQL do Redis/RQ; awaria Redis nie usuwa jobów. Worker atomowo przejmuje job i ponownie sprawdza uprawnienia. Odświeżenie sesji użytkownika nie unieważnia oczekującego joba; wylogowanie, odwołanie rodziny sesji lub utrata uprawnień blokują jego rozpoczęcie. Jeden deployment ma jedno aktywne zadanie; dodatkowo obowiązuje flock workspace oraz blokada stanu Terraform. Workery korzystają ze wspólnego lokalnego katalogu danych na tym samym serwerze. Instalacja wieloserwerowa workerów wymaga współdzielonego state i rozproszonego mechanizmu blokowania. Healthcheck odrębnie monitoruje Redis, heartbeat dispatchera i heartbeat workerów, również gdy kolejka jest pusta.
+`POST /deployments` tworzy deployment i trwały job w jednej transakcji. Dispatcher przenosi zadania z PostgreSQL do Redis/RQ; awaria Redis nie usuwa jobów. Worker atomowo przejmuje job i ponownie sprawdza uprawnienia. Jeden deployment ma jedno aktywne zadanie. Terraform state jest szyfrowany AES-GCM i przechowywany w PostgreSQL z SHA-256 oraz numerem wersji; przed wykonaniem jest odtwarzany na dowolnym workerze. PostgreSQL advisory lock zapewnia blokadę rozproszoną, a lokalny flock pozostaje drugą warstwą ochrony. Dzięki temu workery na oddzielnych hostach nie wymagają wspólnego filesystemu; muszą współdzielić PostgreSQL, Redis i ten sam master key. Częściowy state jest zapisywany również po błędzie executora.
 
 Przepływ z opcją Ansible: init → plan → apply → adres VM z guest agent → wait_for_connection SSH/WinRM → zatwierdzony playbook → walidacja → successful. Bez Ansible kończy się po apply. Host SSH jest sprawdzany względem known_hosts z credentiala (również wpisy SSH CA); WinRM używa HTTPS i weryfikacji certyfikatu. Szablon musi zawierać przygotowane zaufanie kluczy/certyfikatów i konto odpowiednie dla playbooka. Bootstrap Linux wymaga bezhasłowego sudo tego konta.
 
 API nie przyjmuje HCL, ścieżek plików, dowolnych playbooków, pluginów, zmiennych `ansible_*` ani komend. Dozwolone są tylko playbooki z repozytorium. OpenTofu używa wspólnego executora, jeżeli administrator zainstaluje `tofu` w `/usr/local/bin` lub `/usr/bin`.
 
-Anulowanie kończy grupę procesów, zachowując state. Nie jest automatycznym rollbackiem zasobów. Przerwany worker oznacza zadanie jako failed; ponowienie apply jest decyzją operatora. Nie usuwa się VM po nieudanym Ansible. Logi: `GET /jobs/{id}/logs?after=ID&limit=200`.
+Anulowanie kończy grupę procesów i zachowuje state. Joby mają jawny retry lineage (`retry_of`, `attempt`). Blueprint może mieć `recovery_policy=preserve` albo `destroy_on_failure`; automatyczny recovery jest osobnym, audytowalnym `terraform.destroy` jobem, a nie ukrytym rollbackiem. Blueprint może też wymagać `blueprints.approve`. Logi: `GET /jobs/{id}/logs?after=ID&limit=200`.
 
 ## Uruchomienie w Docker Compose
 
@@ -117,7 +125,22 @@ TEST_REDIS_URL=redis://localhost:6379/15 .venv/bin/pytest -q
 
 Testy używają domyślnie tymczasowego SQLite oraz dedykowanej bazy Redis 15. **Nie podawaj produkcyjnego URL**: testy czyszczą bazę testową. CI definiuje PostgreSQL, Terraform validate, budowę kontenera oraz test instalacji i reinstalacji systemd. Wynik tych zadań zależy od dostępności runnerów GitHub Actions. `TEST_DATABASE_URL` wskazuje wyłącznie pustą testową bazę PostgreSQL. `REDIS_SERVER_BINARY=/path/to/redis-server` uruchamia lokalny Redis na 16389 na czas testów.
 
-E2E na prawdziwym PVE: `scripts/e2e-proxmox.py` używa istniejącego credentiala i providera w backendzie; wymaga jawnego `--allow-create-and-destroy` i odpowiednich parametrów. Test tworzy VM, czeka na wynik workflow, pobiera logi i niszczy VM. Nie uruchamia się automatycznie na produkcji.
+Live E2E są zawsze jawnie opt-in i nie uruchamiają się automatycznie na produkcji. `scripts/e2e-proxmox.py` wykonuje pełny create → workflow → destroy dla Proxmox. `scripts/e2e-proxmox-operations.py` na wskazanej testowej VM sprawdza console-ticket, backup, restore do jawnie podanego wolnego VMID oraz cleanup odtworzonej VM. `scripts/e2e-terraform-provider.py` jest wspólnym runnerem dla `aws-ec2`, `azure-linux-vm`, `openstack-vm`, `vmware-vsphere-vm` i innych zatwierdzonych template: testuje credential, tworzy deployment, czeka na job, weryfikuje `ManagedResource`, a następnie wykonuje destroy. Runnery wymagają HTTPS, token file z mode 0600 oraz jawnej flagi zezwalającej na create/destroy.
+
+## Blueprinty i Hostname Manager
+
+Backend jest źródłem prawdy dla Blueprintów oraz rezerwacji hostname. Blueprint przechowuje wersjonowany schemat formularza, definicję deploymentu, widoczność (`backend`, `cloudportal`, `api`), ograniczenia ról/użytkowników i workflow będący walidowanym DAG-em. Niedozwolone typy kroków, brakujące zależności, cykle i nieznane zmienne są odrzucane przed utworzeniem zadania.
+
+Najważniejsze endpointy:
+
+- `GET/POST /api/v1/blueprints`, `PUT/DELETE /api/v1/blueprints/{id}`;
+- `POST /api/v1/blueprints/{id}/execute` — waliduje formularz, rezerwuje hostname, tworzy deployment i trwały job;
+- `GET/POST /api/v1/hostname-schemes`;
+- `GET /api/v1/hostnames`, `POST /api/v1/hostnames/generate` oraz operacje `assign`/`release`.
+
+Wzorce hostname obsługują: `{location}`, `{environment}`, `{env}`, `{application}`, `{service}`, `{role}`, `{os}`, `{cluster}`, `{site}`, `{year}`, `{number}` i `{random}`. Sekwencja jest blokowana transakcyjnie, nazwa ma unikalny indeks, a historia nie jest usuwana przy zwolnieniu rezerwacji.
+
+Żądania z CloudPortal wysyłają jednocześnie token zalogowanego użytkownika i osobny `X-Portal-Token` konta serwisowego z `portal.connect`. Backend zapisuje źródło w zadaniu i audycie. Sam nagłówek `X-Portal-Source: CloudPortal` bez poprawnego uwierzytelnienia usługi jest odrzucany.
 
 Usługi: `cloudportal-api`, `cloudportal-dispatcher`, `cloudportal-worker@1`, `cloudportal-redis`. Sekrety konfiguracyjne: `/etc/cloudportal-backed/backend.env`. Dane: `/var/lib/cloudportal-backed`. Sprawdzenie: `systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1` i `journalctl -u cloudportal-api`.
 
@@ -130,3 +153,8 @@ PORTAL_PATH=/path/to/HomeLAB-Proxmox-CloudPortal PHP_BINARY=php TEST_REDIS_URL=r
 ```
 
 Status weryfikacji przy przygotowaniu: lokalne testy API/RBAC/workerów/klienta PHP i integracji HTTPS przeszły. Faktyczna instalacja systemd, kontener oraz współbieżność PostgreSQL wymagają uruchomienia zadań CI (pierwszy run prywatnego repozytorium zakończył się przed przydzieleniem runnerów). Pełnego provisioning E2E na rzeczywistym Proxmoxie nie wykonano bez dostępu do infrastruktury.
+
+
+## Operacyjność i retencja
+
+Dispatcher wykonuje trwałe harmonogramy Terraform, podpisane webhooki HMAC z retry, skan alertów systemowych oraz okresowe czyszczenie danych technicznych. Retencja obejmuje JobLog, Audit, zakończone WebhookDelivery, rekordy idempotency oraz zwolnione IP/hostname; czasy są konfigurowane przez `CP_RETENTION_*`. `/metrics` wystawia format Prometheus, `/alerts` agreguje m.in. stan DB/Redis/dispatcher/workers, stuck jobs, wyczerpane webhooki oraz credential expiry/rotation. Opcjonalne trace OTLP włącza `CP_OTEL_EXPORTER_OTLP_ENDPOINT`.
