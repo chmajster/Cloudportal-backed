@@ -268,3 +268,13 @@ class ManagedVM(Timestamp, Base):
     lifecycle_status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     destroyed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+
+class TerraformState(Base):
+    __tablename__ = "terraform_states"
+    deployment_id: Mapped[str] = mapped_column(ForeignKey("deployments.id", ondelete="CASCADE"), primary_key=True)
+    encrypted_state: Mapped[bytes] = mapped_column(LargeBinary)
+    state_sha256: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
