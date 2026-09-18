@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
-from app.api import administration, automation, health, infrastructure
+from app.api import administration, automation, health, infrastructure, proxmox_management
 from app.auth import routes as auth
 from app.config import settings
 from app.security.core import throttle
@@ -74,7 +74,7 @@ async def conflict(request, error):
 # eager and lazy router inclusion in supported FastAPI versions.
 from fastapi.routing import APIRoute
 
-for router in (auth.router, administration.router, infrastructure.router, automation.router, health.router):
+for router in (auth.router, administration.router, infrastructure.router, automation.router, proxmox_management.router, health.router):
     for route in router.routes:
         if not isinstance(route, APIRoute):
             continue
