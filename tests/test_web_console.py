@@ -41,9 +41,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Secrets JSON' not in script.text
     assert 'Zastąp zapisane sekrety' in script.text
     assert "['suspend', 'Resume']" not in script.text
-    assert "['suspend', 'Suspend']" in script.text
-    assert "['resume', 'Resume']" in script.text
-    assert "['reset', 'Reset']" in script.text
+    assert "['suspend', 'Wstrzymaj']" in script.text
+    assert "['resume', 'Wznów']" in script.text
+    assert "['reset', 'Twardy reset']" in script.text
     assert 'destroy_unreferenced_disks' in script.text
     assert 'credential-secret-panel' in script.text
     assert 'Akceptuj certyfikat self-signed / niezaufany' in script.text
@@ -51,6 +51,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'data-workflow-row' in script.text
     assert 'deployment_ansible_enabled' in script.text
     assert 'function permissionPicker(' in script.text
+    assert 'function permissionSummary(' in script.text
+    assert 'function discoverVmOptions(' in script.text
+    assert 'function storageLabel(' in script.text
     assert 'function hostnameValueFields(' in script.text
     assert 'Zmienne template JSON' not in script.text
     assert 'Schemat zmiennych JSON' not in script.text
@@ -70,7 +73,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '192.168.1.10' in script.text
     assert 'restoreVmFromBackup' in script.text
     assert "backups.restore" in script.text
-    assert "Uruchom restore" in script.text
+    assert "Uruchom przywracanie" in script.text
     assert 'consoleRfb' in script.text
     assert 'rfb_module' in script.text
     assert 'ws_path' in script.text
