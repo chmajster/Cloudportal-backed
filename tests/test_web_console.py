@@ -15,6 +15,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert page.text.count('data-theme-toggle') == 2
     assert 'id="sidebar-backdrop"' in page.text
     assert 'id="modal-close"' in page.text
+    assert 'id="refresh-view"' in page.text
     assert 'src="./theme-init.js"' in page.text
     assert 'src="./app.js"' in page.text
     assert page.headers['cache-control'] == 'no-store'
@@ -72,6 +73,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "const THEME_KEY = 'cloudportal.console.theme';" in script.text
     assert 'function setTheme(' in script.text
     assert 'function setMobileMenu(' in script.text
+    assert "dom.refreshView.addEventListener('click'" in script.text
     assert 'function copyText(' in script.text
     assert 'function setLoginMessage(' in script.text
     assert "replace(/^Value error" in script.text
