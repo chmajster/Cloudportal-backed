@@ -337,6 +337,47 @@ def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
 
 
 
+
+def test_proxmox_auto_token_bootstrap_stores_token_not_password(client, headers, monkeypatch):
+    calls = []
+
+    def fake_create_api_token(endpoint, username, password, verify_ssl=True):
+        calls.append((endpoint, username, password, verify_ssl))
+        return {
+            'token_id': username + '!cloudportal-test',
+            'token_secret': 'generated-proxmox-token-secret',
+            'version': '9.0',
+        }
+
+    monkeypatch.setattr('app.api.infrastructure.create_api_token', fake_create_api_token)
+    key = str(uuid.uuid4())
+    payload = {
+        'name': 'PVE automatic',
+        'endpoint': 'https://pve.example.com:8006/api2/json',
+        'username': 'root@pam',
+        'password': 'one-time-pve-password',
+        'verify_ssl': True,
+    }
+    auth = {**headers, 'Idempotency-Key': key}
+    first = client.post('/api/v1/credentials/proxmox/auto-token', headers=auth, json=payload)
+    second = client.post('/api/v1/credentials/proxmox/auto-token', headers=auth, json=payload)
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()['id'] == second.json()['id']
+    assert first.json()['endpoint'] == 'https://pve.example.com:8006'
+    assert first.json()['secret'] == '********'
+    assert calls == [('https://pve.example.com:8006', 'root@pam', 'one-time-pve-password', True)]
+
+    with session() as db:
+        row = db.get(Credential, first.json()['id'])
+        stored = decrypt_secret(row)
+        assert stored == {
+            'token_id': 'root@pam!cloudportal-test',
+            'token_secret': 'generated-proxmox-token-secret',
+        }
+        assert 'one-time-pve-password' not in str(db.scalars(select(Idempotency)).all())
+
 def test_provider_specific_credential_validation(client, headers):
     invalid = [
         {'name': 'VMware invalid', 'type': 'vmware', 'endpoint': 'https://vc.example.com', 'username': 'administrator@vsphere.local', 'secrets': {'secret': 'x'}},
