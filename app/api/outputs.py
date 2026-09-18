@@ -107,7 +107,7 @@ class ProviderOutput(Output):
 class JobOutput(Output):
     id: str
     deployment_id: str | None
-    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'ansible.execute']
+    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'terraform.import', 'ansible.execute']
     status: Literal['queued', 'running', 'successful', 'failed', 'cancelled']
     created_by: int
     request_id: str
