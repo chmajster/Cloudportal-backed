@@ -88,7 +88,12 @@ function canManageBlueprintByRole(item) {
 }
 
 async function blueprintsView() {
-  const blueprints = (await api('/blueprints?limit=200')).items;
+  const [blueprintResult, roleResult] = await Promise.all([
+    api('/blueprints?limit=200'),
+    allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const blueprints = blueprintResult.items;
+  const roleNames = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
   const canQuickProxmox = canDesignBlueprint && allowed('hostnames.read') && allowed('ipam.read');
   const actions = [];
@@ -101,7 +106,7 @@ async function blueprintsView() {
       { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => ({ backend: 'Backend', cloudportal: 'CloudPortal', api: 'API' }[key] || key)).join(', ') || '—' },
       { label: 'Kroki', value: item => item.workflow.length },
       { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
-        ? node('span', { class: 'mono', text: (item.manager_role_ids || []).map(id => '#' + id).join(', ') })
+        ? (item.manager_role_ids || []).map(id => roleNames.get(Number(id)) || ('Rola #' + id)).join(', ')
         : badge('Bez roli dedykowanej', 'warning') },
       { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Wymaga akceptacji', 'warning') : badge('Bez akceptacji', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
