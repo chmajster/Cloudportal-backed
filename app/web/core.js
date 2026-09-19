@@ -1098,10 +1098,16 @@ function navigationGroup(route) {
   const order = Number(route.order ?? 1000);
   return order <= 0 ? '' : order <= 40 ? 'Dostęp' : order <= 100 ? 'Infrastruktura' : order <= 140 ? 'Operacje' : 'System';
 }
+function navigationGroupRank(route) {
+  const group = navigationGroup(route);
+  return group === '' ? 0 : group === 'Operacje' ? 1 : group === 'Dostęp' ? 2 : group === 'Infrastruktura' ? 3 : 4;
+}
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
-  const visibleRoutes = routes.filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'));
+  const visibleRoutes = routes
+    .filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
+    .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || a.order - b.order || a.id.localeCompare(b.id));
   let previousGroup = null;
   visibleRoutes.forEach(route => {
     const group = navigationGroup(route);
