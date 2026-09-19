@@ -1,0 +1,16 @@
+- name: Collect Linux system information
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Show operating system
+      ansible.builtin.debug:
+        msg: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+    - name: Show kernel
+      ansible.builtin.debug:
+        msg: "{{ ansible_facts.kernel }}"
+    - name: Show CPU and memory
+      ansible.builtin.debug:
+        msg: "vCPU={{ ansible_facts.processor_vcpus | default('unknown') }} memoryMiB={{ ansible_facts.memtotal_mb | default('unknown') }}"
+    - name: Show addresses
+      ansible.builtin.debug:
+        var: ansible_facts.all_ipv4_addresses
