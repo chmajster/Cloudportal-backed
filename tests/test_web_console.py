@@ -161,7 +161,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function stopTaskPolling(' in script
     assert "registerView({ id: 'updates'" in script
     assert 'Aktualizuj teraz' in script
-    assert 'Zainstaluj aktualizację' in script
+    assert 'Zainstaluj nowszy commit' in script
+    assert 'Commit zainstalowany' in script
+    assert 'Commit kanału' in script
+    assert 'Model wersji' in script
+    assert 'Git commit' in script
+    assert 'Updater nie wykona downgrade’u' in script
     assert 'UPDATE_PHASES' in script
     assert 'updatePipeline' in script
     assert 'Polityka auto-update' in script
