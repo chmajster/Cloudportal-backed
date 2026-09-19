@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, or_
@@ -30,7 +31,16 @@ def deployment_public(d):
 
 
 def job_public(j):
-    return public(j, JOB_FIELDS)
+    result = public(j, JOB_FIELDS)
+    wait = (j.payload or {}).get('_provider_wait') or {}
+    result['provider_waiting'] = bool(wait)
+    result['provider_retry_attempts'] = int(wait.get('attempts') or 0)
+    next_retry = wait.get('next_attempt_at')
+    try:
+        result['provider_next_retry_at'] = datetime.fromisoformat(next_retry) if next_retry else None
+    except (TypeError, ValueError):
+        result['provider_next_retry_at'] = None
+    return result
 
 
 def provider_public(p):
