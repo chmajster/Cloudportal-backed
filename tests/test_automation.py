@@ -185,6 +185,39 @@ def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client
 
 
 
+def test_blueprint_quick_toggle(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'toggle-template',
+        'name': 'Toggle template',
+        'deployment': {
+            'name': 'toggle-template',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+    blueprint = created.json()
+
+    disabled = client.put(
+        f"/api/v1/blueprints/{blueprint['id']}/enabled",
+        headers=headers,
+        json={'enabled': False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()['is_active'] is False
+
+    enabled = client.put(
+        f"/api/v1/blueprints/{blueprint['id']}/enabled",
+        headers=headers,
+        json={'enabled': True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()['is_active'] is True
+
+
 def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={

@@ -182,6 +182,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert "registerCommand('ansible.run'" in script
+    assert '/catalog/templates/' in script
+    assert '/catalog/playbooks/' in script
+    assert "item.enabled === false ? 'Włącz' : 'Wyłącz'" in script
+    assert "item.enabled !== false" in script
     assert 'ansible-playbook-info' in script
     assert 'Wszystkie kategorie' in script
     assert '.ansible-playbook-info' in stylesheet

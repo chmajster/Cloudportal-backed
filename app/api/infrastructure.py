@@ -6,10 +6,11 @@ from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
                              SSHHostKeyOutput, SSHKeyBootstrapOutput)
-from app.api.schemas import (CredentialInput, DeploymentInput, JobInput, ProviderInput, ProxmoxTokenBootstrapInput,
-                             SSHHostKeyInput, SSHKeyBootstrapInput)
-from app.catalog import (list_playbooks, list_templates, playbook_definition, template_definition,
+from app.api.schemas import (CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
+                             ProxmoxTokenBootstrapInput, SSHHostKeyInput, SSHKeyBootstrapInput)
+from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, template_definition,
                          template_public, template_source_preview, playbook_source_preview, validate_template_variables)
+from app.catalog_control import catalog_item_public, require_catalog_item_enabled, set_catalog_item_enabled
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
@@ -292,13 +293,22 @@ def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templa
 
 @router.get('/templates', response_model=Items[TemplateOutput])
 @router.get('/terraform/templates', response_model=Items[TemplateOutput])
-def templates(actor=Depends(require('terraform.read'))):
-    return {'items': list_templates()}
+def templates(actor=Depends(require('terraform.read')), db=Depends(get_db, scope='function')):
+    return {'items': [catalog_item_public(db, 'templates', item) for item in list_templates()]}
 
 
 @router.get('/templates/{id}', response_model=TemplateOutput)
-def template(id: str, actor=Depends(require('terraform.read'))):
-    return template_public(id)
+def template(id: str, actor=Depends(require('terraform.read')), db=Depends(get_db, scope='function')):
+    return catalog_item_public(db, 'templates', template_public(id))
+
+
+@router.put('/catalog/templates/{id}/enabled', response_model=TemplateOutput)
+def set_template_enabled(id: str, data: CatalogItemStateInput, request: Request,
+                         actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    item = template_public(id)
+    set_catalog_item_enabled(db, 'templates', id, data.enabled)
+    audit(db, request, 'catalog.template_enabled' if data.enabled else 'catalog.template_disabled', 'catalog', id)
+    return catalog_item_public(db, 'templates', item)
 
 
 @router.get('/templates/{id}/source')
@@ -307,8 +317,17 @@ def template_source(id: str, actor=Depends(require('terraform.read'))):
 
 
 @router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
-def playbooks(actor=Depends(require('ansible.read'))):
-    return {'items': list_playbooks()}
+def playbooks(actor=Depends(require('ansible.read')), db=Depends(get_db, scope='function')):
+    return {'items': [catalog_item_public(db, 'playbooks', item) for item in list_playbooks()]}
+
+
+@router.put('/catalog/playbooks/{id}/enabled', response_model=PlaybookOutput)
+def set_playbook_enabled(id: str, data: CatalogItemStateInput, request: Request,
+                         actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    item = playbook_public(id)
+    set_catalog_item_enabled(db, 'playbooks', id, data.enabled)
+    audit(db, request, 'catalog.playbook_enabled' if data.enabled else 'catalog.playbook_disabled', 'catalog', id)
+    return catalog_item_public(db, 'playbooks', item)
 
 
 @router.get('/ansible/playbooks/{id}/source')
@@ -330,6 +349,7 @@ def check_job_permissions(request, operation):
 
 def validate_ansible(db, data):
     c = ensure_credential_usable(locked_credential(db, data.credentials_id))
+    require_catalog_item_enabled(db, 'playbooks', data.playbook)
     expected = playbook_definition(data.playbook)['transport']
     if c.type != expected:
         raise HTTPException(422, f'Playbook requires {expected} credential')
@@ -362,6 +382,7 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
     check_job_permissions(request, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
     ensure_credential_usable(find(db, Credential, p.credentials_id))
+    require_catalog_item_enabled(db, 'templates', data.template)
     template_meta, _ = template_definition(data.template)
     if p.type != template_meta['provider']:
         raise HTTPException(422, 'Selected infrastructure provider does not match the Terraform template')

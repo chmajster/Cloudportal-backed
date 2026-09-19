@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent
 from app.api.schemas import Input, Slug
 from app.catalog import template_import_target, template_public, validate_template_variables
+from app.catalog_control import require_catalog_item_enabled
 from app.database import get_db
 from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider
 from app.providers.registry import provider_for
@@ -201,6 +202,7 @@ def adoption_preview(
     provider, adapter = provider_adapter(db, row.provider_id)
     if provider.type != 'proxmox':
         raise HTTPException(422, 'VM adoption is currently implemented for Proxmox')
+    require_catalog_item_enabled(db, 'templates', template)
     template_meta = template_public(template)
     if template_meta['provider'] != provider.type or not template_meta['importable']:
         raise HTTPException(422, 'Selected Terraform template cannot import this provider resource')
@@ -234,6 +236,7 @@ def adopt_vm(
     provider = find(db, Provider, row.provider_id)
     if provider.type != 'proxmox':
         raise HTTPException(422, 'VM adoption is currently implemented for Proxmox')
+    require_catalog_item_enabled(db, 'templates', data.template)
     template_meta = template_public(data.template)
     if template_meta['provider'] != provider.type or not template_meta['importable']:
         raise HTTPException(422, 'Selected Terraform template cannot import this provider resource')

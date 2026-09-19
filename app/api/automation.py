@@ -4,9 +4,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
+from app.catalog_control import require_catalog_item_enabled
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items)
-from app.api.schemas import BlueprintExecuteInput, BlueprintInput, DeploymentInput, HostnameGenerateInput, HostnameSchemeInput
+from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
+                             HostnameGenerateInput, HostnameSchemeInput)
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
                                     generate_hostname, hostname_public)
 from app.database import get_db
@@ -109,7 +111,14 @@ def release_hostname(id: str, request: Request, actor=Depends(require('hostnames
 
 def validate_blueprint_references(db, data, blueprint_id=None):
     provider = find(db, Provider, data.deployment.provider_id)
+    existing = db.get(Blueprint, blueprint_id) if blueprint_id is not None else None
+    existing_template = existing.deployment.get('template') if existing else None
+    existing_playbook = (existing.deployment.get('ansible') or {}).get('playbook') if existing else None
+    if data.deployment.template != existing_template:
+        require_catalog_item_enabled(db, 'templates', data.deployment.template)
     template_meta, _ = template_definition(data.deployment.template)
+    if data.deployment.ansible and data.deployment.ansible.playbook != existing_playbook:
+        require_catalog_item_enabled(db, 'playbooks', data.deployment.ansible.playbook)
     if provider.type != template_meta['provider']:
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
@@ -206,6 +215,18 @@ def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depe
     return blueprint_public(row)
 
 
+@router.put('/blueprints/{id}/enabled', response_model=BlueprintOutput)
+def set_blueprint_enabled(id: int, data: CatalogItemStateInput, request: Request,
+                          actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
+    row = find(db, Blueprint, id)
+    require_blueprint_manager(row, actor)
+    row.is_active = data.enabled
+    row.version += 1
+    audit(db, request, 'blueprint.enabled' if data.enabled else 'blueprint.disabled', 'blueprints', id)
+    db.flush()
+    return blueprint_public(row)
+
+
 @router.delete('/blueprints/{id}', response_model=DeletedOutput)
 def delete_blueprint(id: int, request: Request, actor=Depends(require('blueprints.delete')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
@@ -232,6 +253,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id)
         blueprint_variables = rendered.pop('blueprint_variables')
         parsed = DeploymentInput.model_validate(rendered)
+        require_catalog_item_enabled(db, 'templates', parsed.template)
         provider = find(db, Provider, parsed.provider_id)
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')

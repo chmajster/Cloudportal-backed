@@ -13,6 +13,10 @@ class Input(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=False)
 
 
+class CatalogItemStateInput(Input):
+    enabled: bool
+
+
 class Login(Input):
     username: Annotated[str, Field(min_length=1, max_length=254)]
     password: Annotated[str, Field(min_length=1, max_length=256)]

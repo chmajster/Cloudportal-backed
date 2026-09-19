@@ -46,6 +46,101 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert all(isinstance(item['content'], str) for item in playbook_data['files'])
 
 
+def test_catalog_items_can_be_disabled_and_block_new_use(client, headers):
+    import uuid
+
+    templates = client.get('/api/v1/templates', headers=headers)
+    assert templates.status_code == 200
+    assert all(item['enabled'] is True for item in templates.json()['items'])
+
+    playbooks = client.get('/api/v1/ansible/playbooks', headers=headers)
+    assert playbooks.status_code == 200
+    assert all(item['enabled'] is True for item in playbooks.json()['items'])
+
+    disabled_template = client.put(
+        '/api/v1/catalog/templates/aws-ec2/enabled',
+        headers=headers,
+        json={'enabled': False},
+    )
+    assert disabled_template.status_code == 200, disabled_template.text
+    assert disabled_template.json()['enabled'] is False
+
+    disabled_playbook = client.put(
+        '/api/v1/catalog/playbooks/validate-linux/enabled',
+        headers=headers,
+        json={'enabled': False},
+    )
+    assert disabled_playbook.status_code == 200, disabled_playbook.text
+    assert disabled_playbook.json()['enabled'] is False
+
+    templates = {item['id']: item for item in client.get('/api/v1/templates', headers=headers).json()['items']}
+    playbooks = {item['id']: item for item in client.get('/api/v1/ansible/playbooks', headers=headers).json()['items']}
+    assert templates['aws-ec2']['enabled'] is False
+    assert playbooks['validate-linux']['enabled'] is False
+
+    credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'AWS disabled template test',
+        'type': 'aws',
+        'secrets': {
+            'access_key_id': 'AKIAEXAMPLEVALUE',
+            'secret_access_key': 'example-secret-key-material',
+        },
+    }).json()
+    provider = client.post('/api/v1/providers', headers=headers, json={
+        'name': 'AWS disabled template test',
+        'type': 'aws',
+        'credentials_id': credential['id'],
+    }).json()
+
+    deployment = client.post('/api/v1/deployments', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4()),
+    }, json={
+        'name': 'disabled-template',
+        'provider_id': provider['id'],
+        'template': 'aws-ec2',
+        'credentials_id': credential['id'],
+        'variables': {
+            'name': 'disabled-template',
+            'region': 'eu-central-1',
+            'ami': 'ami-1234567890abcdef0',
+            'instance_type': 't3.micro',
+            'subnet_id': 'subnet-1234567890abcdef0',
+            'security_group_ids': ['sg-1234567890abcdef0'],
+        },
+    })
+    assert deployment.status_code == 409
+    assert 'disabled' in deployment.text
+
+    ssh = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'SSH disabled playbook test',
+        'type': 'ssh',
+        'endpoint': 'ssh://192.0.2.1:22',
+        'username': 'clouduser',
+        'secrets': {
+            'private_key': 'private-key-data',
+            'known_hosts': '192.0.2.1 ssh-ed25519 AAAATEST',
+        },
+    })
+    assert ssh.status_code == 201, ssh.text
+
+    job = client.post('/api/v1/jobs', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4()),
+    }, json={
+        'operation': 'ansible.execute',
+        'ansible': {
+            'playbook': 'validate-linux',
+            'credentials_id': ssh.json()['id'],
+            'inventory': {'hosts': ['192.0.2.1']},
+            'variables': {},
+        },
+    })
+    assert job.status_code == 409
+    assert 'disabled' in job.text
+
+    assert client.put('/api/v1/catalog/templates/aws-ec2/enabled', headers=headers, json={'enabled': True}).json()['enabled'] is True
+    assert client.put('/api/v1/catalog/playbooks/validate-linux/enabled', headers=headers, json={'enabled': True}).json()['enabled'] is True
+
+
 def test_aws_provider_and_template_are_validated_before_job_creation(client, headers):
     credential = client.post('/api/v1/credentials', headers=headers, json={
         'name': 'AWS Terraform',
