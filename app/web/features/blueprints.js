@@ -15,7 +15,6 @@ function blueprintTemplateVariableField(name, spec, value) {
   wrapper.dataset.blueprintTemplateVariable = name;
   return wrapper;
 }
-
 function readBlueprintTemplateVariables(root, template) {
   const result = {};
   const properties = template?.variables_schema?.properties || {};
@@ -37,7 +36,6 @@ function readBlueprintTemplateVariables(root, template) {
   }
   return result;
 }
-
 const HOSTNAME_TOKEN_LABELS = {
   location: 'Lokalizacja',
   environment: 'Środowisko',
@@ -49,12 +47,10 @@ const HOSTNAME_TOKEN_LABELS = {
   cluster: 'Klaster',
   site: 'Site',
 };
-
 function hostnameTokens(pattern = '') {
   return [...new Set([...String(pattern).matchAll(/{([a-z]+)}/g)].map(match => match[1]))]
     .filter(token => !['number', 'random', 'year'].includes(token));
 }
-
 function hostnameValueFields(pattern, values = {}, required = true) {
   const wrapper = node('div', { class: 'form-grid hostname-values wide' });
   const tokens = hostnameTokens(pattern);
@@ -69,7 +65,6 @@ function hostnameValueFields(pattern, values = {}, required = true) {
   if (!tokens.length) wrapper.append(node('p', { class: 'muted wide', text: 'Ten wzorzec nie wymaga dodatkowych wartości.' }));
   return wrapper;
 }
-
 function readHostnameValues(form) {
   const result = {};
   form.querySelectorAll('[data-hostname-token]').forEach(wrapper => {
@@ -79,14 +74,12 @@ function readHostnameValues(form) {
   });
   return result;
 }
-
 function canManageBlueprintByRole(item) {
   const required = new Set((item?.manager_role_ids || []).map(Number));
   if (!required.size) return true;
   const owned = new Set((state.identity?.roles || []).map(role => Number(role.id)));
   return [...required].some(id => owned.has(id));
 }
-
 async function blueprintsView() {
   const [blueprintResult, roleResult] = await Promise.all([
     api('/blueprints?limit=200'),
@@ -120,7 +113,6 @@ async function blueprintsView() {
       return result;
     }));
 }
-
 function jsonValue(value) { return JSON.stringify(value, null, 2); }
 function parseObject(value, label) {
   try { const parsed = JSON.parse(value); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(); return parsed; }
@@ -130,13 +122,11 @@ function parseArray(value, label) {
   try { const parsed = JSON.parse(value); if (!Array.isArray(parsed)) throw new Error(); return parsed; }
   catch { throw new Error(`${label} musi zawierać poprawną tablicę JSON.`); }
 }
-
 function hostnamePatternTokens(pattern) {
   const automatic = new Set(['number', 'random', 'year']);
   return [...new Set(Array.from(String(pattern || '').matchAll(/{([a-z]+)}/g), match => match[1]))]
     .filter(token => !automatic.has(token));
 }
-
 function normalizeHostnamePattern(pattern, padding = 3) {
   const raw = String(pattern || '').trim();
   const runs = [...raw.matchAll(/X{1,9}/g)];
@@ -148,11 +138,9 @@ function normalizeHostnamePattern(pattern, padding = 3) {
   }
   return { pattern: raw, padding: Number(padding || 3) };
 }
-
 function blueprintTags(value) {
   return [...new Set(String(value || '').split(/[,\n]+/).map(item => item.trim().toLowerCase()).filter(Boolean))];
 }
-
 function setSelectChoices(select, choices, selected = '', placeholder = '') {
   select.replaceChildren();
   if (placeholder) select.append(node('option', { value: '', text: placeholder }));
@@ -162,7 +150,6 @@ function setSelectChoices(select, choices, selected = '', placeholder = '') {
     selected: String(choice.value) === String(selected),
   })));
 }
-
 function blueprintWorkflow(options) {
   const steps = [];
   let previous = [];
@@ -180,7 +167,6 @@ function blueprintWorkflow(options) {
   if (options.ansible) add('ansible', 'run_ansible_playbook');
   return steps;
 }
-
 async function proxmoxBlueprintForm(item = null, options = {}) {
   try {
     const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult, blueprintResult] = await Promise.all([
@@ -194,7 +180,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     ]);
     const providers = providerResult.items.filter(value => value.type === 'proxmox');
     if (!providers.length) throw new Error('Najpierw dodaj platformę Proxmox.');
-
     const schemes = schemeResult.items.filter(value => value.is_active);
     const pools = poolResult.items.filter(value => value.is_active);
     const playbooks = playbookResult.items.filter(value =>
@@ -218,7 +203,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const variables = deployment.variables || {};
     const templateWizard = options.mode === 'template';
     const currentProvider = providers.find(value => value.id === deployment.provider_id) || providers[0];
-
     const providerField = selectField(
       'Platforma Proxmox', 'provider_id',
       providers.map(value => ({ value: value.id, label: value.name + ' (#' + value.id + ')' })),
@@ -228,7 +212,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const imageField = selectField('Obraz / szablon Proxmox', 'image', [], '', { required: true, placeholder: 'Wybierz szablon' });
     const storageField = selectField('Storage VM', 'storage', [], variables.storage || '', { required: true, placeholder: 'Wybierz storage' });
     const networkField = selectField('Bridge / sieć', 'network', [], variables.network || 'vmbr0', { required: true, placeholder: 'Wybierz sieć' });
-
     const schemeChoices = [
       ...schemes.map(value => ({ value: value.id, label: 'Użyj istniejącego: ' + value.pattern })),
       { value: '__new__', label: 'Własny pattern hostname' },
@@ -279,7 +262,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         node('small', { class: 'field-help', text: 'Przykład wyniku dla wybranego patternu.' }))
     );
     const hostnameDefaults = node('div', { class: 'form-grid designer-subsection wide' });
-
     const ipMode = selectField(
       'Adres IPv4', 'ip_mode',
       [
@@ -297,7 +279,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     );
     const staticIp = field('IPv4/CIDR', 'ipv4_address', { value: variables.ipv4_address || '', placeholder: '10.0.20.25/24' });
     const staticGateway = field('Gateway', 'ipv4_gateway', { value: variables.ipv4_gateway || '', placeholder: '10.0.20.1' });
-
     const playbookField = selectField(
       'Playbook po utworzeniu (opcjonalnie)', 'ansible_playbook',
       [{ value: '', label: 'Bez Ansible' }, ...playbooks.map(value => ({ value: value.id, label: value.name + ' [' + value.transport + ']' }))],
@@ -310,7 +291,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       })),
       deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' }
     );
-
     const executorField = selectField(
       'Silnik IaC', 'executor',
       [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }],
@@ -319,7 +299,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     );
     const workflowPreview = node('div', { class: 'workflow-preview workflow-preview-visual' });
     const preservedVariablesSchema = item?.variables_schema || {};
-
     const fields = node('div', { class: 'form-grid blueprint-designer' },
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '1. Blueprint' }), node('span', { text: 'Zapisujesz kompletny preset VM.' })),
       field('Slug / identyfikator szablonu', 'slug', {
@@ -329,7 +308,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       }),
       field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
       providerField, executorField,
-
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '2. Proxmox i obraz' }), node('span', { text: 'Wybierz bazową VM/template oraz parametry używane przy każdym uruchomieniu.' })),
       nodeField, imageField, storageField, networkField,
       field('Rdzenie CPU', 'cpu', { type: 'number', min: 1, max: 128, value: variables.cpu ?? 2 }),
@@ -341,22 +319,18 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         placeholder: 'linux, production, web',
         help: 'Tagi zostaną zapisane w Blueprintcie, dodane do workflow i automatycznie ustawione na VM.',
       }),
-
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Wybierz gotowy pattern albo wpisz własny. Podgląd pokaże przykładową nazwę hosta.' })),
       schemeField, newScheme, existingSchemeEditor, hostnameDefaults,
-
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '4. Cloud-init' }), node('span', { text: 'Konfiguracja sieci, DNS i konta trafia do template Proxmox.' })),
       ipMode, ipamField, staticIp, staticGateway,
       field('Użytkownik SSH', 'ssh_username', { value: variables.ssh_username || 'clouduser', required: true }),
       field('Klucz publiczny SSH (opcjonalnie)', 'ssh_public_key', { tag: 'textarea', value: variables.ssh_public_key || '', wide: true }),
       field('Serwery DNS', 'dns_servers', { value: (variables.dns_servers || []).join(', '), placeholder: '1.1.1.1, 8.8.8.8' }),
       field('Domena wyszukiwania DNS', 'dns_domain', { value: variables.dns_domain || '', placeholder: 'lab.example.com' }),
-
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '5. Workflow' }), node('span', { text: 'Bez ponownego wybierania obrazu, hostname, tagów ani cloud-init.' })),
       checkboxField('Czekaj na QEMU Agent po Terraform apply', 'wait_agent', true),
       playbookField, ansibleCredentialField,
       node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),
-
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp, role i recovery' })),
       multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, item?.manager_role_ids || [], {
         help: 'Użytkownik musi mieć globalne uprawnienie do zarządzania Blueprintami oraz co najmniej jedną z tych ról. Jedna rola może zarządzać tylko jednym szablonem.',
@@ -372,7 +346,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
       ], item?.recovery_policy || 'preserve'),
     );
-
     const providerSelect = providerField.querySelector('select');
     const nodeSelect = nodeField.querySelector('select');
     const imageSelect = imageField.querySelector('select');
@@ -385,7 +358,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
     let templateRows = [];
     let hydratedHostnameSchemeId = null;
-
     const updateHostnameFields = () => {
       const selected = schemeSelect.value;
       const scheme = schemes.find(value => String(value.id) === String(selected));
@@ -459,7 +431,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       }
       updateWorkflowPreview();
     };
-
     const updateIpMode = () => {
       const mode = ipModeSelect.value;
       ipamField.hidden = mode !== 'ipam';
@@ -467,7 +438,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       staticGateway.hidden = mode !== 'static';
       updateWorkflowPreview();
     };
-
     const updateAnsible = () => {
       const playbook = playbooks.find(value => value.id === playbookSelect.value);
       ansibleCredentialField.hidden = !playbook;
@@ -483,7 +453,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       }
       updateWorkflowPreview();
     };
-
     function updateWorkflowPreview() {
       const options = {
         hostname: Boolean(schemeSelect.value),
@@ -504,7 +473,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           : [card];
       }));
     }
-
     const loadNodeResources = async () => {
       const providerId = providerSelect.value;
       const targetNode = nodeSelect.value;
@@ -528,7 +496,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         'Wybierz sieć'
       );
     };
-
     const loadProvider = async () => {
       const providerId = providerSelect.value;
       const [nodeResult, templateResult] = await Promise.all([
@@ -556,7 +523,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       );
       await loadNodeResources();
     };
-
     providerSelect.addEventListener('change', loadProvider);
     nodeSelect.addEventListener('change', loadNodeResources);
     schemeSelect.addEventListener('change', updateHostnameFields);
@@ -569,13 +535,11 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     playbookSelect.addEventListener('change', updateAnsible);
     fields.querySelector('[name="tags"]').addEventListener('input', updateWorkflowPreview);
     fields.querySelector('[name="wait_agent"]').addEventListener('change', updateWorkflowPreview);
-
     await loadProvider();
     updateHostnameFields();
     updateIpMode();
     updateAnsible();
     updateWorkflowPreview();
-
     openModal({
       title: item ? 'Edytuj ' + item.name : (templateWizard ? 'Nowy szablon Terraform / OpenTofu' : 'Nowy Blueprint Proxmox'),
       eyebrow: templateWizard ? 'Kreator szablonu IaC' : 'Blueprint Designer',
@@ -585,7 +549,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       onSubmit: async (data, form) => {
         const provider = providers.find(value => String(value.id) === String(data.get('provider_id')));
         if (!provider) throw new Error('Wybierz platformę Proxmox.');
-
         let schemeId = data.get('hostname_scheme_id');
         let selectedPattern = '';
         if (schemeId === '__new__') {
@@ -608,7 +571,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         } else {
           const selectedScheme = schemes.find(value => String(value.id) === String(schemeId));
           if (!selectedScheme) throw new Error('Wybrany schemat hostname nie istnieje.');
-
           const normalized = normalizeHostnamePattern(
             data.get('existing_hostname_pattern') || selectedScheme.pattern,
             data.get('existing_hostname_padding') || selectedScheme.padding
@@ -616,7 +578,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           const editedName = selectedScheme.name;
           const changed = normalized.pattern.toLowerCase() !== selectedScheme.pattern.toLowerCase()
             || Number(normalized.padding) !== Number(selectedScheme.padding);
-
           if (changed) {
             if (!allowed('hostnames.update')) throw new Error('Brak uprawnienia do edycji schematu hostname.');
             const updated = await api('/hostname-schemes/' + selectedScheme.id, {
@@ -634,18 +595,15 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             selectedPattern = selectedScheme.pattern;
           }
         }
-
         const hostnameValues = {};
         hostnamePatternTokens(selectedPattern).forEach(token => {
           const value = form.elements['hostname_token_' + token]?.value.trim();
           if (value) hostnameValues[token] = value;
         });
-
         const image = String(data.get('image') || '').split('|');
         const templateNode = image[0];
         const templateId = Number(image[1]);
         if (!templateId) throw new Error('Wybierz obraz/template Proxmox.');
-
         const tags = blueprintTags(data.get('tags'));
         const vmVariables = {
           name: '{{ hostname }}',
@@ -664,7 +622,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           dns_domain: data.get('dns_domain') || null,
           tags,
         };
-
         const mode = data.get('ip_mode');
         let ipamPoolId = null;
         if (mode === 'ipam') {
@@ -675,7 +632,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           vmVariables.ipv4_address = data.get('ipv4_address');
           vmVariables.ipv4_gateway = data.get('ipv4_gateway');
         }
-
         let ansible = null;
         if (data.get('ansible_playbook')) {
           const credentialId = Number(data.get('ansible_credentials_id'));
@@ -689,7 +645,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             ansible.variables.hostname = '{{ hostname }}';
           }
         }
-
         const workflow = blueprintWorkflow({
           hostname: Boolean(schemeId),
           ipam: mode === 'ipam',
