@@ -183,13 +183,14 @@ function blueprintWorkflow(options) {
 
 async function proxmoxBlueprintForm(item = null, options = {}) {
   try {
-    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult] = await Promise.all([
+    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult, blueprintResult] = await Promise.all([
       api('/providers?limit=200'),
       api('/hostname-schemes?limit=200'),
       api('/ipam/pools?limit=200'),
       allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
       api('/credentials?limit=200'),
       allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
+      allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items.filter(value => value.type === 'proxmox');
     if (!providers.length) throw new Error('Najpierw dodaj platformę Proxmox.');
@@ -199,7 +200,14 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const playbooks = playbookResult.items;
     const credentials = credentialResult.items;
     const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
+    const dedicatedElsewhere = new Set(
+      blueprintResult.items
+        .filter(blueprint => Number(blueprint.id) !== Number(item?.id))
+        .flatMap(blueprint => blueprint.manager_role_ids || [])
+        .map(Number)
+    );
     const roleChoices = roleResult.items
+      .filter(role => !dedicatedElsewhere.has(Number(role.id)))
       .filter(role => [...managerPermissions].every(permission => (role.permissions || []).includes(permission)))
       .map(role => ({ value: role.id, label: role.name }));
     (item?.manager_role_ids || []).forEach(id => {
@@ -688,7 +696,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
 
 async function blueprintForm(item = null) {
   try {
-    const [providerResult, credentialResult, templateResult, schemeResult, poolResult, roleResult, userResult, playbookResult] = await Promise.all([
+    const [providerResult, credentialResult, templateResult, schemeResult, poolResult, roleResult, userResult, playbookResult, blueprintResult] = await Promise.all([
       api('/providers?limit=200'),
       api('/credentials?limit=200'),
       api('/templates'),
@@ -697,6 +705,7 @@ async function blueprintForm(item = null) {
       allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
       allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
       allowed('ansible.execute') && allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
+      allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items;
     const credentials = credentialResult.items;
@@ -1040,7 +1049,14 @@ async function blueprintForm(item = null) {
     ansibleToggle.querySelector('input').addEventListener('change', renderBlueprintAnsible);
 
     const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
+    const dedicatedElsewhere = new Set(
+      blueprintResult.items
+        .filter(blueprint => Number(blueprint.id) !== Number(item?.id))
+        .flatMap(blueprint => blueprint.manager_role_ids || [])
+        .map(Number)
+    );
     const roleChoices = roleResult.items
+      .filter(role => !dedicatedElsewhere.has(Number(role.id)))
       .filter(role => [...managerPermissions].every(permission => (role.permissions || []).includes(permission)))
       .map(role => ({ value: role.id, label: role.name }));
     (item?.allowed_role_ids || []).forEach(id => {
