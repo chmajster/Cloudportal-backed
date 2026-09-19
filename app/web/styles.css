@@ -16,7 +16,10 @@
   --info: #1769aa;
   --shadow: 0 10px 30px rgba(15, 23, 32, .06);
   --panel-shadow: 0 8px 24px rgba(15, 23, 32, .045);
-  --radius: 20px;\n  --radius-sm: 13px;\n  --success: #1ea85b;
+  --radius: 20px;
+  --radius-sm: 13px;
+  --success: #1ea85b;
+  --success-border: rgba(15, 139, 95, .38);
   --label: #344a43;
   --input-bg: #ffffff;
   --focus-ring: rgba(11, 122, 83, .18);
@@ -84,6 +87,8 @@ html[data-theme="dark"] {
   --hero-card-text: #cfe0db;
   --accent-soft: rgba(94, 230, 174, .08);
   --accent-border: rgba(94, 230, 174, .33);
+  --success: #5ee6ae;
+  --success-border: rgba(94, 230, 174, .42);
   --warning-soft: rgba(246, 196, 91, .08);
   --danger-soft: rgba(255, 125, 120, .08);
   --danger-border: rgba(255, 125, 120, .40);
@@ -727,5 +732,89 @@ tbody tr:hover { background: var(--row-hover); }
   .sidebar-profile-card,
   .global-search-trigger {
     transition: none;
+  }
+}
+
+
+/* UI polish: navigation hierarchy, responsive context and unclipped table controls */
+.nav-group-label {
+  margin: 14px 12px 5px;
+  color: var(--muted);
+  font-size: .61rem;
+  font-weight: 850;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.nav-group-label:first-child { margin-top: 2px; }
+.page-context {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.page-context h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-dot.warn {
+  background: var(--warning);
+  box-shadow: 0 0 0 4px var(--warning-soft);
+}
+.advanced-table {
+  overflow: visible;
+}
+.advanced-table .table-toolbar {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.advanced-table .table-scroll {
+  background: var(--surface);
+}
+.advanced-table .table-footer {
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.table-column-picker-body {
+  width: max-content;
+  min-width: 210px;
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: min(310px, 55vh);
+}
+@media (max-width: 860px) {
+  .topbar > .page-context {
+    display: block;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .page-context .eyebrow {
+    display: none;
+  }
+  .page-context h1 {
+    max-width: 34vw;
+  }
+}
+@media (max-width: 760px) {
+  .sidebar {
+    left: 0;
+    width: min(86vw, 292px);
+    transform: translateX(-105%);
+    transition: transform .2s ease;
+    will-change: transform;
+  }
+  .sidebar.open {
+    left: 0;
+    transform: translateX(0);
+  }
+  .page-context h1 {
+    max-width: 28vw;
+  }
+}
+@media (max-width: 620px) {
+  #logout {
+    padding-inline: 10px;
+    font-size: 0;
+    gap: 0;
+  }
+  #logout .button-icon {
+    width: 18px;
+    height: 18px;
   }
 }
