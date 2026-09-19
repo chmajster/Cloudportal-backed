@@ -28,10 +28,10 @@ function toolStatusDot(status) {
 }
 
 function toolHealthText(status, updateAvailable) {
-  if (updateAvailable) return 'Nowszy commit jest dostępny';
+  if (status === 'failed') return 'Updater wymaga uwagi';
   if (status === 'checking') return 'Sprawdzanie repozytorium';
   if (status === 'running') return 'Aktualizacja jest w toku';
-  if (status === 'failed') return 'Updater wymaga uwagi';
+  if (updateAvailable) return 'Nowszy commit jest dostępny';
   return 'Updater gotowy';
 }
 
