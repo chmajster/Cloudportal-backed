@@ -264,6 +264,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'SRLXXX' in script
     assert 'Sposób nadawania hostname' in script
     assert 'Pattern hostname' in script
+    assert "button('Nowy pattern', () => hostnameSchemeForm(), 'primary')" in script
+    assert 'const schemeId = item == null ? null : Number(item.id);' in script
+    assert 'const editing = Number.isInteger(schemeId) && schemeId > 0;' in script
+    assert "editing ? `/hostname-schemes/${schemeId}` : '/hostname-schemes'" in script
     assert 'Podgląd hostname' in script
     assert 'data-hostname-preview' in script
     assert 'data-existing-hostname-preview' in script
