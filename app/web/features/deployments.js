@@ -545,7 +545,7 @@ async function createDeployment() {
     const fields = node('div', { class: 'form-grid' },
       formSection('Podstawowe informacje', 'Wybierz szablon i miejsce wdrożenia.',
         node('div', { class: 'form-grid' },
-          field('Nazwa wdrożenia', 'name', { required: true, placeholder: 'np. web-prod-01' }),
+          field('Nazwa wdrożenia', 'deployment_name', { required: true, placeholder: 'np. web-prod-01' }),
           templateField,
           node('div', { class: 'terraform-template-preview-actions wide' }, terraformPreviewButton),
           terraformPreview,
@@ -652,7 +652,7 @@ async function createDeployment() {
           throw new Error('Wybierz bazowy szablon Proxmox z kreatora.');
         }
         const body = {
-          name: form.elements.name.value,
+          name: form.elements.deployment_name.value,
           provider_id: Number(providerSelect.value),
           template: template.id,
           credentials_id: Number(credentialSelect.value),
