@@ -1,6 +1,12 @@
 'use strict';
 
 (() => {
+function ldapDetailRow(label, value) {
+  return node('div', { class: 'detail-item' },
+    node('span', { class: 'muted', text: label }),
+    node('strong', { text: String(value ?? '—') }));
+}
+
 function ldapSettingsForm(config) {
   const fields = node('div', { class: 'form-grid' },
     checkboxField('Włącz logowanie LDAP', 'enabled', Boolean(config.enabled)),
@@ -102,23 +108,23 @@ async function settingsView() {
           node('p', { class: 'muted', text: 'Logowanie katalogowe z automatycznym utworzeniem lokalnego konta i późniejszym przypisaniem ról przez RBAC.' })),
         badge(config.enabled ? 'Włączony' : 'Wyłączony', config.enabled ? 'ok' : 'warning')),
       node('div', { class: 'detail-grid' },
-        detailRow('Serwer', config.url || '—'),
-        detailRow('Base DN', config.base_dn || '—'),
-        detailRow('Bind DN', config.bind_dn || 'Anonymous bind'),
-        detailRow('Sekret bind', config.bind_password_configured ? 'Skonfigurowany' : 'Brak'),
-        detailRow('TLS', config.url?.startsWith('ldaps://') ? 'LDAPS' : (config.start_tls ? 'StartTLS' : 'Bez TLS')),
-        detailRow('Weryfikacja TLS', config.verify_tls ? 'Włączona' : 'Wyłączona'),
-        detailRow('Filtr użytkownika', config.user_filter || '—'),
-        detailRow('Mapowanie loginu', config.username_attribute || 'uid'),
-        detailRow('Mapowanie e-mail', config.email_attribute || 'mail')),
+        ldapDetailRow('Serwer', config.url || '—'),
+        ldapDetailRow('Base DN', config.base_dn || '—'),
+        ldapDetailRow('Bind DN', config.bind_dn || 'Anonymous bind'),
+        ldapDetailRow('Sekret bind', config.bind_password_configured ? 'Skonfigurowany' : 'Brak'),
+        ldapDetailRow('TLS', config.url?.startsWith('ldaps://') ? 'LDAPS' : (config.start_tls ? 'StartTLS' : 'Bez TLS')),
+        ldapDetailRow('Weryfikacja TLS', config.verify_tls ? 'Włączona' : 'Wyłączona'),
+        ldapDetailRow('Filtr użytkownika', config.user_filter || '—'),
+        ldapDetailRow('Mapowanie loginu', config.username_attribute || 'uid'),
+        ldapDetailRow('Mapowanie e-mail', config.email_attribute || 'mail')),
       node('div', { class: 'callout info' },
         node('strong', { text: 'JIT provisioning i RBAC' }),
         node('p', { text: 'Po pierwszym poprawnym logowaniu LDAP Cloudportal tworzy konto z auth_source=ldap bez żadnych ról. Administrator przypisuje role później w Użytkownicy → Role. Hasło pozostaje wyłącznie w LDAP i nie jest zapisywane przez Cloudportal.' }))),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Przykładowe filtry' })),
       node('div', { class: 'detail-grid' },
-        detailRow('LDAP / LLDAP', '(&(objectClass=person)(uid={username}))'),
-        detailRow('Active Directory', '(&(objectClass=user)(sAMAccountName={username}))')))
+        ldapDetailRow('LDAP / LLDAP', '(&(objectClass=person)(uid={username}))'),
+        ldapDetailRow('Active Directory', '(&(objectClass=user)(sAMAccountName={username}))')))
   );
 }
 
