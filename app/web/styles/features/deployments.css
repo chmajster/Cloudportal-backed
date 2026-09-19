@@ -443,3 +443,42 @@
     align-self: flex-start;
   }
 }
+
+
+.ansible-playbook-info {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.ansible-playbook-info-copy {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.ansible-playbook-info-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.ansible-playbook-info-title strong {
+  margin-right: 3px;
+  font-size: .85rem;
+}
+
+.ansible-playbook-info p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
+.ansible-playbook-info small {
+  font-size: .67rem;
+}
