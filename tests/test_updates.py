@@ -44,6 +44,22 @@ def test_update_execution_requires_separate_permission(client, headers, monkeypa
     assert denied.status_code == 403
 
 
+
+def test_update_ref_override_requires_update_permission(client, headers, monkeypatch):
+    import app.api.updates as updates
+
+    monkeypatch.setattr(updates, 'updater_request', lambda *args, **kwargs: {'accepted': True, 'ref': 'main'})
+    _, executor = new_user(
+        client,
+        headers,
+        username='update-executor',
+        permissions=['updates.read', 'updates.execute'],
+    )
+    denied_run = client.post('/api/v1/updates/run', headers=executor, json={'ref': 'feature/test'})
+    denied_check = client.post('/api/v1/updates/check', headers=executor, json={'ref': 'feature/test'})
+    assert denied_run.status_code == 403
+    assert denied_check.status_code == 403
+
 def test_update_ref_validation(client, headers, monkeypatch):
     import app.api.updates as updates
 
