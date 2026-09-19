@@ -211,6 +211,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('blueprints.proxmoxTemplateWizard'" in script
     assert "registerCommand('blueprints.execute'" in script
     assert 'SRLXXX' in script
+    assert 'Sposób nadawania hostname' in script
+    assert 'Pattern hostname' in script
+    assert 'Podgląd hostname' in script
+    assert 'data-hostname-preview' in script
+    assert 'data-existing-hostname-preview' in script
+    assert 'hostname_scheme_name' not in script
+    assert 'existing_hostname_scheme_name' not in script
+    assert 'Slug / identyfikator szablonu' in script
+    assert "name: blueprintName" in script
     assert 'hostname_next_number' in script
     assert 'existing_hostname_pattern' in script
     assert 'Role zarządzające szablonem' in script
