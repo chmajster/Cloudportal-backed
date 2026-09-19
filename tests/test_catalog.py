@@ -9,6 +9,15 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     proxmox_properties = items['proxmox-vm']['variables_schema']['properties']
     assert {'tags', 'dns_servers', 'dns_domain'} <= set(proxmox_properties)
 
+    source = client.get('/api/v1/templates/proxmox-vm/source', headers=headers)
+    assert source.status_code == 200, source.text
+    source_data = source.json()
+    assert source_data['id'] == 'proxmox-vm'
+    assert source_data['files']
+    assert {'main.tf', 'variables.tf'} <= {item['name'] for item in source_data['files']}
+    assert all(item['name'].endswith('.tf') for item in source_data['files'])
+    assert all(isinstance(item['content'], str) for item in source_data['files'])
+
     playbooks = client.get('/api/v1/ansible/playbooks', headers=headers)
     assert playbooks.status_code == 200
     ids = {item['id'] for item in playbooks.json()['items']}
