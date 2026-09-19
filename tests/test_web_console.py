@@ -125,6 +125,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "default: 'pam'" in script
     assert "placeholder: 'root'" in script
     assert 'if (proxmoxIdentityRow) secretPanel.append(proxmoxIdentityRow);' in script
+    assert 'Sprawdź połączenie' in script
+    assert '/credentials/proxmox/test' in script
+    assert 'renderProxmoxConnectionResult' in script
+    assert 'Czas odpowiedzi' in script
+    assert 'Wersja Proxmox VE' in script
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert 'data-workflow-row' in script
@@ -208,6 +213,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-tls-control' in stylesheet
     assert '.credential-endpoint-row' in stylesheet
     assert '.credential-user-row' in stylesheet
+    assert '.credential-connection-check' in stylesheet
+    assert '.credential-connection-result' in stylesheet
     assert '.form-section' in stylesheet
     assert '.required-mark' in stylesheet
     assert 'input:user-invalid' in stylesheet
