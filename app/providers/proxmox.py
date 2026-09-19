@@ -370,6 +370,60 @@ class ProxmoxProvider(InfrastructureProvider):
         self.secret = decrypt_secret(credential)
         self.verify_ssl = credential.verify_ssl
 
+    def execution_availability(self):
+        """Check whether Proxmox is temporarily reachable before starting Terraform.
+
+        Transport failures are retryable. Authentication, authorization and TLS
+        configuration failures are returned as non-retryable configuration errors.
+        """
+        try:
+            with httpx.Client(
+                verify=self.verify_ssl,
+                timeout=httpx.Timeout(8, connect=4),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                headers = {}
+                if self.secret.get('token_id') and self.secret.get('token_secret'):
+                    token_id = self.secret['token_id']
+                    if '!' not in token_id:
+                        token_id = self.username + '!' + token_id
+                    headers['Authorization'] = 'PVEAPIToken=' + token_id + '=' + self.secret['token_secret']
+                else:
+                    auth = client.post(
+                        self.endpoint + '/access/ticket',
+                        data={'username': self.username, 'password': self.secret.get('password', '')},
+                    )
+                    if auth.status_code in {401, 403}:
+                        return {'ok': False, 'retryable': False, 'reason': 'authentication'}
+                    auth.raise_for_status()
+                    ticket = auth.json()['data']
+                    client.cookies.set('PVEAuthCookie', ticket['ticket'])
+                    headers['CSRFPreventionToken'] = ticket['CSRFPreventionToken']
+
+                response = client.get(self.endpoint + '/version', headers=headers)
+                if response.status_code in {401, 403}:
+                    return {'ok': False, 'retryable': False, 'reason': 'authentication'}
+                response.raise_for_status()
+                return {'ok': True, 'retryable': False, 'reason': None}
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as error:
+            if _certificate_verification_failed(error):
+                return {'ok': False, 'retryable': False, 'reason': 'tls'}
+            return {'ok': False, 'retryable': True, 'reason': 'unreachable'}
+        except httpx.HTTPStatusError as error:
+            return {
+                'ok': False,
+                'retryable': error.response.status_code >= 500,
+                'reason': 'remote_error',
+                'status': error.response.status_code,
+            }
+        except httpx.TransportError as error:
+            if _certificate_verification_failed(error):
+                return {'ok': False, 'retryable': False, 'reason': 'tls'}
+            return {'ok': False, 'retryable': True, 'reason': 'transport'}
+        except (KeyError, ValueError, TypeError):
+            return {'ok': False, 'retryable': False, 'reason': 'invalid_response'}
+
     def _request(self, method, path, *, data=None):
         try:
             with httpx.Client(

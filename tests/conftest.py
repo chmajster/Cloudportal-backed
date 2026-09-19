@@ -37,6 +37,7 @@ def system(tmp_path, monkeypatch):
     monkeypatch.setenv('CP_MASTER_KEY_FILE', str(tmp_path / 'master.key'))
     monkeypatch.setenv('CP_DATA_DIR', str(tmp_path / 'data'))
     monkeypatch.setenv('CP_ALLOW_HTTP', 'true')
+    monkeypatch.setenv('CP_PROVIDER_OFFLINE_QUEUE_ENABLED', 'false')
     settings.cache_clear()
     engine.cache_clear()
     redis_client.cache_clear()
