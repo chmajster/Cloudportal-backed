@@ -46,9 +46,16 @@ def seed(db):
         if not role:
             db.add(Role(name=name, permissions=[existing[p] for p in sorted(permissions)]))
         else:
-            # Existing installations receive only newly introduced built-in permissions.
             current = {p.name for p in role.permissions}
-            additions = permissions & new_permission_names - current
+            if name == 'Administrator':
+                # The built-in Administrator role is authoritative and must always
+                # receive every permission, including permissions that already exist
+                # in the database but were missing from the role assignment.
+                additions = permissions - current
+            else:
+                # Other built-in roles receive only newly introduced defaults so
+                # administrators can intentionally customize them.
+                additions = permissions & new_permission_names - current
             role.permissions.extend(existing[p] for p in sorted(additions))
     if not db.get(Setting, 'governance'):
         db.add(Setting(key='governance', value={}))
