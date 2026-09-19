@@ -70,3 +70,19 @@
   .workflow-dag-header { flex-direction: column; }
   .workflow-dag-columns { grid-auto-columns: minmax(170px, 80vw); }
 }
+
+
+.hostname-generator-info { margin-bottom: 18px; }
+.hostname-pattern-preview {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+.hostname-pattern-preview strong {
+  font-size: 1rem;
+  color: var(--accent-strong);
+  overflow-wrap: anywhere;
+}
