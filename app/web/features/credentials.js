@@ -238,6 +238,61 @@ async function testProxmoxCredentialForm(item, form) {
   });
 }
 
+function sshBootstrapHostKeyPanel() {
+  const knownHosts = node('input', { type: 'hidden', name: 'ssh_bootstrap_known_hosts' });
+  const fingerprint = node('strong', { class: 'mono', text: 'Nie pobrano' });
+  const keyType = node('span', { class: 'muted', text: '—' });
+  const confirm = checkboxField('Potwierdzam, że odcisk należy do tego serwera', 'ssh_host_key_confirmed', false);
+  const confirmInput = confirm.querySelector('input');
+  confirmInput.disabled = true;
+
+  const fetchButton = button('Pobierz odcisk hosta', async event => {
+    const control = event.currentTarget;
+    const form = control.closest('form');
+    const endpoint = String(form?.elements.endpoint?.value || '').trim();
+    if (!endpoint) {
+      toast('Najpierw podaj endpoint SSH, np. ssh://server.example.com:22.', 'error');
+      return;
+    }
+    const previous = control.textContent;
+    control.disabled = true;
+    control.textContent = 'Pobieranie…';
+    confirmInput.checked = false;
+    confirmInput.disabled = true;
+    knownHosts.value = '';
+    fingerprint.textContent = 'Pobieranie…';
+    keyType.textContent = '';
+    try {
+      const result = await api('/credentials/ssh/host-key', { method: 'POST', body: { endpoint } });
+      knownHosts.value = result.known_hosts;
+      fingerprint.textContent = result.fingerprint;
+      keyType.textContent = result.key_type + ' · ' + result.host + ':' + result.port;
+      confirmInput.disabled = false;
+    } catch (error) {
+      fingerprint.textContent = 'Nie udało się pobrać';
+      keyType.textContent = error.message;
+      toast(error.message, 'error');
+    } finally {
+      control.disabled = false;
+      control.textContent = previous;
+    }
+  }, 'ghost');
+
+  return node('section', { class: 'ssh-key-bootstrap-panel wide' },
+    node('div', { class: 'ssh-key-bootstrap-head' },
+      node('div', {},
+        node('strong', { text: 'Automatyczne wygenerowanie i wgranie klucza SSH' }),
+        node('p', { class: 'muted', text: 'Cloudportal pobierze klucz hosta, po Twoim potwierdzeniu wygeneruje Ed25519, zaloguje się jednorazowo hasłem i dopisze klucz publiczny do ~/.ssh/authorized_keys.' })),
+      fetchButton),
+    node('div', { class: 'ssh-host-fingerprint' },
+      node('span', { text: 'Odcisk hosta' }),
+      fingerprint,
+      keyType),
+    confirm,
+    knownHosts,
+    node('p', { class: 'field-help', text: 'Hasło służy tylko do instalacji klucza. Po udanej weryfikacji zapisywany jest wyłącznie zaszyfrowany klucz prywatny i zweryfikowany known_hosts.' }));
+}
+
 function renderCredentialDynamic(container, type, item) {
   const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
   const sameType = Boolean(item && item.type === type);
@@ -336,7 +391,11 @@ function renderCredentialDynamic(container, type, item) {
   const refresh = () => {
     const enabled = !item || mustReplace || Boolean(replaceInput?.checked);
     authSelect.disabled = !enabled;
-    renderCredentialSecretFields(secretGrid, config, authSelect.value || config.defaultAuth, enabled);
+    const authMode = authSelect.value || config.defaultAuth;
+    renderCredentialSecretFields(secretGrid, config, authMode, enabled);
+    if (type === 'ssh' && authMode === 'generate_key' && enabled) {
+      secretGrid.append(sshBootstrapHostKeyPanel());
+    }
   };
   authSelect.addEventListener('change', refresh);
   replaceInput?.addEventListener('change', refresh);
@@ -500,6 +559,38 @@ function credentialForm(item = null) {
             toast('Token Proxmox wygenerowany i zapisany. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
           } catch (error) { toast('Token wygenerowany i zapisany, ale test nie powiódł się: ' + error.message, 'error'); }
         } else toast('Token Proxmox wygenerowany i zapisany. Hasło nie zostało zachowane.');
+        navigate('credentials');
+        return;
+      }
+      if (!item && type === 'ssh' && authMode === 'generate_key') {
+        const password = form.querySelector('[data-secret-key="password"]')?.value || '';
+        const knownHosts = String(form.elements.ssh_bootstrap_known_hosts?.value || '').trim();
+        const confirmed = Boolean(form.elements.ssh_host_key_confirmed?.checked);
+        if (!endpoint || !endpoint.startsWith('ssh://')) throw new Error('Podaj endpoint SSH w formacie ssh://host:port.');
+        if (!username) throw new Error('Podaj użytkownika SSH.');
+        if (!password) throw new Error('Podaj hasło SSH używane do jednorazowego wgrania klucza.');
+        if (!knownHosts || !confirmed) throw new Error('Pobierz odcisk hosta SSH i potwierdź go przed wygenerowaniem klucza.');
+
+        const generated = await api('/credentials/ssh/bootstrap', { method: 'POST', body: {
+          name: payload.name,
+          endpoint,
+          username,
+          password,
+          known_hosts: knownHosts,
+          expires_at: payload.expires_at,
+          rotation_due_at: payload.rotation_due_at,
+        }});
+        const saved = generated.credential;
+        if (data.has('test_after_save')) {
+          try {
+            await api('/credentials/' + saved.id + '/test', { method: 'POST' });
+            toast('Klucz SSH wygenerowany, wgrany i zweryfikowany. Hasło nie zostało zapisane.');
+          } catch (error) {
+            toast('Klucz został wgrany i zapisany, ale końcowy test nie powiódł się: ' + error.message, 'error');
+          }
+        } else {
+          toast('Klucz SSH Ed25519 wygenerowany i wgrany na serwer. Hasło nie zostało zapisane.');
+        }
         navigate('credentials');
         return;
       }
