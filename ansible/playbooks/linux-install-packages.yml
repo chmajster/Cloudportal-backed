@@ -1,0 +1,9 @@
+- name: Install approved package list on Linux
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install requested packages
+      ansible.builtin.package:
+        name: "{{ packages.split(',') | map('trim') | reject('equalto', '') | list }}"
+        state: present
