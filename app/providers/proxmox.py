@@ -144,6 +144,49 @@ def _proxmox_http_exception(error, operation):
     )
 
 
+def _proxmox_duplicate_token_response(response):
+    if response.status_code not in {400, 409}:
+        return False
+    try:
+        body = response.text.lower()
+    except Exception:
+        body = ''
+    markers = (
+        'already exists',
+        'already exist',
+        'duplicate',
+        'value exists',
+    )
+    return any(marker in body for marker in markers)
+
+
+def _suggest_proxmox_token_name(token_name):
+    match = re.fullmatch(r'(.+?)-(\d+)', token_name)
+    if match:
+        base = match.group(1)
+        number = int(match.group(2)) + 1
+    else:
+        base = token_name
+        number = 2
+    suffix = f'-{number}'
+    max_base = max(1, 63 - len(suffix))
+    base = base[:max_base].rstrip('._-') or 'cloudportal'
+    return base + suffix
+
+
+def _proxmox_duplicate_token_exception(username, token_name):
+    suggested = _suggest_proxmox_token_name(token_name)
+    return HTTPException(
+        409,
+        {
+            'code': 'proxmox_token_duplicate',
+            'message': f'Token API Proxmox „{username}!{token_name}” już istnieje.',
+            'token_name': token_name,
+            'suggested_token_name': suggested,
+        },
+    )
+
+
 def test_proxmox_connection(endpoint, username, secret, *, verify_ssl=True):
     """Test a draft Proxmox credential without persisting the supplied secret."""
     base = endpoint.rstrip('/') + '/api2/json'
@@ -236,7 +279,12 @@ def create_api_token(endpoint, username, password, token_name, *, verify_ssl=Tru
                     'comment': 'Managed by Cloudportal-backed',
                 },
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                if _proxmox_duplicate_token_response(error.response):
+                    raise _proxmox_duplicate_token_exception(username, token_name) from None
+                raise
             data = response.json()['data']
             token_secret = data.get('value')
             if not token_secret:
@@ -245,6 +293,8 @@ def create_api_token(endpoint, username, password, token_name, *, verify_ssl=Tru
                 'token_id': data.get('full-tokenid') or f'{username}!{token_name}',
                 'token_secret': token_secret,
             }
+    except HTTPException:
+        raise
     except httpx.HTTPError as error:
         raise _proxmox_http_exception(error, phase) from None
     except (KeyError, ValueError):
