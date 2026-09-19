@@ -1,5 +1,8 @@
 x-backend: &backend
-  build: .
+  build:
+    context: .
+    args:
+      BUILD_COMMIT: ${CP_BUILD_COMMIT:-unknown}
   environment: &environment
     CP_DATABASE_URL: postgresql+psycopg://cloudportal:${CP_POSTGRES_PASSWORD:?Set CP_POSTGRES_PASSWORD in .env}@postgres/cloudportal
     CP_REDIS_URL: redis://redis:6379/0
