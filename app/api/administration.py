@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
-                             IssuedResetOutput, DeletedOutput, AuditOutput)
-from app.api.schemas import AssignRoles, RoleInput, TokenInput, UserCreate, UserUpdate
+                             IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput)
+from app.api.schemas import AssignRoles, LDAPSettingsInput, RoleInput, TokenInput, UserCreate, UserUpdate
 from app.auth.routes import user_public
+from app.auth.ldap import ldap_settings, save_ldap_settings, test_ldap_connection
 from app.database import get_db
 from app.models import Audit, PasswordReset, Role, Token, User, UserRole, now
 from app.rbac.service import ALL_PERMISSIONS, ensure_admin_remains, governance_lock, permissions_from_names
@@ -120,6 +121,8 @@ def reset_user(id: int, request: Request, actor=Depends(require('users.update'))
     can_grant(request, effective_permissions(u))
     if u.is_service_account or not u.is_active:
         raise HTTPException(409, 'Password reset requires an active human account')
+    if u.auth_source != 'local':
+        raise HTTPException(409, 'Password is managed by LDAP')
     def create():
         plain = secrets.token_urlsafe(48)
         db.execute(update(PasswordReset).where(PasswordReset.user_id == id, PasswordReset.consumed_at.is_(None)).values(consumed_at=now()))
@@ -129,6 +132,27 @@ def reset_user(id: int, request: Request, actor=Depends(require('users.update'))
         audit(db, request, 'user.password_reset_requested', 'users', id)
         return {'reset_token': plain, 'expires_in': 900, 'user_id': id}
     return idempotent(db, request, actor, {'id': id}, create)
+
+
+@router.get('/settings/ldap', response_model=LDAPSettingsOutput)
+def get_ldap_settings(actor=Depends(require('settings.read')), db=Depends(get_db, scope='function')):
+    return ldap_settings(db)
+
+
+@router.put('/settings/ldap', response_model=LDAPSettingsOutput)
+def update_ldap_settings(data: LDAPSettingsInput, request: Request,
+                         actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    result = save_ldap_settings(db, data)
+    audit(db, request, 'settings.ldap_updated', 'settings', 'ldap')
+    return result
+
+
+@router.post('/settings/ldap/test', response_model=LDAPTestOutput)
+def test_ldap_settings(request: Request, actor=Depends(require('settings.update')),
+                       db=Depends(get_db, scope='function')):
+    result = test_ldap_connection(db)
+    audit(db, request, 'settings.ldap_tested', 'settings', 'ldap')
+    return result
 
 
 @router.get('/permissions', response_model=Items[str])
