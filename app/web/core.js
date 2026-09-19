@@ -1062,8 +1062,9 @@ function showApp() {
 
 function renderNavigation() {
   dom.navigation.replaceChildren();
+  const currentRoute = routes.find(route => route.id === state.view);
   routes.filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account')).forEach(route => {
-    const active = state.view === route.id || route.navigationParent === state.view;
+    const active = state.view === route.id || currentRoute?.navigationParent === route.id;
     const item = node('button', { class: `nav-link ${active ? 'active' : ''}`, type: 'button', onClick: () => navigate(route.id) },
       node('span', { class: 'nav-icon', text: route.icon }), route.label);
     item.dataset.route = route.id;
