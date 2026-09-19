@@ -228,6 +228,8 @@ function changePassword(required = false) {
   }});
 }
 
+registerCommand('users.create', createUser);
+registerCommand('tokens.create', createToken);
 registerView({ id: 'users', label: 'Użytkownicy', icon: 'U', permission: 'users.read', order: 10 }, usersView);
 registerView({ id: 'roles', label: 'Role i RBAC', icon: 'R', permission: 'roles.read', order: 20 }, rolesView);
 registerView({ id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read', order: 30 }, tokensView);
