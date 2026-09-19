@@ -161,6 +161,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'renderProxmoxConnectionResult' in script
     assert 'Czas odpowiedzi' in script
     assert 'Wersja Proxmox VE' in script
+    assert "label: 'Hasło → wygeneruj i wgraj klucz (zalecane)'" in script
+    assert 'Automatyczne wygenerowanie i wgranie klucza SSH' in script
+    assert '/credentials/ssh/host-key' in script
+    assert '/credentials/ssh/bootstrap' in script
+    assert 'ssh_host_key_confirmed' in script
+    assert 'Hasło służy tylko do instalacji klucza' in script
     assert 'function proxmoxDuplicateTokenDetail(' in script
     assert 'function applyProxmoxDuplicateTokenSuggestion(' in script
     assert 'function setProxmoxTokenVerificationState(' in script
@@ -320,6 +326,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-user-row' in stylesheet
     assert '.credential-connection-check' in stylesheet
     assert '.credential-connection-result' in stylesheet
+    assert '.ssh-key-bootstrap-panel' in stylesheet
+    assert '.ssh-host-fingerprint' in stylesheet
     assert '.credential-connection-result.pending' in stylesheet
     assert '.proxmox-token-verification' in stylesheet
     assert '@keyframes proxmox-token-check-spin' in stylesheet
