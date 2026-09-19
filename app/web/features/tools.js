@@ -78,7 +78,6 @@ function unavailableUpdateTool(error) {
   );
 }
 
-
 function hostnameGeneratorTool(schemes = []) {
   const active = schemes.filter(item => item.is_active);
   const next = active[0] || schemes[0] || null;
@@ -103,6 +102,257 @@ function hostnameGeneratorTool(schemes = []) {
   );
 }
 
+function ansibleHostEntryTool() {
+  return node('article', { class: 'panel tool-card' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('file-text')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Ansible' }),
+        node('h2', { text: 'Generator wpisu hosta' }),
+        node('p', { class: 'muted', text: 'Zbuduj poprawny wpis hosta do inventory Ansible dla SSH albo WinRM i skopiuj wynik w formacie INI lub YAML.' })),
+      badge('Lokalnie', 'ok')),
+    node('div', { class: 'tool-meta-grid' },
+      toolMeta('Formaty', 'INI / YAML'),
+      toolMeta('Połączenia', 'SSH / WinRM'),
+      toolMeta('Walidacja', 'alias, grupa, host_vars'),
+      toolMeta('Sekrety', 'nie są zapisywane')),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot ok' }),
+        'Generator działa wyłącznie w przeglądarce'),
+      button('Otwórz generator', () => navigate('ansible-host-entry'), 'primary'))
+  );
+}
+
+function ansibleInventoryToken(value) {
+  const text = String(value ?? '');
+  if (/^[A-Za-z0-9_./:@+\-]+$/.test(text)) return text;
+  return JSON.stringify(text);
+}
+
+function ansibleYamlScalar(value) {
+  return JSON.stringify(String(value ?? ''));
+}
+
+function parseAnsibleHostVariables(raw) {
+  const rows = [];
+  String(raw || '').split('\n').forEach((line, index) => {
+    const text = line.trim();
+    if (!text || text.startsWith('#')) return;
+    const separator = text.indexOf('=');
+    if (separator < 1) throw new Error(`Host vars, wiersz ${index + 1}: użyj formatu klucz=wartość.`);
+    const key = text.slice(0, separator).trim();
+    const value = text.slice(separator + 1).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`Host vars, wiersz ${index + 1}: „${key}” nie jest poprawną nazwą zmiennej Ansible.`);
+    }
+    rows.push([key, value]);
+  });
+  return rows;
+}
+
+function ansibleHostEntryModel(form) {
+  const data = new FormData(form);
+  const alias = String(data.get('alias') || '').trim();
+  const address = String(data.get('address') || '').trim();
+  const group = String(data.get('group') || '').trim();
+  const connection = String(data.get('connection') || 'ssh');
+  const username = String(data.get('username') || '').trim();
+  const port = Number.parseInt(String(data.get('port') || ''), 10);
+
+  if (!/^[A-Za-z0-9_.-]+$/.test(alias)) throw new Error('Alias hosta może zawierać tylko litery, cyfry, kropkę, podkreślenie i myślnik.');
+  if (!address || /\s/.test(address)) throw new Error('Podaj adres IP lub nazwę DNS bez spacji.');
+  if (group && !/^[A-Za-z0-9_.-]+$/.test(group)) throw new Error('Nazwa grupy może zawierać tylko litery, cyfry, kropkę, podkreślenie i myślnik.');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port musi być liczbą od 1 do 65535.');
+
+  return {
+    alias,
+    address,
+    group,
+    connection,
+    username,
+    port,
+    privateKey: String(data.get('private_key') || '').trim(),
+    become: data.get('become') === 'on',
+    winrmTransport: String(data.get('winrm_transport') || 'ntlm'),
+    ignoreWinrmCertificate: data.get('ignore_winrm_certificate') === 'on',
+    variables: parseAnsibleHostVariables(data.get('host_vars')),
+  };
+}
+
+function ansibleHostIni(model) {
+  const parts = [
+    model.alias,
+    `ansible_host=${ansibleInventoryToken(model.address)}`,
+  ];
+  if (model.username) parts.push(`ansible_user=${ansibleInventoryToken(model.username)}`);
+  parts.push(`ansible_port=${model.port}`);
+
+  if (model.connection === 'winrm') {
+    parts.push('ansible_connection=winrm');
+    parts.push(`ansible_winrm_transport=${ansibleInventoryToken(model.winrmTransport)}`);
+    if (model.ignoreWinrmCertificate) parts.push('ansible_winrm_server_cert_validation=ignore');
+  } else {
+    parts.push('ansible_connection=ssh');
+    if (model.privateKey) parts.push(`ansible_ssh_private_key_file=${ansibleInventoryToken(model.privateKey)}`);
+    if (model.become) parts.push('ansible_become=true');
+  }
+
+  model.variables.forEach(([key, value]) => parts.push(`${key}=${ansibleInventoryToken(value)}`));
+  const entry = parts.join(' ');
+  return model.group ? `[${model.group}]\n${entry}` : entry;
+}
+
+function ansibleHostYaml(model) {
+  const root = model.group
+    ? ['all:', '  children:', `    ${model.group}:`, '      hosts:', `        ${model.alias}:`]
+    : ['all:', '  hosts:', `    ${model.alias}:`];
+  const indent = model.group ? '          ' : '      ';
+  root.push(`${indent}ansible_host: ${ansibleYamlScalar(model.address)}`);
+  if (model.username) root.push(`${indent}ansible_user: ${ansibleYamlScalar(model.username)}`);
+  root.push(`${indent}ansible_port: ${model.port}`);
+
+  if (model.connection === 'winrm') {
+    root.push(`${indent}ansible_connection: "winrm"`);
+    root.push(`${indent}ansible_winrm_transport: ${ansibleYamlScalar(model.winrmTransport)}`);
+    if (model.ignoreWinrmCertificate) root.push(`${indent}ansible_winrm_server_cert_validation: "ignore"`);
+  } else {
+    root.push(`${indent}ansible_connection: "ssh"`);
+    if (model.privateKey) root.push(`${indent}ansible_ssh_private_key_file: ${ansibleYamlScalar(model.privateKey)}`);
+    if (model.become) root.push(`${indent}ansible_become: true`);
+  }
+
+  model.variables.forEach(([key, value]) => root.push(`${indent}${key}: ${ansibleYamlScalar(value)}`));
+  return root.join('\n');
+}
+
+function ansibleHostEntryView() {
+  const alias = field('Alias hosta', 'alias', { required: true, value: 'server01', placeholder: 'np. web01' });
+  const address = field('Adres IP / DNS', 'address', { required: true, value: '192.168.1.10', placeholder: 'np. 10.20.30.40' });
+  const group = field('Grupa inventory', 'group', { value: 'linux', placeholder: 'np. linux' });
+  const connection = selectField('Typ połączenia', 'connection', [
+    { value: 'ssh', label: 'Linux / Unix — SSH' },
+    { value: 'winrm', label: 'Windows — WinRM' },
+  ], 'ssh');
+  const username = field('Użytkownik', 'username', { value: 'ansible', placeholder: 'np. ansible' });
+  const port = field('Port', 'port', { type: 'number', min: 1, max: 65535, value: 22, required: true });
+  const format = selectField('Format wyniku', 'format', [
+    { value: 'ini', label: 'INI — inventory.ini' },
+    { value: 'yaml', label: 'YAML — inventory.yml' },
+  ], 'ini');
+  const hostVars = field('Dodatkowe host_vars', 'host_vars', {
+    tag: 'textarea',
+    wide: true,
+    placeholder: 'environment=dev\napp_role=frontend',
+    help: 'Jedna zmienna w wierszu, format klucz=wartość. Linie zaczynające się od # są pomijane.',
+  });
+
+  const sshOptions = node('section', { class: 'ansible-entry-options' },
+    node('div', { class: 'ansible-entry-options-head' },
+      node('strong', { text: 'Opcje SSH' }),
+      node('span', { class: 'muted', text: 'Linux / Unix' })),
+    node('div', { class: 'form-grid' },
+      field('Ścieżka do klucza prywatnego', 'private_key', {
+        value: '',
+        placeholder: '~/.ssh/id_ed25519',
+        wide: true,
+        help: 'Opcjonalnie. Generator nie odczytuje ani nie zapisuje zawartości klucza.',
+      }),
+      checkboxField('Użyj privilege escalation (ansible_become=true)', 'become', true)));
+
+  const winrmOptions = node('section', { class: 'ansible-entry-options', hidden: true },
+    node('div', { class: 'ansible-entry-options-head' },
+      node('strong', { text: 'Opcje WinRM' }),
+      node('span', { class: 'muted', text: 'Windows' })),
+    node('div', { class: 'form-grid' },
+      selectField('Transport WinRM', 'winrm_transport', [
+        { value: 'ntlm', label: 'NTLM' },
+        { value: 'kerberos', label: 'Kerberos' },
+        { value: 'credssp', label: 'CredSSP' },
+        { value: 'basic', label: 'Basic' },
+      ], 'ntlm'),
+      checkboxField('Ignoruj walidację certyfikatu WinRM', 'ignore_winrm_certificate', true)));
+
+  const form = node('form', { class: 'panel ansible-entry-form', autocomplete: 'off' },
+    node('div', { class: 'ansible-entry-form-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Inventory Ansible' }),
+        node('h2', { text: 'Parametry hosta' }),
+        node('p', { class: 'muted', text: 'Uzupełnij dane. Podgląd po prawej aktualizuje się automatycznie.' }))),
+    node('div', { class: 'form-grid' }, alias, address, group, connection, username, port, format, hostVars),
+    sshOptions,
+    winrmOptions);
+
+  const preview = node('pre', { class: 'ansible-entry-code', 'aria-live': 'polite' });
+  const validation = node('div', { class: 'ansible-entry-validation' });
+  const copy = button('Kopiuj wpis', async () => {
+    try {
+      await copyText(preview.textContent);
+      toast('Wpis Ansible skopiowany do schowka.');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }, 'primary');
+  const reset = button('Przywróć przykład', () => {
+    form.reset();
+    form.elements.port.value = '22';
+    syncConnection();
+  });
+
+  const resultPanel = node('section', { class: 'panel ansible-entry-preview' },
+    node('div', { class: 'ansible-entry-preview-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Gotowy wpis' }),
+        node('h2', { text: 'Podgląd inventory' }),
+        node('p', { class: 'muted', text: 'Wynik można wkleić bezpośrednio do inventory.ini albo inventory.yml.' })),
+      badge('Na żywo', 'ok')),
+    preview,
+    validation,
+    node('div', { class: 'ansible-entry-preview-actions' }, reset, copy));
+
+  function sync() {
+    try {
+      const model = ansibleHostEntryModel(form);
+      const output = form.elements.format.value === 'yaml' ? ansibleHostYaml(model) : ansibleHostIni(model);
+      preview.textContent = output;
+      validation.className = 'ansible-entry-validation ok';
+      validation.textContent = 'Wpis jest poprawny składniowo dla generatora.';
+      copy.disabled = false;
+    } catch (error) {
+      preview.textContent = '# Uzupełnij lub popraw pola, aby wygenerować wpis.';
+      validation.className = 'ansible-entry-validation error';
+      validation.textContent = error.message;
+      copy.disabled = true;
+    }
+  }
+
+  function syncConnection() {
+    const isWinrm = form.elements.connection.value === 'winrm';
+    const currentPort = String(form.elements.port.value || '');
+    sshOptions.hidden = isWinrm;
+    winrmOptions.hidden = !isWinrm;
+    if (isWinrm && (!currentPort || currentPort === '22')) form.elements.port.value = '5986';
+    if (!isWinrm && (!currentPort || currentPort === '5986' || currentPort === '5985')) form.elements.port.value = '22';
+    sync();
+  }
+
+  connection.querySelector('select').addEventListener('change', syncConnection);
+  form.addEventListener('input', sync);
+  form.addEventListener('change', sync);
+  form.addEventListener('submit', event => event.preventDefault());
+
+  dom.content.replaceChildren(
+    heading('Generator pojedynczego wpisu hosta do inventory Ansible.', [
+      button('← Narzędzia', () => navigate('tools')),
+    ]),
+    node('div', { class: 'ansible-entry-layout' }, form, resultPanel),
+    node('section', { class: 'panel ansible-entry-help' },
+      node('h2', { text: 'Co jest generowane' }),
+      node('p', { class: 'muted', text: 'SSH dodaje ansible_connection=ssh, opcjonalny klucz prywatny i ansible_become. WinRM dodaje ansible_connection=winrm, transport oraz opcjonalne wyłączenie walidacji certyfikatu. Hasła i zawartość kluczy nie są przechowywane ani generowane.' }))
+  );
+  syncConnection();
+}
+
 async function toolsView() {
   const cards = [];
 
@@ -125,6 +375,8 @@ async function toolsView() {
           button('Otwórz generator', () => navigate('hostnames'), 'primary'))));
     }
   }
+
+  if (allowed('ansible.read')) cards.push(ansibleHostEntryTool());
 
   if (allowed('updates.read')) {
     try {
@@ -152,4 +404,13 @@ async function toolsView() {
 }
 
 registerView({ id: 'tools', label: 'Narzędzia', iconName: 'wrench', order: 155 }, toolsView);
+registerView({
+  id: 'ansible-host-entry',
+  label: 'Generator hosta Ansible',
+  iconName: 'file-text',
+  navigation: false,
+  navigationParent: 'tools',
+  permission: 'ansible.read',
+  order: 156,
+}, ansibleHostEntryView);
 })();
