@@ -679,7 +679,16 @@
             saveStateFromInput(control);
             if (['cpu', 'memory', 'disk'].includes(control.name)) state.preset = 'custom';
           });
-          control.addEventListener('change', () => saveStateFromInput(control));
+          control.addEventListener('change', () => {
+            saveStateFromInput(control);
+            if (control.name === 'environment') {
+              state.environment = control.value;
+              state.hostnameValues.env = control.value;
+              state.hostnameValues.environment = control.value;
+            }
+            if (control.name === 'apmid') state.apmid = String(control.value || '').trim().toUpperCase();
+            if (['environment', 'apmid'].includes(control.name)) render();
+          });
         });
 
         const advanced = node('details', { class: 'advanced-options' },
