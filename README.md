@@ -24,18 +24,36 @@ Instalacja unattended / własny host i port:
 curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --non-interactive --host backend.example.com --port 8443 --workers 3
 ```
 
+### Interfejs terminalowy instalatora
+
+`install.sh` raportuje postęp w siedmiu etapach: `[1/7]`–`[7/7]`. Operacje mają statusy `[ OK ]`, `[INFO]`, `[WARN]` i `[FAIL]`. Kolory ANSI są używane wyłącznie wtedy, gdy stdout jest interaktywnym terminalem; w pipe, cron, logach i CI wyjście pozostaje czystym tekstem. `NO_COLOR=1` wymusza brak kolorów.
+
+Przed zmianami w systemie wykonywany jest pretest: obsługiwany system/architektura, wymagane narzędzia bazowe, menedżer pakietów, wolne miejsce, dostęp HTTPS do GitHub oraz potencjalny konflikt portu. Błędy końcowe wskazują również komendy `systemctl` i `journalctl`, które należy sprawdzić.
+
+Status bez wykonywania zmian:
+
+```bash
+sudo ./install.sh --status
+```
+
+Pełna pomoc:
+
+```bash
+./install.sh --help
+```
+
 Jeżeli nowy instalator wykryje aktywny `/run/cloudportal-install.lock`, domyślnie przejmuje instalację: zatrzymuje usługi aplikacji Cloudportal (API, dispatcher, workery oraz updater), kończy poprzedni proces instalatora i po zwolnieniu blokady kontynuuje instalację. Blokada jest teraz utrzymywana przez osobny proces `flock --close`, dzięki czemu nie jest dziedziczona przez `apt`, `curl`, `systemctl`, Pythona, Terraform ani inne procesy potomne. Dla zgodności ze starymi uruchomieniami instalator dodatkowo skanuje `/proc/*/fd`, więc potrafi znaleźć lock niewidoczny w `lslocks`. Zachowanie można wyłączyć przez `--no-takeover`.
 
 Awaryjne usunięcie runtime Cloudportal z zachowaniem bazy, konfiguracji i danych:
 
 ```bash
-curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --force-uninstall
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --uninstall
 ```
 
 Pełny, destrukcyjny reset razem z bazą PostgreSQL, `/etc/cloudportal-backed`, `/var/lib/cloudportal-backed`, backupami i użytkownikiem systemowym:
 
 ```bash
-curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --force-uninstall --purge-data
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --uninstall --purge-data
 ```
 
 `--purge-data` działa wyłącznie razem z `--force-uninstall`.
