@@ -16,6 +16,21 @@ function canManageCatalogTemplate(item) {
   return [...required].some(id => owned.has(id));
 }
 
+async function toggleCatalogItem(kind, item) {
+  const enabled = item.enabled === false;
+  const label = kind === 'templates' ? 'szablon' : 'playbook';
+  try {
+    await api('/catalog/' + kind + '/' + encodeURIComponent(item.id) + '/enabled', {
+      method: 'PUT',
+      body: { enabled },
+    });
+    toast((enabled ? 'Włączono ' : 'Wyłączono ') + label + ' „' + item.name + '”.');
+    navigate('catalog');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
 async function catalogView() {
   const [templates, playbooks, blueprintResult, roleResult] = await Promise.all([
     api('/templates'),
@@ -46,8 +61,15 @@ async function catalogView() {
         { label: 'Szablon', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.id })) },
         { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider, 'info') },
         { label: 'Wersja', value: item => `v${item.version}` },
+        { label: 'Status', value: item => badge(item.enabled === false ? 'Wyłączony' : 'Aktywny', item.enabled === false ? 'danger' : 'ok') },
         { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
-      ], templates.items, item => [button('Pola', () => showTemplateFields(item))])
+      ], templates.items, item => {
+        const rowActions = [button('Pola', () => showTemplateFields(item))];
+        if (allowed('settings.update')) {
+          rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCatalogItem('templates', item), item.enabled === false ? 'primary' : 'danger'));
+        }
+        return rowActions;
+      })
     ),
   ];
 
@@ -102,16 +124,24 @@ async function catalogView() {
         { label: 'Kategoria', value: item => badge(item.category || 'Inne', 'info') },
         { label: 'ID', class: 'mono', value: item => item.id },
         { label: 'Transport', value: item => badge(item.transport.toUpperCase()) },
+        { label: 'Status', value: item => badge(item.enabled === false ? 'Wyłączony' : 'Aktywny', item.enabled === false ? 'danger' : 'ok') },
         { label: 'Zmienne', value: item => item.variables.map(name => FIELD_LABELS[name] || name.replaceAll('_', ' ')).join(', ') || '—' },
-      ], playbooks.items, item => allowed('jobs.execute') && allowed('ansible.execute') && allowed('credentials.read')
-        ? [button('Uruchom', () => {
+      ], playbooks.items, item => {
+        const rowActions = [];
+        if (item.enabled !== false && allowed('jobs.execute') && allowed('ansible.execute') && allowed('credentials.read')) {
+          rowActions.push(button('Uruchom', () => {
             if (!hasCommand('ansible.run')) {
               toast('Uruchamianie Ansible nie jest dostępne.', 'error');
               return;
             }
             runCommand('ansible.run', item.id);
-          }, 'primary')]
-        : [])));
+          }, 'primary'));
+        }
+        if (allowed('settings.update')) {
+          rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCatalogItem('playbooks', item), item.enabled === false ? 'primary' : 'danger'));
+        }
+        return rowActions;
+      })));
   }
 
   dom.content.replaceChildren(
