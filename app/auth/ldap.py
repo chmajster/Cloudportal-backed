@@ -1,5 +1,4 @@
 import base64
-import secrets
 import ssl
 from urllib.parse import urlsplit
 
@@ -169,7 +168,6 @@ def authenticate_ldap(db, identity, password):
             'email': email.lower(),
             'first_name': value(config['first_name_attribute']),
             'last_name': value(config['last_name_attribute']),
-            'password_hash': secrets.token_urlsafe(64),
         }
     except LDAPException:
         return None
