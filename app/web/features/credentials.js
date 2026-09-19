@@ -62,6 +62,31 @@ function buildProxmoxEndpoint(address, port) {
   return base + ':' + selectedPort;
 }
 
+function splitProxmoxUsername(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { username: '', realm: 'pam' };
+  const separator = raw.lastIndexOf('@');
+  if (separator <= 0 || separator === raw.length - 1) {
+    return { username: raw, realm: 'pam' };
+  }
+  return {
+    username: raw.slice(0, separator),
+    realm: raw.slice(separator + 1),
+  };
+}
+
+function buildProxmoxUsername(username, realm) {
+  const user = String(username || '').trim();
+  const selectedRealm = String(realm || 'pam').trim();
+  if (!user) throw new Error('Podaj użytkownika Proxmox.');
+  if (!selectedRealm) throw new Error('Podaj realm Proxmox.');
+  if (user.includes('@')) {
+    const parsed = splitProxmoxUsername(user);
+    return parsed.username + '@' + (parsed.realm || selectedRealm);
+  }
+  return user + '@' + selectedRealm;
+}
+
 function renderCredentialDynamic(container, type, item) {
   const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
   const sameType = Boolean(item && item.type === type);
@@ -99,9 +124,34 @@ function renderCredentialDynamic(container, type, item) {
       }));
     }
   }
-  if (config.username) identity.append(field(config.username.label, 'username', {
-    value: sameType ? item.username : '', required: config.username.required, placeholder: config.username.placeholder,
-  }));
+  if (config.username) {
+    if (type === 'proxmox' && config.realm) {
+      const parsedIdentity = splitProxmoxUsername(sameType ? item.username : '');
+      const usernameField = field(config.username.label, 'username', {
+        value: parsedIdentity.username,
+        required: config.username.required,
+        placeholder: config.username.placeholder,
+      });
+      const realmField = field(config.realm.label, 'realm', {
+        value: parsedIdentity.realm || config.realm.default,
+        required: config.realm.required,
+        placeholder: config.realm.placeholder,
+        help: config.realm.help,
+      });
+      const usernameInput = usernameField.querySelector('input');
+      const realmInput = realmField.querySelector('input');
+      usernameInput.addEventListener('change', () => {
+        const parsed = splitProxmoxUsername(usernameInput.value);
+        usernameInput.value = parsed.username;
+        if (parsed.realm) realmInput.value = parsed.realm;
+      });
+      identity.append(node('div', { class: 'credential-user-row wide' }, usernameField, realmField));
+    } else {
+      identity.append(field(config.username.label, 'username', {
+        value: sameType ? item.username : '', required: config.username.required, placeholder: config.username.placeholder,
+      }));
+    }
+  }
   if (config.tls) {
     identity.append(node('div', { class: 'credential-tls-control' },
       checkboxField('Akceptuj certyfikat self-signed / niezaufany', 'accept_untrusted_tls', sameType ? !item.verify_ssl : false),
@@ -197,7 +247,9 @@ function credentialForm(item = null) {
       const endpoint = type === 'proxmox'
         ? buildProxmoxEndpoint(form.elements.endpoint?.value || '', form.elements.port?.value || config.port?.default)
         : (form.elements.endpoint ? form.elements.endpoint.value : (sameType ? item.endpoint : ''));
-      const username = form.elements.username ? form.elements.username.value : (sameType ? item.username : '');
+      const username = type === 'proxmox'
+        ? buildProxmoxUsername(form.elements.username?.value || '', form.elements.realm?.value || config.realm?.default)
+        : (form.elements.username ? form.elements.username.value : (sameType ? item.username : ''));
       const verifySsl = config.tls ? !data.has('accept_untrusted_tls') : (sameType ? item.verify_ssl : true);
       const replaceSecrets = !item || !sameType || data.has('replace_secrets');
       const identityChanged = Boolean(item && (item.type !== type || item.endpoint !== endpoint || item.username !== username || item.verify_ssl !== verifySsl));
