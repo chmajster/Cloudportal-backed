@@ -337,9 +337,7 @@ function statusKind(status) {
   return 'info';
 }
 
-function button(label, onClick, kind = 'ghost', disabled = false) {
-  return node('button', { type: 'button', class: `button small ${kind}`, onClick, disabled }, label);
-}
+function button(label, onClick, kind = 'ghost', disabled = false) { return node('button', { type: 'button', class: `button small ${kind}`, onClick, disabled }, label); }
 
 function heading(description, actions = []) {
   return node('div', { class: 'page-actions' }, node('p', { text: description }), node('div', { class: 'action-group' }, actions));
