@@ -161,6 +161,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function stopTaskPolling(' in script
     assert "registerView({ id: 'updates'" in script
     assert 'Aktualizuj teraz' in script
+    assert 'Zainstaluj aktualizację' in script
+    assert 'UPDATE_PHASES' in script
+    assert 'updatePipeline' in script
+    assert 'Polityka auto-update' in script
+    assert 'Backup przed wdrożeniem' in script
+    assert 'Następne sprawdzenie' in script
+    assert 'update-interval-presets' in script
     assert "'X-Update-Status-Token': token" in script
     assert "registerExtension('global-search'" in script
     assert 'function loadIndex(' in script
@@ -235,6 +242,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.vm-detail-header' in stylesheet
     assert '.vm-tabs' in stylesheet
     assert '.vm-overview-grid' in stylesheet
+    assert '.update-hero' in stylesheet
+    assert '.update-version-grid' in stylesheet
+    assert '.update-pipeline' in stylesheet
+    assert '.update-master-toggle' in stylesheet
+    assert '.update-safety-grid' in stylesheet
 
 
 def test_web_console_is_not_added_to_openapi_contract(client):
