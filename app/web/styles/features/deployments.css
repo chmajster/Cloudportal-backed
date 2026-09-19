@@ -222,3 +222,113 @@
     transition: none;
   }
 }
+
+
+.terraform-template-preview-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: -4px;
+}
+
+.terraform-template-preview {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.terraform-template-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.terraform-template-preview-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.terraform-template-preview-header strong {
+  font-size: .84rem;
+}
+
+.terraform-template-preview-header small {
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.45;
+}
+
+.terraform-template-preview-body {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.terraform-template-preview-loading {
+  min-height: 96px;
+}
+
+.terraform-template-preview-meta,
+.terraform-template-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.terraform-template-tabs {
+  padding-bottom: 2px;
+}
+
+.terraform-template-tab {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .72rem;
+  font-weight: 750;
+}
+
+.terraform-template-tab:hover,
+.terraform-template-tab:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--text);
+  outline: none;
+}
+
+.terraform-template-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.terraform-template-code {
+  max-height: 440px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--log-bg);
+  color: var(--log-text);
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+
+@media (max-width: 760px) {
+  .terraform-template-preview-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .terraform-template-preview-header .button {
+    align-self: flex-start;
+  }
+}
