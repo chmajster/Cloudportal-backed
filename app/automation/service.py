@@ -25,7 +25,17 @@ def hostname_public(row):
 
 
 def blueprint_public(row):
-    return as_public(row, BLUEPRINT_FIELDS)
+    result = as_public(row, BLUEPRINT_FIELDS)
+    result['manager_role_ids'] = sorted(role.id for role in row.manager_roles)
+    return result
+
+
+def can_manage_blueprint(blueprint: Blueprint, actor) -> bool:
+    required = {role.id for role in blueprint.manager_roles}
+    if not required:
+        return True
+    actor_roles = {role.id for role in actor.user.roles}
+    return bool(required & actor_roles)
 
 
 def available_to(blueprint: Blueprint, actor, source: str = 'api') -> bool:
