@@ -235,7 +235,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     ];
     const schemeField = selectField(
       'Sposób nadawania hostname', 'hostname_scheme_id', schemeChoices,
-      deployment.hostname_scheme_id || (schemes[0]?.id || '__new__'),
+      options.hostnameSchemeId || deployment.hostname_scheme_id || (schemes[0]?.id || '__new__'),
       {
         required: true,
         wide: true,
@@ -1421,23 +1421,54 @@ async function executeBlueprint(item) {
 }
 
 async function hostnamesView() {
-  const [schemes, reservations] = await Promise.all([api('/hostname-schemes?limit=200'), api('/hostnames?limit=200')]);
+  const [schemes, reservations, blueprintResult] = await Promise.all([
+    api('/hostname-schemes?limit=200'),
+    api('/hostnames?limit=200'),
+    allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const blueprintUsage = new Map();
+  blueprintResult.items.forEach(blueprint => {
+    const schemeId = Number(blueprint.deployment?.hostname_scheme_id || 0);
+    if (!schemeId) return;
+    if (!blueprintUsage.has(schemeId)) blueprintUsage.set(schemeId, []);
+    blueprintUsage.get(schemeId).push(blueprint);
+  });
   const actions = [];
-  if (allowed('hostnames.create')) actions.push(button('Nowy schemat', hostnameSchemeForm, 'primary'));
-  if (allowed('hostnames.reserve')) actions.push(button('Generuj nazwę', () => generateHostname(schemes.items)));
-  dom.content.replaceChildren(heading('Centralne generowanie nazw z blokadą sekwencji, wykrywaniem kolizji i historią rezerwacji.', actions),
-    node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Schematy' })), table([
-      { label: 'Nazwa', value: item => item.name }, { label: 'Wzorzec', value: item => node('span', { class: 'mono', text: item.pattern }) },
-      { label: 'Następny numer', value: item => item.next_number }, { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
+  if (allowed('hostnames.create')) actions.push(button('Nowy pattern', hostnameSchemeForm, 'primary'));
+  if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => generateHostname(schemes.items)));
+  if (allowed('blueprints.read')) actions.push(button('Przejdź do Blueprintów', () => navigate('blueprints')));
+  dom.content.replaceChildren(
+    heading('Generator hostname tworzy centralne patterny nazw VM. Pattern można przypisać do Blueprintu, a podczas jego uruchomienia Cloudportal zarezerwuje kolejny unikalny hostname i użyje go jako nazwy VM.', actions),
+    node('section', { class: 'panel hostname-generator-info' },
+      node('div', { class: 'panel-header' },
+        node('h2', { text: 'Jak działa generator' }),
+        badge('Blueprint ready', 'ok')),
+      node('div', { class: 'checks' },
+        info('1. Pattern', 'np. {location}-{env}-{role}-{number}'),
+        info('2. Blueprint', 'wybiera zapisany pattern'),
+        info('3. Execute', 'rezerwuje kolejny hostname'),
+        info('4. VM', 'hostname staje się nazwą deploymentu i VM'))),
+    node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Patterny hostname' })), table([
+      { label: 'Nazwa', value: item => item.name },
+      { label: 'Pattern', value: item => node('span', { class: 'mono', text: item.pattern }) },
+      { label: 'Następny numer', value: item => item.next_number },
+      { label: 'Blueprinty', value: item => {
+        const usage = blueprintUsage.get(Number(item.id)) || [];
+        return usage.length ? badge(String(usage.length), 'info') : '—';
+      }},
+      { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
     ], schemes.items, item => {
       const result = [];
+      if (allowed('blueprints.create') && item.is_active && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')) {
+        result.push(button('Użyj w Blueprint', () => proxmoxBlueprintForm(null, { hostnameSchemeId: item.id, returnTo: 'hostnames' }), 'primary'));
+      }
       if (allowed('hostnames.update')) result.push(button('Edytuj', () => hostnameSchemeForm(item)));
       if (allowed('hostnames.delete')) result.push(button('Usuń', () => confirmAction(
-        'Usuń schemat hostname',
-        `Schemat „${item.name}” zostanie usunięty, jeśli nie ma historii rezerwacji.`,
+        'Usuń pattern hostname',
+        `Pattern „${item.name}” zostanie usunięty, jeśli nie ma historii rezerwacji.`,
         async () => {
           await api(`/hostname-schemes/${item.id}`, { method: 'DELETE' });
-          toast('Schemat hostname usunięty.');
+          toast('Pattern hostname usunięty.');
           navigate('hostnames');
         },
       ), 'danger'));
@@ -1493,12 +1524,81 @@ async function assignHostname(item) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
+function hostnameSchemePreview(pattern, padding, nextNumber) {
+  const normalized = normalizeHostnamePattern(pattern, padding);
+  let value = String(normalized.pattern || '')
+    .replaceAll('{year}', String(new Date().getFullYear()))
+    .replaceAll('{random}', 'a1b2c3')
+    .replaceAll('{number}', String(nextNumber || 1).padStart(Number(normalized.padding || 3), '0'));
+  const samples = {
+    location: 'wro', environment: 'prod', env: 'prod', application: 'app',
+    service: 'api', role: 'web', os: 'linux', cluster: 'c1', site: 'dc1',
+  };
+  hostnamePatternTokens(normalized.pattern).forEach(token => {
+    value = value.replaceAll('{' + token + '}', samples[token] || token);
+  });
+  return value.toLowerCase();
+}
+
 function hostnameSchemeForm(item = null) {
-  const fields = node('div', { class: 'form-grid' }, field('Nazwa', 'name', { required: true, value: item?.name || '' }), field('Wzorzec', 'pattern', { required: true, value: item?.pattern || '{location}-{env}-{role}-{number}', wide: true }), field('Następny numer', 'next_number', { type: 'number', min: 1, value: item?.next_number || 1 }), field('Dopełnienie', 'padding', { type: 'number', min: 1, max: 9, value: item?.padding || 3 }), checkboxField('Aktywny', 'is_active', item?.is_active ?? true));
-  openModal({ title: item ? 'Edytuj schemat hostname' : 'Nowy schemat hostname', eyebrow: 'Hostname Manager', body: fields, onSubmit: async data => {
-    await api(item ? `/hostname-schemes/${item.id}` : '/hostname-schemes', { method: item ? 'PUT' : 'POST', body: { name: data.get('name'), pattern: data.get('pattern'), next_number: Number(data.get('next_number')), padding: Number(data.get('padding')), is_active: data.has('is_active') } });
-    toast('Schemat hostname zapisany.'); navigate('hostnames');
-  }});
+  const patternField = field('Pattern hostname', 'pattern', {
+    required: true,
+    value: item?.pattern || '{location}-{env}-{role}-{number}',
+    wide: true,
+    placeholder: 'np. WRO-{env}-{role}-XXX',
+    help: 'Obsługiwane: {number}, {random}, {year} oraz własne składniki, np. {location}, {env}, {role}. Zapis XXX zostanie zamieniony na {number} z odpowiednim dopełnieniem.',
+  });
+  const numberField = field('Następny numer', 'next_number', {
+    type: 'number', min: 1, value: item?.next_number || 1,
+    help: item ? 'Sekwencji nie można cofnąć poniżej aktualnej wartości.' : 'Pierwszy numer użyty przy rezerwacji.',
+  });
+  const paddingField = field('Liczba cyfr', 'padding', {
+    type: 'number', min: 1, max: 9, value: item?.padding || 3,
+    help: 'Np. 3 daje 001, 002, 003.',
+  });
+  const preview = node('div', { class: 'hostname-pattern-preview wide' },
+    node('span', { class: 'field-label', text: 'Podgląd wygenerowanego hostname' }),
+    node('strong', { class: 'mono', 'data-generator-hostname-preview': 'true' }),
+    node('small', { class: 'field-help', text: 'Podgląd używa przykładowych wartości dla zmiennych patternu.' }));
+  const fields = node('div', { class: 'form-grid' },
+    field('Nazwa patternu', 'name', { required: true, value: item?.name || '', placeholder: 'np. Produkcyjne serwery WRO' }),
+    checkboxField('Aktywny', 'is_active', item?.is_active ?? true),
+    patternField,
+    numberField,
+    paddingField,
+    preview);
+  const refreshPreview = () => {
+    const pattern = patternField.querySelector('input').value;
+    const padding = Number(paddingField.querySelector('input').value || 3);
+    const nextNumber = Number(numberField.querySelector('input').value || 1);
+    preview.querySelector('[data-generator-hostname-preview]').textContent = hostnameSchemePreview(pattern, padding, nextNumber) || '—';
+  };
+  [patternField, numberField, paddingField].forEach(wrapper => {
+    wrapper.querySelector('input').addEventListener('input', refreshPreview);
+  });
+  refreshPreview();
+
+  openModal({
+    title: item ? 'Edytuj pattern hostname' : 'Nowy pattern hostname',
+    eyebrow: 'Narzędzia · Generator hostname',
+    body: fields,
+    submitLabel: item ? 'Zapisz pattern' : 'Utwórz pattern',
+    onSubmit: async data => {
+      const normalized = normalizeHostnamePattern(data.get('pattern'), data.get('padding'));
+      await api(item ? `/hostname-schemes/${item.id}` : '/hostname-schemes', {
+        method: item ? 'PUT' : 'POST',
+        body: {
+          name: data.get('name'),
+          pattern: normalized.pattern,
+          next_number: Number(data.get('next_number')),
+          padding: normalized.padding,
+          is_active: data.has('is_active'),
+        },
+      });
+      toast('Pattern hostname zapisany i jest dostępny w Blueprintach.');
+      navigate('hostnames');
+    },
+  });
 }
 
 function generateHostname(schemes) {
@@ -1546,5 +1646,5 @@ registerCommand('blueprints.proxmoxTemplateWizard', proxmoxBlueprintForm);
 registerCommand('blueprints.execute', executeBlueprint);
 registerCommand('blueprints.create', () => blueprintForm());
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
-registerView({ id: 'hostnames', label: 'Nazwy hostów', icon: 'H', permission: 'hostnames.read', order: 80 }, hostnamesView);
+registerView({ id: 'hostnames', label: 'Generator hostname', iconName: 'network', permission: 'hostnames.read', order: 80 }, hostnamesView);
 })();
