@@ -1060,13 +1060,40 @@ function showApp() {
   if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
 }
 
+function navigationGroup(route) {
+  const order = Number(route.order ?? 1000);
+  if (order <= 0) return '';
+  if (order <= 40) return 'Dostęp';
+  if (order <= 100) return 'Infrastruktura';
+  if (order <= 140) return 'Operacje';
+  return 'System';
+}
+
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
-  routes.filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account')).forEach(route => {
-    const active = state.view === route.id || currentRoute?.navigationParent === route.id;
-    const item = node('button', { class: `nav-link ${active ? 'active' : ''}`, type: 'button', onClick: () => navigate(route.id) },
-      node('span', { class: 'nav-icon', text: route.icon }), route.label);
+  const visibleRoutes = routes.filter(route =>
+    route.navigation !== false
+    && allowed(route.permission)
+    && (!state.identity.user.must_change_password || route.id === 'account')
+  );
+  let previousGroup = null;
+  visibleRoutes.forEach(route => {
+    const group = navigationGroup(route);
+    if (group && group !== previousGroup) {
+      dom.navigation.append(node('div', { class: 'nav-group-label', 'aria-hidden': 'true', text: group }));
+    }
+    previousGroup = group;
+    const exact = state.view === route.id;
+    const active = exact || currentRoute?.navigationParent === route.id;
+    const item = node('button', {
+      class: `nav-link ${active ? 'active' : ''}`,
+      type: 'button',
+      title: route.label,
+      'aria-current': exact ? 'page' : null,
+      onClick: () => navigate(route.id),
+    },
+      node('span', { class: 'nav-icon', 'aria-hidden': 'true', text: route.icon }), route.label);
     item.dataset.route = route.id;
     dom.navigation.append(item);
   });
@@ -1085,7 +1112,10 @@ async function navigate(view) {
       : 'Zarządzanie lokalne';
   dom.navigation.querySelectorAll('.nav-link').forEach(item => {
     const navRoute = routes.find(candidate => candidate.id === item.dataset.route);
-    item.classList.toggle('active', item.dataset.route === route.id || route.navigationParent === navRoute?.id);
+    const exact = item.dataset.route === route.id;
+    item.classList.toggle('active', exact || route.navigationParent === navRoute?.id);
+    if (exact) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
   });
   setMobileMenu(false);
   loading();
