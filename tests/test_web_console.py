@@ -178,6 +178,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Wzorzec nazwy hosta' in script
     assert 'Nowy szablon Terraform / OpenTofu' in script
     assert "registerCommand('blueprints.proxmoxTemplateWizard'" in script
+    assert "registerCommand('blueprints.execute'" in script
     assert 'SRLXXX' in script
     assert 'hostname_next_number' in script
     assert "executor: data.get('executor')" in script
