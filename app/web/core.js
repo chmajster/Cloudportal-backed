@@ -1078,7 +1078,11 @@ async function navigate(view) {
   state.view = route.id;
   location.hash = route.id;
   dom.pageTitle.textContent = route.label;
-  dom.pageEyebrow.textContent = route.id === 'dashboard' ? 'Stan systemu' : 'Zarządzanie lokalne';
+  dom.pageEyebrow.textContent = route.id === 'dashboard'
+    ? 'Stan systemu'
+    : route.navigationParent
+      ? (routes.find(item => item.id === route.navigationParent)?.label || 'Narzędzia')
+      : 'Zarządzanie lokalne';
   dom.navigation.querySelectorAll('.nav-link').forEach(item => {
     const navRoute = routes.find(candidate => candidate.id === item.dataset.route);
     item.classList.toggle('active', item.dataset.route === route.id || route.navigationParent === navRoute?.id);
