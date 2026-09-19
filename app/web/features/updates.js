@@ -345,6 +345,7 @@ function intervalPresets(intervalInput) {
       node('button', {
         type: 'button',
         class: 'update-preset ' + (Number(intervalInput.value) === item[0] ? 'active' : ''),
+        'data-value': String(item[0]),
         disabled: intervalInput.disabled,
         onClick: event => {
           intervalInput.value = String(item[0]);
@@ -371,13 +372,7 @@ function settingsPanel(settings, statusRoot) {
 
   const syncPreset = () => {
     presets.querySelectorAll('.update-preset').forEach(item => {
-      item.classList.toggle('active', item.textContent === (
-        Number(interval.value) === 6 ? '6 h'
-          : Number(interval.value) === 12 ? '12 h'
-            : Number(interval.value) === 24 ? '24 h'
-              : Number(interval.value) === 72 ? '3 dni'
-                : Number(interval.value) === 168 ? '7 dni' : ''
-      ));
+      item.classList.toggle('active', Number(item.dataset.value) === Number(interval.value));
     });
   };
 
