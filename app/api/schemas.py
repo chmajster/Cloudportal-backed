@@ -182,6 +182,40 @@ class CredentialInput(Input):
         return value
 
 
+class SSHHostKeyInput(Input):
+    endpoint: Annotated[str, Field(min_length=7, max_length=2048)]
+
+    @field_validator('endpoint')
+    @classmethod
+    def ssh_endpoint(cls, value):
+        parsed = urlsplit(value.strip())
+        if parsed.scheme != 'ssh' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('Endpoint SSH must use ssh://host:port without credentials')
+        if parsed.path not in {'', '/'}:
+            raise ValueError('SSH endpoint must not contain a path')
+        return value.strip().rstrip('/')
+
+
+class SSHKeyBootstrapInput(Input):
+    name: Name
+    endpoint: Annotated[str, Field(min_length=7, max_length=2048)]
+    username: Annotated[str, Field(min_length=1, max_length=254)]
+    password: Annotated[str, Field(min_length=1, max_length=1024, json_schema_extra={'writeOnly': True})]
+    known_hosts: Annotated[str, Field(min_length=1, max_length=32768, json_schema_extra={'writeOnly': True})]
+    expires_at: datetime | None = None
+    rotation_due_at: datetime | None = None
+
+    @field_validator('endpoint')
+    @classmethod
+    def ssh_endpoint(cls, value):
+        parsed = urlsplit(value.strip())
+        if parsed.scheme != 'ssh' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('Endpoint SSH must use ssh://host:port without credentials')
+        if parsed.path not in {'', '/'}:
+            raise ValueError('SSH endpoint must not contain a path')
+        return value.strip().rstrip('/')
+
+
 class ProxmoxTokenBootstrapInput(Input):
     name: Name
     endpoint: Annotated[str, Field(max_length=2048)]

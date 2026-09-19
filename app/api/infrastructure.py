@@ -4,12 +4,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, or_
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
-                             JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput)
-from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput, ProxmoxTokenBootstrapInput
+                             JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
+                             SSHHostKeyOutput, SSHKeyBootstrapOutput)
+from app.api.schemas import (CredentialInput, DeploymentInput, JobInput, ProviderInput, ProxmoxTokenBootstrapInput,
+                             SSHHostKeyInput, SSHKeyBootstrapInput)
 from app.catalog import (list_playbooks, list_templates, playbook_definition, template_definition,
                          template_public, template_source_preview, playbook_source_preview, validate_template_variables)
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
+from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
 from app.models import Credential, Deployment, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
@@ -60,6 +63,43 @@ def credential_in_use(db, id, *, pending_only=False):
 @router.get('/credentials', response_model=Items[CredentialOutput])
 def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
     return {'items': [credential_public(c) for c in paginate(db, Credential, offset, limit)]}
+
+
+@router.post('/credentials/ssh/host-key', response_model=SSHHostKeyOutput)
+def ssh_host_key(data: SSHHostKeyInput, request: Request,
+                 actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
+    try:
+        result = scan_ssh_host_key(data.endpoint)
+    except HTTPException:
+        audit(db, request, 'credential.ssh_host_key_scanned', 'credentials', None, 'failure')
+        db.commit()
+        raise
+    audit(db, request, 'credential.ssh_host_key_scanned', 'credentials', None)
+    return result
+
+
+@router.post('/credentials/ssh/bootstrap', status_code=201, response_model=SSHKeyBootstrapOutput)
+def bootstrap_ssh_credential(data: SSHKeyBootstrapInput, request: Request,
+                             actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
+    try:
+        generated = install_generated_key(data.endpoint, data.username, data.password, data.known_hosts)
+    except HTTPException:
+        audit(db, request, 'credential.ssh_key_bootstrapped', 'credentials', None, 'failure')
+        db.commit()
+        raise
+    credential = Credential(
+        name=data.name, type='ssh', endpoint=data.endpoint, username=data.username, verify_ssl=True,
+        expires_at=data.expires_at, rotation_due_at=data.rotation_due_at, encrypted_secret=b'',
+    )
+    db.add(credential)
+    db.flush()
+    save_secret(db, credential, generated['secret'])
+    audit(db, request, 'credential.ssh_key_bootstrapped', 'credentials', credential.id)
+    return {
+        'credential': credential_public(credential),
+        'public_key': generated['public_key'],
+        'fingerprint': generated['fingerprint'],
+    }
 
 
 @router.post('/credentials/proxmox/bootstrap', status_code=201, response_model=CredentialOutput)
