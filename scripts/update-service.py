@@ -123,6 +123,12 @@ def default_state() -> dict:
         "last_check_at": None,
         "current_version": None,
         "target_version": None,
+        "current_commit_at": None,
+        "target_commit_at": None,
+        "commit_relation": None,
+        "ahead_by": 0,
+        "behind_by": 0,
+        "version_strategy": "git_commit",
         "ref": public_settings()["ref"],
         "update_available": None,
         "automatic": False,
@@ -220,49 +226,139 @@ def _http_json(url: str, settings: dict) -> dict:
     return json.loads(_read_url(url, settings, "application/vnd.github+json").decode("utf-8"))
 
 
-def remote_sha(ref: str, settings: dict) -> str:
+def remote_commit(ref: str, settings: dict) -> dict:
     ref = validate_ref(ref)
     url = "https://api.github.com/repos/" + REPOSITORY + "/commits/" + quote(ref, safe="")
     data = _http_json(url, settings)
     sha = str(data.get("sha") or "")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise RuntimeError("GitHub returned an invalid commit identifier")
-    return sha
+    commit = data.get("commit") or {}
+    committer = commit.get("committer") or {}
+    author = commit.get("author") or {}
+    committed_at = committer.get("date") or author.get("date")
+    return {
+        "sha": sha,
+        "committed_at": committed_at,
+    }
+
+
+def commit_order(current_sha: str, target: dict, settings: dict) -> dict:
+    target_sha = target["sha"]
+    if not current_sha:
+        return {
+            "relation": "unknown_current",
+            "update_available": True,
+            "ahead_by": 1,
+            "behind_by": 0,
+            "current_commit_at": None,
+        }
+    if current_sha == target_sha:
+        return {
+            "relation": "identical",
+            "update_available": False,
+            "ahead_by": 0,
+            "behind_by": 0,
+            "current_commit_at": target.get("committed_at"),
+        }
+
+    compare_url = (
+        "https://api.github.com/repos/" + REPOSITORY + "/compare/"
+        + quote(current_sha, safe="") + "..." + quote(target_sha, safe="")
+    )
+    comparison = _http_json(compare_url, settings)
+    status = str(comparison.get("status") or "")
+    ahead_by = int(comparison.get("ahead_by") or 0)
+    behind_by = int(comparison.get("behind_by") or 0)
+
+    current = remote_commit(current_sha, settings)
+    if status == "ahead":
+        available = ahead_by > 0
+        relation = "target_newer" if available else "identical"
+    elif status == "behind":
+        available = False
+        relation = "current_newer"
+    elif status == "identical":
+        available = False
+        relation = "identical"
+    elif status == "diverged":
+        current_at = current.get("committed_at")
+        target_at = target.get("committed_at")
+        available = bool(target_at and current_at and target_at > current_at)
+        relation = "target_newer_diverged" if available else "current_newer_diverged"
+    else:
+        raise RuntimeError("GitHub returned an unknown commit relation")
+
+    return {
+        "relation": relation,
+        "update_available": available,
+        "ahead_by": ahead_by,
+        "behind_by": behind_by,
+        "current_commit_at": current.get("committed_at"),
+    }
 
 
 def check_remote(ref: str | None = None) -> dict:
     settings = load_settings()
     ref = validate_ref(ref or settings.get("ref", "main"))
     event("checking", 3, "Sprawdzanie dostępnej wersji.", status="checking", ref=ref, finished_at=None)
+    current = str(release_info().get("commit_sha") or "")
     try:
-        target = remote_sha(ref, settings)
+        target = remote_commit(ref, settings)
+        ordering = commit_order(current, target, settings)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
         attempted_at = utcnow()
         save_state(status="failed", finished_at=attempted_at, last_check_at=attempted_at)
         event("check_failed", 0, "Nie udało się sprawdzić aktualizacji: " + str(exc))
         raise
-    current = str(release_info().get("commit_sha") or "")
-    available = current != target
+
+    available = ordering["update_available"]
+    relation = ordering["relation"]
+    status = "update_available" if available else (
+        "local_ahead" if relation.startswith("current_newer") else "up_to_date"
+    )
     now = utcnow()
     save_state(
-        status="update_available" if available else "up_to_date",
+        status=status,
         current_version=current[:12] or "nieznana",
-        target_version=target[:12],
+        target_version=target["sha"][:12],
+        current_commit_at=ordering.get("current_commit_at"),
+        target_commit_at=target.get("committed_at"),
+        commit_relation=relation,
+        ahead_by=ordering.get("ahead_by", 0),
+        behind_by=ordering.get("behind_by", 0),
+        version_strategy="git_commit",
         update_available=available,
         last_check_at=now,
         finished_at=now,
         ref=ref,
     )
-    event(
-        "available" if available else "up_to_date",
-        8 if available else 100,
-        "Dostępna jest nowa wersja." if available else "Zainstalowana wersja jest aktualna.",
-    )
+
+    if available:
+        message = "Dostępny jest nowszy commit."
+        phase = "available"
+        progress = 8
+    elif status == "local_ahead":
+        message = "Zainstalowany commit jest nowszy niż commit kanału."
+        phase = "local_ahead"
+        progress = 100
+    else:
+        message = "Zainstalowany commit jest aktualny."
+        phase = "up_to_date"
+        progress = 100
+
+    event(phase, progress, message)
     return {
         "ref": ref,
         "current_version": current[:12] or "nieznana",
-        "target_version": target[:12],
-        "target_sha": target,
+        "target_version": target["sha"][:12],
+        "target_sha": target["sha"],
+        "current_commit_at": ordering.get("current_commit_at"),
+        "target_commit_at": target.get("committed_at"),
+        "commit_relation": relation,
+        "ahead_by": ordering.get("ahead_by", 0),
+        "behind_by": ordering.get("behind_by", 0),
+        "version_strategy": "git_commit",
         "update_available": available,
     }
 
