@@ -355,8 +355,24 @@ for token_file in "$config/updater.token" "$config/updater-status.token"; do
   chown root:cloudportal "$token_file"
   chmod 0640 "$token_file"
 done
+persistent_github_token=''
+persistent_github_config=''
+if [[ -n "$github_token_file" ]]; then
+  persistent_github_token="$config/github.token"
+  if [[ "$github_token_file" != "$persistent_github_token" ]]; then
+    install -m 0600 "$github_token_file" "$persistent_github_token"
+  fi
+  chown root:root "$persistent_github_token"
+fi
+if [[ -n "$github_config" ]]; then
+  persistent_github_config="$config/github.curl.conf"
+  if [[ "$github_config" != "$persistent_github_config" ]]; then
+    install -m 0600 "$github_config" "$persistent_github_config"
+  fi
+  chown root:root "$persistent_github_config"
+fi
 updater_config="$config/updater.json"
-"$python_binary" - "$updater_config" "$ref" "$github_token_file" "$github_config" <<'PY'
+"$python_binary" - "$updater_config" "$ref" "$persistent_github_token" "$persistent_github_config" <<'PY'
 import json, os, sys
 from pathlib import Path
 path = Path(sys.argv[1])
