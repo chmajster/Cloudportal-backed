@@ -35,6 +35,10 @@ def bootstrap(db):
     if db.bind.dialect.name == 'postgresql':
         db.execute(text('SELECT pg_advisory_xact_lock(613040621)'))
     if db.get(Setting, 'bootstrapped'):
+        # Existing installations still need idempotent RBAC synchronization after
+        # upgrades so the built-in Administrator receives newly added permissions.
+        seed(db)
+        db.commit()
         return None
     seed(db)
     if db.scalar(select(User.id).limit(1)):
