@@ -118,7 +118,7 @@ Anulowanie kończy grupę procesów i zachowuje state. Joby mają jawny retry li
 
 ## Uruchomienie w Docker Compose
 
-Alternatywa dla instalacji systemd. Wersja aplikacji jest SHA commita użytego do budowy obrazu. Przygotuj `.env` z losowym, URL-safe `CP_POSTGRES_PASSWORD`, pliki `tls/server.crt` i `tls/server.key`, ustaw `CP_BUILD_COMMIT=$(git rev-parse HEAD)`, następnie:
+Alternatywa dla instalacji systemd. Wersja aplikacji jest skróconym SHA commita użytego do budowy obrazu. Przygotuj `.env` z losowym, URL-safe `CP_POSTGRES_PASSWORD`, pliki `tls/server.crt` i `tls/server.key`, wykonaj `export CP_BUILD_COMMIT=$(git rev-parse HEAD)`, następnie:
 
 ```bash
 docker compose build
