@@ -321,8 +321,11 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
 
     const fields = node('div', { class: 'form-grid blueprint-designer' },
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '1. Blueprint' }), node('span', { text: 'Zapisujesz kompletny preset VM.' })),
-      field('Slug', 'slug', { required: true, value: item?.slug || '' }),
-      field('Nazwa', 'name', { required: true, value: item?.name || '' }),
+      field('Slug / identyfikator szablonu', 'slug', {
+        required: true,
+        value: item?.slug || '',
+        help: 'To pole identyfikuje szablon. Nazwa wyświetlana jest tworzona automatycznie ze slugu.',
+      }),
       field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
       providerField, executorField,
 
@@ -592,7 +595,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           const created = await api('/hostname-schemes', {
             method: 'POST',
             body: {
-              name: (data.get('slug') || data.get('name') || 'hostname') + ' hostnames',
+              name: (data.get('slug') || 'hostname') + ' hostnames',
               pattern: normalized.pattern,
               next_number: Number(data.get('hostname_next_number') || 1),
               padding: normalized.padding,
@@ -699,9 +702,15 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           throw new Error('Wybierz co najmniej jedną rolę zarządzającą szablonem.');
         }
 
+        const blueprintSlug = String(data.get('slug') || '').trim();
+        if (!blueprintSlug) throw new Error('Podaj slug / identyfikator szablonu.');
+        const blueprintName = item?.name || blueprintSlug
+          .replace(/[-_]+/g, ' ')
+          .replace(/\b\w/g, value => value.toUpperCase());
+
         const payload = {
-          slug: data.get('slug'),
-          name: data.get('name'),
+          slug: blueprintSlug,
+          name: blueprintName,
           description: data.get('description'),
           is_active: data.has('is_active'),
           visibility: {
