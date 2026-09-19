@@ -114,6 +114,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'destroy_unreferenced_disks' in script
     assert 'credential-secret-panel' in script
     assert 'Akceptuj certyfikat self-signed / niezaufany' in script
+    assert 'function splitProxmoxEndpoint(' in script
+    assert 'function buildProxmoxEndpoint(' in script
+    assert "label: 'Port'" in script
+    assert 'default: 8006' in script
+    assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert 'data-workflow-row' in script
     assert 'deployment_ansible_enabled' in script
@@ -194,6 +199,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.sidebar-backdrop' in stylesheet
     assert '.credential-secret-panel' in stylesheet
     assert '.credential-tls-control' in stylesheet
+    assert '.credential-endpoint-row' in stylesheet
     assert '.form-section' in stylesheet
     assert '.required-mark' in stylesheet
     assert 'input:user-invalid' in stylesheet
