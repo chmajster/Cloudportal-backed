@@ -7,7 +7,7 @@ from app.api.outputs import (Items, CredentialOutput, ProviderOutput, Deployment
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput)
 from app.api.schemas import CredentialInput, DeploymentInput, JobInput, ProviderInput, ProxmoxTokenBootstrapInput
 from app.catalog import (list_playbooks, list_templates, playbook_definition, template_definition,
-                         template_public, template_source_preview, validate_template_variables)
+                         template_public, template_source_preview, playbook_source_preview, validate_template_variables)
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.database import get_db
@@ -269,6 +269,11 @@ def template_source(id: str, actor=Depends(require('terraform.read'))):
 @router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
 def playbooks(actor=Depends(require('ansible.read'))):
     return {'items': list_playbooks()}
+
+
+@router.get('/ansible/playbooks/{id}/source')
+def playbook_source(id: str, actor=Depends(require('ansible.read'))):
+    return playbook_source_preview(id)
 
 
 def check_job_permissions(request, operation):
