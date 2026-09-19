@@ -19,6 +19,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-open"' in page.text
     assert 'id="global-search-dialog"' in page.text
     assert 'id="global-search-input"' in page.text
+    assert 'id="global-search-close"' in page.text
+    assert 'id="global-search-title"' in page.text
     assert 'id="sidebar-profile"' in page.text
     assert 'class="page-context"' in page.text
     assert 'href="./favicon.ico"' in page.text
@@ -115,6 +117,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
+    assert "registerCommand('users.create'" in script
+    assert "registerCommand('tokens.create'" in script
+    assert "registerCommand('providers.create'" in script
+    assert "registerCommand('blueprints.create'" in script
+    assert "registerCommand('deployments.create'" in script
+    assert "registerCommand('deployments.open'" in script
     assert 'function navigationGroup(' in core
     assert "'aria-current': exact ? 'page' : null" in core
     assert "appIcon('search')" in core
@@ -225,6 +233,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Witaj, ${greetingName}!' in script
     assert 'dashboard-metrics' in script
     assert 'dashboard-metric-action' in script
+    assert "runCommand('deployments.open'" in script
+    assert "entity: { type: 'deployment', item }" in script
     assert 'toolStatusDot' in script
     assert 'dashboard-quick-actions' in script
     assert 'Ostatnie wdrożenia' in script
@@ -318,6 +328,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.toast-close' in stylesheet
     assert '.modal.modal-wide' in stylesheet
     assert '.global-search-trigger' in stylesheet
+    assert '.global-search-close' in stylesheet
+    assert '.sr-only' in stylesheet
     assert '.sidebar-profile-card' in stylesheet
     assert '.nav-link.active::before' in stylesheet
     assert '.dashboard-metrics' in stylesheet
