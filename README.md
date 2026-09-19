@@ -24,6 +24,9 @@ Instalacja unattended / własny host i port:
 curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --non-interactive --host backend.example.com --port 8443 --workers 3
 ```
 
+Jeżeli nowy instalator wykryje aktywny `/run/cloudportal-install.lock`, domyślnie przejmuje instalację: zatrzymuje usługi aplikacji Cloudportal (API, dispatcher, workery oraz updater), kończy poprzedni proces instalatora i po zwolnieniu blokady kontynuuje instalację. Dzięki temu ponowienie one-linera nie kończy się samym komunikatem `Another installation is running.`. Awaryjne wymuszenie po `SIGTERM` jest ograniczone wyłącznie do drzewa procesu trzymającego blokadę instalatora. Zachowanie można wyłączyć przez `--no-takeover`; wtedy instalator nie zatrzymuje poprzedniej instalacji i kończy pracę z błędem.
+
+
 Instalacja z interfejsem terminalowym `dialog` jest uruchamiana jawnie przez `--gui` lub alias `-gui`. Działa również przy `curl | sudo bash`, ponieważ formularze czytają wejście bezpośrednio z `/dev/tty`. GUI pozwala ustawić host, port HTTPS, liczbę workerów, backup i retencję, a przed zmianami pokazuje podsumowanie:
 
 ```bash
