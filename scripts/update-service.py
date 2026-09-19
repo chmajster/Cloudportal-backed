@@ -249,7 +249,7 @@ def commit_order(current_sha: str, target: dict, settings: dict) -> dict:
         return {
             "relation": "unknown_current",
             "update_available": True,
-            "ahead_by": 1,
+            "ahead_by": 0,
             "behind_by": 0,
             "current_commit_at": None,
         }
@@ -301,7 +301,7 @@ def commit_order(current_sha: str, target: dict, settings: dict) -> dict:
 def check_remote(ref: str | None = None) -> dict:
     settings = load_settings()
     ref = validate_ref(ref or settings.get("ref", "main"))
-    event("checking", 3, "Sprawdzanie dostępnej wersji.", status="checking", ref=ref, finished_at=None)
+    event("checking", 3, "Porównywanie commitów wybranego kanału.", status="checking", ref=ref, finished_at=None)
     current = str(release_info().get("commit_sha") or "")
     try:
         target = remote_commit(ref, settings)
