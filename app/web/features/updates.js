@@ -187,24 +187,47 @@ function updatePipeline(status) {
   const currentIndex = UPDATE_PHASES.findIndex(item => item[0] === status.phase);
   const complete = status.status === 'success';
   const failed = status.status === 'failed';
-  return node('div', { class: 'update-pipeline' },
-    ...UPDATE_PHASES.map((item, index) => {
-      const key = item[0];
-      const label = item[1];
-      let stateClass = '';
-      let marker = String(index + 1);
-      if (complete || index < currentIndex) {
-        stateClass = 'complete';
-        marker = '✓';
-      } else if (index === currentIndex) {
-        stateClass = failed ? 'failed' : 'active';
-        marker = failed ? '!' : '•';
-      }
-      return node('div', { class: 'update-pipeline-step ' + stateClass },
-        node('div', { class: 'update-pipeline-marker', text: marker }),
-        node('span', { text: label })
-      );
-    })
+  const visibleStep = complete
+    ? UPDATE_PHASES.length
+    : currentIndex >= 0 ? currentIndex + 1 : 0;
+  const pipelineCaption = complete
+    ? 'Wszystkie etapy zakończone'
+    : failed
+      ? 'Proces zatrzymany na etapie: ' + phaseLabel(status.phase)
+      : currentIndex >= 0
+        ? 'Etap ' + (currentIndex + 1) + ' z ' + UPDATE_PHASES.length
+        : 'Oczekiwanie na rozpoczęcie procesu';
+
+  return node('div', { class: 'update-pipeline-shell' },
+    node('div', { class: 'update-pipeline-meta' },
+      node('span', { class: 'update-pipeline-caption', text: pipelineCaption }),
+      node('span', { class: 'update-pipeline-count mono', text: visibleStep + '/' + UPDATE_PHASES.length })
+    ),
+    node('div', { class: 'update-pipeline', role: 'list', 'aria-label': 'Etapy aktualizacji' },
+      ...UPDATE_PHASES.map((item, index) => {
+        const label = item[1];
+        let stateClass = '';
+        let marker = String(index + 1);
+        if (complete || index < currentIndex) {
+          stateClass = 'complete';
+          marker = '✓';
+        } else if (index === currentIndex) {
+          stateClass = failed ? 'failed' : 'active';
+          marker = failed ? '!' : '•';
+        }
+
+        const attrs = {
+          class: 'update-pipeline-step ' + stateClass,
+          role: 'listitem',
+        };
+        if (index === currentIndex && !complete) attrs['aria-current'] = 'step';
+
+        return node('div', attrs,
+          node('div', { class: 'update-pipeline-marker', 'aria-hidden': 'true', text: marker }),
+          node('span', { class: 'update-pipeline-label', text: label })
+        );
+      })
+    )
   );
 }
 
@@ -319,8 +342,13 @@ function statusActions(status, container, settings) {
 function statusPanel(status, settings, container) {
   status = normalizedUpdateStatus(status);
   const progress = Math.max(0, Math.min(100, Number(status.progress || 0)));
-  const fill = node('div', { class: 'update-progress-fill' });
+  const fill = node('div', { class: 'update-progress-fill' + (updateBusy(status.status) ? ' is-running' : '') });
   fill.style.width = progress + '%';
+  const progressStateText = status.status === 'success'
+    ? 'Zakończono'
+    : status.status === 'failed'
+      ? 'Przerwano'
+      : updateBusy(status.status) ? 'W toku' : 'Stan bieżący';
   const tone = updateTone(status.status);
   const symbol = status.status === 'failed'
     ? '!'
@@ -359,11 +387,20 @@ function statusPanel(status, settings, container) {
         node('div', {},
           node('span', { class: 'update-card-label', text: 'Postęp operacji' }),
           node('h2', { text: phaseLabel(status.phase) })),
-        node('div', { class: 'update-progress-number' },
-          node('strong', { text: String(progress) }),
-          node('span', { text: '%' }))
+        node('div', { class: 'update-progress-metric' },
+          node('span', { class: 'update-progress-metric-label', text: progressStateText }),
+          node('div', { class: 'update-progress-number' },
+            node('strong', { text: String(progress) }),
+            node('span', { text: '%' })))
       ),
-      node('div', { class: 'update-progress-track', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(progress) }, fill),
+      node('div', {
+        class: 'update-progress-track',
+        role: 'progressbar',
+        'aria-label': 'Postęp aktualizacji',
+        'aria-valuemin': '0',
+        'aria-valuemax': '100',
+        'aria-valuenow': String(progress),
+      }, fill),
       updatePipeline(status)
     ),
 
