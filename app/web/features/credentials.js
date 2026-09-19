@@ -27,7 +27,8 @@ function splitProxmoxEndpoint(value) {
     try {
       const parsed = new URL(raw);
       const address = parsed.protocol + '//' + parsed.hostname.replace(/^\[(.*)\]$/, '[$1]');
-      return { address, port: Number(parsed.port || 8006) };
+      const defaultPort = parsed.protocol === 'https:' ? 443 : parsed.protocol === 'http:' ? 80 : 8006;
+      return { address, port: Number(parsed.port || defaultPort) };
     } catch {
       return { address: raw, port: 8006 };
     }
@@ -57,6 +58,7 @@ function buildProxmoxEndpoint(address, port) {
     url.port = String(selectedPort);
     return url.origin;
   }
+  if (base.includes(':') && !base.startsWith('[')) base = '[' + base + ']';
   return base + ':' + selectedPort;
 }
 
@@ -81,6 +83,13 @@ function renderCredentialDynamic(container, type, item) {
         min: config.port.min,
         max: config.port.max,
         help: config.port.help,
+      });
+      const endpointInput = endpointField.querySelector('input');
+      const portInput = portField.querySelector('input');
+      endpointInput.addEventListener('change', () => {
+        const parsed = splitProxmoxEndpoint(endpointInput.value);
+        endpointInput.value = parsed.address;
+        portInput.value = String(parsed.port || config.port.default);
       });
       identity.append(node('div', { class: 'credential-endpoint-row wide' }, endpointField, portField));
     } else {
