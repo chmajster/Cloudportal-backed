@@ -1,0 +1,68 @@
+.update-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.update-summary > div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.update-progress-panel { overflow: hidden; }
+.update-progress-track {
+  width: 100%;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.update-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width .25s ease;
+}
+.update-progress-value { font-size: 1.15rem; }
+.update-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  gap: 18px;
+}
+.update-events {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+.update-event {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.update-event:last-child { border-bottom: 0; }
+.update-event div { display: grid; gap: 3px; }
+.update-log {
+  min-height: 320px;
+  max-height: 480px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.update-settings .switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.update-settings .switch-row span { display: grid; gap: 3px; }
+@media (max-width: 900px) {
+  .update-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .update-detail-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .update-summary { grid-template-columns: 1fr; }
+}
