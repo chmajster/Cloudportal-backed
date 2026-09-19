@@ -406,7 +406,9 @@ class ProxmoxProvider(InfrastructureProvider):
                     return {'ok': False, 'retryable': False, 'reason': 'authentication'}
                 response.raise_for_status()
                 return {'ok': True, 'retryable': False, 'reason': None}
-        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError):
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as error:
+            if _certificate_verification_failed(error):
+                return {'ok': False, 'retryable': False, 'reason': 'tls'}
             return {'ok': False, 'retryable': True, 'reason': 'unreachable'}
         except httpx.HTTPStatusError as error:
             return {
