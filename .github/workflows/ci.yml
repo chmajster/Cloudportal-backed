@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t cloudportal-backed:ci .
+      - run: docker build --build-arg BUILD_COMMIT="$GITHUB_SHA" -t cloudportal-backed:ci .
   installer:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
