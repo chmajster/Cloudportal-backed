@@ -244,6 +244,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Role zarządzające szablonem' in script
     assert 'Jedna rola może zarządzać tylko jednym szablonem.' in script
     assert 'canManageBlueprintByRole' in script
+    assert 'Generator hostname' in script
+    assert 'function hostnameGeneratorTool(' in script
+    assert 'Użyj w Blueprint' in script
+    assert 'options.hostnameSchemeId || deployment.hostname_scheme_id' in script
+    assert 'function hostnameSchemePreview(' in script
+    assert 'Pattern hostname zapisany i jest dostępny w Blueprintach.' in script
+    assert 'hostname staje się nazwą deploymentu i VM' in script
     assert 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' in script
     assert "registerView({ id: 'settings'" in script
     assert "'Wygląd'" in script
@@ -390,6 +397,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.workflow-dag' in stylesheet
     assert '.workflow-dag-columns' in stylesheet
     assert '.workflow-preview-visual' in stylesheet
+    assert '.hostname-pattern-preview' in stylesheet
+    assert '.hostname-generator-info' in stylesheet
     assert '.blueprint-run-summary' in stylesheet
     assert '.table-toolbar' in stylesheet
     assert '.table-sort-button' in stylesheet
