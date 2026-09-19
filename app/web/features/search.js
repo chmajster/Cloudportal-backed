@@ -92,8 +92,10 @@ async function loadIndex(force = false) {
   const fresh = searchState.cache && Date.now() - searchState.loadedAt < CACHE_MS;
   if (fresh && !force) return searchState.cache;
 
-  const index = routes
-    .filter(route => allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
+  const accessibleRoutes = routes
+    .filter(route => allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'));
+  const index = accessibleRoutes
+    .filter(route => route.navigation !== false)
     .map(route => ({
       kind: 'Widok',
       route: route.id,
@@ -101,6 +103,18 @@ async function loadIndex(force = false) {
       subtitle: 'Przejdź do sekcji',
       search: searchable([route.label, route.id].join(' ')),
     }));
+  accessibleRoutes
+    .filter(route => route.navigation === false && route.navigationParent)
+    .forEach(route => {
+      const parent = routes.find(candidate => candidate.id === route.navigationParent);
+      index.push({
+        kind: 'Narzędzie',
+        route: route.id,
+        title: route.label,
+        subtitle: (parent?.label || 'Narzędzia') + ' · narzędzie administracyjne',
+        search: searchable([route.label, route.id, parent?.label, 'narzędzie'].join(' ')),
+      });
+    });
 
   const sources = searchSources().filter(source => allowed(source.permission));
   await Promise.all(sources.map(async source => {
