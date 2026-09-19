@@ -258,3 +258,22 @@ sudo python scripts/e2e-disaster-restore.py \
 
 Target jest czyszczony przez `pg_restore --clean --if-exists`; nigdy nie używaj istniejącej bazy z danymi, których potrzebujesz. Przy external KMS/Vault środowisko uruchamiające drill musi mieć dostęp do tego samego KEK, aby test odszyfrowania zakończył się powodzeniem.
 
+## Modular development and parallel branches
+
+The backend and local web console are structured so multiple developers or coding agents can work on separate domain branches with minimal overlap.
+
+- Backend feature descriptors live in `app/modules/feature_*.py` and are auto-discovered. Adding a domain does not require editing `app/main.py`.
+- Frontend domains live in `app/web/features/*.js`; shared browser registries live in `app/web/shared/*.js`.
+- Feature CSS lives in `app/web/styles/features/*.css`.
+- `/ui/manifest.json` discovers installed UI feature assets, so adding a feature does not require editing `index.html`.
+- `app/web/app.js` is bootstrap-only and `app/web/core.js` contains only shared UI runtime code.
+- CI runs `scripts/check-module-boundaries.py` to prevent domain logic from drifting back into shared hot files.
+
+Create a new module skeleton with:
+
+```bash
+python scripts/scaffold-module.py example --ui --backend --label "Example" --order 500
+```
+
+See `docs/architecture/modularity.md` and `AGENTS.md` before parallel feature work.
+

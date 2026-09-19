@@ -7,7 +7,8 @@
   <title>Cloudportal Console</title>
   <script src="./theme-init.js"></script>
   <link rel="stylesheet" href="./styles.css">
-  <script src="./app.js" defer></script>
+  <script src="./core.js" defer></script>
+  <script src="./loader.js" defer></script>
 </head>
 <body>
   <noscript>Panel administracyjny wymaga JavaScript.</noscript>
@@ -32,7 +33,7 @@
           <input name="password" type="password" autocomplete="current-password" maxlength="256" required>
         </label>
         <p id="login-error" class="form-error" role="alert" hidden></p>
-        <button class="button primary wide" type="submit">Zaloguj</button>
+        <button class="button primary wide" type="submit" data-boot-disabled disabled>Ładowanie modułów…</button>
       </form>
       <button id="reset-open" class="button link" type="button">Mam token resetu hasła</button>
       <p class="login-footnote">Sesja pozostaje wyłącznie w tej karcie przeglądarki.</p>
@@ -65,7 +66,7 @@
           <p id="page-eyebrow" class="eyebrow">Cloudportal</p>
           <h1 id="page-title">Dashboard</h1>
         </div>
-        <button id="global-search-open" class="global-search-trigger" type="button" aria-haspopup="dialog" aria-controls="global-search-dialog">
+        <button id="global-search-open" class="global-search-trigger" type="button" aria-haspopup="dialog" aria-controls="global-search-dialog" hidden>
           <span class="global-search-icon" aria-hidden="true">⌕</span>
           <span class="global-search-label">Szukaj zasobów, VM, wdrożeń…</span>
           <kbd>Ctrl K</kbd>
@@ -85,7 +86,7 @@
     <div class="global-search-shell">
       <header class="global-search-header">
         <span class="global-search-icon" aria-hidden="true">⌕</span>
-        <input id="global-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Szukaj VM, wdrożenia, joba, providera, użytkownika…" aria-label="Globalne wyszukiwanie">
+        <input id="global-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Szukaj VM, wdrożenia, zadania, platformy, użytkownika…" aria-label="Globalne wyszukiwanie">
         <kbd>Esc</kbd>
       </header>
       <div id="global-search-status" class="global-search-status">Wpisz co najmniej 2 znaki.</div>

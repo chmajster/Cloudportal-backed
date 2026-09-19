@@ -20,7 +20,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-dialog"' in page.text
     assert 'id="global-search-input"' in page.text
     assert 'src="./theme-init.js"' in page.text
-    assert 'src="./app.js"' in page.text
+    assert 'src="./core.js"' in page.text
+    assert 'src="./loader.js"' in page.text
+    assert 'src="./app.js"' not in page.text
+    assert 'features/' not in page.text
     assert page.headers['cache-control'] == 'no-store'
     assert page.headers['x-frame-options'] == 'DENY'
     assert page.headers['content-security-policy'] == (
@@ -29,144 +32,216 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         "form-action 'self'; frame-ancestors 'none'"
     )
 
-    theme_script = client.get('/ui/theme-init.js')
-    script = client.get('/ui/app.js')
-    stylesheet = client.get('/ui/styles.css')
+    manifest_response = client.get('/ui/manifest.json')
+    assert manifest_response.status_code == 200
+    manifest = manifest_response.json()
+    assert manifest['version'] == 1
+    assert manifest['shared'] == sorted(manifest['shared'])
+    assert manifest['scripts'] == sorted(manifest['scripts'])
+    assert manifest['styles'] == sorted(manifest['styles'])
+    assert manifest['shared'] == ['shared/platforms.js']
+    assert {
+        'features/dashboard.js',
+        'features/identity.js',
+        'features/credentials.js',
+        'features/providers.js',
+        'features/catalog.js',
+        'features/blueprints.js',
+        'features/ipam.js',
+        'features/inventory.js',
+        'features/deployments.js',
+        'features/operations.js',
+    } == set(manifest['scripts'])
+    assert {
+        'styles/features/identity.css',
+        'styles/features/credentials.css',
+        'styles/features/blueprints.css',
+        'styles/features/inventory.css',
+    } <= set(manifest['styles'])
 
+    script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
+    style_paths = ['styles.css', *manifest['styles']]
+
+    theme_script = client.get('/ui/theme-init.js')
     assert theme_script.status_code == 200
     assert theme_script.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
     assert "cloudportal.console.theme" in theme_script.text
     assert "document.documentElement.dataset.theme" in theme_script.text
 
-    assert script.status_code == 200
-    assert script.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
-    assert "const API = '/api/v1';" in script.text
-    assert 'CREDENTIAL_TYPE_CONFIG' in script.text
-    assert 'Secrets JSON' not in script.text
-    assert 'Zastąp zapisane sekrety' in script.text
-    assert "['suspend', 'Resume']" not in script.text
-    assert "'suspend', 'Wstrzymaj'" in script.text
-    assert "'resume', 'Wznów'" in script.text
-    assert "'reset', 'Twardy reset'" in script.text
-    assert 'destroy_unreferenced_disks' in script.text
-    assert 'credential-secret-panel' in script.text
-    assert 'Akceptuj certyfikat self-signed / niezaufany' in script.text
-    assert 'template-variable-grid' in script.text
-    assert 'data-workflow-row' in script.text
-    assert 'deployment_ansible_enabled' in script.text
-    assert 'function permissionPicker(' in script.text
-    assert 'function permissionSummary(' in script.text
-    assert 'function discoverVmOptions(' in script.text
-    assert 'function storageLabel(' in script.text
-    assert 'function hostnameValueFields(' in script.text
-    assert 'function proxmoxBlueprintForm(' in script.text
-    assert 'const workflowGraph = node(' in script.text
-    assert 'const syncWorkflowGraph = () =>' in script.text
-    assert 'const moveWorkflowRow = (row, direction) =>' in script.text
-    assert 'workflow-dag-card' in script.text
-    assert 'workflow-preview-visual' in script.text
-    assert 'Szybki Blueprint Proxmox' in script.text
-    assert 'Obraz / szablon Proxmox' in script.text
-    assert 'Wzorzec nazwy hosta' in script.text
-    assert 'Tagi Proxmox' in script.text
-    assert 'Serwery DNS' in script.text
-    assert "'set_tags'" in script.text
-    assert 'function multiCheckboxField(' in script.text
-    assert 'function toDateTimeLocal(' in script.text
-    assert 'table-search-empty' in script.text
-    assert 'function tablePreferenceKey(' in script.text
-    assert 'function readTablePreferences(' in script.text
-    assert 'table-sort-button' in script.text
-    assert 'table-column-picker' in script.text
-    assert 'table-page-size' in script.text
-    assert "density === 'compact'" in script.text
-    assert 'function showDeploymentDetails(' in script.text
-    assert 'function assignHostname(' in script.text
-    assert 'function assignIpAllocation(' in script.text
-    assert 'function showProxmoxTask(' in script.text
-    assert 'function showVmDetailsPage(' in script.text
-    assert 'function vmDetailActions(' in script.text
-    assert 'function vmSnapshotsContent(' in script.text
-    assert 'function vmBackupsContent(' in script.text
-    assert 'function vmAuditContent(' in script.text
-    assert "['overview', 'Przegląd']" in script.text
-    assert "selectField('Powtarzanie', 'interval_preset'" in script.text
-    assert "class: 'advanced-options wide'" in script.text
-    assert 'function stopTaskPolling(' in script.text
-    assert 'Zmienne template JSON' not in script.text
-    assert 'Schemat zmiennych JSON' not in script.text
-    assert 'Definicja deploymentu JSON' not in script.text
-    assert 'Workflow DAG JSON' not in script.text
-    assert 'Wartości hostname JSON' not in script.text
-    assert 'Desired variables JSON' not in script.text
-    assert 'modal-form-error' in script.text
-    assert "const THEME_KEY = 'cloudportal.console.theme';" in script.text
-    assert 'function setTheme(' in script.text
-    assert 'function setMobileMenu(' in script.text
-    assert "dom.refreshView.addEventListener('click'" in script.text
-    assert 'function loadGlobalSearchIndex(' in script.text
-    assert 'function renderGlobalSearch(' in script.text
-    assert 'globalSearchSources' in script.text
-    assert "event.key.toLocaleLowerCase() === 'k'" in script.text
-    assert 'function copyText(' in script.text
-    assert 'function setLoginMessage(' in script.text
-    assert 'function formFieldLabel(' in script.text
-    assert 'function friendlyApiText(' in script.text
-    assert 'VALIDATION_FIELD_LABELS' in script.text
-    assert "replace(/^Value error" in script.text
-    assert "dom.modal.addEventListener('cancel'" in script.text
-    assert "setMobileMenu(false)" in script.text
-    assert '192.168.1.10' in script.text
-    assert 'restoreVmFromBackup' in script.text
-    assert "backups.restore" in script.text
-    assert "Uruchom przywracanie" in script.text
-    assert 'consoleRfb' in script.text
-    assert 'rfb_module' in script.text
-    assert 'ws_path' in script.text
-    assert "window.open('about:blank'" not in script.text
-    assert stylesheet.status_code == 200
-    assert ':root {' in stylesheet.text
-    assert 'html[data-theme="dark"]' in stylesheet.text
-    assert '--sidebar-bg:' in stylesheet.text
-    assert '.sidebar-backdrop' in stylesheet.text
-    assert '.credential-secret-panel' in stylesheet.text
-    assert '.credential-tls-control' in stylesheet.text
-    assert '.form-section' in stylesheet.text
-    assert '.required-mark' in stylesheet.text
-    assert 'input:user-invalid' in stylesheet.text
-    assert '.choice-fieldset' in stylesheet.text
-    assert '.choice-grid' in stylesheet.text
-    assert '.detail-section' in stylesheet.text
-    assert '.task-progress' in stylesheet.text
-    assert '.advanced-options' in stylesheet.text
-    assert '.task-id-details' in stylesheet.text
-    assert '.editor-card' in stylesheet.text
-    assert '.designer-heading' in stylesheet.text
-    assert '.designer-subsection' in stylesheet.text
-    assert '.workflow-preview' in stylesheet.text
-    assert '.blueprint-run-summary' in stylesheet.text
-    assert '.table-toolbar' in stylesheet.text
-    assert '.permission-group' in stylesheet.text
-    assert '.modal-form-error' in stylesheet.text
-    assert '.form-error.success' in stylesheet.text
-    assert '.clipboard-fallback' in stylesheet.text
-    assert '.toast.error' in stylesheet.text
-    assert '.toast-close' in stylesheet.text
-    assert '.modal.modal-wide' in stylesheet.text
-    assert '.global-search-trigger' in stylesheet.text
-    assert '.global-search-dialog' in stylesheet.text
-    assert '.vm-detail-header' in stylesheet.text
-    assert '.vm-tabs' in stylesheet.text
-    assert '.vm-overview-grid' in stylesheet.text
-    assert '.workflow-dag' in stylesheet.text
-    assert '.workflow-dag-columns' in stylesheet.text
-    assert '.workflow-preview-visual' in stylesheet.text
-    assert '.table-sort-button' in stylesheet.text
-    assert '.table-column-picker' in stylesheet.text
-    assert '.table-pagination' in stylesheet.text
-    assert '.advanced-table.compact' in stylesheet.text
-    assert '.global-search-result' in stylesheet.text
-    assert stylesheet.headers['content-type'].startswith('text/css')
+    scripts = {path: client.get('/ui/' + path) for path in script_paths}
+    styles = {path: client.get('/ui/' + path) for path in style_paths}
+    for response in scripts.values():
+        assert response.status_code == 200
+        assert response.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
+    for response in styles.values():
+        assert response.status_code == 200
+        assert response.headers['content-type'].startswith('text/css')
+
+    script = '\n'.join(response.text for response in scripts.values())
+    stylesheet = '\n'.join(response.text for response in styles.values())
+    bootstrap = scripts['app.js'].text
+    core = scripts['core.js'].text
+    loader = scripts['loader.js'].text
+
+    assert "fetch('./manifest.json'" in loader
+    assert "loadFeatureScript('app.js')" in loader
+    assert 'manifest.shared' in loader
+    assert 'loadFeatureStyle' in loader
+
+    assert "const API = '/api/v1';" in core
+    assert 'function registerView(' in core
+    assert 'function registerCommand(' in core
+    assert 'function registerExtension(' in core
+    assert 'function emitUiEvent(' in core
+    assert 'const routes = [];' in core
+    assert 'const views = Object.create(null);' in core
+    assert len(bootstrap.splitlines()) < 120
+    assert 'async function usersView(' not in bootstrap
+    assert 'async function blueprintsView(' not in bootstrap
+    assert 'const views = {' not in bootstrap
+
+    for path in script_paths:
+        if path.startswith('features/'):
+            assert 'registerView({' in scripts[path].text
+
+    assert 'CREDENTIAL_TYPE_CONFIG' in script
+    assert 'Secrets JSON' not in script
+    assert 'Zastąp zapisane sekrety' in script
+    assert "['suspend', 'Resume']" not in script
+    assert "'suspend', 'Wstrzymaj'" in script
+    assert "'resume', 'Wznów'" in script
+    assert "'reset', 'Twardy reset'" in script
+    assert 'destroy_unreferenced_disks' in script
+    assert 'credential-secret-panel' in script
+    assert 'Akceptuj certyfikat self-signed / niezaufany' in script
+    assert 'function splitProxmoxEndpoint(' in script
+    assert 'function buildProxmoxEndpoint(' in script
+    assert 'function splitProxmoxUsername(' in script
+    assert 'function buildProxmoxUsername(' in script
+    assert "label: 'Port'" in script
+    assert 'default: 8006' in script
+    assert "label: 'Realm'" in script
+    assert "default: 'pam'" in script
+    assert "placeholder: 'root'" in script
+    assert 'if (proxmoxIdentityRow) secretPanel.append(proxmoxIdentityRow);' in script
+    assert "name: 'port'" not in script
+    assert 'template-variable-grid' in script
+    assert 'data-workflow-row' in script
+    assert 'deployment_ansible_enabled' in script
+    assert 'function permissionPicker(' in script
+    assert 'function permissionSummary(' in script
+    assert 'function discoverVmOptions(' in script
+    assert 'function storageLabel(' in script
+    assert 'function hostnameValueFields(' in script
+    assert 'function proxmoxBlueprintForm(' in script
+    assert 'const workflowGraph = node(' in script
+    assert 'const syncWorkflowGraph = () =>' in script
+    assert 'const moveWorkflowRow = (row, direction) =>' in script
+    assert 'workflow-dag-card' in script
+    assert 'workflow-preview-visual' in script
+    assert 'Szybki Blueprint Proxmox' in script
+    assert 'Obraz / szablon Proxmox' in script
+    assert 'Wzorzec nazwy hosta' in script
+    assert 'Tagi Proxmox' in script
+    assert 'Serwery DNS' in script
+    assert "'set_tags'" in script
+    assert 'function multiCheckboxField(' in script
+    assert 'function toDateTimeLocal(' in script
+    assert 'table-search-empty' in script
+    assert 'function tablePreferenceKey(' in script
+    assert 'function readTablePreferences(' in script
+    assert 'table-sort-button' in script
+    assert 'table-column-picker' in script
+    assert 'table-page-size' in script
+    assert "density === 'compact'" in script
+    assert 'function showDeploymentDetails(' in script
+    assert 'function assignHostname(' in script
+    assert 'function assignIpAllocation(' in script
+    assert 'function showProxmoxTask(' in script
+    assert 'function showVmDetailsPage(' in script
+    assert 'function vmDetailActions(' in script
+    assert 'function vmSnapshotsContent(' in script
+    assert 'function vmBackupsContent(' in script
+    assert 'function vmAuditContent(' in script
+    assert "['overview', 'Przegląd']" in script
+    assert "selectField('Powtarzanie', 'interval_preset'" in script
+    assert "class: 'advanced-options wide'" in script
+    assert 'function stopTaskPolling(' in script
+    assert "registerExtension('global-search'" in script
+    assert 'function loadIndex(' in script
+    assert 'function renderSearch(' in script
+    assert "event.key.toLocaleLowerCase() === 'k'" in script
+    assert 'Zmienne template JSON' not in script
+    assert 'Schemat zmiennych JSON' not in script
+    assert 'Definicja deploymentu JSON' not in script
+    assert 'Workflow DAG JSON' not in script
+    assert 'Wartości hostname JSON' not in script
+    assert 'Desired variables JSON' not in script
+    assert 'modal-form-error' in script
+    assert "const THEME_KEY = 'cloudportal.console.theme';" in script
+    assert 'function setTheme(' in script
+    assert 'function setMobileMenu(' in script
+    assert "dom.refreshView.addEventListener('click'" in script
+    assert 'function copyText(' in script
+    assert 'function setLoginMessage(' in script
+    assert 'function formFieldLabel(' in script
+    assert 'function friendlyApiText(' in script
+    assert 'VALIDATION_FIELD_LABELS' in script
+    assert "replace(/^Value error" in script
+    assert "dom.modal.addEventListener('cancel'" in script
+    assert "setMobileMenu(false)" in script
+    assert '192.168.1.10' in script
+    assert 'restoreVmFromBackup' in script
+    assert "backups.restore" in script
+    assert "Uruchom przywracanie" in script
+    assert 'consoleRfb' in script
+    assert 'rfb_module' in script
+    assert 'ws_path' in script
+    assert "window.open('about:blank'" not in script
+
+    assert ':root {' in stylesheet
+    assert 'html[data-theme="dark"]' in stylesheet
+    assert '--sidebar-bg:' in stylesheet
+    assert '.sidebar-backdrop' in stylesheet
+    assert '.credential-secret-panel' in stylesheet
+    assert '.credential-tls-control' in stylesheet
+    assert '.credential-endpoint-row' in stylesheet
+    assert '.credential-user-row' in stylesheet
+    assert '.form-section' in stylesheet
+    assert '.required-mark' in stylesheet
+    assert 'input:user-invalid' in stylesheet
+    assert '.choice-fieldset' in stylesheet
+    assert '.choice-grid' in stylesheet
+    assert '.detail-section' in stylesheet
+    assert '.task-progress' in stylesheet
+    assert '.advanced-options' in stylesheet
+    assert '.task-id-details' in stylesheet
+    assert '.editor-card' in stylesheet
+    assert '.designer-heading' in stylesheet
+    assert '.designer-subsection' in stylesheet
+    assert '.workflow-preview' in stylesheet
+    assert '.workflow-dag' in stylesheet
+    assert '.workflow-dag-columns' in stylesheet
+    assert '.workflow-preview-visual' in stylesheet
+    assert '.blueprint-run-summary' in stylesheet
+    assert '.table-toolbar' in stylesheet
+    assert '.table-sort-button' in stylesheet
+    assert '.table-column-picker' in stylesheet
+    assert '.table-pagination' in stylesheet
+    assert '.advanced-table.compact' in stylesheet
+    assert '.permission-group' in stylesheet
+    assert '.modal-form-error' in stylesheet
+    assert '.form-error.success' in stylesheet
+    assert '.clipboard-fallback' in stylesheet
+    assert '.toast.error' in stylesheet
+    assert '.toast-close' in stylesheet
+    assert '.modal.modal-wide' in stylesheet
+    assert '.global-search-trigger' in stylesheet
+    assert '.global-search-dialog' in stylesheet
+    assert '.global-search-result' in stylesheet
+    assert '.vm-detail-header' in stylesheet
+    assert '.vm-tabs' in stylesheet
+    assert '.vm-overview-grid' in stylesheet
 
 
 def test_web_console_is_not_added_to_openapi_contract(client):

@@ -1,0 +1,40 @@
+from app.modules import backend_modules
+
+
+def test_backend_feature_modules_are_discovered_and_ordered():
+    modules = backend_modules()
+    names = [module.name for module in modules]
+
+    assert names == [
+        'web-ui',
+        'auth',
+        'administration',
+        'infrastructure',
+        'proxmox-management',
+        'automation',
+        'inventory',
+        'ipam',
+        'operations',
+        'health',
+    ]
+    assert len(names) == len(set(names))
+    assert [module.order for module in modules] == sorted(module.order for module in modules)
+    prefixes = {module.name: module.prefix for module in modules}
+    assert prefixes['web-ui'] == '/ui'
+    assert all(prefix == '/api/v1' for name, prefix in prefixes.items() if name != 'web-ui')
+    assert all(module.router.routes for module in modules)
+
+
+def test_feature_registry_exposes_expected_router_contracts():
+    modules = {module.name: module for module in backend_modules()}
+
+    def paths(name):
+        return {getattr(route, 'path', '') for route in modules[name].router.routes}
+
+    assert any(path.endswith('/auth/login') for path in paths('auth'))
+    assert '/providers' in paths('infrastructure')
+    assert '/blueprints' in paths('automation')
+    assert '/ipam/pools' in paths('ipam')
+    assert '/webhooks' in paths('operations')
+    assert '/health' in paths('health')
+    assert '/manifest.json' in paths('web-ui')

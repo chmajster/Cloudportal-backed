@@ -3,12 +3,17 @@ import hmac
 import hashlib
 import uuid
 from datetime import datetime
-from fastapi import HTTPException
+from typing import Annotated
+from fastapi import HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from app.models import Idempotency
 from app.security.core import encryption_key
+
+
+Limit = Annotated[int, Query(ge=1, le=200)]
+Offset = Annotated[int, Query(ge=0)]
 
 
 def public(obj, fields):
