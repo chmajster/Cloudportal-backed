@@ -42,7 +42,17 @@ function updateStatusLabel(status) {
 }
 
 function phaseLabel(phase) {
-  return new Map(UPDATE_PHASES).get(phase) || phase || 'Oczekiwanie';
+  const special = {
+    idle: 'Oczekiwanie',
+    checking: 'Sprawdzanie repozytorium',
+    available: 'Aktualizacja dostępna',
+    up_to_date: 'Wersja aktualna',
+    check_failed: 'Błąd sprawdzania',
+    install: 'Uruchamianie instalatora',
+    failed: 'Błąd aktualizacji',
+    interrupted: 'Przerwany proces',
+  };
+  return new Map(UPDATE_PHASES).get(phase) || special[phase] || phase || 'Oczekiwanie';
 }
 
 function updateTone(status) {
@@ -129,7 +139,7 @@ function versionCard(label, value, description, emphasis) {
 
 function updatePipeline(status) {
   const currentIndex = UPDATE_PHASES.findIndex(item => item[0] === status.phase);
-  const complete = ['success', 'up_to_date'].includes(status.status);
+  const complete = status.status === 'success';
   const failed = status.status === 'failed';
   return node('div', { class: 'update-pipeline' },
     ...UPDATE_PHASES.map((item, index) => {
@@ -257,7 +267,13 @@ function statusPanel(status, settings, container) {
   const fill = node('div', { class: 'update-progress-fill' });
   fill.style.width = progress + '%';
   const tone = updateTone(status.status);
-  const symbol = status.status === 'failed' ? '!' : status.status === 'update_available' ? '↓' : status.status === 'running' ? '↻' : '✓';
+  const symbol = status.status === 'failed'
+    ? '!'
+    : status.status === 'update_available'
+      ? '↓'
+      : ['running', 'checking'].includes(status.status)
+        ? '↻'
+        : ['success', 'up_to_date'].includes(status.status) ? '✓' : 'U';
 
   return node('div', { class: 'stack update-status-stack' },
     node('section', { class: 'update-hero update-hero-' + tone },
