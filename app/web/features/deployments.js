@@ -675,7 +675,7 @@ async function createDeployment() {
           };
         }
         await api('/deployments', { method: 'POST', idempotent: true, body });
-        toast('Wdrożenie zostało utworzone i uruchomiono zastosowanie konfiguracji.');
+        toast('Wdrożenie zapisano w lokalnej bazie i dodano do kolejki. Jeśli Proxmox jest niedostępny, provisioning uruchomi się automatycznie po odzyskaniu połączenia.');
         navigate('deployments');
       },
     });
@@ -691,7 +691,11 @@ async function jobsView() {
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.', actions),
     table([
       { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => operationLabel(item.operation) },
-      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Źródło', value: item => item.source }, { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 14) },
+      { label: 'Status', value: item => badge(item.provider_waiting ? 'Oczekuje na Proxmox' : statusLabel(item.status), item.provider_waiting ? 'warning' : statusKind(item.status)) },
+      { label: 'Synchronizacja', value: item => item.provider_waiting
+        ? node('span', { class: 'muted', text: 'Próba ' + item.provider_retry_attempts + ' · kolejna ' + formatDate(item.provider_next_retry_at) })
+        : '—' },
+      { label: 'Źródło', value: item => item.source }, { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 14) },
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
       const actions = [button('Logi', () => showJobLogs(item))];
