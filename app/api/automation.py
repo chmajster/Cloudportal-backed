@@ -7,7 +7,8 @@ from app.catalog import template_definition
 from app.catalog_control import require_catalog_item_enabled
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items)
-from app.api.schemas import BlueprintExecuteInput, BlueprintInput, DeploymentInput, HostnameGenerateInput, HostnameSchemeInput
+from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
+                             HostnameGenerateInput, HostnameSchemeInput)
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
                                     generate_hostname, hostname_public)
 from app.database import get_db
@@ -210,6 +211,18 @@ def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depe
     row.manager_roles = manager_roles
     row.version += 1
     audit(db, request, 'blueprint.updated', 'blueprints', id)
+    db.flush()
+    return blueprint_public(row)
+
+
+@router.put('/blueprints/{id}/enabled', response_model=BlueprintOutput)
+def set_blueprint_enabled(id: int, data: CatalogItemStateInput, request: Request,
+                          actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
+    row = find(db, Blueprint, id)
+    require_blueprint_manager(row, actor)
+    row.is_active = data.enabled
+    row.version += 1
+    audit(db, request, 'blueprint.enabled' if data.enabled else 'blueprint.disabled', 'blueprints', id)
     db.flush()
     return blueprint_public(row)
 
