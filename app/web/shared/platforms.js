@@ -17,7 +17,14 @@ const CREDENTIAL_TYPE_CONFIG = {
       max: 65535,
       help: 'Domyślny port API Proxmox VE: 8006.',
     },
-    username: { label: 'Użytkownik / realm', placeholder: 'root@pam', required: true },
+    username: { label: 'Użytkownik', placeholder: 'root', required: true },
+    realm: {
+      label: 'Realm',
+      default: 'pam',
+      placeholder: 'pam',
+      required: true,
+      help: 'Domyślny realm Proxmox dla kont systemowych to pam.',
+    },
     tls: true,
     defaultAuth: 'token',
     authModes: {
