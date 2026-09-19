@@ -7,6 +7,7 @@ const searchDom = {
   open: document.querySelector('#global-search-open'),
   dialog: document.querySelector('#global-search-dialog'),
   input: document.querySelector('#global-search-input'),
+  close: document.querySelector('#global-search-close'),
   status: document.querySelector('#global-search-status'),
   results: document.querySelector('#global-search-results'),
 };
@@ -233,6 +234,10 @@ registerExtension('global-search', () => {
   }
 
   searchDom.open.addEventListener('click', openSearch);
+  searchDom.close.addEventListener('click', closeSearch);
+  searchDom.dialog.addEventListener('click', event => {
+    if (event.target === searchDom.dialog) closeSearch();
+  });
   searchDom.input.addEventListener('input', () => { renderSearch(searchDom.input.value); });
   searchDom.input.addEventListener('keydown', event => {
     const count = searchDom.results.querySelectorAll('.global-search-result').length;
