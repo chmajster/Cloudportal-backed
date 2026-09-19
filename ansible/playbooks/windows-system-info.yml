@@ -1,0 +1,13 @@
+- name: Collect Windows system information
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Show Windows version
+      ansible.builtin.debug:
+        msg: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+    - name: Show hostname
+      ansible.builtin.debug:
+        msg: "{{ ansible_facts.hostname }}"
+    - name: Show CPU and memory
+      ansible.builtin.debug:
+        msg: "vCPU={{ ansible_facts.processor_vcpus | default('unknown') }} memoryMiB={{ ansible_facts.memtotal_mb | default('unknown') }}"
