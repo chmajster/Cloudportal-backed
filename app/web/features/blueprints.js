@@ -121,6 +121,18 @@ function hostnamePatternTokens(pattern) {
     .filter(token => !automatic.has(token));
 }
 
+function normalizeHostnamePattern(pattern, padding = 3) {
+  const raw = String(pattern || '').trim();
+  const runs = [...raw.matchAll(/X{1,9}/g)];
+  if (!raw.includes('{number}') && !raw.includes('{random}') && runs.length === 1) {
+    return {
+      pattern: raw.replace(runs[0][0], '{number}'),
+      padding: runs[0][0].length,
+    };
+  }
+  return { pattern: raw, padding: Number(padding || 3) };
+}
+
 function blueprintTags(value) {
   return [...new Set(String(value || '').split(/[,\n]+/).map(item => item.trim().toLowerCase()).filter(Boolean))];
 }
@@ -153,7 +165,7 @@ function blueprintWorkflow(options) {
   return steps;
 }
 
-async function proxmoxBlueprintForm(item = null) {
+async function proxmoxBlueprintForm(item = null, options = {}) {
   try {
     const [providerResult, schemeResult, poolResult, playbookResult, credentialResult] = await Promise.all([
       api('/providers?limit=200'),
@@ -171,6 +183,7 @@ async function proxmoxBlueprintForm(item = null) {
     const credentials = credentialResult.items;
     const deployment = item?.deployment || {};
     const variables = deployment.variables || {};
+    const templateWizard = options.mode === 'template';
     const currentProvider = providers.find(value => value.id === deployment.provider_id) || providers[0];
 
     const providerField = selectField(
@@ -193,14 +206,18 @@ async function proxmoxBlueprintForm(item = null) {
       { required: true, wide: true }
     );
     const newScheme = node('div', { class: 'form-grid designer-subsection wide' },
-      field('Nazwa wzorca', 'hostname_scheme_name', { value: item ? item.name + ' hostnames' : '', placeholder: 'Np. WRO PROD WEB' }),
+      field('Nazwa wzorca', 'hostname_scheme_name', { value: item ? item.name + ' hostnames' : '', placeholder: 'Np. Serwery SRL' }),
       field('Wzorzec', 'hostname_pattern', {
-        value: '{env}-{role}-{number}',
-        placeholder: '{location}-{env}-{role}-{number}',
-        help: 'Dostępne m.in. {location}, {env}, {environment}, {application}, {service}, {role}, {os}, {cluster}, {site}, {year}, {number}, {random}.',
+        value: 'SRLXXX',
+        placeholder: 'SRLXXX lub {env}-{role}-{number}',
+        help: 'Najprościej użyj X jako cyfr sekwencji: SRLXXX → srl001, srl002, srl003. Obsługiwane są też tokeny {location}, {env}, {environment}, {application}, {service}, {role}, {os}, {cluster}, {site}, {year}, {number}, {random}.',
         wide: true,
       }),
-      field('Dopełnienie numeru', 'hostname_padding', { type: 'number', min: 1, max: 9, value: 3 })
+      field('Pierwszy numer', 'hostname_next_number', { type: 'number', min: 1, max: 999999999, value: 1 }),
+      field('Dopełnienie numeru', 'hostname_padding', {
+        type: 'number', min: 1, max: 9, value: 3,
+        help: 'Dla zapisu SRLXXX liczba cyfr zostanie rozpoznana automatycznie jako 3.',
+      })
     );
     const hostnameDefaults = node('div', { class: 'form-grid designer-subsection wide' });
 
@@ -235,6 +252,12 @@ async function proxmoxBlueprintForm(item = null) {
       deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' }
     );
 
+    const executorField = selectField(
+      'Silnik IaC', 'executor',
+      [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }],
+      deployment.executor || 'terraform',
+      { required: true }
+    );
     const workflowPreview = node('div', { class: 'workflow-preview workflow-preview-visual' });
     const preservedVariablesSchema = item?.variables_schema || {};
 
@@ -243,9 +266,9 @@ async function proxmoxBlueprintForm(item = null) {
       field('Slug', 'slug', { required: true, value: item?.slug || '' }),
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
       field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
-      providerField,
+      providerField, executorField,
 
-      node('div', { class: 'designer-heading wide' }, node('strong', { text: '2. Proxmox i obraz' }), node('span', { text: 'Te wartości zostaną użyte przy każdym uruchomieniu.' })),
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '2. Proxmox i obraz' }), node('span', { text: 'Wybierz bazową VM/template oraz parametry używane przy każdym uruchomieniu.' })),
       nodeField, imageField, storageField, networkField,
       field('Rdzenie CPU', 'cpu', { type: 'number', min: 1, max: 128, value: variables.cpu ?? 2 }),
       field('RAM (MiB)', 'memory', { type: 'number', min: 512, max: 1048576, value: variables.memory ?? 4096 }),
@@ -302,7 +325,10 @@ async function proxmoxBlueprintForm(item = null) {
       const custom = selected === '__new__';
       newScheme.hidden = !custom;
       const pattern = custom
-        ? newScheme.querySelector('[name="hostname_pattern"]').value
+        ? normalizeHostnamePattern(
+            newScheme.querySelector('[name="hostname_pattern"]').value,
+            newScheme.querySelector('[name="hostname_padding"]').value
+          ).pattern
         : (scheme?.pattern || '');
       const defaults = deployment.hostname_values || {};
       hostnameDefaults.replaceChildren();
@@ -431,10 +457,10 @@ async function proxmoxBlueprintForm(item = null) {
     updateWorkflowPreview();
 
     openModal({
-      title: item ? 'Edytuj ' + item.name : 'Nowy Blueprint Proxmox',
-      eyebrow: 'Blueprint Designer',
+      title: item ? 'Edytuj ' + item.name : (templateWizard ? 'Nowy szablon Terraform / OpenTofu' : 'Nowy Blueprint Proxmox'),
+      eyebrow: templateWizard ? 'Kreator szablonu IaC' : 'Blueprint Designer',
       body: fields,
-      submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz Blueprint',
+      submitLabel: item ? 'Zapisz nową wersję' : (templateWizard ? 'Utwórz szablon' : 'Utwórz Blueprint'),
       wide: true,
       onSubmit: async (data, form) => {
         const provider = providers.find(value => String(value.id) === String(data.get('provider_id')));
@@ -443,14 +469,17 @@ async function proxmoxBlueprintForm(item = null) {
         let schemeId = data.get('hostname_scheme_id');
         let selectedPattern = '';
         if (schemeId === '__new__') {
-          const pattern = data.get('hostname_pattern');
+          const normalized = normalizeHostnamePattern(
+            data.get('hostname_pattern'),
+            data.get('hostname_padding')
+          );
           const created = await api('/hostname-schemes', {
             method: 'POST',
             body: {
               name: data.get('hostname_scheme_name') || data.get('name') + ' hostnames',
-              pattern,
-              next_number: 1,
-              padding: Number(data.get('hostname_padding') || 3),
+              pattern: normalized.pattern,
+              next_number: Number(data.get('hostname_next_number') || 1),
+              padding: normalized.padding,
               is_active: true,
             },
           });
@@ -545,7 +574,7 @@ async function proxmoxBlueprintForm(item = null) {
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
             template: 'proxmox-vm',
-            executor: 'terraform',
+            executor: data.get('executor'),
             variables: vmVariables,
             ansible,
           },
@@ -558,8 +587,10 @@ async function proxmoxBlueprintForm(item = null) {
           method: item ? 'PUT' : 'POST',
           body: payload,
         });
-        toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint gotowy do szybkiego tworzenia VM.');
-        navigate('blueprints');
+        toast(item
+          ? 'Utworzono nową wersję Blueprintu.'
+          : (templateWizard ? 'Szablon Terraform / OpenTofu jest gotowy do tworzenia VM.' : 'Blueprint gotowy do szybkiego tworzenia VM.'));
+        navigate(options.returnTo || 'blueprints');
       },
     });
   } catch (error) {
@@ -1300,6 +1331,7 @@ function generateHostname(schemes) {
   });
 }
 
+registerCommand('blueprints.proxmoxTemplateWizard', proxmoxBlueprintForm);
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
 registerView({ id: 'hostnames', label: 'Nazwy hostów', icon: 'H', permission: 'hostnames.read', order: 80 }, hostnamesView);
 })();
