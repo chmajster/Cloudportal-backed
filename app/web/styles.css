@@ -114,6 +114,18 @@ button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 [hidden] { display: none !important; }
 
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 .login-layout { min-height: 100vh; display: grid; grid-template-columns: minmax(320px, 520px) 1fr; }
 .login-card { padding: clamp(28px, 6vw, 72px); display: flex; flex-direction: column; justify-content: center; background: var(--surface); position: relative; z-index: 2; }
 .login-aside { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: center; padding: 9vw; background: var(--hero-bg); color: var(--hero-text); }
@@ -777,6 +789,25 @@ tbody tr:hover { background: var(--row-hover); }
   min-width: 210px;
   max-width: min(320px, calc(100vw - 32px));
   max-height: min(310px, 55vh);
+}
+@media (max-width: 980px) {
+  .global-search-trigger {
+    flex: 0 0 46px;
+    width: 46px;
+    min-width: 46px;
+    min-height: 46px;
+    margin-left: auto;
+    padding: 0;
+    justify-content: center;
+    grid-template-columns: 1fr;
+  }
+  .global-search-trigger .global-search-label,
+  .global-search-trigger kbd {
+    display: none;
+  }
+  .user-menu {
+    margin-left: 0;
+  }
 }
 @media (max-width: 860px) {
   .topbar > div.page-context {
