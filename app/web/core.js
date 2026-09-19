@@ -49,10 +49,7 @@ function registerCommand(name, handler) {
   commands[name] = handler;
 }
 
-function hasCommand(name) {
-  return typeof commands[name] === 'function';
-}
-
+function hasCommand(name) { return typeof commands[name] === 'function'; }
 function runCommand(name, ...args) {
   if (!hasCommand(name)) throw new Error('UI command is not registered: ' + name);
   return commands[name](...args);
@@ -1105,7 +1102,6 @@ function navigationGroup(route) {
   const order = Number(route.order ?? 1000);
   return order <= 0 ? '' : order <= 40 ? 'Dostęp' : order <= 100 ? 'Infrastruktura' : order <= 140 ? 'Operacje' : 'System';
 }
-
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
