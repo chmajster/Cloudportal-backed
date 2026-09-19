@@ -152,7 +152,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Wersja Proxmox VE' in script
     assert 'function proxmoxDuplicateTokenDetail(' in script
     assert 'function applyProxmoxDuplicateTokenSuggestion(' in script
+    assert 'function setProxmoxTokenVerificationState(' in script
+    assert 'function proxmoxTokenRejectedDetail(' in script
+    assert 'Sprawdzanie, czy token' in script or 'sprawdzi, czy nazwa tokenu jest duplikatem' in script
     assert 'Proponowana nowa nazwa:' in script
+    assert 'Duplikat został potwierdzony' in script
     assert 'Została wpisana do formularza' in script
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
@@ -275,6 +279,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-user-row' in stylesheet
     assert '.credential-connection-check' in stylesheet
     assert '.credential-connection-result' in stylesheet
+    assert '.proxmox-token-verification' in stylesheet
+    assert '@keyframes proxmox-token-check-spin' in stylesheet
     assert '.form-section' in stylesheet
     assert '.required-mark' in stylesheet
     assert 'input:user-invalid' in stylesheet
