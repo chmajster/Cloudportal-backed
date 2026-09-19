@@ -104,8 +104,11 @@ async function dashboardView() {
       recentBody.append(node('button', {
         class: 'dashboard-deployment-row',
         type: 'button',
-        onClick: () => navigate('deployments'),
-        title: 'Otwórz widok wdrożeń',
+        onClick: async () => {
+          await navigate('deployments');
+          if (hasCommand('deployments.open')) await runCommand('deployments.open', item);
+        },
+        title: 'Otwórz szczegóły wdrożenia',
       },
         node('span', { class: 'dashboard-deployment-name' },
           node('strong', { text: item.name || short(item.id, 18) }),
