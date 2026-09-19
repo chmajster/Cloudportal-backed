@@ -11,8 +11,9 @@ from app.modules.openapi import decorate_router
 from app.config import settings
 from app.observability import configure_telemetry
 from app.security.core import throttle
+from app.version import build_version
 
-app = FastAPI(title='Cloudportal-backed', version='1.0.0', docs_url='/docs', redoc_url=None)
+app = FastAPI(title='Cloudportal-backed', version=build_version(), docs_url='/docs', redoc_url=None)
 
 
 @app.middleware('http')
