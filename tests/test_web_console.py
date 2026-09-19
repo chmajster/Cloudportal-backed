@@ -19,6 +19,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-open"' in page.text
     assert 'id="global-search-dialog"' in page.text
     assert 'id="global-search-input"' in page.text
+    assert 'href="./favicon.ico"' in page.text
+    assert 'type="image/x-icon"' in page.text
     assert 'src="./theme-init.js"' in page.text
     assert 'src="./core.js"' in page.text
     assert 'src="./loader.js"' in page.text
@@ -64,6 +66,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
 
     script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
     style_paths = ['styles.css', *manifest['styles']]
+
+    favicon = client.get('/ui/favicon.ico')
+    assert favicon.status_code == 200
+    assert favicon.headers['content-type'].startswith('image/')
+    assert len(favicon.content) > 1000
 
     theme_script = client.get('/ui/theme-init.js')
     assert theme_script.status_code == 200
