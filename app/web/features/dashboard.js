@@ -25,8 +25,15 @@ function metric(label, value, detail) {
     node('small', { text: detail }));
 }
 
-function dashboardAction(iconName, label, route) {
-  return node('button', { class: 'dashboard-quick-action', type: 'button', onClick: () => navigate(route) },
+function dashboardAction(iconName, label, route, command = null) {
+  return node('button', {
+    class: 'dashboard-quick-action',
+    type: 'button',
+    onClick: async () => {
+      await navigate(route);
+      if (command && hasCommand(command)) await runCommand(command);
+    },
+  },
     node('span', { class: 'dashboard-action-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
     node('span', { class: 'dashboard-action-label', text: label }),
     node('span', { class: 'dashboard-action-chevron', 'aria-hidden': 'true' }, appIcon('chevron-right')));
@@ -113,11 +120,17 @@ async function dashboardView() {
   }
 
   const actions = [];
-  if (allowed('users.create')) actions.push(dashboardAction('users', 'Dodaj użytkownika', 'users'));
-  if (allowed('tokens.create')) actions.push(dashboardAction('key', 'Utwórz token API', 'tokens'));
-  if (allowed('providers.create')) actions.push(dashboardAction('server', 'Dodaj platformę', 'providers'));
-  if (allowed('blueprints.create')) actions.push(dashboardAction('workflow', 'Utwórz Blueprint', 'blueprints'));
-  if (allowed('deployments.create')) actions.push(dashboardAction('rocket', 'Nowe wdrożenie', 'deployments'));
+  if (allowed('users.create')) actions.push(dashboardAction('users', 'Dodaj użytkownika', 'users', 'users.create'));
+  if (allowed('tokens.create')) actions.push(dashboardAction('key', 'Utwórz token API', 'tokens', 'tokens.create'));
+  if (allowed('providers.create') && allowed('credentials.read')) {
+    actions.push(dashboardAction('server', 'Dodaj platformę', 'providers', 'providers.create'));
+  }
+  if (allowed('blueprints.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')) {
+    actions.push(dashboardAction('workflow', 'Utwórz Blueprint', 'blueprints', 'blueprints.create'));
+  }
+  if (allowed('deployments.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')) {
+    actions.push(dashboardAction('rocket', 'Nowe wdrożenie', 'deployments', 'deployments.create'));
+  }
 
   const deploymentPanel = node('section', { class: 'panel dashboard-panel' },
     node('div', { class: 'dashboard-panel-header' },
