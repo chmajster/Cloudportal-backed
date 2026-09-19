@@ -33,3 +33,11 @@ def test_backup_and_restore_include_system_sbin_for_runuser():
         assert expected_path in source
         assert "shutil.which('runuser', path=env['PATH'])" in source
         assert "['runuser', '-u'" not in source
+
+
+def test_backup_streams_pg_dump_into_root_owned_file():
+    source = (ROOT / 'scripts' / 'backend-backup.py').read_text()
+    assert "'--file'" not in source
+    assert "with dump.open('xb') as stream:" in source
+    assert "stdout=stream" in source
+    assert "dump.unlink(missing_ok=True)" in source
