@@ -119,6 +119,8 @@
 }
 .blueprint-wizard-step-tab strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .7rem; }
 .blueprint-wizard-step-tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+.blueprint-wizard-step-tab.invalid { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); }
+.blueprint-wizard-step-tab.invalid > span { border-color: var(--danger-border); color: var(--danger); }
 .blueprint-wizard-step-tab.done { color: var(--text); }
 .blueprint-wizard-step-tab.done > span { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .blueprint-wizard-step-tab:disabled { cursor: not-allowed; opacity: .48; }
