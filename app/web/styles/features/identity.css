@@ -177,13 +177,15 @@
 }
 
 .account-permissions-grid > .permission-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: start;
-  gap: 10px;
+  display: block;
+  column-count: 3;
+  column-gap: 10px;
 }
 .account-permissions-grid .permission-group {
+  width: 100%;
   min-width: 0;
+  margin: 0 0 10px;
+  break-inside: avoid;
   border-radius: 11px;
   box-shadow: none;
 }
@@ -216,7 +218,7 @@
     grid-template-columns: 1fr;
   }
   .account-permissions-grid > .permission-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-count: 2;
   }
 }
 
@@ -249,7 +251,7 @@
     gap: 6px;
   }
   .account-permissions-grid > .permission-summary {
-    grid-template-columns: 1fr;
+    column-count: 1;
   }
 }
 
