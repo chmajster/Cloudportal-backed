@@ -45,7 +45,7 @@ dom.refreshView.addEventListener('click', async () => {
     dom.refreshView.classList.remove('is-refreshing');
   }
 });
-dom.menuToggle.addEventListener('click', () => setMobileMenu(!dom.appView.classList.contains('menu-open')));
+dom.menuToggle.addEventListener('click', toggleSidebar);
 dom.sidebarBackdrop.addEventListener('click', () => setMobileMenu(false));
 document.querySelector('#modal-close').addEventListener('click', closeModal);
 dom.modal.addEventListener('cancel', event => {
@@ -53,13 +53,17 @@ dom.modal.addEventListener('cancel', event => {
   closeModal();
 });
 dom.modal.addEventListener('click', event => { if (event.target === dom.modal) closeModal(); });
-window.addEventListener('resize', () => { if (window.innerWidth > 760) setMobileMenu(false); });
+window.addEventListener('resize', () => {
+  setMobileMenu(false);
+  updateSidebarToggleState();
+});
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !dom.modal.open && dom.appView.classList.contains('menu-open')) setMobileMenu(false);
 });
 window.addEventListener('hashchange', () => { if (!dom.appView.hidden && location.hash.slice(1) !== state.view) navigate(location.hash.slice(1)); });
 
 loadTheme();
+loadSidebarState();
 
 (async function boot() {
   loadSession();
