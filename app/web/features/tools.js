@@ -29,7 +29,7 @@ function autoUpdateTool(status) {
 
   return node('article', { class: 'panel tool-card tool-card-featured' },
     node('div', { class: 'tool-card-head' },
-      node('div', { class: 'tool-icon', 'aria-hidden': 'true', text: 'UP' }),
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('refresh')),
       node('div', { class: 'tool-title' },
         node('span', { class: 'tool-category', text: 'System' }),
         node('h2', { text: 'Auto-update' }),
@@ -51,7 +51,7 @@ function autoUpdateTool(status) {
 function unavailableUpdateTool(error) {
   return node('article', { class: 'panel tool-card' },
     node('div', { class: 'tool-card-head' },
-      node('div', { class: 'tool-icon', 'aria-hidden': 'true', text: 'UP' }),
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('refresh')),
       node('div', { class: 'tool-title' },
         node('span', { class: 'tool-category', text: 'System' }),
         node('h2', { text: 'Auto-update' }),
@@ -87,5 +87,5 @@ async function toolsView() {
   );
 }
 
-registerView({ id: 'tools', label: 'Narzędzia', icon: 'N', permission: 'updates.read', order: 165 }, toolsView);
+registerView({ id: 'tools', label: 'Narzędzia', iconName: 'wrench', permission: 'updates.read', order: 155 }, toolsView);
 })();
