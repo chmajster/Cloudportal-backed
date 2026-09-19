@@ -232,6 +232,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Slug / identyfikator szablonu' in script
     assert "name: blueprintName" in script
     assert 'hostname_next_number' in script
+    assert 'Nazwa deploymentu i nazwa VM będą generowane automatycznie z wybranego wzorca hostname.' in script
+    assert "name: hostnameSchemeId ? '{{ hostname }}' : form.elements.deployment_name.value" in script
+    assert "deploymentVariables.name = '{{ hostname }}'" in script
+    assert "field('Nazwa wdrożenia', 'deployment_name'" in script
     assert 'existing_hostname_pattern' in script
     assert 'Role zarządzające szablonem' in script
     assert 'Jedna rola może zarządzać tylko jednym szablonem.' in script
