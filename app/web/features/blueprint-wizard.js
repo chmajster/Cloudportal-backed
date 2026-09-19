@@ -104,7 +104,11 @@
       state.providerCredentialId = String(preferred.credentials_id || '');
       state.terraformTemplateId = data.templates.find(value => value.provider === preferred.type)?.id || '';
       state.hostnameSchemeId = String(data.schemes[0]?.id || '');
-      if (options.hostnameSchemeId) state.hostnameSchemeId = String(options.hostnameSchemeId);
+      state.hostnameEnabled = Boolean(allowed('hostnames.read') && data.schemes.length);
+      if (options.hostnameSchemeId) {
+        state.hostnameSchemeId = String(options.hostnameSchemeId);
+        state.hostnameEnabled = true;
+      }
 
       const dedicatedElsewhere = new Set(
         blueprints.flatMap(value => value.manager_role_ids || []).map(Number)
@@ -470,9 +474,12 @@
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         if (!provider) return wrapper;
 
+        const verifiedConnection = provider.type === 'proxmox' && state.providerConnected;
         wrapper.append(node('div', { class: 'blueprint-wizard-connection-status' },
-          node('span', { class: 'status-dot ' + (state.providerConnected ? 'ok' : (state.providerError ? 'bad' : '')) }),
-          node('strong', { text: state.providerConnected ? 'Połączenie z providerem działa' : (state.providerError ? 'Nie udało się odczytać providera' : 'Provider skonfigurowany') }),
+          node('span', { class: 'status-dot ' + (verifiedConnection ? 'ok' : (state.providerError ? 'bad' : '')) }),
+          node('strong', { text: verifiedConnection
+            ? 'Połączenie z providerem działa'
+            : state.providerError ? 'Nie udało się odczytać providera' : 'Provider ma przypisane credentials' }),
           state.providerError ? node('small', { text: state.providerError }) : null));
 
         if (provider.type === 'proxmox') {
@@ -627,7 +634,10 @@
           selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' })
         );
         fields.querySelectorAll('input,select').forEach(control => {
-          control.addEventListener('input', () => saveStateFromInput(control));
+          control.addEventListener('input', () => {
+            saveStateFromInput(control);
+            if (['cpu', 'memory', 'disk'].includes(control.name)) state.preset = 'custom';
+          });
           control.addEventListener('change', () => saveStateFromInput(control));
         });
 
@@ -1079,7 +1089,8 @@
         bodyRoot.replaceChildren(renderStepBody());
         renderFooter();
         errorText(bodyRoot, state.errors);
-        bodyRoot.scrollTo?.({ top: 0, behavior: 'smooth' });
+        const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        bodyRoot.scrollTo?.({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
       }
 
       dom.modal.classList.add('modal-wide');
