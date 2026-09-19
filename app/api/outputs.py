@@ -198,6 +198,12 @@ class CredentialTestOutput(Output):
     ok: bool
     provider: str
     version: str | None = None
+    endpoint: str | None = None
+    username: str | None = None
+    auth_mode: str | None = None
+    verify_ssl: bool | None = None
+    latency_ms: int | None = None
+    message: str | None = None
 
 
 class WorkersOutput(Output):
