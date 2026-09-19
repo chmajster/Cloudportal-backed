@@ -16,10 +16,17 @@ async function dashboardView() {
     try { counts[key] = (await api(`${path}?limit=200`)).items.length; } catch { counts[key] = '—'; }
   }));
   const metrics = node('div', { class: 'metrics' },
-    metric('Stan backendu', statusLabel(health.status), `${health.checks.workers.online}/${health.checks.workers.expected} workerów`),
-    metric('Użytkownicy', counts.users ?? '—', allowed('users.read') ? 'widoczne konta' : 'brak uprawnienia'),
-    metric('Wdrożenia', counts.deployments ?? '—', 'łącznie'),
-    metric('Zadania', counts.jobs ?? '—', 'ostatnie 200'),
+    metric(
+      'Stan backendu',
+      statusLabel(health.status),
+      `${health.checks.workers.online}/${health.checks.workers.expected} workerów`,
+      allowed('metrics.read') ? 'observability' : null,
+      'health-' + health.status
+    ),
+    metric('Użytkownicy', counts.users ?? '—', allowed('users.read') ? 'widoczne konta' : 'brak uprawnienia', allowed('users.read') ? 'users' : null),
+    metric('Dane dostępowe', counts.credentials ?? '—', allowed('credentials.read') ? 'skonfigurowane sekrety' : 'brak uprawnienia', allowed('credentials.read') ? 'credentials' : null),
+    metric('Wdrożenia', counts.deployments ?? '—', 'łącznie', allowed('deployments.read') ? 'deployments' : null),
+    metric('Zadania', counts.jobs ?? '—', 'ostatnie 200 widocznych', allowed('jobs.read') ? 'jobs' : null),
   );
   const checkLabels = {
     api: 'API', database: 'Baza danych', queue: 'Kolejka Redis', dispatcher: 'Dispatcher',
@@ -29,7 +36,11 @@ async function dashboardView() {
   Object.entries(health.checks).forEach(([name, value]) => {
     const ok = typeof value === 'object' ? value.online >= value.expected : Boolean(value);
     const detail = typeof value === 'object' ? `${value.online}/${value.expected}` : (ok ? 'OK' : 'Problem');
-    checks.append(node('div', { class: 'check' }, node('span', { text: checkLabels[name] || name }), node('strong', { text: detail })));
+    checks.append(node('div', { class: 'check' },
+      node('span', { class: 'check-label' },
+        node('span', { class: 'status-dot ' + (ok ? 'ok' : 'bad'), 'aria-hidden': 'true' }),
+        node('span', { text: checkLabels[name] || name })),
+      node('strong', { text: detail })));
   });
   const recent = allowed('jobs.read') ? (await api('/jobs?limit=8')).items : [];
   const componentPanel = node('section', { class: 'panel' },
@@ -51,8 +62,19 @@ async function dashboardView() {
   setApiStatus(health.status === 'ok');
 }
 
-function metric(label, value, detail) {
-  return node('section', { class: 'metric' }, node('span', { text: label }), node('strong', { text: String(value) }), node('small', { text: detail }));
+function metric(label, value, detail, route = null, kind = '') {
+  const content = [
+    node('span', { text: label }),
+    node('strong', { text: String(value) }),
+    node('small', { text: detail }),
+  ];
+  if (!route) return node('section', { class: 'metric ' + (kind ? 'metric-' + kind : '') }, content);
+  return node('button', {
+    type: 'button',
+    class: 'metric metric-action ' + (kind ? 'metric-' + kind : ''),
+    title: 'Otwórz: ' + label,
+    onClick: () => navigate(route),
+  }, content);
 }
 
 async function auditView(requestId = '') {
