@@ -1062,8 +1062,10 @@ function showApp() {
 
 function renderNavigation() {
   dom.navigation.replaceChildren();
-  routes.filter(route => allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account')).forEach(route => {
-    const item = node('button', { class: `nav-link ${state.view === route.id ? 'active' : ''}`, type: 'button', onClick: () => navigate(route.id) },
+  const currentRoute = routes.find(route => route.id === state.view);
+  routes.filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account')).forEach(route => {
+    const active = state.view === route.id || currentRoute?.navigationParent === route.id;
+    const item = node('button', { class: `nav-link ${active ? 'active' : ''}`, type: 'button', onClick: () => navigate(route.id) },
       node('span', { class: 'nav-icon', text: route.icon }), route.label);
     item.dataset.route = route.id;
     dom.navigation.append(item);
@@ -1076,8 +1078,15 @@ async function navigate(view) {
   state.view = route.id;
   location.hash = route.id;
   dom.pageTitle.textContent = route.label;
-  dom.pageEyebrow.textContent = route.id === 'dashboard' ? 'Stan systemu' : 'Zarządzanie lokalne';
-  dom.navigation.querySelectorAll('.nav-link').forEach(item => item.classList.toggle('active', item.dataset.route === route.id));
+  dom.pageEyebrow.textContent = route.id === 'dashboard'
+    ? 'Stan systemu'
+    : route.navigationParent
+      ? (routes.find(item => item.id === route.navigationParent)?.label || 'Narzędzia')
+      : 'Zarządzanie lokalne';
+  dom.navigation.querySelectorAll('.nav-link').forEach(item => {
+    const navRoute = routes.find(candidate => candidate.id === item.dataset.route);
+    item.classList.toggle('active', item.dataset.route === route.id || route.navigationParent === navRoute?.id);
+  });
   setMobileMenu(false);
   loading();
   try { await views[route.id](); }

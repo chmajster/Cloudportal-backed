@@ -166,20 +166,57 @@ async function createToken() {
 
 async function accountView() {
   const user = state.identity.user;
-  const details = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Tożsamość' }), badge(state.identity.token_type, 'info')),
-    node('div', { class: 'checks' },
-      info('Login', user.username), info('E-mail', user.email), info('Role', state.identity.roles.map(role => role.name).join(', ') || 'Brak'), info('Ostatnie logowanie', formatDate(user.last_login_at)),
-    ));
+  const roles = state.identity.roles.map(role => role.name).join(', ') || 'Brak przypisanych ról';
+  const initials = String(user.username || 'U').slice(0, 2).toUpperCase();
+
+  const accountValue = (label, value, options = {}) => node('div', { class: 'account-meta-item' },
+    node('span', { text: label }),
+    node(options.mono ? 'code' : 'strong', { class: options.mono ? 'mono' : '', text: value || '—' }));
+
+  const details = node('section', { class: 'panel account-card account-identity-card' },
+    node('div', { class: 'account-profile-head' },
+      node('div', { class: 'account-avatar', 'aria-hidden': 'true', text: initials }),
+      node('div', { class: 'account-profile-copy' },
+        node('span', { class: 'account-kicker', text: 'Zalogowane konto' }),
+        node('h2', { text: user.username }),
+        node('p', { class: 'muted', text: user.email })),
+      badge(state.identity.token_type === 'session' ? 'Sesja' : state.identity.token_type, 'info')),
+    node('div', { class: 'account-meta-grid' },
+      accountValue('Login', user.username, { mono: true }),
+      accountValue('E-mail', user.email),
+      accountValue('Role', roles),
+      accountValue('Ostatnie logowanie', formatDate(user.last_login_at))));
+
   const passwordMessage = user.must_change_password
-    ? 'Konto używa początkowego hasła admin. Zmień je, aby odblokować panel administracyjny.'
-    : 'Zmiana hasła unieważnia wszystkie sesje i tokeny resetu. Po zapisaniu wymagane jest ponowne logowanie.';
-  const security = node('section', { class: 'panel' }, node('div', { class: 'panel-header' }, node('h2', { text: 'Bezpieczeństwo konta' }), user.must_change_password ? badge('wymagana zmiana', 'warning') : ''), node('p', { class: user.must_change_password ? 'form-error' : 'muted', text: passwordMessage }), button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary'));
+    ? 'Konto używa początkowego hasła administratora. Ustaw własne hasło, aby odblokować pełny dostęp.'
+    : 'Zmiana hasła unieważni aktywne sesje i tokeny resetu. Po zapisaniu zalogujesz się ponownie.';
+
+  const security = node('section', { class: 'panel account-card account-security-card' },
+    node('div', { class: 'account-card-heading' },
+      node('div', { class: 'account-security-icon', 'aria-hidden': 'true', text: '✓' }),
+      node('div', {},
+        node('span', { class: 'account-kicker', text: 'Ochrona dostępu' }),
+        node('h2', { text: 'Bezpieczeństwo konta' })),
+      user.must_change_password ? badge('Wymagana zmiana', 'warning') : badge('Hasło ustawione', 'ok')),
+    node('p', { class: user.must_change_password ? 'form-error account-security-copy' : 'muted account-security-copy', text: passwordMessage }),
+    node('div', { class: 'account-security-actions' },
+      button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary')));
+
+  const permissionPanel = node('section', { class: 'panel account-permissions-panel' },
+    node('div', { class: 'account-permissions-header' },
+      node('div', {},
+        node('span', { class: 'account-kicker', text: 'RBAC' }),
+        node('h2', { text: 'Skuteczne uprawnienia' }),
+        node('p', { class: 'muted', text: 'Uprawnienia wynikające z przypisanych ról i aktywnej sesji.' })),
+      node('div', { class: 'account-permission-count' },
+        node('strong', { text: String(state.identity.permissions.length) }),
+        node('span', { text: 'uprawnień' }))),
+    node('div', { class: 'account-permissions-grid' }, permissionSummary(state.identity.permissions)));
+
   dom.content.replaceChildren(
-    heading('Twoja sesja i skuteczne uprawnienia.'),
-    node('div', { class: 'panels' }, details, security),
-    node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Uprawnienia' }), badge(`${state.identity.permissions.length}`, 'info')),
-      permissionSummary(state.identity.permissions)));
+    heading('Twoje konto, bezpieczeństwo i skuteczne uprawnienia.'),
+    node('div', { class: 'account-overview-grid' }, details, security),
+    permissionPanel);
 }
 
 function changePassword(required = false) {

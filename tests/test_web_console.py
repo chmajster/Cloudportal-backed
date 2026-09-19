@@ -19,6 +19,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-open"' in page.text
     assert 'id="global-search-dialog"' in page.text
     assert 'id="global-search-input"' in page.text
+    assert 'href="./favicon.ico"' in page.text
+    assert 'type="image/x-icon"' in page.text
     assert 'src="./theme-init.js"' in page.text
     assert 'src="./core.js"' in page.text
     assert 'src="./loader.js"' in page.text
@@ -52,16 +54,25 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/deployments.js',
         'features/operations.js',
         'features/search.js',
+        'features/tools.js',
+        'features/updates.js',
     } == set(manifest['scripts'])
     assert {
         'styles/features/identity.css',
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
         'styles/features/inventory.css',
+        'styles/features/tools.css',
+        'styles/features/updates.css',
     } <= set(manifest['styles'])
 
     script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
     style_paths = ['styles.css', *manifest['styles']]
+
+    favicon = client.get('/ui/favicon.ico')
+    assert favicon.status_code == 200
+    assert favicon.headers['content-type'].startswith('image/')
+    assert len(favicon.content) > 1000
 
     theme_script = client.get('/ui/theme-init.js')
     assert theme_script.status_code == 200
@@ -96,6 +107,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function emitUiEvent(' in core
     assert 'const routes = [];' in core
     assert 'const views = Object.create(null);' in core
+    assert 'route.navigation !== false' in core
+    assert 'currentRoute?.navigationParent === route.id' in core
     assert len(bootstrap.splitlines()) < 120
     assert 'async function usersView(' not in bootstrap
     assert 'async function blueprintsView(' not in bootstrap
@@ -136,6 +149,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'deployment_ansible_enabled' in script
     assert 'function permissionPicker(' in script
     assert 'function permissionSummary(' in script
+    assert 'account-overview-grid' in script
+    assert 'account-permissions-panel' in script
+    assert 'Skuteczne uprawnienia' in script
+    assert 'Ochrona dostępu' in script
     assert 'function discoverVmOptions(' in script
     assert 'function storageLabel(' in script
     assert 'function hostnameValueFields(' in script
@@ -173,9 +190,32 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
+    assert "id: 'updates'" in script
+    assert "navigationParent: 'tools'" in script
+    assert 'navigation: false' in script
+    assert "registerView({ id: 'tools'" in script
+    assert 'Centrum narzędzi' in script
+    assert 'Otwórz Auto-update' in script
+    assert '← Narzędzia' in script
+    assert 'Aktualizuj teraz' in script
+    assert 'Zainstaluj nowszy commit' in script
+    assert 'Commit zainstalowany' in script
+    assert 'Commit kanału' in script
+    assert 'Model wersji' in script
+    assert 'Git commit' in script
+    assert 'Updater nie wykona downgrade’u' in script
+    assert 'UPDATE_PHASES' in script
+    assert 'updatePipeline' in script
+    assert 'Polityka auto-update' in script
+    assert 'Backup przed wdrożeniem' in script
+    assert 'Następne sprawdzenie' in script
+    assert 'update-interval-presets' in script
+    assert "'X-Update-Status-Token': token" in script
     assert "registerExtension('global-search'" in script
     assert 'function loadIndex(' in script
     assert 'function renderSearch(' in script
+    assert "kind: 'Narzędzie'" in script
+    assert 'route.navigation === false && route.navigationParent' in script
     assert "event.key.toLocaleLowerCase() === 'k'" in script
     assert 'Zmienne template JSON' not in script
     assert 'Schemat zmiennych JSON' not in script
@@ -238,6 +278,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.table-pagination' in stylesheet
     assert '.advanced-table.compact' in stylesheet
     assert '.permission-group' in stylesheet
+    assert '.account-overview-grid' in stylesheet
+    assert '.account-profile-head' in stylesheet
+    assert '.account-meta-grid' in stylesheet
+    assert '.account-permissions-grid' in stylesheet
+    assert 'column-count: 3' in stylesheet
     assert '.modal-form-error' in stylesheet
     assert '.form-error.success' in stylesheet
     assert '.clipboard-fallback' in stylesheet
@@ -250,6 +295,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.vm-detail-header' in stylesheet
     assert '.vm-tabs' in stylesheet
     assert '.vm-overview-grid' in stylesheet
+    assert '.tools-hero' in stylesheet
+    assert '.tools-grid' in stylesheet
+    assert '.tool-card' in stylesheet
+    assert '.update-hero' in stylesheet
+    assert '.update-version-grid' in stylesheet
+    assert '.update-pipeline' in stylesheet
+    assert '.update-master-toggle' in stylesheet
+    assert '.update-safety-grid' in stylesheet
 
 
 def test_web_console_is_not_added_to_openapi_contract(client):

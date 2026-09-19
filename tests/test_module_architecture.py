@@ -16,6 +16,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'ipam',
         'operations',
         'health',
+        'updates',
     ]
     assert len(names) == len(set(names))
     assert [module.order for module in modules] == sorted(module.order for module in modules)
@@ -37,4 +38,5 @@ def test_feature_registry_exposes_expected_router_contracts():
     assert '/ipam/pools' in paths('ipam')
     assert '/webhooks' in paths('operations')
     assert '/health' in paths('health')
+    assert '/updates/status' in paths('updates')
     assert '/manifest.json' in paths('web-ui')
