@@ -180,6 +180,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerView({ id: 'tools'" in script
     assert 'Centrum narzędzi' in script
     assert 'Otwórz Auto-update' in script
+    assert '← Narzędzia' in script
     assert 'Aktualizuj teraz' in script
     assert 'Zainstaluj nowszy commit' in script
     assert 'Commit zainstalowany' in script
@@ -197,6 +198,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerExtension('global-search'" in script
     assert 'function loadIndex(' in script
     assert 'function renderSearch(' in script
+    assert "kind: 'Narzędzie'" in script
+    assert 'route.navigation === false && route.navigationParent' in script
     assert "event.key.toLocaleLowerCase() === 'k'" in script
     assert 'Zmienne template JSON' not in script
     assert 'Schemat zmiennych JSON' not in script
