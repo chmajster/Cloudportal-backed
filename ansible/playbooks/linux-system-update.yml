@@ -1,0 +1,17 @@
+- name: Update Linux system packages
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Update APT cache and upgrade Debian family
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+      when: ansible_facts.os_family == 'Debian'
+    - name: Update all packages on RedHat family
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+        update_only: true
+      when: ansible_facts.os_family == 'RedHat'
