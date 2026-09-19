@@ -117,9 +117,10 @@ async function updatesView() {
   const statusRoot = node('div', { class: 'stack' });
   statusRoot.replaceChildren(statusPanel(initialStatus));
 
-  const autoEnabled = node('input', { type: 'checkbox', name: 'enabled', checked: settings.enabled });
-  const interval = node('input', { type: 'number', name: 'interval_hours', min: '1', max: '168', value: settings.interval_hours, class: 'input' });
-  const ref = node('input', { type: 'text', name: 'ref', value: settings.ref, maxlength: '200', class: 'input mono' });
+  const canUpdateSettings = allowed('updates.update');
+  const autoEnabled = node('input', { type: 'checkbox', name: 'enabled', checked: settings.enabled, disabled: !canUpdateSettings });
+  const interval = node('input', { type: 'number', name: 'interval_hours', min: '1', max: '168', value: settings.interval_hours, class: 'input', disabled: !canUpdateSettings });
+  const ref = node('input', { type: 'text', name: 'ref', value: settings.ref, maxlength: '200', class: 'input mono', disabled: !canUpdateSettings });
   const settingsForm = node('form', {
     class: 'panel stack update-settings',
     onSubmit: async event => {
@@ -152,7 +153,7 @@ async function updatesView() {
       node('label', { class: 'field' }, node('span', { text: 'Interwał sprawdzania [h]' }), interval),
       node('label', { class: 'field' }, node('span', { text: 'Git ref / kanał' }), ref)
     ),
-    allowed('updates.update') ? node('div', { class: 'actions' }, node('button', { class: 'button primary', type: 'submit' }, 'Zapisz ustawienia')) : null
+    canUpdateSettings ? node('div', { class: 'actions' }, node('button', { class: 'button primary', type: 'submit' }, 'Zapisz ustawienia')) : null
   );
 
   const actions = node('div', { class: 'actions' });
