@@ -124,6 +124,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('deployments.create'" in script
     assert "registerCommand('deployments.open'" in script
     assert 'function navigationGroup(' in core
+    assert 'function navigationGroupRank(' in core
+    assert "group === 'Operacje' ? 1" in core
     assert "'aria-current': exact ? 'page' : null" in core
     assert "appIcon('search')" in core
     assert "appIcon('refresh')" in core
