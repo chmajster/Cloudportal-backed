@@ -345,9 +345,7 @@ function heading(description, actions = []) {
   return node('div', { class: 'page-actions' }, node('p', { text: description }), node('div', { class: 'action-group' }, actions));
 }
 
-function loading() {
-  dom.content.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner', 'aria-label': 'Ładowanie' })));
-}
+function loading() { dom.content.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner', 'aria-label': 'Ładowanie' }))); }
 
 function searchable(value) {
   return String(value ?? '')
