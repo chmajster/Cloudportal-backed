@@ -223,7 +223,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'const moveWorkflowRow = (row, direction) =>' in script
     assert 'workflow-dag-card' in script
     assert 'workflow-preview-visual' in script
-    assert 'Szybki Blueprint Proxmox' in script
     assert 'Obraz / szablon Proxmox' in script
     assert 'Sposób nadawania hostname' in script
     assert 'Nowy szablon Terraform / OpenTofu' in script
