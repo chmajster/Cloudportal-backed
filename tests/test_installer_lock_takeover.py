@@ -7,7 +7,7 @@ INSTALLER = (ROOT / 'install.sh').read_text(encoding='utf-8')
 
 def test_installer_takes_over_competing_installation_by_default():
     assert 'takeover_running_install=1' in INSTALLER
-    assert 'Another installation is running. Stopping Cloudportal and taking over the installer lock...' in INSTALLER
+    assert 'Wykryto inną instalację. Zatrzymuję Cloudportal i przejmuję blokadę instalatora...' in INSTALLER
     assert 'stop_cloudportal_application' in INSTALLER
     assert 'stop_previous_installer TERM' in INSTALLER
     assert 'stop_previous_installer KILL' in INSTALLER
@@ -39,14 +39,14 @@ def test_installer_stops_cloudportal_services_before_takeover():
 def test_installer_allows_disabling_takeover():
     assert '--no-takeover) takeover_running_install=0' in INSTALLER
     assert '--takeover) takeover_running_install=1' in INSTALLER
-    assert 'Re-run without --no-takeover to stop it automatically.' in INSTALLER
+    assert '--no-takeover zabrania jej zatrzymania' in INSTALLER
 
 
 def test_force_uninstall_preserves_data_by_default():
-    assert '--force-uninstall) force_uninstall=1' in INSTALLER
+    assert '--force-uninstall|--uninstall) force_uninstall=1' in INSTALLER
     assert 'force_uninstall_cloudportal' in INSTALLER
     assert 'rm -rf "$app_root"' in INSTALLER
-    assert 'Database, /etc/cloudportal-backed and /var/lib/cloudportal-backed were preserved.' in INSTALLER
+    assert 'Baza, /etc/cloudportal-backed i /var/lib/cloudportal-backed zostały zachowane.' in INSTALLER
     assert 'systemctl disable --now' in INSTALLER
     assert '/etc/nginx/conf.d/cloudportal-backed.conf' in INSTALLER
 
