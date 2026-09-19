@@ -1,0 +1,12 @@
+- name: Set Windows hostname
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Rename computer
+      ansible.windows.win_hostname:
+        name: "{{ hostname }}"
+      register: rename_result
+    - name: Reboot after hostname change
+      ansible.windows.win_reboot:
+        reboot_timeout: 1200
+      when: rename_result.reboot_required

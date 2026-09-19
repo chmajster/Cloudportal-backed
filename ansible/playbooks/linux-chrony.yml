@@ -1,0 +1,21 @@
+- name: Install and enable time synchronization
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install chrony
+      ansible.builtin.package:
+        name: chrony
+        state: present
+    - name: Enable chrony on Debian family
+      ansible.builtin.service:
+        name: chrony
+        state: started
+        enabled: true
+      when: ansible_facts.os_family == 'Debian'
+    - name: Enable chronyd on RedHat family
+      ansible.builtin.service:
+        name: chronyd
+        state: started
+        enabled: true
+      when: ansible_facts.os_family == 'RedHat'

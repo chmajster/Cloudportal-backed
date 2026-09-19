@@ -1,8 +1,11 @@
 {
+  "version": 2,
   "playbooks": [
     {
       "id": "bootstrap-linux",
-      "name": "Configure hostname/timezone and guest agent",
+      "name": "Bootstrap Linux VM",
+      "description": "Ustawia hostname i strefę czasową oraz instaluje QEMU Guest Agent.",
+      "category": "Konfiguracja",
       "file": "bootstrap-linux.yml",
       "transport": "ssh",
       "wait": "wait-linux.yml",
@@ -17,11 +20,13 @@
           "pattern": "[A-Za-z_]+(?:/[A-Za-z_+-]+){0,2}"
         }
       },
-      "version": 1
+      "version": 2
     },
     {
       "id": "validate-linux",
-      "name": "Validate Linux connectivity",
+      "name": "Sprawdź łączność Linux",
+      "description": "Weryfikuje uwierzytelnione połączenie SSH i dostępność Pythona.",
+      "category": "Diagnostyka",
       "file": "validate-linux.yml",
       "transport": "ssh",
       "wait": "wait-linux.yml",
@@ -30,15 +35,325 @@
       "version": 1
     },
     {
+      "id": "linux-system-update",
+      "name": "Aktualizuj system Linux",
+      "description": "Aktualizuje pakiety systemowe na Debian/Ubuntu lub RHEL/Rocky/Alma.",
+      "category": "Aktualizacje",
+      "file": "linux-system-update.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "linux-install-packages",
+      "name": "Zainstaluj pakiety Linux",
+      "description": "Instaluje listę pakietów rozdzielonych przecinkami.",
+      "category": "Pakiety",
+      "file": "linux-install-packages.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "packages": {
+          "required": true,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9+_.:@/-]*(?:\\s*,\\s*[A-Za-z0-9][A-Za-z0-9+_.:@/-]*){0,49}"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "linux-remove-packages",
+      "name": "Usuń pakiety Linux",
+      "description": "Usuwa wskazaną listę pakietów.",
+      "category": "Pakiety",
+      "file": "linux-remove-packages.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "packages": {
+          "required": true,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9+_.:@/-]*(?:\\s*,\\s*[A-Za-z0-9][A-Za-z0-9+_.:@/-]*){0,49}"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "linux-reboot",
+      "name": "Restart Linux VM",
+      "description": "Bezpiecznie restartuje system i czeka na powrót SSH.",
+      "category": "System",
+      "file": "linux-reboot.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "linux-service",
+      "name": "Zarządzaj usługą Linux",
+      "description": "Uruchamia, zatrzymuje lub restartuje wskazaną usługę systemową.",
+      "category": "Usługi",
+      "file": "linux-service.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "service_name": {
+          "required": true,
+          "pattern": "[A-Za-z0-9_.@-]{1,128}"
+        },
+        "service_state": {
+          "required": true,
+          "pattern": "(?:started|stopped|restarted|reloaded)"
+        },
+        "service_enabled": {
+          "required": true,
+          "pattern": "(?:true|false)"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "linux-set-hostname",
+      "name": "Ustaw hostname Linux",
+      "description": "Zmienia nazwę hosta systemu Linux.",
+      "category": "Konfiguracja",
+      "file": "linux-set-hostname.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "hostname": {
+          "required": true,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9.-]{0,62}"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "linux-set-timezone",
+      "name": "Ustaw strefę czasową Linux",
+      "description": "Konfiguruje systemową strefę czasową.",
+      "category": "Konfiguracja",
+      "file": "linux-set-timezone.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "timezone": {
+          "required": true,
+          "pattern": "[A-Za-z_]+(?:/[A-Za-z_+-]+){0,2}"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "linux-qemu-guest-agent",
+      "name": "QEMU Guest Agent",
+      "description": "Instaluje, uruchamia i włącza qemu-guest-agent.",
+      "category": "Wirtualizacja",
+      "file": "linux-qemu-guest-agent.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "linux-nginx",
+      "name": "Nginx",
+      "description": "Instaluje i uruchamia Nginx; opcjonalnie tworzy prostą stronę startową.",
+      "category": "Web",
+      "file": "linux-nginx.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "page_title": {
+          "required": false,
+          "pattern": "[A-Za-z0-9 _.,:()/-]{1,100}"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "linux-webserver",
+      "name": "Apache / httpd",
+      "description": "Instaluje Apache na Debian/Ubuntu lub httpd na systemach RedHat.",
+      "category": "Web",
+      "file": "linux-webserver.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "linux-chrony",
+      "name": "Synchronizacja czasu Chrony",
+      "description": "Instaluje i uruchamia Chrony/chronyd.",
+      "category": "Usługi",
+      "file": "linux-chrony.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "linux-create-user",
+      "name": "Utwórz użytkownika Linux",
+      "description": "Tworzy konto lokalne z katalogiem domowym i opcjonalnymi grupami.",
+      "category": "Użytkownicy",
+      "file": "linux-create-user.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {
+        "username": {
+          "required": true,
+          "pattern": "[a-z_][a-z0-9_-]{0,31}"
+        },
+        "user_shell": {
+          "required": true,
+          "pattern": "/(?:bin|usr/bin)/(?:bash|sh|zsh|fish)"
+        },
+        "user_groups": {
+          "required": false,
+          "pattern": "[A-Za-z0-9_-]+(?:\\s*,\\s*[A-Za-z0-9_-]+){0,15}"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "linux-disk-usage",
+      "name": "Zużycie dysków Linux",
+      "description": "Wyświetla typy systemów plików oraz wykorzystanie przestrzeni.",
+      "category": "Diagnostyka",
+      "file": "linux-disk-usage.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "linux-system-info",
+      "name": "Informacje o Linux VM",
+      "description": "Wyświetla system, kernel, CPU, pamięć i adresy IPv4.",
+      "category": "Diagnostyka",
+      "file": "linux-system-info.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "linux-cleanup",
+      "name": "Wyczyść nieużywane pakiety Linux",
+      "description": "Wykonuje autoremove/autoclean dla wspieranej rodziny systemu.",
+      "category": "Utrzymanie",
+      "file": "linux-cleanup.yml",
+      "transport": "ssh",
+      "wait": "wait-linux.yml",
+      "validate": "validate-linux.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
       "id": "validate-windows",
-      "name": "Validate Windows connectivity",
+      "name": "Sprawdź łączność Windows",
+      "description": "Weryfikuje uwierzytelnione połączenie WinRM.",
+      "category": "Diagnostyka",
       "file": "validate-windows.yml",
       "transport": "winrm",
       "wait": "wait-windows.yml",
       "validate": null,
       "variables": {},
       "version": 1
+    },
+    {
+      "id": "windows-update",
+      "name": "Windows Update",
+      "description": "Instaluje aktualizacje bezpieczeństwa, krytyczne i rollupy; restartuje gdy potrzeba.",
+      "category": "Aktualizacje",
+      "file": "windows-update.yml",
+      "transport": "winrm",
+      "wait": "wait-windows.yml",
+      "validate": "validate-windows.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "windows-reboot",
+      "name": "Restart Windows VM",
+      "description": "Restartuje Windows i czeka na powrót WinRM.",
+      "category": "System",
+      "file": "windows-reboot.yml",
+      "transport": "winrm",
+      "wait": "wait-windows.yml",
+      "validate": "validate-windows.yml",
+      "variables": {},
+      "version": 1
+    },
+    {
+      "id": "windows-service",
+      "name": "Zarządzaj usługą Windows",
+      "description": "Steruje stanem i trybem startu usługi Windows.",
+      "category": "Usługi",
+      "file": "windows-service.yml",
+      "transport": "winrm",
+      "wait": "wait-windows.yml",
+      "validate": "validate-windows.yml",
+      "variables": {
+        "service_name": {
+          "required": true,
+          "pattern": "[A-Za-z0-9_. -]{1,128}"
+        },
+        "service_state": {
+          "required": true,
+          "pattern": "(?:started|stopped|restarted)"
+        },
+        "service_start_mode": {
+          "required": true,
+          "pattern": "(?:auto|delayed|manual|disabled)"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "windows-set-hostname",
+      "name": "Ustaw hostname Windows",
+      "description": "Zmienia nazwę komputera i restartuje go, jeśli jest to wymagane.",
+      "category": "Konfiguracja",
+      "file": "windows-set-hostname.yml",
+      "transport": "winrm",
+      "wait": "wait-windows.yml",
+      "validate": "validate-windows.yml",
+      "variables": {
+        "hostname": {
+          "required": true,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9-]{0,14}"
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "windows-system-info",
+      "name": "Informacje o Windows VM",
+      "description": "Wyświetla wersję Windows, hostname, CPU i pamięć.",
+      "category": "Diagnostyka",
+      "file": "windows-system-info.yml",
+      "transport": "winrm",
+      "wait": "wait-windows.yml",
+      "validate": "validate-windows.yml",
+      "variables": {},
+      "version": 1
     }
-  ],
-  "version": 1
+  ]
 }

@@ -1,0 +1,9 @@
+- name: Remove package list from Linux
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Remove requested packages
+      ansible.builtin.package:
+        name: "{{ packages.split(',') | map('trim') | reject('equalto', '') | list }}"
+        state: absent

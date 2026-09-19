@@ -705,7 +705,7 @@ async function jobsView() {
     }));
 }
 
-async function runStandaloneAnsible() {
+async function runStandaloneAnsible(initialPlaybookId = null) {
   try {
     const [playbookResult, credentialResult] = await Promise.all([
       api('/ansible/playbooks'),
@@ -715,20 +715,22 @@ async function runStandaloneAnsible() {
     const credentials = credentialResult.items;
     if (!playbooks.length) throw new Error('Katalog nie zawiera playbooków Ansible.');
 
-    const playbookField = selectField('Playbook', 'playbook', playbooks.map(playbook => ({
-      value: playbook.id,
-      label: `${playbook.name} · v${playbook.version}`,
-    })), playbooks[0].id, { required: true });
+    const categories = [...new Set(playbooks.map(playbook => playbook.category || 'Inne'))].sort((a, b) => a.localeCompare(b));
+    const categoryField = selectField('Kategoria', 'playbook_category', [
+      { value: '', label: 'Wszystkie kategorie' },
+      ...categories.map(value => ({ value, label: value })),
+    ], '');
+    const playbookField = selectField('Playbook', 'playbook', [], '', { required: true });
+    const playbookInfo = node('div', { class: 'ansible-playbook-info wide' });
     const playbookSelect = playbookField.querySelector('select');
     const playbookPreview = createAnsiblePlaybookPreview(playbookSelect);
     const credentialField = selectField('Dane dostępowe hosta', 'credentials_id', [], '', { required: true });
     const variables = node('div', { class: 'form-grid wide' });
     const fields = node('div', { class: 'form-grid' },
+      formSection('Playbook', 'Wybierz zatwierdzoną operację, którą backend uruchomi na zdalnej VM.',
+        node('div', { class: 'form-grid' }, categoryField, playbookField, playbookInfo, playbookPreview.actions, playbookPreview.panel)),
       formSection('Cel', 'Podaj adresy IP hostów, na których ma zostać uruchomiony zatwierdzony playbook.',
         node('div', { class: 'form-grid' },
-          playbookField,
-          playbookPreview.actions,
-          playbookPreview.panel,
           credentialField,
           field('Adresy IP hostów', 'hosts', {
             tag: 'textarea',
@@ -739,21 +741,77 @@ async function runStandaloneAnsible() {
           }))),
       formSection('Zmienne playbooka', 'Puste pola opcjonalne nie są wysyłane.', variables));
 
+    const categorySelect = categoryField.querySelector('select');
+
+    if (initialPlaybookId) {
+      const initial = playbooks.find(value => value.id === initialPlaybookId);
+      if (initial) categorySelect.value = initial.category || 'Inne';
+    }
+
+    const fillPlaybooks = () => {
+      const selected = playbookSelect.value || initialPlaybookId || '';
+      const category = categorySelect.value;
+      const matching = playbooks.filter(value => !category || (value.category || 'Inne') === category);
+      playbookSelect.replaceChildren();
+      matching.forEach(playbook => playbookSelect.append(node('option', {
+        value: playbook.id,
+        text: `${playbook.name} · ${playbook.transport.toUpperCase()} · v${playbook.version}`,
+        selected: playbook.id === selected,
+      })));
+      if (!playbookSelect.value && matching.length) playbookSelect.value = matching[0].id;
+    };
+
     const refresh = () => {
       const playbook = playbooks.find(value => value.id === playbookSelect.value) || playbooks[0];
+      playbookInfo.replaceChildren(
+        node('div', { class: 'ansible-playbook-info-copy' },
+          node('div', { class: 'ansible-playbook-info-title' },
+            node('strong', { text: playbook.name }),
+            badge(playbook.category || 'Inne', 'info'),
+            badge(playbook.transport.toUpperCase())),
+          node('p', { text: playbook.description || 'Zatwierdzony playbook Ansible.' }),
+          node('small', { class: 'mono muted', text: playbook.id })));
       const matching = credentials.filter(value => value.type === playbook.transport);
       const select = credentialField.querySelector('select');
       select.replaceChildren(node('option', { value: '', text: matching.length ? 'Wybierz dane dostępowe' : `Brak danych typu ${playbook.transport}` }));
       matching.forEach(value => select.append(node('option', { value: value.id, text: value.name })));
       if (matching.length === 1) select.value = String(matching[0].id);
       variables.replaceChildren();
-      (playbook.variables || []).forEach(name => variables.append(field(
-        FIELD_LABELS[name] || name.replaceAll('_', ' '),
-        `ansible_job_var_${name}`,
-        { help: 'Zmienna zatwierdzonego playbooka.' },
-      )));
+      const defaults = {
+        service_state: 'restarted',
+        service_enabled: 'true',
+        user_shell: '/bin/bash',
+        service_start_mode: 'auto',
+      };
+      const choices = {
+        service_state: ['started', 'stopped', 'restarted', 'reloaded'],
+        service_enabled: ['true', 'false'],
+        service_start_mode: ['auto', 'delayed', 'manual', 'disabled'],
+      };
+      (playbook.variables || []).forEach(name => {
+        const required = (playbook.required_variables || []).includes(name);
+        const label = FIELD_LABELS[name] || name.replaceAll('_', ' ');
+        const inputName = `ansible_job_var_${name}`;
+        if (choices[name]) {
+          variables.append(selectField(label, inputName,
+            choices[name].map(value => ({ value, label: value })),
+            defaults[name] || choices[name][0],
+            { required }));
+          return;
+        }
+        variables.append(field(label, inputName, {
+          required,
+          value: defaults[name] || '',
+          help: required ? 'Pole wymagane przez wybrany playbook.' : 'Opcjonalna zmienna zatwierdzonego playbooka.',
+        }));
+      });
     };
+    categorySelect.addEventListener('change', () => {
+      fillPlaybooks();
+      refresh();
+    });
     playbookSelect.addEventListener('change', refresh);
+    fillPlaybooks();
     refresh();
 
     openModal({
@@ -808,6 +866,7 @@ async function showJobLogs(job) {
 
 registerCommand('deployments.create', createDeployment);
 registerCommand('deployments.open', showDeploymentDetails);
+registerCommand('ansible.run', runStandaloneAnsible);
 registerView({ id: 'deployments', label: 'Wdrożenia', icon: 'D', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
 })();

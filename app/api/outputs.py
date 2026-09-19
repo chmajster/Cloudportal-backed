@@ -206,8 +206,11 @@ class TemplateOutput(Output):
 class PlaybookOutput(Output):
     id: str
     name: str
+    description: str | None = None
+    category: str = 'Inne'
     version: int
     variables: list[str]
+    required_variables: list[str]
     transport: Literal['ssh', 'winrm']
 
 

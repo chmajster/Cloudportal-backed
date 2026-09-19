@@ -1,0 +1,12 @@
+- name: Inspect Linux disk usage
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Read mounted filesystem usage
+      ansible.builtin.command:
+        argv: [df, -hT]
+      register: disk_usage
+      changed_when: false
+    - name: Print filesystem usage
+      ansible.builtin.debug:
+        var: disk_usage.stdout_lines

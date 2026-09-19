@@ -188,8 +188,14 @@ def playbook_public(playbook_id):
     return {
         'id': item['id'],
         'name': item['name'],
+        'description': item.get('description'),
+        'category': item.get('category', 'Inne'),
         'version': item['version'],
         'variables': list(item.get('variables', {}).keys()),
+        'required_variables': [
+            name for name, definition in item.get('variables', {}).items()
+            if definition.get('required')
+        ],
         'transport': item['transport'],
     }
 

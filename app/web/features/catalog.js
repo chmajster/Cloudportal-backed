@@ -96,11 +96,22 @@ async function catalogView() {
     sections.push(node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Zatwierdzone playbooki Ansible' })),
       table([
-        { label: 'Playbook', value: item => node('strong', { text: item.name }) },
+        { label: 'Playbook', value: item => node('div', {},
+          node('strong', { text: item.name }),
+          item.description ? node('div', { class: 'muted', text: item.description }) : null) },
+        { label: 'Kategoria', value: item => badge(item.category || 'Inne', 'info') },
         { label: 'ID', class: 'mono', value: item => item.id },
-        { label: 'Transport', value: item => badge(item.transport, 'info') },
+        { label: 'Transport', value: item => badge(item.transport.toUpperCase()) },
         { label: 'Zmienne', value: item => item.variables.map(name => FIELD_LABELS[name] || name.replaceAll('_', ' ')).join(', ') || '—' },
-      ], playbooks.items)));
+      ], playbooks.items, item => allowed('jobs.execute') && allowed('ansible.execute') && allowed('credentials.read')
+        ? [button('Uruchom', () => {
+            if (!hasCommand('ansible.run')) {
+              toast('Uruchamianie Ansible nie jest dostępne.', 'error');
+              return;
+            }
+            runCommand('ansible.run', item.id);
+          }, 'primary')]
+        : [])));
   }
 
   dom.content.replaceChildren(

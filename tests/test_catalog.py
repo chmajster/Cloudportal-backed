@@ -20,8 +20,21 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
 
     playbooks = client.get('/api/v1/ansible/playbooks', headers=headers)
     assert playbooks.status_code == 200
-    ids = {item['id'] for item in playbooks.json()['items']}
-    assert {'bootstrap-linux', 'validate-linux', 'validate-windows'} <= ids
+    playbook_items = {item['id']: item for item in playbooks.json()['items']}
+    ids = set(playbook_items)
+    assert {
+        'bootstrap-linux', 'validate-linux', 'linux-system-update', 'linux-install-packages',
+        'linux-remove-packages', 'linux-reboot', 'linux-service', 'linux-set-hostname',
+        'linux-set-timezone', 'linux-qemu-guest-agent', 'linux-nginx', 'linux-webserver',
+        'linux-chrony', 'linux-create-user', 'linux-disk-usage', 'linux-system-info',
+        'linux-cleanup', 'validate-windows', 'windows-update', 'windows-reboot',
+        'windows-service', 'windows-set-hostname', 'windows-system-info',
+    } <= ids
+    assert len(ids) >= 23
+    assert playbook_items['linux-system-update']['category'] == 'Aktualizacje'
+    assert playbook_items['linux-system-update']['description']
+    assert {'service_name', 'service_state', 'service_enabled'} <= set(playbook_items['linux-service']['variables'])
+    assert {'service_name', 'service_state', 'service_enabled'} <= set(playbook_items['linux-service']['required_variables'])
 
     playbook_source = client.get('/api/v1/ansible/playbooks/bootstrap-linux/source', headers=headers)
     assert playbook_source.status_code == 200, playbook_source.text

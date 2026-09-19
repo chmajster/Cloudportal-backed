@@ -1,0 +1,9 @@
+- name: Manage Windows service
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply Windows service state
+      ansible.windows.win_service:
+        name: "{{ service_name }}"
+        state: "{{ service_state }}"
+        start_mode: "{{ service_start_mode }}"

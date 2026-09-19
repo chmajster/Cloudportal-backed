@@ -1,0 +1,17 @@
+- name: Create Linux user
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Ensure user exists
+      ansible.builtin.user:
+        name: "{{ username }}"
+        shell: "{{ user_shell }}"
+        create_home: true
+        state: present
+    - name: Add user to optional groups
+      ansible.builtin.user:
+        name: "{{ username }}"
+        groups: "{{ user_groups }}"
+        append: true
+      when: user_groups is defined and user_groups | length > 0
