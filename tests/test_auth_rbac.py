@@ -23,6 +23,34 @@ def test_bootstrap_is_once_and_hashes(system):
     assert 'password_hash' not in response.text and admin['token'] not in response.text
 
 
+def test_existing_administrator_recovers_all_permissions_on_bootstrap(system):
+    from app.bootstrap import bootstrap
+    from app.models import Role
+    from app.rbac.service import ALL_PERMISSIONS
+
+    client, headers, _admin = system
+    with session() as db:
+        role = db.scalar(select(Role).where(Role.name == 'Administrator'))
+        role.permissions = [permission for permission in role.permissions
+                            if permission.name not in {'settings.read', 'settings.update', 'updates.read',
+                                                       'updates.execute', 'updates.update'}]
+        db.commit()
+
+    before = client.get('/api/v1/auth/me', headers=headers)
+    assert before.status_code == 200
+    assert 'settings.read' not in before.json()['permissions']
+    assert 'updates.read' not in before.json()['permissions']
+
+    with session() as db:
+        assert bootstrap(db) is None
+        role = db.scalar(select(Role).where(Role.name == 'Administrator'))
+        assert {permission.name for permission in role.permissions} == ALL_PERMISSIONS
+
+    after = client.get('/api/v1/auth/me', headers=headers)
+    assert after.status_code == 200
+    assert {'settings.read', 'settings.update', 'updates.read', 'updates.execute', 'updates.update'} <= set(after.json()['permissions'])
+
+
 def test_default_admin_session_requires_password_change(system):
     client, bootstrap_headers, admin = system
     login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'admin'})
