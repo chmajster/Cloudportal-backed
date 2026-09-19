@@ -537,13 +537,13 @@ async function updatesView() {
     settingsPanel(settings, statusRoot),
     node('section', { class: 'update-safety-grid' },
       node('div', { class: 'panel update-safety-card' },
-        node('span', { class: 'update-safety-icon', text: 'DB' }),
+        node('span', { class: 'update-safety-icon', 'aria-hidden': 'true' }, appIcon('database')),
         node('div', {}, node('strong', { text: 'Backup przed wdrożeniem' }), node('span', { class: 'muted', text: 'Przed zmianą release wykonywany jest backup PostgreSQL.' }))),
       node('div', { class: 'panel update-safety-card' },
-        node('span', { class: 'update-safety-icon', text: 'API' }),
+        node('span', { class: 'update-safety-icon', 'aria-hidden': 'true' }, appIcon('server')),
         node('div', {}, node('strong', { text: 'Podgląd niezależny od API' }), node('span', { class: 'muted', text: 'Status aktualizacji jest serwowany przez osobny proces na loopback.' }))),
       node('div', { class: 'panel update-safety-card' },
-        node('span', { class: 'update-safety-icon', text: 'RBAC' }),
+        node('span', { class: 'update-safety-icon', 'aria-hidden': 'true' }, appIcon('shield')),
         node('div', {}, node('strong', { text: 'Kontrola uprawnień' }), node('span', { class: 'muted', text: 'Odczyt, wykonanie i zmiana kanału mają oddzielne uprawnienia.' })))
     )
   );
@@ -560,7 +560,7 @@ document.addEventListener('cloudportal:app-hidden', () => {
 registerView({
   id: 'updates',
   label: 'Auto-update',
-  icon: 'U',
+  iconName: 'refresh',
   permission: 'updates.read',
   order: 166,
   navigation: false,
