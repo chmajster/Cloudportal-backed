@@ -71,7 +71,7 @@
     }
 
     try {
-      const [providers, templates, schemes, pools, playbooks, credentials, roles, users, blueprints] = await Promise.all([
+      const [providers, templates, schemes, pools, playbooks, credentials, roles, users, blueprints, vmClassification] = await Promise.all([
         safeApi('/providers?limit=200'),
         safeApi('/templates'),
         allowed('hostnames.read') ? safeApi('/hostname-schemes?limit=200') : Promise.resolve([]),
@@ -81,6 +81,10 @@
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
         allowed('users.read') ? safeApi('/users?limit=200') : Promise.resolve([]),
         allowed('blueprints.read') ? safeApi('/blueprints?limit=200') : Promise.resolve([]),
+        safeApi('/settings/vm-classification', {
+          environments: { test: true, dev: true, nonprod: true, prod: true },
+          apmids: [],
+        }),
       ]);
 
       if (!providers.length) throw new Error('Najpierw dodaj platformę infrastruktury.');
@@ -96,6 +100,7 @@
         roles,
         users: users.filter(value => value.is_active !== false),
         blueprints,
+        vmClassification,
       };
       const state = parts.core.stateDefaults();
       const preferred = providers.find(value => value.type === 'proxmox') || providers[0];
@@ -105,6 +110,10 @@
       state.terraformTemplateId = data.templates.find(value => value.provider === preferred.type)?.id || '';
       state.hostnameSchemeId = String(data.schemes[0]?.id || '');
       state.hostnameEnabled = Boolean(allowed('hostnames.read') && data.schemes.length);
+      const enabledEnvironments = ['test', 'dev', 'nonprod', 'prod']
+        .filter(name => data.vmClassification?.environments?.[name] !== false);
+      state.environment = enabledEnvironments[0] || '';
+      state.apmid = String(data.vmClassification?.apmids?.[0] || '');
       if (options.hostnameSchemeId) {
         state.hostnameSchemeId = String(options.hostnameSchemeId);
         state.hostnameEnabled = true;
@@ -209,6 +218,8 @@
           storage: 'storage',
           network: 'network',
           vlan_id: 'vlanId',
+          environment: 'environment',
+          apmid: 'apmid',
           tags: 'tags',
           ssh_username: 'sshUsername',
           ssh_public_key: 'sshPublicKey',
@@ -254,6 +265,12 @@
             state.storage = root.querySelector('[name="storage"]')?.value || state.storage;
             state.network = root.querySelector('[name="network"]')?.value || state.network;
             state.vlanId = root.querySelector('[name="vlan_id"]')?.value || '';
+            state.environment = root.querySelector('[name="environment"]')?.value || state.environment;
+            state.apmid = root.querySelector('[name="apmid"]')?.value.trim().toUpperCase() || state.apmid;
+            if (state.environment) {
+              state.hostnameValues.env = state.environment;
+              state.hostnameValues.environment = state.environment;
+            }
             state.tags = root.querySelector('[name="tags"]')?.value.trim() || '';
             state.sshUsername = root.querySelector('[name="ssh_username"]')?.value.trim() || 'clouduser';
             state.sshPublicKey = root.querySelector('[name="ssh_public_key"]')?.value.trim() || '';
@@ -353,6 +370,8 @@
             if (!Number.isFinite(Number(state.disk)) || Number(state.disk) < 1) errors.disk = 'Dysk musi mieć co najmniej 1 GiB.';
             if (!state.storage) errors.storage = 'Wybierz storage.';
             if (!state.network) errors.network = 'Wybierz sieć/bridge.';
+            if (!state.environment) errors.environment = 'Wybierz Environment.';
+            if (!state.apmid) errors.apmid = 'Podaj lub wybierz APMID.';
           } else {
             const template = data.templates.find(value => value.id === state.terraformTemplateId);
             const required = parts.core.requiredTemplateVariables(template);
@@ -434,7 +453,14 @@
         });
         content.querySelectorAll('input,textarea,select').forEach(control => {
           if (control !== nameInput && control !== slugInput) control.addEventListener('input', () => saveStateFromInput(control));
-          control.addEventListener('change', () => saveStateFromInput(control));
+          control.addEventListener('change', () => {
+            saveStateFromInput(control);
+            if (control.name === 'environment') {
+              state.hostnameValues.env = control.value;
+              state.hostnameValues.environment = control.value;
+            }
+            if (control.name === 'apmid') state.apmid = String(control.value || '').trim().toUpperCase();
+          });
         });
         return content;
       }
@@ -631,14 +657,38 @@
           field('Dysk (GiB)', 'disk', { type: 'number', min: 1, max: 65536, value: state.disk, required: true }),
           field('VLAN ID (opcjonalnie)', 'vlan_id', { type: 'number', min: 1, max: 4094, value: state.vlanId }),
           selectField('Storage', 'storage', storageChoices, state.storage, { required: true, placeholder: 'Wybierz storage' }),
-          selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' })
+          selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' }),
+          selectField('Environment', 'environment',
+            ['test', 'dev', 'nonprod', 'prod']
+              .filter(name => data.vmClassification?.environments?.[name] !== false)
+              .map(name => ({ value: name, label: name.toUpperCase() })),
+            state.environment, { required: true, placeholder: 'Brak włączonych Environment' }),
+          (data.vmClassification?.apmids || []).length
+            ? selectField('APMID', 'apmid',
+                data.vmClassification.apmids.map(value => ({ value, label: value })),
+                state.apmid, { required: true, placeholder: 'Wybierz APMID' })
+            : field('APMID', 'apmid', {
+                value: state.apmid,
+                required: true,
+                placeholder: 'IAASTEAM',
+                help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
+              })
         );
         fields.querySelectorAll('input,select').forEach(control => {
           control.addEventListener('input', () => {
             saveStateFromInput(control);
             if (['cpu', 'memory', 'disk'].includes(control.name)) state.preset = 'custom';
           });
-          control.addEventListener('change', () => saveStateFromInput(control));
+          control.addEventListener('change', () => {
+            saveStateFromInput(control);
+            if (control.name === 'environment') {
+              state.environment = control.value;
+              state.hostnameValues.env = control.value;
+              state.hostnameValues.environment = control.value;
+            }
+            if (control.name === 'apmid') state.apmid = String(control.value || '').trim().toUpperCase();
+            if (['environment', 'apmid'].includes(control.name)) render();
+          });
         });
 
         const advanced = node('details', { class: 'advanced-options' },
@@ -653,6 +703,12 @@
             })));
         advanced.querySelectorAll('input,textarea').forEach(control => control.addEventListener('input', () => saveStateFromInput(control)));
 
+        const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
+          node('strong', { text: 'Klasyfikacja VM' }),
+          node('span', { text: state.apmid && state.environment
+            ? state.apmid + '.' + state.environment.toUpperCase()
+            : 'Wybierz APMID i Environment. Tagi Proxmox zostaną dodane automatycznie.' }));
+
         return node('div', { class: 'blueprint-wizard-step-stack' },
           node('div', { class: 'blueprint-wizard-presets' },
             presetButton('small', 'Mała', 1, 2048, 20),
@@ -660,6 +716,7 @@
             presetButton('large', 'Duża', 4, 8192, 80),
             presetButton('custom', 'Własna', state.cpu, state.memory, state.disk)),
           fields,
+          classificationPreview,
           advanced);
       }
 
@@ -914,6 +971,9 @@
             ['Dysk', state.disk + ' GB'],
             ['Storage', state.storage],
             ['Network', state.network],
+            ['Environment', state.environment ? state.environment.toUpperCase() : '—'],
+            ['APMID', state.apmid || '—'],
+            ['Klasyfikacja', state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—'],
           ] : [
             ['Szablon IaC', state.terraformTemplateId],
             ['Parametry', Object.keys(state.genericVariables).length + ' ustawionych'],

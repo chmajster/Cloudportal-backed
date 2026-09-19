@@ -163,6 +163,8 @@
       network: 'vmbr0',
       vlanId: '',
       preset: 'standard',
+      environment: '',
+      apmid: '',
       tags: '',
       sshUsername: 'clouduser',
       sshPublicKey: '',
@@ -215,6 +217,12 @@
     let variables;
     if (provider.type === 'proxmox') {
       const tags = String(state.tags || '').split(/[,\n]+/).map(value => value.trim().toLowerCase()).filter(Boolean);
+      if (state.apmid && state.environment) {
+        const apmid = String(state.apmid).trim().toLowerCase();
+        const environment = String(state.environment).trim().toLowerCase();
+        tags.push('apmid-' + apmid, 'env-' + environment, apmid + '.' + environment);
+      }
+      const uniqueTags = [...new Set(tags)];
       variables = {
         name: state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName,
         node: state.node,
@@ -226,7 +234,7 @@
         storage: state.storage,
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
-        tags,
+        tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
       if (state.sshPublicKey) variables.ssh_public_key = state.sshPublicKey;
@@ -278,7 +286,7 @@
     const autoWorkflow = workflow({
       hostname: state.hostnameEnabled,
       ipam: state.ipMode === 'ipam',
-      tags: Boolean(String(state.tags || '').trim()),
+      tags: Boolean(String(state.tags || '').trim() || (state.apmid && state.environment)),
       waitAgent: state.waitAgent,
       ansible: state.ansibleEnabled,
     });

@@ -105,6 +105,70 @@ function ldapSettingsForm(config) {
   });
 }
 
+function vmClassificationSettingsForm(config) {
+  const environmentLabels = {
+    test: 'TEST',
+    dev: 'DEV',
+    nonprod: 'NONPROD',
+    prod: 'PROD',
+  };
+  const environmentControls = node('div', { class: 'settings-environment-grid wide' },
+    ...Object.entries(environmentLabels).map(([key, label]) =>
+      node('label', { class: 'settings-environment-card' },
+        node('input', {
+          type: 'checkbox',
+          name: 'environment_' + key,
+          checked: config.environments?.[key] !== false,
+        }),
+        node('span', {},
+          node('strong', { text: label }),
+          node('small', { text: 'Dostępne w kreatorze Blueprintu' }))))
+  );
+
+  const fields = node('div', { class: 'form-grid' },
+    node('div', { class: 'wide blueprint-wizard-info' },
+      node('strong', { text: 'Klasyfikacja VM' }),
+      node('span', { text: 'Environment oraz APMID są używane przez kreator VM i automatycznie dodawane jako tagi Proxmox.' })),
+    node('div', { class: 'wide settings-form-heading' },
+      node('strong', { text: 'Environment' }),
+      node('span', { class: 'muted', text: 'Wyłączone środowiska nie pojawią się przy tworzeniu nowych Blueprintów.' })),
+    environmentControls,
+    field('APMID', 'apmids', {
+      tag: 'textarea',
+      value: (config.apmids || []).join('\n'),
+      wide: true,
+      placeholder: 'IAASTEAM\nCRM\nPAYMENTS',
+      help: 'Jeden APMID w wierszu. Dozwolone: litery, cyfry, _ oraz -. Wartości są zapisywane wielkimi literami.',
+    })
+  );
+
+  openModal({
+    title: 'Environment i APMID',
+    eyebrow: 'Klasyfikacja VM',
+    body: fields,
+    submitLabel: 'Zapisz ustawienia',
+    wide: true,
+    onSubmit: async (data) => {
+      const payload = {
+        environments: {
+          test: data.has('environment_test'),
+          dev: data.has('environment_dev'),
+          nonprod: data.has('environment_nonprod'),
+          prod: data.has('environment_prod'),
+        },
+        apmids: String(data.get('apmids') || '')
+          .split(/[\n,]+/)
+          .map(value => value.trim().toUpperCase())
+          .filter(Boolean),
+      };
+      await api('/settings/vm-classification', { method: 'PUT', body: payload });
+      toast('Ustawienia Environment i APMID zapisane.');
+      navigate('settings');
+    },
+  });
+}
+
+
 async function testLdap() {
   try {
     const result = await api('/settings/ldap/test', { method: 'POST' });
@@ -115,8 +179,9 @@ async function testLdap() {
 }
 
 async function settingsView() {
-  const [config, health, updateSettings] = await Promise.all([
+  const [config, vmClassification, health, updateSettings] = await Promise.all([
     api('/settings/ldap'),
+    api('/settings/vm-classification'),
     api('/health', { auth: false, allow: [503] }),
     allowed('updates.read') ? api('/updates/settings').catch(() => null) : Promise.resolve(null),
   ]);
@@ -211,6 +276,22 @@ async function settingsView() {
       allowed('tokens.read') ? button('Tokeny API', () => navigate('tokens')) : null)
   );
 
+  const vmClassificationCard = settingsCard(
+    'box',
+    'Environment i APMID',
+    'Klasyfikacja maszyn wirtualnych i automatyczne tagi Proxmox.',
+    node('div', { class: 'settings-values' },
+      settingsValue('TEST', vmClassification.environments?.test ? 'Włączony' : 'Wyłączony'),
+      settingsValue('DEV', vmClassification.environments?.dev ? 'Włączony' : 'Wyłączony'),
+      settingsValue('NONPROD', vmClassification.environments?.nonprod ? 'Włączony' : 'Wyłączony'),
+      settingsValue('PROD', vmClassification.environments?.prod ? 'Włączony' : 'Wyłączony'),
+      settingsValue('APMID', (vmClassification.apmids || []).length ? vmClassification.apmids.join(', ') : 'Brak')),
+    allowed('settings.update')
+      ? node('div', { class: 'settings-card-actions' },
+          button('Konfiguruj', () => vmClassificationSettingsForm(vmClassification), 'primary'))
+      : null
+  );
+
   const ldap = node('section', { class: 'panel settings-ldap-panel' },
     node('div', { class: 'panel-header' },
       node('div', {},
@@ -233,7 +314,7 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.', actions),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security),
+    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security, vmClassificationCard),
     ldap,
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Przykładowe filtry LDAP' })),

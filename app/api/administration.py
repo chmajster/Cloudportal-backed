@@ -5,10 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
-                             IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput)
-from app.api.schemas import AssignRoles, LDAPSettingsInput, RoleInput, TokenInput, UserCreate, UserUpdate
+                             IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput,
+                             VMClassificationSettingsOutput)
+from app.api.schemas import (AssignRoles, LDAPSettingsInput, RoleInput, TokenInput, UserCreate, UserUpdate,
+                             VMClassificationSettingsInput)
 from app.auth.routes import user_public
 from app.auth.ldap import ldap_settings, save_ldap_settings, test_ldap_connection
+from app.vm_classification import save_vm_classification_settings, vm_classification_settings
 from app.database import get_db
 from app.models import Audit, PasswordReset, Role, Token, User, UserRole, now
 from app.rbac.service import ALL_PERMISSIONS, ensure_admin_remains, governance_lock, permissions_from_names
@@ -132,6 +135,19 @@ def reset_user(id: int, request: Request, actor=Depends(require('users.update'))
         audit(db, request, 'user.password_reset_requested', 'users', id)
         return {'reset_token': plain, 'expires_in': 900, 'user_id': id}
     return idempotent(db, request, actor, {'id': id}, create)
+
+
+@router.get('/settings/vm-classification', response_model=VMClassificationSettingsOutput)
+def get_vm_classification_settings(actor=Depends(require('settings.read')), db=Depends(get_db, scope='function')):
+    return vm_classification_settings(db)
+
+
+@router.put('/settings/vm-classification', response_model=VMClassificationSettingsOutput)
+def update_vm_classification_settings(data: VMClassificationSettingsInput, request: Request,
+                                      actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    result = save_vm_classification_settings(db, data)
+    audit(db, request, 'settings.vm_classification_updated', 'settings', 'vm_classification')
+    return result
 
 
 @router.get('/settings/ldap', response_model=LDAPSettingsOutput)

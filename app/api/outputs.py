@@ -33,6 +33,11 @@ class UserOutput(Output):
     locked_until: datetime | None
 
 
+class VMClassificationSettingsOutput(Output):
+    environments: dict[str, bool]
+    apmids: list[str]
+
+
 class LDAPSettingsOutput(Output):
     enabled: bool
     url: str
