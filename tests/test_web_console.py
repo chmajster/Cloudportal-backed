@@ -52,6 +52,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/credentials.js',
         'features/providers.js',
         'features/catalog.js',
+        'features/blueprint-wizard-core.js',
+        'features/blueprint-wizard-hostname.js',
+        'features/blueprint-wizard-network.js',
+        'features/blueprint-wizard.js',
         'features/blueprints.js',
         'features/hostnames.js',
         'features/ipam.js',
@@ -225,6 +229,39 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Nowy szablon Terraform / OpenTofu' in script
     assert "registerCommand('blueprints.proxmoxTemplateWizard'" in script
     assert "registerCommand('blueprints.execute'" in script
+    assert "window.BlueprintWizard.open()" in script
+    assert "registerExtension('blueprint-wizard-core'" in script
+    assert "registerExtension('blueprint-wizard-hostname'" in script
+    assert "registerExtension('blueprint-wizard-network'" in script
+    assert "registerExtension('blueprint-wizard'" in script
+    assert "'Podstawy', 'Podstawowe informacje'" in script
+    assert "'Platforma', 'Platforma i źródło VM'" in script
+    assert "'VM', 'Parametry VM'" in script
+    assert "'Hostname', 'Nazwa hosta'" in script
+    assert "'Sieć', 'Sieć'" in script
+    assert "'Konfiguracja', 'Konfiguracja systemu'" in script
+    assert "'Workflow', 'Workflow'" in script
+    assert "'Dostęp', 'Dostęp i bezpieczeństwo'" in script
+    assert "'Podsumowanie', 'Podsumowanie'" in script
+    assert "Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji." in script
+    assert "state.slug = parts.core.slugify" in script
+    assert "api('/providers/' + provider.id + '/nodes')" in script
+    assert "api('/providers/' + provider.id + '/templates')" in script
+    assert "VMID " in script
+    assert "presetButton('small', 'Mała', 1, 2048, 20)" in script
+    assert "presetButton('standard', 'Standardowa', 2, 4096, 40)" in script
+    assert "presetButton('large', 'Duża', 4, 8192, 80)" in script
+    assert "hostname_scheme_id" in script
+    assert "hostname_values" in script
+    assert "ipam_pool_id" in script
+    assert "ansibleVariables.hostname = '{{ hostname }}'" in script
+    assert "add('clone', 'clone_vm')" in script
+    assert "add('cloud_init', 'cloud_init')" in script
+    assert "add('apply', 'terraform_apply')" in script
+    assert "Tryb zaawansowany" in script
+    assert "Conditions (JSON)" in script
+    assert "Opcjonalne ustawienia dostępu" in script
+    assert "Blueprint został utworzony i jest gotowy do użycia." in script
     assert 'SRLXXX' in script
     assert 'Sposób nadawania hostname' in script
     assert 'Pattern hostname' in script
@@ -400,6 +437,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.hostname-pattern-preview' in stylesheet
     assert '.hostname-generator-info' in stylesheet
     assert '.blueprint-run-summary' in stylesheet
+    assert '.blueprint-wizard-shell' in stylesheet
+    assert '.blueprint-wizard-steps' in stylesheet
+    assert '.blueprint-wizard-select-card' in stylesheet
+    assert '.blueprint-wizard-workflow-visual' in stylesheet
+    assert '.blueprint-wizard-review' in stylesheet
+    assert '@media (prefers-reduced-motion: reduce)' in stylesheet
     assert '.table-toolbar' in stylesheet
     assert '.table-sort-button' in stylesheet
     assert '.table-column-picker' in stylesheet
