@@ -50,6 +50,8 @@ def create_hostname_scheme(data: HostnameSchemeInput, request: Request, actor=De
 @router.put('/hostname-schemes/{id}', response_model=HostnameSchemeOutput)
 def update_hostname_scheme(id: int, data: HostnameSchemeInput, request: Request, actor=Depends(require('hostnames.update')), db=Depends(get_db, scope='function')):
     row = find(db, HostnameScheme, id)
+    if data.next_number < row.next_number:
+        raise HTTPException(409, f'Hostname sequence cannot be moved backwards; next number is {row.next_number}')
     for key, value in data.model_dump().items():
         setattr(row, key, value)
     audit(db, request, 'hostname_scheme.updated', 'hostname_schemes', id)
