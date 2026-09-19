@@ -58,6 +58,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/deployments.js',
         'features/operations.js',
         'features/search.js',
+        'features/settings.js',
         'features/tools.js',
         'features/updates.js',
     } == set(manifest['scripts'])
@@ -68,6 +69,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/inventory.css',
         'styles/features/dashboard.css',
         'styles/features/tools.css',
+        'styles/features/settings.css',
         'styles/features/updates.css',
     } <= set(manifest['styles'])
 
@@ -124,6 +126,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('deployments.create'" in script
     assert "registerCommand('deployments.open'" in script
     assert 'function navigationGroup(' in core
+    assert 'function navigationGroupRank(' in core
+    assert "group === 'Operacje' ? 1" in core
     assert "'aria-current': exact ? 'page' : null" in core
     assert "appIcon('search')" in core
     assert "appIcon('refresh')" in core
@@ -182,6 +186,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "if (!nodeSelect.value) nodeSelect.value = String(row.node);" in script
     assert "await loadNodeResources();" in script
     assert 'Podgląd Terraform' in script
+    assert 'Podgląd playbooka' in script
+    assert "'/ansible/playbooks/'" in script
+    assert '.ansible-playbook-code' in stylesheet
     assert "'/source'" in script or "+ '/source'" in script
     assert '.terraform-template-code' in stylesheet
     assert 'Obraz / szablon Proxmox' in script
@@ -226,6 +233,21 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Jedna rola może zarządzać tylko jednym szablonem.' in script
     assert 'canManageBlueprintByRole' in script
     assert 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' in script
+    assert "registerView({ id: 'settings'" in script
+    assert "'Wygląd'" in script
+    assert "'Konto i sesja'" in script
+    assert "'System'" in script
+    assert "'Aktualizacje'" in script
+    assert "'Bezpieczeństwo'" in script
+    assert "api('/updates/settings')" in script
+    assert "api('/health'" in script
+    assert ".settings-grid" in stylesheet
+    assert ".settings-choice" in stylesheet
+    assert ".settings-ldap-panel" in stylesheet
+    assert 'Konfiguracja LDAP' in script
+    assert '/settings/ldap/test' in script
+    assert 'JIT provisioning i RBAC' in script
+    assert 'auth_source=ldap' in script
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
