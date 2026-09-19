@@ -492,6 +492,12 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
             update_available=False,
             current_version=checked["target_version"],
             target_version=checked["target_version"],
+            current_commit_at=checked.get("target_commit_at"),
+            target_commit_at=checked.get("target_commit_at"),
+            commit_relation="identical",
+            ahead_by=0,
+            behind_by=0,
+            version_strategy="git_commit",
             finished_at=utcnow(),
         )
         event("complete", 100, "Aktualizacja zakończona pomyślnie.", status="success")
