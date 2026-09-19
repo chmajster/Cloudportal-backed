@@ -32,6 +32,56 @@ class ChangePassword(Input):
     password: Password
 
 
+class LDAPSettingsInput(Input):
+    enabled: bool = False
+    url: Annotated[str, Field(min_length=8, max_length=2048)] = 'ldap://localhost:389'
+    start_tls: bool = False
+    verify_tls: bool = True
+    bind_dn: Annotated[str, Field(max_length=1024)] = ''
+    bind_password: Annotated[str | None, Field(max_length=4096, json_schema_extra={'writeOnly': True})] = None
+    base_dn: Annotated[str, Field(max_length=1024)] = ''
+    user_filter: Annotated[str, Field(min_length=3, max_length=1024)] = '(&(objectClass=person)(uid={username}))'
+    username_attribute: Annotated[str, Field(min_length=1, max_length=64)] = 'uid'
+    email_attribute: Annotated[str, Field(min_length=1, max_length=64)] = 'mail'
+    first_name_attribute: Annotated[str, Field(min_length=1, max_length=64)] = 'givenName'
+    last_name_attribute: Annotated[str, Field(min_length=1, max_length=64)] = 'sn'
+
+    @field_validator('url')
+    @classmethod
+    def ldap_url(cls, value):
+        parsed = urlsplit(value.strip())
+        if parsed.scheme not in {'ldap', 'ldaps'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('LDAP URL must use ldap:// or ldaps:// without credentials, query or fragment')
+        if parsed.path not in {'', '/'}:
+            raise ValueError('LDAP URL must contain only host and optional port')
+        return value.strip().rstrip('/')
+
+    @field_validator('user_filter')
+    @classmethod
+    def ldap_filter(cls, value):
+        if value.count('{username}') != 1:
+            raise ValueError('LDAP user filter must contain exactly one {username} placeholder')
+        return value
+
+    @field_validator('username_attribute', 'email_attribute', 'first_name_attribute', 'last_name_attribute')
+    @classmethod
+    def ldap_attribute(cls, value):
+        import re
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9;-]{0,63}', value):
+            raise ValueError('Invalid LDAP attribute name')
+        return value
+
+    @model_validator(mode='after')
+    def ldap_transport(self):
+        if self.start_tls and self.url.startswith('ldaps://'):
+            raise ValueError('StartTLS cannot be combined with LDAPS')
+        if self.enabled and not self.base_dn:
+            raise ValueError('Base DN is required when LDAP is enabled')
+        if self.bind_password and not self.bind_dn:
+            raise ValueError('Bind password requires Bind DN')
+        return self
+
+
 class UserCreate(Input):
     username: Slug
     email: EmailStr
