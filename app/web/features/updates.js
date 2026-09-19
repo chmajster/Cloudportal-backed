@@ -529,7 +529,10 @@ async function updatesView() {
   statusRoot.replaceChildren(statusPanel(initialStatus, settings, statusRoot));
 
   dom.content.replaceChildren(
-    heading('Bezpieczne aktualizacje Cloudportal z ciągłym podglądem procesu, backupem bazy i niezależnym serwisem wykonawczym.'),
+    heading(
+      'Bezpieczne aktualizacje Cloudportal z ciągłym podglądem procesu, backupem bazy i niezależnym serwisem wykonawczym.',
+      [button('← Narzędzia', () => navigate('tools'))]
+    ),
     statusRoot,
     settingsPanel(settings, statusRoot),
     node('section', { class: 'update-safety-grid' },
@@ -554,5 +557,13 @@ document.addEventListener('cloudportal:app-hidden', () => {
   try { sessionStorage.removeItem(STATUS_SESSION_KEY); } catch { /* ignore */ }
 });
 
-registerView({ id: 'updates', label: 'Aktualizacje', icon: 'U', permission: 'updates.read', order: 170 }, updatesView);
+registerView({
+  id: 'updates',
+  label: 'Auto-update',
+  icon: 'U',
+  permission: 'updates.read',
+  order: 166,
+  navigation: false,
+  navigationParent: 'tools',
+}, updatesView);
 })();
