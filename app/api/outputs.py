@@ -194,6 +194,20 @@ class DeletedOutput(Output):
     deleted: bool
 
 
+class SSHHostKeyOutput(Output):
+    host: str
+    port: int
+    key_type: str
+    fingerprint: str
+    known_hosts: str
+
+
+class SSHKeyBootstrapOutput(Output):
+    credential: CredentialOutput
+    public_key: str
+    fingerprint: str
+
+
 class CredentialTestOutput(Output):
     ok: bool
     provider: str
