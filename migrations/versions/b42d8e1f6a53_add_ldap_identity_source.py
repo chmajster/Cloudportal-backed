@@ -12,7 +12,6 @@ def upgrade():
     op.add_column('users', sa.Column('external_id', sa.String(length=1024), nullable=True))
     op.create_index('ix_users_auth_source', 'users', ['auth_source'], unique=False)
     op.create_index('uq_users_external_id', 'users', ['external_id'], unique=True)
-    op.alter_column('users', 'auth_source', server_default=None)
 
 
 def downgrade():
