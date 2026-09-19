@@ -66,6 +66,8 @@ def update_check(
     actor=Depends(require('updates.read')),
     db=Depends(get_db, scope='function'),
 ):
+    if data.ref is not None and 'updates.update' not in request.state.permissions:
+        raise HTTPException(403, 'updates.update required to override update ref')
     result = call('/check', 'POST', data.model_dump(exclude_none=True))
     audit(db, request, 'update.checked', 'system_updates', data.ref or result.get('ref'))
     return result
@@ -78,6 +80,8 @@ def update_run(
     actor=Depends(require('updates.execute')),
     db=Depends(get_db, scope='function'),
 ):
+    if data.ref is not None and 'updates.update' not in request.state.permissions:
+        raise HTTPException(403, 'updates.update required to override update ref')
     result = call('/run', 'POST', data.model_dump(exclude_none=True))
     audit(db, request, 'update.started', 'system_updates', data.ref)
     return result
