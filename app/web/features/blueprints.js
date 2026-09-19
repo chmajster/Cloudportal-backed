@@ -1332,6 +1332,7 @@ function generateHostname(schemes) {
 }
 
 registerCommand('blueprints.proxmoxTemplateWizard', proxmoxBlueprintForm);
+registerCommand('blueprints.execute', executeBlueprint);
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
 registerView({ id: 'hostnames', label: 'Nazwy hostów', icon: 'H', permission: 'hostnames.read', order: 80 }, hostnamesView);
 })();
