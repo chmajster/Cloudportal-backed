@@ -20,6 +20,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-dialog"' in page.text
     assert 'id="global-search-input"' in page.text
     assert 'id="sidebar-profile"' in page.text
+    assert 'class="page-context"' in page.text
     assert 'href="./favicon.ico"' in page.text
     assert 'type="image/x-icon"' in page.text
     assert 'src="./theme-init.js"' in page.text
@@ -114,6 +115,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
+    assert 'function navigationGroup(' in core
+    assert "'aria-current': exact ? 'page' : null" in core
     assert "appIcon('search')" in core
     assert "appIcon('refresh')" in core
     assert len(bootstrap.splitlines()) < 120
@@ -221,6 +224,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'X-Update-Status-Token': token" in script
     assert 'Witaj, ${greetingName}!' in script
     assert 'dashboard-metrics' in script
+    assert 'dashboard-metric-action' in script
+    assert 'toolStatusDot' in script
     assert 'dashboard-quick-actions' in script
     assert 'Ostatnie wdrożenia' in script
     assert "api('/providers?limit=200')" in script
@@ -264,6 +269,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert ':root {' in stylesheet
     assert 'html[data-theme="dark"]' in stylesheet
     assert '--sidebar-bg:' in stylesheet
+    assert '--radius-sm: 13px;' in stylesheet
+    assert r'--radius: 20px;\n  --radius-sm' not in stylesheet
+    assert '--success-border:' in stylesheet
+    assert '.nav-group-label' in stylesheet
+    assert '.status-dot.warn' in stylesheet
     assert '.sidebar-backdrop' in stylesheet
     assert '.credential-secret-panel' in stylesheet
     assert '.credential-tls-control' in stylesheet
@@ -271,6 +281,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-user-row' in stylesheet
     assert '.credential-connection-check' in stylesheet
     assert '.credential-connection-result' in stylesheet
+    assert '.credential-connection-result.pending' in stylesheet
     assert '.form-section' in stylesheet
     assert '.required-mark' in stylesheet
     assert 'input:user-invalid' in stylesheet
@@ -293,6 +304,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.table-column-picker' in stylesheet
     assert '.table-pagination' in stylesheet
     assert '.advanced-table.compact' in stylesheet
+    assert '.advanced-table {' in stylesheet
     assert '.permission-group' in stylesheet
     assert '.account-overview-grid' in stylesheet
     assert '.account-profile-head' in stylesheet
@@ -310,6 +322,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.nav-link.active::before' in stylesheet
     assert '.dashboard-metrics' in stylesheet
     assert '.dashboard-quick-action' in stylesheet
+    assert '.dashboard-metric-action' in stylesheet
     assert '.global-search-dialog' in stylesheet
     assert '.global-search-result' in stylesheet
     assert '.vm-detail-header' in stylesheet
