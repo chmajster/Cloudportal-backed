@@ -161,6 +161,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'renderProxmoxConnectionResult' in script
     assert 'Czas odpowiedzi' in script
     assert 'Wersja Proxmox VE' in script
+    assert 'function proxmoxDuplicateTokenDetail(' in script
+    assert 'function applyProxmoxDuplicateTokenSuggestion(' in script
+    assert 'Proponowana nowa nazwa:' in script
+    assert 'Została wpisana do formularza' in script
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert 'data-workflow-row' in script
