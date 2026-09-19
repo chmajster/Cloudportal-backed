@@ -66,7 +66,13 @@ async function catalogView() {
           rowActions.push(button('Edytuj', () => openProxmoxTemplateWizard(item)));
         }
         if (allowed('blueprints.execute')) {
-          rowActions.push(button('Użyj', () => navigate('blueprints'), 'primary'));
+          rowActions.push(button('Użyj', () => {
+            if (!hasCommand('blueprints.execute')) {
+              toast('Uruchamianie szablonu nie jest dostępne.', 'error');
+              return;
+            }
+            runCommand('blueprints.execute', item);
+          }, 'primary'));
         }
         return rowActions;
       })
