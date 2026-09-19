@@ -3,6 +3,7 @@
 const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
 const THEME_KEY = 'cloudportal.console.theme';
+const SIDEBAR_COLLAPSED_KEY = 'cloudportal.console.sidebar.collapsed';
 const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
 
 const dom = {
@@ -212,12 +213,56 @@ function toggleTheme() {
   setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 }
 
+function isDesktopSidebar() {
+  return window.matchMedia('(min-width: 761px)').matches;
+}
+
+function updateSidebarToggleState() {
+  if (isDesktopSidebar()) {
+    const collapsed = dom.appView.classList.contains('sidebar-collapsed');
+    const label = collapsed ? 'Rozwiń menu boczne' : 'Zwiń menu boczne';
+    dom.menuToggle.setAttribute('aria-expanded', String(!collapsed));
+    dom.menuToggle.setAttribute('aria-label', label);
+    dom.menuToggle.setAttribute('title', label);
+    return;
+  }
+
+  const active = dom.appView.classList.contains('menu-open');
+  const label = active ? 'Zamknij menu' : 'Otwórz menu';
+  dom.menuToggle.setAttribute('aria-expanded', String(active));
+  dom.menuToggle.setAttribute('aria-label', label);
+  dom.menuToggle.setAttribute('title', label);
+}
+
 function setMobileMenu(open) {
   const active = Boolean(open);
   dom.sidebar.classList.toggle('open', active);
   dom.appView.classList.toggle('menu-open', active);
-  dom.menuToggle.setAttribute('aria-expanded', String(active));
-  dom.menuToggle.setAttribute('aria-label', active ? 'Zamknij menu' : 'Otwórz menu');
+  updateSidebarToggleState();
+}
+
+function setDesktopSidebarCollapsed(collapsed, persist = true) {
+  const active = Boolean(collapsed);
+  dom.appView.classList.toggle('sidebar-collapsed', active);
+  if (persist) {
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, active ? '1' : '0'); } catch { /* Storage may be unavailable. */ }
+  }
+  updateSidebarToggleState();
+}
+
+function loadSidebarState() {
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { /* Use expanded default. */ }
+  setDesktopSidebarCollapsed(collapsed, false);
+}
+
+function toggleSidebar() {
+  if (isDesktopSidebar()) {
+    setMobileMenu(false);
+    setDesktopSidebarCollapsed(!dom.appView.classList.contains('sidebar-collapsed'));
+    return;
+  }
+  setMobileMenu(!dom.appView.classList.contains('menu-open'));
 }
 
 function loadSession() {
