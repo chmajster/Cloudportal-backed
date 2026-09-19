@@ -31,6 +31,16 @@ def generate_key():
     return True
 
 
+def sync_existing_rbac():
+    """Synchronize built-in roles on every API start for an already bootstrapped installation."""
+    with session() as db:
+        if not inspect(engine()).has_table('settings') or not db.get(Setting, 'bootstrapped'):
+            return False
+        seed(db)
+        db.commit()
+        return True
+
+
 def bootstrap(db):
     if db.bind.dialect.name == 'postgresql':
         db.execute(text('SELECT pg_advisory_xact_lock(613040621)'))
