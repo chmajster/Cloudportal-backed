@@ -16,6 +16,19 @@ function canManageCatalogTemplate(item) {
   return [...required].some(id => owned.has(id));
 }
 
+async function toggleGeneratedTemplate(item) {
+  try {
+    await api('/blueprints/' + item.id + '/enabled', {
+      method: 'PUT',
+      body: { enabled: !item.is_active },
+    });
+    toast((item.is_active ? 'Wyłączono' : 'Włączono') + ' szablon „' + item.name + '”.');
+    navigate('catalog');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
 async function toggleCatalogItem(kind, item) {
   const enabled = item.enabled === false;
   const label = kind === 'templates' ? 'szablon' : 'playbook';
@@ -99,8 +112,11 @@ async function catalogView() {
       ], generated, item => {
         const rowActions = [];
         const canManage = canManageCatalogTemplate(item);
-        if (allowed('blueprints.update') && canCreateTemplate && canManage) {
-          rowActions.push(button('Edytuj', () => openProxmoxTemplateWizard(item)));
+        if (allowed('blueprints.update') && canManage) {
+          if (canCreateTemplate || item.is_active === false) {
+            rowActions.push(button('Edytuj', () => openProxmoxTemplateWizard(item)));
+          }
+          rowActions.push(button(item.is_active ? 'Wyłącz' : 'Włącz', () => toggleGeneratedTemplate(item), item.is_active ? 'danger' : 'primary'));
         }
         const deploymentTemplateEnabled = templates.items.some(template =>
           template.id === item.deployment?.template && template.enabled !== false);
