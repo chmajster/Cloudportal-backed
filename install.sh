@@ -231,6 +231,8 @@ try_acquire_install_lock() {
   for ((attempt=1; attempt<=40; attempt++)); do
     if [[ -e "$ready_file" ]]; then
       lock_holder_pid=$holder
+      printf '%s\n' "$" > "$lock_file"
+      chmod 0600 "$lock_file" 2>/dev/null || true
       rm -f "$ready_file"
       return 0
     fi
@@ -316,6 +318,13 @@ force_uninstall_cloudportal() {
 
   if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
     systemctl reload nginx >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$os_family" == rhel ]] && command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+    if [[ "${previous_port:-}" =~ ^[0-9]{1,5}$ ]]; then
+      firewall-cmd --permanent --remove-port="${previous_port}/tcp" >/dev/null 2>&1 || true
+      firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
   fi
 
   rm -rf "$app_root"
