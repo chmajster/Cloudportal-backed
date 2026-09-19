@@ -137,6 +137,10 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         role = db.scalar(select(Role).where(Role.id == role_id).with_for_update())
         if role is None:
             raise HTTPException(404, 'Manager role not found')
+        permissions = {permission.name for permission in role.permissions}
+        required_permissions = {'blueprints.read', 'blueprints.update', 'blueprints.delete'}
+        if not required_permissions <= permissions:
+            raise HTTPException(422, f'Role {role.name} must include blueprint read, update and delete permissions')
         assignment = db.scalar(select(BlueprintManagerRole).where(BlueprintManagerRole.role_id == role_id))
         if assignment is not None and assignment.blueprint_id != blueprint_id:
             raise HTTPException(409, f'Role {role.name} is already dedicated to another template')
