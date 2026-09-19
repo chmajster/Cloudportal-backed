@@ -20,6 +20,20 @@ const UPDATE_PHASES = [
 ];
 let updatePollTimer = null;
 
+function normalizedUpdateStatus(status) {
+  if (!status || typeof status !== 'object') return status;
+  if (status.status === 'running' && status.phase === 'complete' && Number(status.progress || 0) >= 100) {
+    return {
+      ...status,
+      status: 'success',
+      progress: 100,
+      update_available: false,
+      message: status.message || 'Aktualizacja zakończona pomyślnie.',
+    };
+  }
+  return status;
+}
+
 function updateStatusKind(status) {
   if (status === 'success' || status === 'up_to_date' || status === 'local_ahead') return 'ok';
   if (status === 'failed') return 'danger';
@@ -303,6 +317,7 @@ function statusActions(status, container, settings) {
 }
 
 function statusPanel(status, settings, container) {
+  status = normalizedUpdateStatus(status);
   const progress = Math.max(0, Math.min(100, Number(status.progress || 0)));
   const fill = node('div', { class: 'update-progress-fill' });
   fill.style.width = progress + '%';
@@ -375,7 +390,7 @@ function statusPanel(status, settings, container) {
 
 async function renderLiveStatus(container, settings) {
   try {
-    const status = await resilientUpdateStatus();
+    const status = normalizedUpdateStatus(await resilientUpdateStatus());
     container.replaceChildren(statusPanel(status, settings, container));
   } catch (error) {
     container.replaceChildren(node('section', { class: 'panel update-unavailable' },
@@ -524,7 +539,7 @@ async function updatesView() {
     resilientUpdateStatus(),
   ]);
   const settings = { ...results[0] };
-  const initialStatus = results[1];
+  const initialStatus = normalizedUpdateStatus(results[1]);
   const statusRoot = node('div', { class: 'stack update-live-root' });
   statusRoot.replaceChildren(statusPanel(initialStatus, settings, statusRoot));
 
