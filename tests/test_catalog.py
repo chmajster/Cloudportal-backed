@@ -23,6 +23,15 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     ids = {item['id'] for item in playbooks.json()['items']}
     assert {'bootstrap-linux', 'validate-linux', 'validate-windows'} <= ids
 
+    playbook_source = client.get('/api/v1/ansible/playbooks/bootstrap-linux/source', headers=headers)
+    assert playbook_source.status_code == 200, playbook_source.text
+    playbook_data = playbook_source.json()
+    assert playbook_data['id'] == 'bootstrap-linux'
+    assert playbook_data['files']
+    assert all(item['name'].endswith(('.yml', '.yaml')) for item in playbook_data['files'])
+    assert all(item['role'] in {'main', 'wait', 'validate'} for item in playbook_data['files'])
+    assert all(isinstance(item['content'], str) for item in playbook_data['files'])
+
 
 def test_aws_provider_and_template_are_validated_before_job_creation(client, headers):
     credential = client.post('/api/v1/credentials', headers=headers, json={
