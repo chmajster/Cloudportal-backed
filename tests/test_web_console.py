@@ -181,6 +181,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('blueprints.execute'" in script
     assert 'SRLXXX' in script
     assert 'hostname_next_number' in script
+    assert 'existing_hostname_pattern' in script
+    assert 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' in script
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
