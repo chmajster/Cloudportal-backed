@@ -90,8 +90,7 @@ async function blueprintsView() {
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
   const canQuickProxmox = canDesignBlueprint && allowed('hostnames.read') && allowed('ipam.read');
   const actions = [];
-  if (allowed('blueprints.create') && canQuickProxmox) actions.push(button('Szybki Blueprint Proxmox', () => proxmoxBlueprintForm(), 'primary'));
-  if (allowed('blueprints.create') && canDesignBlueprint) actions.push(button('Nowy Blueprint', () => blueprintForm()));
+  if (allowed('blueprints.create') && canDesignBlueprint) actions.push(button('Nowy Blueprint', () => window.BlueprintWizard.open(), 'primary'));
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
       { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
@@ -1375,9 +1374,9 @@ async function executeBlueprint(item) {
   }
 }
 
-registerCommand('blueprints.proxmoxTemplateWizard', proxmoxBlueprintForm);
-registerCommand('blueprints.proxmoxWithHostnameScheme', schemeId => proxmoxBlueprintForm(null, { hostnameSchemeId: schemeId, returnTo: 'hostnames' }));
+registerCommand('blueprints.proxmoxTemplateWizard', item => item ? proxmoxBlueprintForm(item) : window.BlueprintWizard.open());
+registerCommand('blueprints.proxmoxWithHostnameScheme', schemeId => window.BlueprintWizard.open({ hostnameSchemeId: schemeId }));
 registerCommand('blueprints.execute', executeBlueprint);
-registerCommand('blueprints.create', () => blueprintForm());
+registerCommand('blueprints.create', () => window.BlueprintWizard.open());
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
 })();
