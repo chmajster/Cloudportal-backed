@@ -172,6 +172,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert 'createProxmoxTemplatePicker' in script
+    assert "function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedNode = '', onSelect = null)" in script
+    assert "if (!nodeSelect.value) nodeSelect.value = String(row.node);" in script
+    assert "await loadNodeResources();" in script
     assert 'Podgląd Terraform' in script
     assert "'/source'" in script or "+ '/source'" in script
     assert '.terraform-template-code' in stylesheet

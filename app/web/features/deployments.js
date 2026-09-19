@@ -105,7 +105,7 @@ function deploymentReplaceVariableWithSelect(container, template, name, label, c
   return replacement.querySelector('select');
 }
 
-function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedNode = '') {
+function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedNode = '', onSelect = null) {
   const current = deploymentVariableWrapper(container, 'template_id');
   if (!current) return null;
 
@@ -129,6 +129,7 @@ function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedN
     hiddenId.value = String(row?.vmid || '');
     hiddenNode.value = String(row?.node || '');
     render();
+    if (typeof onSelect === 'function') onSelect(row);
   };
 
   const render = () => {
@@ -259,8 +260,6 @@ async function enhanceProxmoxDeploymentVariables(container, template, providerSe
     'Lista jest pobierana bezpośrednio z wybranej platformy Proxmox.'
   );
 
-  createProxmoxTemplatePicker(container, templateResult.items || [], previous.templateId, previous.templateNode);
-
   const storageSelect = deploymentReplaceVariableWithSelect(
     container,
     template,
@@ -333,6 +332,30 @@ async function enhanceProxmoxDeploymentVariables(container, template, providerSe
       loadNodeResources().catch(error => toast(error.message, 'error'));
     });
   }
+
+  const picker = createProxmoxTemplatePicker(
+    container,
+    templateResult.items || [],
+    previous.templateId,
+    previous.templateNode,
+    row => {
+      if (!nodeSelect || !row?.node) return;
+      const matchingTargetNode = [...nodeSelect.options].some(option => String(option.value) === String(row.node));
+      if (!matchingTargetNode) {
+        toast('Węzeł szablonu nie jest dostępny jako węzeł docelowy. Wybierz węzeł ręcznie.', 'warning');
+        return;
+      }
+      if (!nodeSelect.value) nodeSelect.value = String(row.node);
+      loadNodeResources().catch(error => toast(error.message, 'error'));
+    }
+  );
+
+  if (nodeSelect && !nodeSelect.value && picker?.hiddenNode?.value) {
+    const templateNode = String(picker.hiddenNode.value);
+    const matchingTargetNode = [...nodeSelect.options].some(option => String(option.value) === templateNode);
+    if (matchingTargetNode) nodeSelect.value = templateNode;
+  }
+
   await loadNodeResources();
 }
 
