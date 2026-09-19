@@ -21,6 +21,18 @@ function toolMeta(label, value, mono = false) {
     node('strong', { class: mono ? 'mono' : '', text: value || '—' }));
 }
 
+function toolStatusDot(status) {
+  if (status === 'failed') return 'bad';
+  if (['checking', 'running', 'update_available'].includes(status)) return 'warn';
+  return 'ok';
+}
+
+function updateBusyText(status) {
+  if (status === 'checking') return 'Sprawdzanie repozytorium';
+  if (status === 'running') return 'Aktualizacja jest w toku';
+  return 'Updater gotowy';
+}
+
 function autoUpdateTool(status) {
   const stateInfo = toolStatus(status?.status);
   const current = status?.current_version || 'nieznany';
@@ -42,8 +54,8 @@ function autoUpdateTool(status) {
       toolMeta('Tryb', status?.automatic ? 'Automatyczny' : 'Ręczny')),
     node('div', { class: 'tool-card-footer' },
       node('span', { class: 'tool-health' },
-        node('span', { class: 'status-dot ' + (status?.status === 'failed' ? 'bad' : 'ok') }),
-        updateAvailable ? 'Nowszy commit jest dostępny' : 'Updater gotowy'),
+        node('span', { class: 'status-dot ' + toolStatusDot(status?.status) }),
+        updateAvailable ? 'Nowszy commit jest dostępny' : (updateBusyText(status?.status))),
       button(updateAvailable ? 'Otwórz i zaktualizuj' : 'Otwórz Auto-update', () => navigate('updates'), 'primary'))
   );
 }
