@@ -116,8 +116,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Akceptuj certyfikat self-signed / niezaufany' in script
     assert 'function splitProxmoxEndpoint(' in script
     assert 'function buildProxmoxEndpoint(' in script
+    assert 'function splitProxmoxUsername(' in script
+    assert 'function buildProxmoxUsername(' in script
     assert "label: 'Port'" in script
     assert 'default: 8006' in script
+    assert "label: 'Realm'" in script
+    assert "default: 'pam'" in script
+    assert "placeholder: 'root'" in script
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert 'data-workflow-row' in script
@@ -200,6 +205,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-secret-panel' in stylesheet
     assert '.credential-tls-control' in stylesheet
     assert '.credential-endpoint-row' in stylesheet
+    assert '.credential-user-row' in stylesheet
     assert '.form-section' in stylesheet
     assert '.required-mark' in stylesheet
     assert 'input:user-invalid' in stylesheet
