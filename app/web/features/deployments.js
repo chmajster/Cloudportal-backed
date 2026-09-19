@@ -1,21 +1,100 @@
 'use strict';
 
 (() => {
+async function launchProductBlueprint(item) {
+  if (!hasCommand('blueprints.execute')) {
+    toast('Uruchamianie Blueprintu nie jest dostępne.', 'error');
+    return;
+  }
+  await runCommand('blueprints.execute', item);
+}
+
+function productCard(item) {
+  const deployment = item.deployment || {};
+  const template = deployment.template || 'VM';
+  const provider = deployment.provider || '';
+  const meta = node('div', { class: 'product-card-meta' },
+    badge('v' + item.version, 'info'),
+    badge(template, ''),
+    provider ? badge(provider, '') : null,
+    item.requires_approval ? badge('Wymaga zatwierdzenia', 'warning') : null);
+
+  return node('article', { class: 'product-card' },
+    node('div', { class: 'product-card-top' },
+      node('span', { class: 'product-card-icon', 'aria-hidden': 'true' }, appIcon('box')),
+      node('div', { class: 'product-card-copy' },
+        node('strong', { text: item.name }),
+        node('small', { class: 'mono muted', text: item.slug }))),
+    node('p', {
+      class: 'product-card-description',
+      text: item.description || 'Gotowy Blueprint do utworzenia maszyny wirtualnej.',
+    }),
+    meta,
+    node('div', { class: 'product-card-actions' },
+      button('Utwórz VM', () => launchProductBlueprint(item), 'primary')));
+}
+
+function productsPanel(blueprints, canUseProducts) {
+  const body = node('div', { class: 'product-grid' });
+  if (!canUseProducts) {
+    body.append(node('div', {
+      class: 'product-catalog-empty',
+      text: 'Brak uprawnień do uruchamiania produktów.',
+    }));
+  } else if (!blueprints.length) {
+    body.append(node('div', {
+      class: 'product-catalog-empty',
+      text: 'Brak gotowych Blueprintów. Aktywuj Blueprint widoczny w panelu backendu, aby pojawił się jako produkt.',
+    }));
+  } else {
+    blueprints.forEach(item => body.append(productCard(item)));
+  }
+
+  return node('section', { class: 'panel product-catalog-panel' },
+    node('div', { class: 'product-catalog-header' },
+      node('div', {},
+        node('span', { class: 'product-catalog-kicker', text: 'Self-service' }),
+        node('h2', { text: 'Produkty' }),
+        node('p', { class: 'muted', text: 'Wybierz gotowy Blueprint. Formularz pokaże tylko parametry wymagane do utworzenia VM.' })),
+      badge(String(blueprints.length) + ' dostępnych', blueprints.length ? 'ok' : '')),
+    body);
+}
+
 async function deploymentsView() {
-  const [deploymentResult, providerResult] = await Promise.all([
+  const canUseProducts = allowed('blueprints.read')
+    && allowed('blueprints.execute')
+    && allowed('deployments.create');
+
+  const [deploymentResult, providerResult, blueprintResult] = await Promise.all([
     api('/deployments?limit=200'),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
+    canUseProducts ? api('/blueprints?available=true&limit=200') : Promise.resolve({ items: [] }),
   ]);
+
   const deployments = deploymentResult.items;
   const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
-  const actions = allowed('deployments.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')
-    ? [button('Nowe wdrożenie', createDeployment, 'primary')] : [];
-  dom.content.replaceChildren(heading('Kontrolowane wdrożenia Terraform/OpenTofu. Każda operacja tworzy audytowalne zadanie.', actions),
-    table([
-      { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
-      { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || `#${item.provider_id}` }, { label: 'Silnik IaC', value: item => badge(item.executor, 'info') },
-      { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) }, { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
-    ], deployments, item => deploymentActions(item)));
+  const products = (blueprintResult.items || []).filter(item =>
+    item.is_active
+    && item.deployment?.template
+    && (!item.requires_approval || allowed('blueprints.approve'))
+  );
+
+  dom.content.replaceChildren(
+    heading('Gotowe produkty infrastrukturalne oparte na Blueprintach. Wybierz produkt i utwórz VM bez ręcznego składania wdrożenia.'),
+    productsPanel(products, canUseProducts),
+    node('section', { class: 'panel product-history-panel' },
+      node('div', { class: 'panel-header' },
+        node('div', {},
+          node('span', { class: 'product-catalog-kicker', text: 'Historia' }),
+          node('h2', { text: 'Wdrożone maszyny i operacje' }))),
+      table([
+        { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
+        { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || `#${item.provider_id}` },
+        { label: 'Silnik IaC', value: item => badge(item.executor, 'info') },
+        { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
+        { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+      ], deployments, item => deploymentActions(item)))
+  );
 }
 
 function deploymentActions(item) {
