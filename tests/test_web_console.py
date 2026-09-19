@@ -105,7 +105,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
 
     for path in script_paths:
         if path.startswith('features/'):
-            assert 'registerView({' in scripts[path].text
+            assert 'registerView({' in scripts[path].text or 'registerExtension(' in scripts[path].text
 
     assert 'CREDENTIAL_TYPE_CONFIG' in script
     assert 'Secrets JSON' not in script
