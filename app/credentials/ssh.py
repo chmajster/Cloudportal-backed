@@ -125,7 +125,8 @@ def install_generated_key(endpoint: str, username: str, password: str, known_hos
             sftp.chmod(ssh_dir, 0o700)
             try:
                 with sftp.file(authorized, 'r') as handle:
-                    existing = handle.read().decode('utf-8', errors='replace')
+                    raw_existing = handle.read()
+                    existing = raw_existing.decode('utf-8', errors='replace') if isinstance(raw_existing, bytes) else str(raw_existing)
             except OSError:
                 existing = ''
             key_material = ' '.join(public_key.split()[:2])
