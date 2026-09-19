@@ -229,41 +229,53 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const networkField = selectField('Bridge / sieć', 'network', [], variables.network || 'vmbr0', { required: true, placeholder: 'Wybierz sieć' });
 
     const schemeChoices = [
-      ...schemes.map(value => ({ value: value.id, label: value.name + ' — ' + value.pattern })),
-      { value: '__new__', label: '+ Utwórz nowy pattern hostname' },
+      ...schemes.map(value => ({ value: value.id, label: 'Użyj istniejącego: ' + value.pattern })),
+      { value: '__new__', label: 'Własny pattern hostname' },
     ];
     const schemeField = selectField(
-      'Wzorzec nazwy hosta', 'hostname_scheme_id', schemeChoices,
+      'Sposób nadawania hostname', 'hostname_scheme_id', schemeChoices,
       deployment.hostname_scheme_id || (schemes[0]?.id || '__new__'),
-      { required: true, wide: true }
+      {
+        required: true,
+        wide: true,
+        help: 'Wybierz gotowy pattern albo ustaw własny. Pattern może używać numeracji, np. SRLXXX → srl001.',
+      }
+    );
+    const hostnamePreview = node('div', { class: 'hostname-pattern-preview wide' },
+      node('span', { class: 'field-label', text: 'Podgląd hostname' }),
+      node('strong', { class: 'mono', 'data-hostname-preview': 'true', text: 'srl001' }),
+      node('small', { class: 'field-help', text: 'Tak będzie wyglądać przykładowa nazwa hosta dla aktualnego patternu.' })
     );
     const newScheme = node('div', { class: 'form-grid designer-subsection wide' },
-      field('Nazwa wzorca', 'hostname_scheme_name', { value: item ? item.name + ' hostnames' : '', placeholder: 'Np. Serwery SRL' }),
-      field('Wzorzec', 'hostname_pattern', {
+      field('Pattern hostname', 'hostname_pattern', {
         value: 'SRLXXX',
         placeholder: 'SRLXXX lub {env}-{role}-{number}',
-        help: 'Najprościej użyj X jako cyfr sekwencji: SRLXXX → srl001, srl002, srl003. Obsługiwane są też tokeny {location}, {env}, {environment}, {application}, {service}, {role}, {os}, {cluster}, {site}, {year}, {number}, {random}.',
+        help: 'Przykłady: SRLXXX → srl001, WEB-{env}-XXX → web-prod-001. Możesz też użyć {number}, {random}, {year}, {env}, {role}, {site}.',
         wide: true,
       }),
       field('Pierwszy numer', 'hostname_next_number', { type: 'number', min: 1, max: 999999999, value: 1 }),
-      field('Dopełnienie numeru', 'hostname_padding', {
+      field('Liczba cyfr numeru', 'hostname_padding', {
         type: 'number', min: 1, max: 9, value: 3,
-        help: 'Dla zapisu SRLXXX liczba cyfr zostanie rozpoznana automatycznie jako 3.',
-      })
+        help: 'Dla SRLXXX wartość zostanie rozpoznana automatycznie jako 3.',
+      }),
+      hostnamePreview
     );
     const existingSchemeEditor = node('div', { class: 'form-grid designer-subsection wide' },
-      field('Nazwa wzorca', 'existing_hostname_scheme_name', { value: '', placeholder: 'Nazwa schematu' }),
-      field('Wzorzec', 'existing_hostname_pattern', {
+      field('Pattern hostname', 'existing_hostname_pattern', {
         value: '',
         placeholder: 'SRLXXX lub srl{number}',
-        help: 'Edycja wzorca nie resetuje licznika. Aktualny następny numer jest zachowywany.',
+        help: 'Możesz zmienić pattern bez resetowania licznika. Nazwa techniczna schematu jest zarządzana automatycznie.',
         wide: true,
       }),
-      field('Dopełnienie numeru', 'existing_hostname_padding', { type: 'number', min: 1, max: 9, value: 3 }),
+      field('Liczba cyfr numeru', 'existing_hostname_padding', { type: 'number', min: 1, max: 9, value: 3 }),
       node('div', { class: 'field wide' },
         node('span', { class: 'field-label', text: 'Następny numer' }),
         node('strong', { class: 'mono', 'data-hostname-next-number': 'true', text: '—' }),
-        node('small', { class: 'field-help', text: 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' }))
+        node('small', { class: 'field-help', text: 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' })),
+      node('div', { class: 'hostname-pattern-preview wide' },
+        node('span', { class: 'field-label', text: 'Podgląd hostname' }),
+        node('strong', { class: 'mono', 'data-existing-hostname-preview': 'true', text: '—' }),
+        node('small', { class: 'field-help', text: 'Przykład wyniku dla wybranego patternu.' }))
     );
     const hostnameDefaults = node('div', { class: 'form-grid designer-subsection wide' });
 
@@ -326,7 +338,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         help: 'Tagi zostaną zapisane w Blueprintcie, dodane do workflow i automatycznie ustawione na VM.',
       }),
 
-      node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Pattern i wartości są zapisywane w Blueprintcie. Edycja nie resetuje licznika.' })),
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Wybierz gotowy pattern albo wpisz własny. Podgląd pokaże przykładową nazwę hosta.' })),
       schemeField, newScheme, existingSchemeEditor, hostnameDefaults,
 
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '4. Cloud-init' }), node('span', { text: 'Konfiguracja sieci, DNS i konta trafia do template Proxmox.' })),
@@ -378,7 +390,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       existingSchemeEditor.hidden = custom || !scheme;
       if (custom) hydratedHostnameSchemeId = null;
       if (scheme && !custom && String(hydratedHostnameSchemeId) !== String(scheme.id)) {
-        existingSchemeEditor.querySelector('[name="existing_hostname_scheme_name"]').value = scheme.name;
         existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]').value = scheme.pattern;
         existingSchemeEditor.querySelector('[name="existing_hostname_padding"]').value = scheme.padding;
         existingSchemeEditor.querySelector('[data-hostname-next-number]').textContent = String(scheme.next_number);
@@ -403,6 +414,44 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           'Domyślne {' + token + '}', 'hostname_token_' + token,
           { required: true, value: defaults[token] || '', placeholder: token === 'env' ? 'prod' : token, help: 'Możesz wpisać stałą wartość albo {{ nazwa_zmiennej }}.' }
         )));
+      }
+      const sampleValue = token => ({
+        env: 'prod',
+        environment: 'prod',
+        location: 'wro',
+        role: 'web',
+        application: 'app',
+        service: 'svc',
+        os: 'linux',
+        cluster: 'cluster1',
+        site: 'dc1',
+      }[token] || token);
+      const previewHostname = (rawPattern, rawPadding, nextNumber = 1) => {
+        const normalized = normalizeHostnamePattern(rawPattern, rawPadding);
+        let preview = String(normalized.pattern || '')
+          .replaceAll('{year}', String(new Date().getFullYear()))
+          .replaceAll('{random}', 'a1b2')
+          .replaceAll('{number}', String(nextNumber).padStart(Number(normalized.padding || 3), '0'));
+        hostnamePatternTokens(normalized.pattern).forEach(token => {
+          preview = preview.replaceAll('{' + token + '}', sampleValue(token));
+        });
+        return preview.toLowerCase();
+      };
+      const customPreview = newScheme.querySelector('[data-hostname-preview]');
+      if (customPreview) {
+        customPreview.textContent = previewHostname(
+          newScheme.querySelector('[name="hostname_pattern"]')?.value || '',
+          newScheme.querySelector('[name="hostname_padding"]')?.value || 3,
+          Number(newScheme.querySelector('[name="hostname_next_number"]')?.value || 1)
+        ) || '—';
+      }
+      const existingPreview = existingSchemeEditor.querySelector('[data-existing-hostname-preview]');
+      if (existingPreview && scheme) {
+        existingPreview.textContent = previewHostname(
+          existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]')?.value || scheme.pattern,
+          existingSchemeEditor.querySelector('[name="existing_hostname_padding"]')?.value || scheme.padding,
+          Number(scheme.next_number || 1)
+        ) || '—';
       }
       updateWorkflowPreview();
     };
@@ -508,7 +557,10 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     nodeSelect.addEventListener('change', loadNodeResources);
     schemeSelect.addEventListener('change', updateHostnameFields);
     newScheme.querySelector('[name="hostname_pattern"]').addEventListener('input', updateHostnameFields);
+    newScheme.querySelector('[name="hostname_padding"]').addEventListener('input', updateHostnameFields);
+    newScheme.querySelector('[name="hostname_next_number"]').addEventListener('input', updateHostnameFields);
     existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]').addEventListener('input', updateHostnameFields);
+    existingSchemeEditor.querySelector('[name="existing_hostname_padding"]').addEventListener('input', updateHostnameFields);
     ipModeSelect.addEventListener('change', updateIpMode);
     playbookSelect.addEventListener('change', updateAnsible);
     fields.querySelector('[name="tags"]').addEventListener('input', updateWorkflowPreview);
@@ -540,7 +592,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           const created = await api('/hostname-schemes', {
             method: 'POST',
             body: {
-              name: data.get('hostname_scheme_name') || data.get('name') + ' hostnames',
+              name: (data.get('slug') || data.get('name') || 'hostname') + ' hostnames',
               pattern: normalized.pattern,
               next_number: Number(data.get('hostname_next_number') || 1),
               padding: normalized.padding,
@@ -557,9 +609,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             data.get('existing_hostname_pattern') || selectedScheme.pattern,
             data.get('existing_hostname_padding') || selectedScheme.padding
           );
-          const editedName = data.get('existing_hostname_scheme_name') || selectedScheme.name;
-          const changed = editedName !== selectedScheme.name
-            || normalized.pattern.toLowerCase() !== selectedScheme.pattern.toLowerCase()
+          const editedName = selectedScheme.name;
+          const changed = normalized.pattern.toLowerCase() !== selectedScheme.pattern.toLowerCase()
             || Number(normalized.padding) !== Number(selectedScheme.padding);
 
           if (changed) {
