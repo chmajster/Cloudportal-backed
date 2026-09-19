@@ -52,7 +52,7 @@
 
 .tools-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
   gap: 18px;
 }
 .tool-card {
@@ -60,6 +60,15 @@
   display: grid;
   gap: 18px;
   padding: 22px;
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
+}
+.tool-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow);
+}
+.tool-card:only-child {
+  max-width: 980px;
 }
 .tool-card-featured {
   border-color: var(--accent-border);
