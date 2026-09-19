@@ -302,6 +302,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Konfiguracja LDAP' in script
     assert '/settings/ldap/test' in script
     assert 'JIT provisioning i RBAC' in script
+    assert 'Environment i APMID' in script
+    assert '/settings/vm-classification' in script
+    assert 'settings-environment-grid' in stylesheet
+    assert "environment: 'environment'" in script
+    assert "apmid: 'apmid'" in script
+    assert "apmid + '.' + environment" in script
+    assert "'apmid-' + apmid" in script
+    assert "'env-' + environment" in script
     assert 'auth_source=ldap' in script
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
