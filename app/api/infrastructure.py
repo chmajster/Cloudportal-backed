@@ -12,7 +12,7 @@ from app.credentials.testing import test_connection
 from app.database import get_db
 from app.models import Credential, Deployment, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
-from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint
+from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
 from app.security.core import audit, require
 
 router = APIRouter(tags=['infrastructure'])
@@ -88,6 +88,29 @@ def bootstrap_proxmox_credential(data: ProxmoxTokenBootstrapInput, request: Requ
     save_secret(db, credential, secret)
     audit(db, request, 'credential.proxmox_token_bootstrapped', 'credentials', credential.id)
     return credential_public(credential)
+
+
+@router.post('/credentials/proxmox/test', response_model=CredentialTestOutput, response_model_exclude_unset=True)
+def test_proxmox_draft_credential(data: CredentialInput, request: Request,
+                                  actor=Depends(require('credentials.test')), db=Depends(get_db, scope='function')):
+    if data.type != 'proxmox':
+        raise HTTPException(422, 'Ten test połączenia obsługuje wyłącznie dane dostępowe Proxmox VE.')
+    if not data.secrets:
+        raise HTTPException(422, 'Podaj hasło Proxmox albo komplet danych tokenu API.')
+    endpoint = resolve_proxmox_endpoint(data.endpoint, verify_ssl=data.verify_ssl)
+    try:
+        result = test_proxmox_connection(
+            endpoint,
+            data.username,
+            data.secrets,
+            verify_ssl=data.verify_ssl,
+        )
+    except HTTPException:
+        audit(db, request, 'credential.proxmox_connection_tested', 'credentials', None, 'failure')
+        db.commit()
+        raise
+    audit(db, request, 'credential.proxmox_connection_tested', 'credentials', None)
+    return result
 
 
 @router.get('/credentials/{id}', response_model=CredentialOutput)

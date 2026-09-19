@@ -87,6 +87,110 @@ function buildProxmoxUsername(username, realm) {
   return user + '@' + selectedRealm;
 }
 
+
+function proxmoxAuthModeLabel(mode) {
+  return mode === 'token' ? 'Token API' : 'Login i hasło';
+}
+
+function renderProxmoxConnectionResult(container, result = null, error = null) {
+  container.hidden = false;
+  container.classList.toggle('success', Boolean(result));
+  container.classList.toggle('error', Boolean(error));
+  if (error) {
+    container.replaceChildren(
+      node('div', { class: 'credential-connection-result-header' },
+        badge('Błąd', 'danger'),
+        node('strong', { text: 'Nie udało się nawiązać połączenia z Proxmox VE' })),
+      node('p', { class: 'credential-connection-message', text: error.message || 'Test połączenia nie powiódł się.' }),
+      node('div', { class: 'credential-connection-hints' },
+        node('strong', { text: 'Sprawdź kolejno:' }),
+        node('ol', {},
+          node('li', { text: 'adres IP / hostname, port i protokół HTTP/HTTPS;' }),
+          node('li', { text: 'czy API Proxmox odpowiada na wskazanym porcie;' }),
+          node('li', { text: 'użytkownika oraz realm, np. root@pam;' }),
+          node('li', { text: 'hasło albo Token ID i Token secret;' }),
+          node('li', { text: 'certyfikat TLS oraz ustawienie akceptacji certyfikatu self-signed;' }),
+          node('li', { text: 'uprawnienia konta, jeśli Cloudportal ma utworzyć nowy token API.' }))));
+    return;
+  }
+
+  const endpoint = result?.endpoint || '';
+  let protocol = '—';
+  let port = '—';
+  try {
+    const parsed = new URL(endpoint);
+    protocol = parsed.protocol.replace(':', '').toUpperCase();
+    port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+  } catch { /* Endpoint is already validated by the backend. */ }
+
+  const rows = [
+    ['Status', 'Połączenie działa poprawnie'],
+    ['Endpoint', endpoint || '—'],
+    ['Protokół', protocol],
+    ['Port', port],
+    ['Użytkownik', result?.username || '—'],
+    ['Uwierzytelnienie', proxmoxAuthModeLabel(result?.auth_mode)],
+    ['Wersja Proxmox VE', result?.version || 'nie podano'],
+    ['Weryfikacja TLS', result?.verify_ssl === false ? 'wyłączona dla tego połączenia' : 'włączona'],
+    ['Czas odpowiedzi', Number.isFinite(Number(result?.latency_ms)) ? result.latency_ms + ' ms' : '—'],
+  ];
+  container.replaceChildren(
+    node('div', { class: 'credential-connection-result-header' },
+      badge('OK', 'ok'),
+      node('strong', { text: result?.message || 'Połączenie z Proxmox VE działa poprawnie.' })),
+    node('div', { class: 'credential-connection-details' },
+      ...rows.map(([label, value]) => node('div', { class: 'credential-connection-detail' },
+        node('span', { text: label }), node('strong', { text: value })))));
+}
+
+async function testProxmoxCredentialForm(item, form) {
+  const data = new FormData(form);
+  const type = data.get('type');
+  if (type !== 'proxmox') throw new Error('Sprawdzenie połączenia przed zapisem jest dostępne dla Proxmox VE.');
+
+  const config = CREDENTIAL_TYPE_CONFIG.proxmox;
+  const endpoint = buildProxmoxEndpoint(form.elements.endpoint?.value || '', form.elements.port?.value || config.port.default);
+  const username = buildProxmoxUsername(form.elements.username?.value || '', form.elements.realm?.value || config.realm.default);
+  const verifySsl = !data.has('accept_untrusted_tls');
+  const sameType = Boolean(item && item.type === 'proxmox');
+  const replaceSecrets = !item || !sameType || data.has('replace_secrets');
+  const identityChanged = Boolean(item && sameType && (
+    item.endpoint !== endpoint || item.username !== username || item.verify_ssl !== verifySsl
+  ));
+
+  if (item && sameType && !replaceSecrets && !identityChanged) {
+    return api('/credentials/' + item.id + '/test', { method: 'POST' });
+  }
+  if (item && sameType && !replaceSecrets && identityChanged) {
+    throw new Error('Aby przetestować zmieniony endpoint, użytkownika lub TLS, zaznacz „Zastąp zapisane sekrety” i podaj dane uwierzytelniające.');
+  }
+
+  const authMode = form.elements.auth_mode?.value || config.defaultAuth;
+  const secrets = {};
+  if (authMode === 'token') {
+    secrets.token_id = form.querySelector('[data-secret-key="token_id"]')?.value || '';
+    secrets.token_secret = form.querySelector('[data-secret-key="token_secret"]')?.value || '';
+    if (!secrets.token_id || !secrets.token_secret) throw new Error('Podaj Token ID i Token secret.');
+  } else {
+    secrets.password = form.querySelector('[data-secret-key="password"]')?.value || '';
+    if (!secrets.password) throw new Error('Podaj hasło Proxmox.');
+  }
+
+  return api('/credentials/proxmox/test', {
+    method: 'POST',
+    body: {
+      name: String(data.get('name') || 'Test Proxmox').trim() || 'Test Proxmox',
+      type: 'proxmox',
+      endpoint,
+      username,
+      verify_ssl: verifySsl,
+      expires_at: null,
+      rotation_due_at: null,
+      secrets,
+    },
+  });
+}
+
 function renderCredentialDynamic(container, type, item) {
   const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
   const sameType = Boolean(item && item.type === type);
@@ -232,10 +336,54 @@ function credentialForm(item = null) {
     field('Dane dostępowe wygasają (opcjonalnie)', 'expires_at', { type: 'datetime-local', value: item?.expires_at ? toDateTimeLocal(item.expires_at) : '' }),
     field('Rotacja wymagana do (opcjonalnie)', 'rotation_due_at', { type: 'datetime-local', value: item?.rotation_due_at ? toDateTimeLocal(item.rotation_due_at) : '' }),
     dynamic);
-  if (allowed('credentials.test')) fields.append(checkboxField('Po zapisaniu przetestuj połączenie', 'test_after_save', false));
+
+  let connectionCheck = null;
+  let connectionResult = null;
+  let connectionButton = null;
+  if (allowed('credentials.test')) {
+    connectionResult = node('div', { class: 'credential-connection-result', hidden: true });
+    connectionButton = button('Sprawdź połączenie', async event => {
+      const control = event.currentTarget;
+      const form = control.closest('dialog')?.querySelector('#modal-form') || document.querySelector('#modal-form');
+      if (!form) return;
+      const previous = control.textContent;
+      control.disabled = true;
+      control.textContent = 'Sprawdzanie…';
+      connectionResult.hidden = false;
+      connectionResult.className = 'credential-connection-result pending';
+      connectionResult.replaceChildren(
+        node('div', { class: 'credential-connection-result-header' },
+          badge('Test', 'info'), node('strong', { text: 'Sprawdzanie połączenia z Proxmox VE…' })),
+        node('p', { class: 'credential-connection-message', text: 'Weryfikuję endpoint, TLS i uwierzytelnienie bez zapisywania sekretu.' }));
+      try {
+        const result = await testProxmoxCredentialForm(item, form);
+        renderProxmoxConnectionResult(connectionResult, result);
+      } catch (error) {
+        renderProxmoxConnectionResult(connectionResult, null, error);
+      } finally {
+        control.disabled = false;
+        control.textContent = previous;
+      }
+    }, 'ghost');
+    connectionCheck = node('section', { class: 'credential-connection-check wide' },
+      node('div', { class: 'credential-connection-check-copy' },
+        node('strong', { text: 'Test połączenia przed zapisem' }),
+        node('p', { text: 'Sprawdza dostęp do API, uwierzytelnienie, wersję Proxmox VE, TLS i czas odpowiedzi. Sekret nie jest zapisywany.' })),
+      node('div', { class: 'credential-connection-check-actions' }, connectionButton),
+      connectionResult);
+    fields.append(connectionCheck);
+    fields.append(checkboxField('Po zapisaniu przetestuj połączenie', 'test_after_save', false));
+  }
 
   const typeSelect = typeField.querySelector('select');
-  const render = () => renderCredentialDynamic(dynamic, typeSelect.value, item);
+  const render = () => {
+    renderCredentialDynamic(dynamic, typeSelect.value, item);
+    if (connectionCheck) {
+      connectionCheck.hidden = typeSelect.value !== 'proxmox';
+      connectionResult.hidden = true;
+      connectionResult.replaceChildren();
+    }
+  };
   typeSelect.addEventListener('change', render);
   render();
 
