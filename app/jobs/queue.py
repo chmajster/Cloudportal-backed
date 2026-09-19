@@ -1,5 +1,5 @@
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import lru_cache
 from redis import Redis
 from redis.exceptions import RedisError
@@ -26,6 +26,17 @@ def queue():
     return Queue('cloudportal', connection=queue_connection(), serializer=JSONSerializer)
 
 
+def provider_retry_ready(job):
+    wait = (job.payload or {}).get('_provider_wait') or {}
+    raw = wait.get('next_attempt_at')
+    if not raw:
+        return True
+    try:
+        return datetime.fromisoformat(raw) <= now()
+    except (TypeError, ValueError):
+        return True
+
+
 def dispatch_once():
     materialize_scheduled_jobs()
     q = queue()
@@ -33,6 +44,8 @@ def dispatch_once():
         jobs = db.scalars(select(Job).where(Job.status == 'queued', Job.cancel_requested.is_(False))
                           .with_for_update(skip_locked=True).limit(100)).all()
         for job in jobs:
+            if not provider_retry_ready(job):
+                continue
             try:
                 existing = RQJob.fetch(job.id, connection=redis_client(), serializer=JSONSerializer)
                 if existing.get_status(refresh=True) in {'queued', 'started', 'deferred', 'scheduled'}:
