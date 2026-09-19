@@ -1,7 +1,7 @@
 from datetime import timedelta
 from sqlalchemy import select
 from app.database import session
-from app.models import Token, User, now
+from app.models import Setting, Token, User, now
 from app.security.core import verify_password
 from conftest import new_user
 
@@ -111,6 +111,72 @@ def test_password_reset_consumed_and_revokes(client,headers):
     assert client.post('/api/v1/auth/reset-password',json={'token':token,'password':'new-password-1234'}).status_code==200
     assert client.post('/api/v1/auth/reset-password',json={'token':token,'password':'new-password-5678'}).status_code==400
     assert client.post('/api/v1/auth/login',json={'username':'viewer','password':'new-password-1234'}).status_code==200
+
+
+def test_ldap_settings_secret_and_jit_rbac(client, headers, monkeypatch):
+    payload = {
+        'enabled': True,
+        'url': 'ldaps://ldap.example.com:636',
+        'start_tls': False,
+        'verify_tls': True,
+        'bind_dn': 'cn=cloudportal,dc=example,dc=com',
+        'bind_password': 'LDAP_BIND_SECRET_123',
+        'base_dn': 'ou=people,dc=example,dc=com',
+        'user_filter': '(uid={username})',
+        'username_attribute': 'uid',
+        'email_attribute': 'mail',
+        'first_name_attribute': 'givenName',
+        'last_name_attribute': 'sn',
+    }
+    saved = client.put('/api/v1/settings/ldap', headers=headers, json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()['bind_password_configured'] is True
+    assert 'LDAP_BIND_SECRET_123' not in saved.text
+    with session() as db:
+        raw = db.get(Setting, 'ldap').value
+        assert raw.get('bind_secret')
+        assert 'LDAP_BIND_SECRET_123' not in str(raw)
+
+    profile = {
+        'dn': 'uid=alice,ou=people,dc=example,dc=com',
+        'username': 'alice',
+        'email': 'alice@example.com',
+        'first_name': 'Alice',
+        'last_name': 'Directory',
+    }
+    monkeypatch.setattr(
+        'app.auth.routes.authenticate_ldap',
+        lambda db, identity, password: profile if identity == 'alice' and password == 'directory-secret' else None,
+    )
+    login = client.post('/api/v1/auth/login', json={'username': 'alice', 'password': 'directory-secret'})
+    assert login.status_code == 200, login.text
+    assert login.json()['user']['auth_source'] == 'ldap'
+    assert login.json()['roles'] == []
+
+    alice = next(row for row in client.get('/api/v1/users', headers=headers).json()['items'] if row['username'] == 'alice')
+    role = client.post('/api/v1/roles', headers=headers, json={
+        'name': 'LDAP operator',
+        'permissions': ['deployments.read'],
+    }).json()
+    assigned = client.put('/api/v1/users/' + str(alice['id']) + '/roles', headers=headers, json={'role_ids': [role['id']]})
+    assert assigned.status_code == 200
+    second = client.post('/api/v1/auth/login', json={'username': 'alice', 'password': 'directory-secret'})
+    assert second.json()['permissions'] == ['deployments.read']
+    assert client.post('/api/v1/users/' + str(alice['id']) + '/reset-password', headers=headers).status_code == 409
+
+
+def test_ldap_does_not_override_local_account(client, headers, monkeypatch):
+    new_user(client, headers, username='localuser')
+    called = {'value': False}
+
+    def ldap_attempt(*args, **kwargs):
+        called['value'] = True
+        return None
+
+    monkeypatch.setattr('app.auth.routes.authenticate_ldap', ldap_attempt)
+    denied = client.post('/api/v1/auth/login', json={'username': 'localuser', 'password': 'wrong-local-password'})
+    assert denied.status_code == 401
+    assert called['value'] is False
 
 
 def test_service_account_cannot_login_or_impersonate(client,headers):
