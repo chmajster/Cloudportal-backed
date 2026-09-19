@@ -365,6 +365,21 @@ function settingsPanel(settings, statusRoot) {
   const ref = node('input', { type: 'text', name: 'ref', value: settings.ref, maxlength: '200', class: 'mono', disabled: !canUpdateSettings });
   const save = node('button', { class: 'button primary', type: 'submit', disabled: true }, 'Zapisz zmiany');
   const dirty = node('span', { class: 'update-unsaved', hidden: true, text: 'Niezapisane zmiany' });
+  const stateBadge = badge(settings.enabled ? 'Auto-update włączony' : 'Auto-update wyłączony', settings.enabled ? 'ok' : '');
+  const channelPreviewValue = node('strong', { class: 'mono', text: settings.ref });
+  const presets = intervalPresets(interval);
+
+  const syncPreset = () => {
+    presets.querySelectorAll('.update-preset').forEach(item => {
+      item.classList.toggle('active', item.textContent === (
+        Number(interval.value) === 6 ? '6 h'
+          : Number(interval.value) === 12 ? '12 h'
+            : Number(interval.value) === 24 ? '24 h'
+              : Number(interval.value) === 72 ? '3 dni'
+                : Number(interval.value) === 168 ? '7 dni' : ''
+      ));
+    });
+  };
 
   const markDirty = () => {
     const changed = autoEnabled.checked !== Boolean(settings.enabled)
@@ -374,7 +389,10 @@ function settingsPanel(settings, statusRoot) {
     save.disabled = !canUpdateSettings || !changed;
   };
   autoEnabled.addEventListener('change', markDirty);
-  interval.addEventListener('input', markDirty);
+  interval.addEventListener('input', () => {
+    syncPreset();
+    markDirty();
+  });
   ref.addEventListener('input', markDirty);
 
   return node('form', {
@@ -395,6 +413,10 @@ function settingsPanel(settings, statusRoot) {
         autoEnabled.checked = saved.enabled;
         interval.value = saved.interval_hours;
         ref.value = saved.ref;
+        stateBadge.textContent = saved.enabled ? 'Auto-update włączony' : 'Auto-update wyłączony';
+        stateBadge.className = 'badge ' + (saved.enabled ? 'ok' : '');
+        channelPreviewValue.textContent = saved.ref;
+        syncPreset();
         dirty.hidden = true;
         toast('Ustawienia aktualizacji zapisane.');
         await renderLiveStatus(statusRoot, settings);
@@ -411,7 +433,7 @@ function settingsPanel(settings, statusRoot) {
         node('h2', { text: 'Polityka auto-update' }),
         node('p', { class: 'muted', text: 'Updater okresowo sprawdza repozytorium. Po wykryciu nowej wersji może sam wykonać backup i wdrożenie.' })),
       node('div', { class: 'update-settings-state' },
-        badge(settings.enabled ? 'Auto-update włączony' : 'Auto-update wyłączony', settings.enabled ? 'ok' : ''),
+        stateBadge,
         dirty)
     ),
     node('label', { class: 'update-master-toggle' },
@@ -423,7 +445,7 @@ function settingsPanel(settings, statusRoot) {
     node('div', { class: 'update-settings-grid' },
       node('div', { class: 'update-setting-block' },
         node('label', {}, node('span', { text: 'Interwał sprawdzania' }), interval),
-        intervalPresets(interval),
+        presets,
         node('small', { class: 'muted', text: 'Zakres: od 1 do 168 godzin.' })
       ),
       node('div', { class: 'update-setting-block' },
@@ -431,7 +453,7 @@ function settingsPanel(settings, statusRoot) {
         node('small', { class: 'muted', text: 'Branch, tag lub commit używany jako źródło aktualizacji.' }),
         node('div', { class: 'update-channel-preview' },
           node('span', { class: 'muted', text: 'Aktywny kanał' }),
-          node('strong', { class: 'mono', text: settings.ref }))
+          channelPreviewValue)
       )
     ),
     node('div', { class: 'update-settings-footer' },
