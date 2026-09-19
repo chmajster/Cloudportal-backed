@@ -193,7 +193,10 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const pools = poolResult.items.filter(value => value.is_active);
     const playbooks = playbookResult.items;
     const credentials = credentialResult.items;
-    const roleChoices = roleResult.items.map(role => ({ value: role.id, label: role.name }));
+    const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
+    const roleChoices = roleResult.items
+      .filter(role => [...managerPermissions].every(permission => (role.permissions || []).includes(permission)))
+      .map(role => ({ value: role.id, label: role.name }));
     (item?.manager_role_ids || []).forEach(id => {
       if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: 'Rola #' + id });
     });
@@ -1031,7 +1034,10 @@ async function blueprintForm(item = null) {
     providerField.querySelector('select').addEventListener('change', refreshCredentialChoices);
     ansibleToggle.querySelector('input').addEventListener('change', renderBlueprintAnsible);
 
-    const roleChoices = roleResult.items.map(role => ({ value: role.id, label: role.name }));
+    const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
+    const roleChoices = roleResult.items
+      .filter(role => [...managerPermissions].every(permission => (role.permissions || []).includes(permission)))
+      .map(role => ({ value: role.id, label: role.name }));
     (item?.allowed_role_ids || []).forEach(id => {
       if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
     });
