@@ -48,6 +48,49 @@ def test_hostname_manager_reserves_unique_names(client, headers):
     assert released.status_code == 200 and released.json()['status'] == 'released'
 
 
+
+def test_hostname_scheme_edit_cannot_reset_sequence(client, headers):
+    scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
+        'name': 'SRL servers', 'pattern': 'srl{number}', 'padding': 3,
+    })
+    assert scheme.status_code == 201, scheme.text
+
+    first = client.post('/api/v1/hostnames/generate', headers=headers, json={
+        'scheme_id': scheme.json()['id'], 'values': {},
+    })
+    assert first.status_code == 200
+    assert first.json()['hostname'] == 'srl001'
+
+    current = client.get('/api/v1/hostname-schemes/' + str(scheme.json()['id']), headers=headers).json()
+    assert current['next_number'] == 2
+
+    edited = client.put('/api/v1/hostname-schemes/' + str(scheme.json()['id']), headers=headers, json={
+        'name': 'SRL production servers',
+        'pattern': 'srl{number}',
+        'next_number': current['next_number'],
+        'padding': 4,
+        'is_active': True,
+    })
+    assert edited.status_code == 200, edited.text
+    assert edited.json()['next_number'] == 2
+    assert edited.json()['padding'] == 4
+
+    rollback = client.put('/api/v1/hostname-schemes/' + str(scheme.json()['id']), headers=headers, json={
+        'name': 'SRL production servers',
+        'pattern': 'srl{number}',
+        'next_number': 1,
+        'padding': 4,
+        'is_active': True,
+    })
+    assert rollback.status_code == 409
+
+    second = client.post('/api/v1/hostnames/generate', headers=headers, json={
+        'scheme_id': scheme.json()['id'], 'values': {},
+    })
+    assert second.status_code == 200
+    assert second.json()['hostname'] == 'srl0002'
+
+
 def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
