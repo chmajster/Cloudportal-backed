@@ -36,6 +36,7 @@ function searchSources() {
         title: item.name || short(item.id, 18),
         subtitle: `${item.template || 'szablon'} · ${statusLabel(item.status)}`,
         keywords: [item.id, item.provider, item.template, item.executor, item.status],
+        entity: { type: 'deployment', item },
       }),
     },
     {
@@ -158,6 +159,12 @@ async function activateResult(result) {
     && allowed('vms.read')
   ) {
     await runCommand('inventory.openVm', result.entity.item);
+  } else if (
+    result.entity?.type === 'deployment'
+    && hasCommand('deployments.open')
+    && allowed('deployments.read')
+  ) {
+    await runCommand('deployments.open', result.entity.item);
   }
 }
 
