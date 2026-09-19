@@ -133,11 +133,13 @@
             grid,
             selectedScheme ? tokenFields : node('div', { class: 'blueprint-wizard-info', text: 'Wybierz pattern hostname.' }),
             node('div', { class: 'blueprint-wizard-inline-actions' },
-              button('Utwórz nowy pattern', () => { state.creatingScheme = true; rerender(); }, 'ghost'),
+              allowed('hostnames.create')
+                ? button('Utwórz nowy pattern', () => { state.creatingScheme = true; rerender(); }, 'ghost')
+                : null,
               button('Otwórz Generator hostname', () => {
                 window.open(location.pathname + '#hostnames', '_blank', 'noopener');
               }, 'ghost')),
-            createPanel)
+            allowed('hostnames.create') ? createPanel : null)
         : field('Stała nazwa VM', 'manual_vm_name', {
             value: state.manualVmName,
             required: true,
