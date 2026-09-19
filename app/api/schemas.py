@@ -387,8 +387,8 @@ class VMVariables(Input):
         normalized = []
         for value in values:
             tag = value.strip().lower()
-            if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', tag):
-                raise ValueError('Proxmox tags may contain lowercase letters, digits, underscore and hyphen')
+            if not re.fullmatch(r'[a-z0-9][a-z0-9_.-]{0,63}', tag):
+                raise ValueError('Proxmox tags may contain lowercase letters, digits, dot, underscore and hyphen')
             normalized.append(tag)
         return sorted(set(normalized))
 
