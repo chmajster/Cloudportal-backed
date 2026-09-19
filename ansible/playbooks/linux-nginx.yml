@@ -1,0 +1,26 @@
+- name: Install and configure Nginx
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install Nginx
+      ansible.builtin.package:
+        name: nginx
+        state: present
+    - name: Write managed default page
+      ansible.builtin.copy:
+        dest: /var/www/html/index.html
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          <!doctype html>
+          <html>
+          <head><meta charset="utf-8"><title>{{ page_title }}</title></head>
+          <body><h1>{{ page_title }}</h1><p>Managed by Cloudportal Ansible.</p></body>
+      when: page_title is defined
+    - name: Enable and start Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
