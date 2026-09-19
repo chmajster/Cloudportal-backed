@@ -152,6 +152,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Wersja Proxmox VE' in script
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
+    assert 'createProxmoxTemplatePicker' in script
+    assert 'Obraz / szablon Proxmox' in script
+    assert '/providers/' in script and '/templates' in script
+    assert '.proxmox-template-card' in stylesheet
     assert 'data-workflow-row' in script
     assert 'deployment_ansible_enabled' in script
     assert 'function permissionPicker(' in script
