@@ -212,6 +212,12 @@ class HostnameReservation(Timestamp, Base):
     released_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+class BlueprintManagerRole(Base):
+    __tablename__ = "blueprint_manager_roles"
+    blueprint_id: Mapped[int] = mapped_column(ForeignKey("blueprints.id", ondelete="CASCADE"), primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True, unique=True)
+
+
 class Blueprint(Timestamp, Base):
     __tablename__ = "blueprints"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -223,6 +229,7 @@ class Blueprint(Timestamp, Base):
     visibility: Mapped[dict] = mapped_column(JSON, default=dict)
     allowed_role_ids: Mapped[list] = mapped_column(JSON, default=list)
     allowed_user_ids: Mapped[list] = mapped_column(JSON, default=list)
+    manager_roles: Mapped[list["Role"]] = relationship(secondary="blueprint_manager_roles", lazy="selectin")
     variables_schema: Mapped[dict] = mapped_column(JSON, default=dict)
     deployment: Mapped[dict] = mapped_column(JSON, default=dict)
     workflow: Mapped[list] = mapped_column(JSON, default=list)

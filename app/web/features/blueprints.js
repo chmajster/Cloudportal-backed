@@ -80,8 +80,20 @@ function readHostnameValues(form) {
   return result;
 }
 
+function canManageBlueprintByRole(item) {
+  const required = new Set((item?.manager_role_ids || []).map(Number));
+  if (!required.size) return true;
+  const owned = new Set((state.identity?.roles || []).map(role => Number(role.id)));
+  return [...required].some(id => owned.has(id));
+}
+
 async function blueprintsView() {
-  const blueprints = (await api('/blueprints?limit=200')).items;
+  const [blueprintResult, roleResult] = await Promise.all([
+    api('/blueprints?limit=200'),
+    allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const blueprints = blueprintResult.items;
+  const roleNames = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
   const canQuickProxmox = canDesignBlueprint && allowed('hostnames.read') && allowed('ipam.read');
   const actions = [];
@@ -93,14 +105,18 @@ async function blueprintsView() {
       { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
       { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => ({ backend: 'Backend', cloudportal: 'CloudPortal', api: 'API' }[key] || key)).join(', ') || '—' },
       { label: 'Kroki', value: item => item.workflow.length },
+      { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
+        ? (item.manager_role_ids || []).map(id => roleNames.get(Number(id)) || ('Rola #' + id)).join(', ')
+        : badge('Bez roli dedykowanej', 'warning') },
       { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Wymaga akceptacji', 'warning') : badge('Bez akceptacji', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
       if (allowed('blueprints.execute') && (!item.requires_approval || allowed('blueprints.approve')) && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
-      if (allowed('blueprints.update') && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
-      if (allowed('blueprints.update') && canDesignBlueprint) result.push(button('Edytuj', () => blueprintForm(item)));
-      if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
+      const canManage = canManageBlueprintByRole(item);
+      if (allowed('blueprints.update') && canManage && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
+      if (allowed('blueprints.update') && canManage && canDesignBlueprint) result.push(button('Edytuj', () => blueprintForm(item)));
+      if (allowed('blueprints.delete') && canManage) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
 }
@@ -119,6 +135,18 @@ function hostnamePatternTokens(pattern) {
   const automatic = new Set(['number', 'random', 'year']);
   return [...new Set(Array.from(String(pattern || '').matchAll(/{([a-z]+)}/g), match => match[1]))]
     .filter(token => !automatic.has(token));
+}
+
+function normalizeHostnamePattern(pattern, padding = 3) {
+  const raw = String(pattern || '').trim();
+  const runs = [...raw.matchAll(/X{1,9}/g)];
+  if (!raw.includes('{number}') && !raw.includes('{random}') && runs.length === 1) {
+    return {
+      pattern: raw.replace(runs[0][0], '{number}'),
+      padding: runs[0][0].length,
+    };
+  }
+  return { pattern: raw, padding: Number(padding || 3) };
 }
 
 function blueprintTags(value) {
@@ -153,14 +181,16 @@ function blueprintWorkflow(options) {
   return steps;
 }
 
-async function proxmoxBlueprintForm(item = null) {
+async function proxmoxBlueprintForm(item = null, options = {}) {
   try {
-    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult] = await Promise.all([
+    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult, blueprintResult] = await Promise.all([
       api('/providers?limit=200'),
       api('/hostname-schemes?limit=200'),
       api('/ipam/pools?limit=200'),
       allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
       api('/credentials?limit=200'),
+      allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
+      allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items.filter(value => value.type === 'proxmox');
     if (!providers.length) throw new Error('Najpierw dodaj platformę Proxmox.');
@@ -169,8 +199,23 @@ async function proxmoxBlueprintForm(item = null) {
     const pools = poolResult.items.filter(value => value.is_active);
     const playbooks = playbookResult.items;
     const credentials = credentialResult.items;
+    const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
+    const dedicatedElsewhere = new Set(
+      blueprintResult.items
+        .filter(blueprint => Number(blueprint.id) !== Number(item?.id))
+        .flatMap(blueprint => blueprint.manager_role_ids || [])
+        .map(Number)
+    );
+    const roleChoices = roleResult.items
+      .filter(role => !dedicatedElsewhere.has(Number(role.id)))
+      .filter(role => [...managerPermissions].every(permission => (role.permissions || []).includes(permission)))
+      .map(role => ({ value: role.id, label: role.name }));
+    (item?.manager_role_ids || []).forEach(id => {
+      if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: 'Rola #' + id });
+    });
     const deployment = item?.deployment || {};
     const variables = deployment.variables || {};
+    const templateWizard = options.mode === 'template';
     const currentProvider = providers.find(value => value.id === deployment.provider_id) || providers[0];
 
     const providerField = selectField(
@@ -193,14 +238,32 @@ async function proxmoxBlueprintForm(item = null) {
       { required: true, wide: true }
     );
     const newScheme = node('div', { class: 'form-grid designer-subsection wide' },
-      field('Nazwa wzorca', 'hostname_scheme_name', { value: item ? item.name + ' hostnames' : '', placeholder: 'Np. WRO PROD WEB' }),
+      field('Nazwa wzorca', 'hostname_scheme_name', { value: item ? item.name + ' hostnames' : '', placeholder: 'Np. Serwery SRL' }),
       field('Wzorzec', 'hostname_pattern', {
-        value: '{env}-{role}-{number}',
-        placeholder: '{location}-{env}-{role}-{number}',
-        help: 'Dostępne m.in. {location}, {env}, {environment}, {application}, {service}, {role}, {os}, {cluster}, {site}, {year}, {number}, {random}.',
+        value: 'SRLXXX',
+        placeholder: 'SRLXXX lub {env}-{role}-{number}',
+        help: 'Najprościej użyj X jako cyfr sekwencji: SRLXXX → srl001, srl002, srl003. Obsługiwane są też tokeny {location}, {env}, {environment}, {application}, {service}, {role}, {os}, {cluster}, {site}, {year}, {number}, {random}.',
         wide: true,
       }),
-      field('Dopełnienie numeru', 'hostname_padding', { type: 'number', min: 1, max: 9, value: 3 })
+      field('Pierwszy numer', 'hostname_next_number', { type: 'number', min: 1, max: 999999999, value: 1 }),
+      field('Dopełnienie numeru', 'hostname_padding', {
+        type: 'number', min: 1, max: 9, value: 3,
+        help: 'Dla zapisu SRLXXX liczba cyfr zostanie rozpoznana automatycznie jako 3.',
+      })
+    );
+    const existingSchemeEditor = node('div', { class: 'form-grid designer-subsection wide' },
+      field('Nazwa wzorca', 'existing_hostname_scheme_name', { value: '', placeholder: 'Nazwa schematu' }),
+      field('Wzorzec', 'existing_hostname_pattern', {
+        value: '',
+        placeholder: 'SRLXXX lub srl{number}',
+        help: 'Edycja wzorca nie resetuje licznika. Aktualny następny numer jest zachowywany.',
+        wide: true,
+      }),
+      field('Dopełnienie numeru', 'existing_hostname_padding', { type: 'number', min: 1, max: 9, value: 3 }),
+      node('div', { class: 'field wide' },
+        node('span', { class: 'field-label', text: 'Następny numer' }),
+        node('strong', { class: 'mono', 'data-hostname-next-number': 'true', text: '—' }),
+        node('small', { class: 'field-help', text: 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' }))
     );
     const hostnameDefaults = node('div', { class: 'form-grid designer-subsection wide' });
 
@@ -235,6 +298,12 @@ async function proxmoxBlueprintForm(item = null) {
       deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' }
     );
 
+    const executorField = selectField(
+      'Silnik IaC', 'executor',
+      [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }],
+      deployment.executor || 'terraform',
+      { required: true }
+    );
     const workflowPreview = node('div', { class: 'workflow-preview workflow-preview-visual' });
     const preservedVariablesSchema = item?.variables_schema || {};
 
@@ -243,9 +312,9 @@ async function proxmoxBlueprintForm(item = null) {
       field('Slug', 'slug', { required: true, value: item?.slug || '' }),
       field('Nazwa', 'name', { required: true, value: item?.name || '' }),
       field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
-      providerField,
+      providerField, executorField,
 
-      node('div', { class: 'designer-heading wide' }, node('strong', { text: '2. Proxmox i obraz' }), node('span', { text: 'Te wartości zostaną użyte przy każdym uruchomieniu.' })),
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '2. Proxmox i obraz' }), node('span', { text: 'Wybierz bazową VM/template oraz parametry używane przy każdym uruchomieniu.' })),
       nodeField, imageField, storageField, networkField,
       field('Rdzenie CPU', 'cpu', { type: 'number', min: 1, max: 128, value: variables.cpu ?? 2 }),
       field('RAM (MiB)', 'memory', { type: 'number', min: 512, max: 1048576, value: variables.memory ?? 4096 }),
@@ -257,8 +326,8 @@ async function proxmoxBlueprintForm(item = null) {
         help: 'Tagi zostaną zapisane w Blueprintcie, dodane do workflow i automatycznie ustawione na VM.',
       }),
 
-      node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Pattern i wartości są zapisywane w Blueprintcie.' })),
-      schemeField, newScheme, hostnameDefaults,
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Pattern i wartości są zapisywane w Blueprintcie. Edycja nie resetuje licznika.' })),
+      schemeField, newScheme, existingSchemeEditor, hostnameDefaults,
 
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '4. Cloud-init' }), node('span', { text: 'Konfiguracja sieci, DNS i konta trafia do template Proxmox.' })),
       ipMode, ipamField, staticIp, staticGateway,
@@ -272,7 +341,11 @@ async function proxmoxBlueprintForm(item = null) {
       playbookField, ansibleCredentialField,
       node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),
 
-      node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp i recovery' })),
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp, role i recovery' })),
+      multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, item?.manager_role_ids || [], {
+        help: 'Użytkownik musi mieć globalne uprawnienie do zarządzania Blueprintami oraz co najmniej jedną z tych ról. Jedna rola może zarządzać tylko jednym szablonem.',
+        empty: 'Brak ról dostępnych do przypisania.',
+      }),
       checkboxField('Aktywny', 'is_active', item?.is_active ?? true),
       checkboxField('Panel backendu', 'visibility_backend', item?.visibility?.backend ?? true),
       checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
@@ -295,15 +368,31 @@ async function proxmoxBlueprintForm(item = null) {
     const playbookSelect = playbookField.querySelector('select');
     const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
     let templateRows = [];
+    let hydratedHostnameSchemeId = null;
 
     const updateHostnameFields = () => {
       const selected = schemeSelect.value;
       const scheme = schemes.find(value => String(value.id) === String(selected));
       const custom = selected === '__new__';
       newScheme.hidden = !custom;
+      existingSchemeEditor.hidden = custom || !scheme;
+      if (custom) hydratedHostnameSchemeId = null;
+      if (scheme && !custom && String(hydratedHostnameSchemeId) !== String(scheme.id)) {
+        existingSchemeEditor.querySelector('[name="existing_hostname_scheme_name"]').value = scheme.name;
+        existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]').value = scheme.pattern;
+        existingSchemeEditor.querySelector('[name="existing_hostname_padding"]').value = scheme.padding;
+        existingSchemeEditor.querySelector('[data-hostname-next-number]').textContent = String(scheme.next_number);
+        hydratedHostnameSchemeId = scheme.id;
+      }
       const pattern = custom
-        ? newScheme.querySelector('[name="hostname_pattern"]').value
-        : (scheme?.pattern || '');
+        ? normalizeHostnamePattern(
+            newScheme.querySelector('[name="hostname_pattern"]').value,
+            newScheme.querySelector('[name="hostname_padding"]').value
+          ).pattern
+        : normalizeHostnamePattern(
+            existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]')?.value || scheme?.pattern || '',
+            existingSchemeEditor.querySelector('[name="existing_hostname_padding"]')?.value || scheme?.padding || 3
+          ).pattern;
       const defaults = deployment.hostname_values || {};
       hostnameDefaults.replaceChildren();
       const tokens = hostnamePatternTokens(pattern);
@@ -419,6 +508,7 @@ async function proxmoxBlueprintForm(item = null) {
     nodeSelect.addEventListener('change', loadNodeResources);
     schemeSelect.addEventListener('change', updateHostnameFields);
     newScheme.querySelector('[name="hostname_pattern"]').addEventListener('input', updateHostnameFields);
+    existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]').addEventListener('input', updateHostnameFields);
     ipModeSelect.addEventListener('change', updateIpMode);
     playbookSelect.addEventListener('change', updateAnsible);
     fields.querySelector('[name="tags"]').addEventListener('input', updateWorkflowPreview);
@@ -431,10 +521,10 @@ async function proxmoxBlueprintForm(item = null) {
     updateWorkflowPreview();
 
     openModal({
-      title: item ? 'Edytuj ' + item.name : 'Nowy Blueprint Proxmox',
-      eyebrow: 'Blueprint Designer',
+      title: item ? 'Edytuj ' + item.name : (templateWizard ? 'Nowy szablon Terraform / OpenTofu' : 'Nowy Blueprint Proxmox'),
+      eyebrow: templateWizard ? 'Kreator szablonu IaC' : 'Blueprint Designer',
       body: fields,
-      submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz Blueprint',
+      submitLabel: item ? 'Zapisz nową wersję' : (templateWizard ? 'Utwórz szablon' : 'Utwórz Blueprint'),
       wide: true,
       onSubmit: async (data, form) => {
         const provider = providers.find(value => String(value.id) === String(data.get('provider_id')));
@@ -443,14 +533,17 @@ async function proxmoxBlueprintForm(item = null) {
         let schemeId = data.get('hostname_scheme_id');
         let selectedPattern = '';
         if (schemeId === '__new__') {
-          const pattern = data.get('hostname_pattern');
+          const normalized = normalizeHostnamePattern(
+            data.get('hostname_pattern'),
+            data.get('hostname_padding')
+          );
           const created = await api('/hostname-schemes', {
             method: 'POST',
             body: {
               name: data.get('hostname_scheme_name') || data.get('name') + ' hostnames',
-              pattern,
-              next_number: 1,
-              padding: Number(data.get('hostname_padding') || 3),
+              pattern: normalized.pattern,
+              next_number: Number(data.get('hostname_next_number') || 1),
+              padding: normalized.padding,
               is_active: true,
             },
           });
@@ -458,7 +551,33 @@ async function proxmoxBlueprintForm(item = null) {
           selectedPattern = created.pattern;
         } else {
           const selectedScheme = schemes.find(value => String(value.id) === String(schemeId));
-          selectedPattern = selectedScheme?.pattern || '';
+          if (!selectedScheme) throw new Error('Wybrany schemat hostname nie istnieje.');
+
+          const normalized = normalizeHostnamePattern(
+            data.get('existing_hostname_pattern') || selectedScheme.pattern,
+            data.get('existing_hostname_padding') || selectedScheme.padding
+          );
+          const editedName = data.get('existing_hostname_scheme_name') || selectedScheme.name;
+          const changed = editedName !== selectedScheme.name
+            || normalized.pattern.toLowerCase() !== selectedScheme.pattern.toLowerCase()
+            || Number(normalized.padding) !== Number(selectedScheme.padding);
+
+          if (changed) {
+            if (!allowed('hostnames.update')) throw new Error('Brak uprawnienia do edycji schematu hostname.');
+            const updated = await api('/hostname-schemes/' + selectedScheme.id, {
+              method: 'PUT',
+              body: {
+                name: editedName,
+                pattern: normalized.pattern,
+                next_number: selectedScheme.next_number,
+                padding: normalized.padding,
+                is_active: selectedScheme.is_active,
+              },
+            });
+            selectedPattern = updated.pattern;
+          } else {
+            selectedPattern = selectedScheme.pattern;
+          }
         }
 
         const hostnameValues = {};
@@ -524,6 +643,11 @@ async function proxmoxBlueprintForm(item = null) {
           ansible: Boolean(ansible),
         });
 
+        const managerRoleIds = [...form.querySelectorAll('[name="manager_role_ids"]:checked')].map(input => Number(input.value));
+        if (templateWizard && !item && roleChoices.length && !managerRoleIds.length) {
+          throw new Error('Wybierz co najmniej jedną rolę zarządzającą szablonem.');
+        }
+
         const payload = {
           slug: data.get('slug'),
           name: data.get('name'),
@@ -536,6 +660,7 @@ async function proxmoxBlueprintForm(item = null) {
           },
           allowed_role_ids: item?.allowed_role_ids || [],
           allowed_user_ids: item?.allowed_user_ids || [],
+          manager_role_ids: managerRoleIds,
           variables_schema: preservedVariablesSchema,
           deployment: {
             name: '{{ hostname }}',
@@ -545,7 +670,7 @@ async function proxmoxBlueprintForm(item = null) {
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
             template: 'proxmox-vm',
-            executor: 'terraform',
+            executor: data.get('executor'),
             variables: vmVariables,
             ansible,
           },
@@ -558,8 +683,10 @@ async function proxmoxBlueprintForm(item = null) {
           method: item ? 'PUT' : 'POST',
           body: payload,
         });
-        toast(item ? 'Utworzono nową wersję Blueprintu.' : 'Blueprint gotowy do szybkiego tworzenia VM.');
-        navigate('blueprints');
+        toast(item
+          ? 'Utworzono nową wersję Blueprintu.'
+          : (templateWizard ? 'Szablon Terraform / OpenTofu jest gotowy do tworzenia VM.' : 'Blueprint gotowy do szybkiego tworzenia VM.'));
+        navigate(options.returnTo || 'blueprints');
       },
     });
   } catch (error) {
@@ -569,7 +696,7 @@ async function proxmoxBlueprintForm(item = null) {
 
 async function blueprintForm(item = null) {
   try {
-    const [providerResult, credentialResult, templateResult, schemeResult, poolResult, roleResult, userResult, playbookResult] = await Promise.all([
+    const [providerResult, credentialResult, templateResult, schemeResult, poolResult, roleResult, userResult, playbookResult, blueprintResult] = await Promise.all([
       api('/providers?limit=200'),
       api('/credentials?limit=200'),
       api('/templates'),
@@ -578,6 +705,7 @@ async function blueprintForm(item = null) {
       allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
       allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
       allowed('ansible.execute') && allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
+      allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items;
     const credentials = credentialResult.items;
@@ -920,8 +1048,21 @@ async function blueprintForm(item = null) {
     providerField.querySelector('select').addEventListener('change', refreshCredentialChoices);
     ansibleToggle.querySelector('input').addEventListener('change', renderBlueprintAnsible);
 
-    const roleChoices = roleResult.items.map(role => ({ value: role.id, label: role.name }));
+    const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
+    const dedicatedElsewhere = new Set(
+      blueprintResult.items
+        .filter(blueprint => Number(blueprint.id) !== Number(item?.id))
+        .flatMap(blueprint => blueprint.manager_role_ids || [])
+        .map(Number)
+    );
+    const roleChoices = roleResult.items
+      .filter(role => !dedicatedElsewhere.has(Number(role.id)))
+      .filter(role => [...managerPermissions].every(permission => (role.permissions || []).includes(permission)))
+      .map(role => ({ value: role.id, label: role.name }));
     (item?.allowed_role_ids || []).forEach(id => {
+      if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
+    });
+    (item?.manager_role_ids || []).forEach(id => {
       if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
     });
     const userChoices = userResult.items.map(user => ({ value: user.id, label: user.username + (user.email ? ' · ' + user.email : '') }));
@@ -956,7 +1097,11 @@ async function blueprintForm(item = null) {
       formSection('Dostęp', 'Puste listy oznaczają brak dodatkowego ograniczenia.',
         node('div', { class: 'form-grid' },
           multiCheckboxField('Dozwolone role', 'allowed_role_ids', roleChoices, item?.allowed_role_ids || [], {
-            help: 'Brak zaznaczeń oznacza brak dodatkowego ograniczenia roli.',
+            help: 'Brak zaznaczeń oznacza brak dodatkowego ograniczenia roli przy uruchamianiu.',
+            empty: 'Brak ról dostępnych do wyboru.',
+          }),
+          multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, item?.manager_role_ids || [], {
+            help: 'Wymagane dodatkowo do edycji i usuwania. Jedna rola może być przypisana jako zarządzająca tylko do jednego szablonu.',
             empty: 'Brak ról dostępnych do wyboru.',
           }),
           multiCheckboxField('Dozwoleni użytkownicy', 'allowed_user_ids', userChoices, item?.allowed_user_ids || [], {
@@ -1091,6 +1236,7 @@ async function blueprintForm(item = null) {
           },
           allowed_role_ids: selectedIds('allowed_role_ids'),
           allowed_user_ids: selectedIds('allowed_user_ids'),
+          manager_role_ids: selectedIds('manager_role_ids'),
           variables_schema: variablesSchema,
           deployment: deploymentPayload,
           workflow,
@@ -1300,6 +1446,8 @@ function generateHostname(schemes) {
   });
 }
 
+registerCommand('blueprints.proxmoxTemplateWizard', proxmoxBlueprintForm);
+registerCommand('blueprints.execute', executeBlueprint);
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
 registerView({ id: 'hostnames', label: 'Nazwy hostów', icon: 'H', permission: 'hostnames.read', order: 80 }, hostnamesView);
 })();

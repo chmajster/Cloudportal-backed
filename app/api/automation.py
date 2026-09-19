@@ -7,10 +7,11 @@ from app.catalog import template_definition
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items)
 from app.api.schemas import BlueprintExecuteInput, BlueprintInput, DeploymentInput, HostnameGenerateInput, HostnameSchemeInput
-from app.automation.service import (available_to, blueprint_public, compile_blueprint, generate_hostname,
-                                    hostname_public)
+from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
+                                    generate_hostname, hostname_public)
 from app.database import get_db
-from app.models import Blueprint, Deployment, HostnameReservation, HostnameScheme, IPPool, Provider, Role, User, now
+from app.models import (Blueprint, BlueprintManagerRole, Deployment, HostnameReservation, HostnameScheme,
+                        IPPool, Provider, Role, User, now)
 from app.security.core import audit, require
 
 
@@ -50,6 +51,8 @@ def create_hostname_scheme(data: HostnameSchemeInput, request: Request, actor=De
 @router.put('/hostname-schemes/{id}', response_model=HostnameSchemeOutput)
 def update_hostname_scheme(id: int, data: HostnameSchemeInput, request: Request, actor=Depends(require('hostnames.update')), db=Depends(get_db, scope='function')):
     row = find(db, HostnameScheme, id)
+    if data.next_number < row.next_number:
+        raise HTTPException(409, f'Hostname sequence cannot be moved backwards; next number is {row.next_number}')
     for key, value in data.model_dump().items():
         setattr(row, key, value)
     audit(db, request, 'hostname_scheme.updated', 'hostname_schemes', id)
@@ -104,7 +107,7 @@ def release_hostname(id: str, request: Request, actor=Depends(require('hostnames
     return hostname_public(row)
 
 
-def validate_blueprint_references(db, data):
+def validate_blueprint_references(db, data, blueprint_id=None):
     provider = find(db, Provider, data.deployment.provider_id)
     template_meta, _ = template_definition(data.deployment.template)
     if provider.type != template_meta['provider']:
@@ -129,8 +132,27 @@ def validate_blueprint_references(db, data):
             raise HTTPException(422, 'Blueprint IPAM pool must be active')
     for role_id in set(data.allowed_role_ids):
         find(db, Role, role_id)
+    manager_roles = []
+    for role_id in sorted(set(data.manager_role_ids)):
+        role = db.scalar(select(Role).where(Role.id == role_id).with_for_update())
+        if role is None:
+            raise HTTPException(404, 'Manager role not found')
+        permissions = {permission.name for permission in role.permissions}
+        required_permissions = {'blueprints.read', 'blueprints.update', 'blueprints.delete'}
+        if not required_permissions <= permissions:
+            raise HTTPException(422, f'Role {role.name} must include blueprint read, update and delete permissions')
+        assignment = db.scalar(select(BlueprintManagerRole).where(BlueprintManagerRole.role_id == role_id))
+        if assignment is not None and assignment.blueprint_id != blueprint_id:
+            raise HTTPException(409, f'Role {role.name} is already dedicated to another template')
+        manager_roles.append(role)
     for user_id in set(data.allowed_user_ids):
         find(db, User, user_id)
+    return manager_roles
+
+
+def require_blueprint_manager(row, actor):
+    if not can_manage_blueprint(row, actor):
+        raise HTTPException(403, 'A dedicated manager role for this template is required')
 
 
 @router.get('/blueprints', response_model=Items[BlueprintOutput])
@@ -158,9 +180,11 @@ def blueprint(id: int, request: Request, source_header: Annotated[str | None, He
 
 @router.post('/blueprints', status_code=201, response_model=BlueprintOutput)
 def create_blueprint(data: BlueprintInput, request: Request, actor=Depends(require('blueprints.create')), db=Depends(get_db, scope='function')):
-    validate_blueprint_references(db, data)
+    manager_roles = validate_blueprint_references(db, data)
     def create():
-        row = Blueprint(**data.model_dump(mode='json'), created_by=actor.user_id)
+        values = data.model_dump(mode='json', exclude={'manager_role_ids'})
+        row = Blueprint(**values, created_by=actor.user_id)
+        row.manager_roles = manager_roles
         db.add(row)
         db.flush()
         audit(db, request, 'blueprint.created', 'blueprints', row.id)
@@ -170,10 +194,12 @@ def create_blueprint(data: BlueprintInput, request: Request, actor=Depends(requi
 
 @router.put('/blueprints/{id}', response_model=BlueprintOutput)
 def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
-    validate_blueprint_references(db, data)
     row = find(db, Blueprint, id)
-    for key, value in data.model_dump(mode='json').items():
+    require_blueprint_manager(row, actor)
+    manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
+    for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
+    row.manager_roles = manager_roles
     row.version += 1
     audit(db, request, 'blueprint.updated', 'blueprints', id)
     db.flush()
@@ -183,6 +209,7 @@ def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depe
 @router.delete('/blueprints/{id}', response_model=DeletedOutput)
 def delete_blueprint(id: int, request: Request, actor=Depends(require('blueprints.delete')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
+    require_blueprint_manager(row, actor)
     db.delete(row)
     audit(db, request, 'blueprint.deleted', 'blueprints', id)
     return {'deleted': True}

@@ -48,6 +48,143 @@ def test_hostname_manager_reserves_unique_names(client, headers):
     assert released.status_code == 200 and released.json()['status'] == 'released'
 
 
+
+def test_hostname_scheme_edit_cannot_reset_sequence(client, headers):
+    scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
+        'name': 'SRL servers', 'pattern': 'srl{number}', 'padding': 3,
+    })
+    assert scheme.status_code == 201, scheme.text
+
+    first = client.post('/api/v1/hostnames/generate', headers=headers, json={
+        'scheme_id': scheme.json()['id'], 'values': {},
+    })
+    assert first.status_code == 200
+    assert first.json()['hostname'] == 'srl001'
+
+    current = client.get('/api/v1/hostname-schemes/' + str(scheme.json()['id']), headers=headers).json()
+    assert current['next_number'] == 2
+
+    edited = client.put('/api/v1/hostname-schemes/' + str(scheme.json()['id']), headers=headers, json={
+        'name': 'SRL production servers',
+        'pattern': 'srl{number}',
+        'next_number': current['next_number'],
+        'padding': 4,
+        'is_active': True,
+    })
+    assert edited.status_code == 200, edited.text
+    assert edited.json()['next_number'] == 2
+    assert edited.json()['padding'] == 4
+
+    rollback = client.put('/api/v1/hostname-schemes/' + str(scheme.json()['id']), headers=headers, json={
+        'name': 'SRL production servers',
+        'pattern': 'srl{number}',
+        'next_number': 1,
+        'padding': 4,
+        'is_active': True,
+    })
+    assert rollback.status_code == 409
+
+    second = client.post('/api/v1/hostnames/generate', headers=headers, json={
+        'scheme_id': scheme.json()['id'], 'values': {},
+    })
+    assert second.status_code == 200
+    assert second.json()['hostname'] == 'srl0002'
+
+
+
+def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+
+    manager_role = client.post('/api/v1/roles', headers=headers, json={
+        'name': 'Template A Manager',
+        'permissions': ['blueprints.read', 'blueprints.update', 'blueprints.delete'],
+    })
+    other_role = client.post('/api/v1/roles', headers=headers, json={
+        'name': 'Template B Manager',
+        'permissions': ['blueprints.read', 'blueprints.update', 'blueprints.delete'],
+    })
+    assert manager_role.status_code == other_role.status_code == 201
+
+    manager_user = client.post('/api/v1/users', headers=headers, json={
+        'username': 'template-manager',
+        'email': 'template-manager@example.com',
+        'password': 'strong-password-1234',
+    })
+    other_user = client.post('/api/v1/users', headers=headers, json={
+        'username': 'other-template-manager',
+        'email': 'other-template-manager@example.com',
+        'password': 'strong-password-1234',
+    })
+    assert manager_user.status_code == other_user.status_code == 201
+
+    assert client.put(
+        '/api/v1/users/' + str(manager_user.json()['id']) + '/roles',
+        headers=headers,
+        json={'role_ids': [manager_role.json()['id']]},
+    ).status_code == 200
+    assert client.put(
+        '/api/v1/users/' + str(other_user.json()['id']) + '/roles',
+        headers=headers,
+        json={'role_ids': [other_role.json()['id']]},
+    ).status_code == 200
+
+    manager_login = client.post('/api/v1/auth/login', json={
+        'username': 'template-manager', 'password': 'strong-password-1234',
+    }).json()
+    other_login = client.post('/api/v1/auth/login', json={
+        'username': 'other-template-manager', 'password': 'strong-password-1234',
+    }).json()
+    manager_headers = {'Authorization': 'Bearer ' + manager_login['access_token']}
+    other_headers = {'Authorization': 'Bearer ' + other_login['access_token']}
+
+    payload = {
+        'slug': 'role-protected-template',
+        'name': 'Role protected template',
+        'manager_role_ids': [manager_role.json()['id']],
+        'deployment': {
+            'name': 'role-protected-template',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+    blueprint = created.json()
+    assert blueprint['manager_role_ids'] == [manager_role.json()['id']]
+
+    denied = client.put(
+        '/api/v1/blueprints/' + str(blueprint['id']),
+        headers=other_headers,
+        json={**payload, 'description': 'unauthorized edit'},
+    )
+    assert denied.status_code == 403
+    assert 'dedicated manager role' in denied.text
+
+    allowed = client.put(
+        '/api/v1/blueprints/' + str(blueprint['id']),
+        headers=manager_headers,
+        json={**payload, 'description': 'authorized edit'},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()['description'] == 'authorized edit'
+
+    second = client.post('/api/v1/blueprints', headers=headers, json={
+        **payload,
+        'slug': 'second-role-protected-template',
+        'name': 'Second role protected template',
+    })
+    assert second.status_code == 409
+    assert 'already dedicated to another template' in second.text
+
+    denied_delete = client.delete('/api/v1/blueprints/' + str(blueprint['id']), headers=other_headers)
+    assert denied_delete.status_code == 403
+    allowed_delete = client.delete('/api/v1/blueprints/' + str(blueprint['id']), headers=manager_headers)
+    assert allowed_delete.status_code == 200
+
+
+
 def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={

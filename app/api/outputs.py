@@ -291,6 +291,7 @@ class BlueprintOutput(Output):
     visibility: dict[str, bool]
     allowed_role_ids: list[int]
     allowed_user_ids: list[int]
+    manager_role_ids: list[int]
     variables_schema: dict[str, Any]
     deployment: dict[str, Any]
     workflow: list[dict[str, Any]]
