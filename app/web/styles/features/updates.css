@@ -643,3 +643,8 @@
   .update-pipeline { grid-template-columns: repeat(14, 70px); }
   .update-master-toggle { align-items: flex-start; }
 }
+
+.update-safety-icon svg {
+  width: 20px;
+  height: 20px;
+}
