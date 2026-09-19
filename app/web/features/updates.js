@@ -185,5 +185,11 @@ async function updatesView() {
   scheduleStatusPoll(statusRoot);
 }
 
+document.addEventListener('cloudportal:app-hidden', () => {
+  if (updatePollTimer) window.clearTimeout(updatePollTimer);
+  updatePollTimer = null;
+  try { sessionStorage.removeItem(STATUS_SESSION_KEY); } catch { /* ignore */ }
+});
+
 registerView({ id: 'updates', label: 'Aktualizacje', icon: 'U', permission: 'updates.read', order: 170 }, updatesView);
 })();
