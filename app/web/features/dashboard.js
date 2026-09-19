@@ -1,13 +1,21 @@
 'use strict';
 
 (() => {
-function dashboardMetric(iconName, label, value, detail) {
-  return node('article', { class: 'dashboard-metric-card' },
+function dashboardMetric(iconName, label, value, detail, route = null) {
+  const content = [
     node('div', { class: 'dashboard-metric-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
     node('div', { class: 'dashboard-metric-copy' },
       node('span', { text: label }),
       node('strong', { text: String(value ?? '—') }),
-      node('small', { text: detail })));
+      node('small', { text: detail })),
+  ];
+  if (!route) return node('article', { class: 'dashboard-metric-card' }, content);
+  return node('button', {
+    class: 'dashboard-metric-card dashboard-metric-action',
+    type: 'button',
+    title: 'Otwórz: ' + label,
+    onClick: () => navigate(route),
+  }, content);
 }
 
 function metric(label, value, detail) {
@@ -71,10 +79,10 @@ async function dashboardView() {
       node('p', { text: 'Oto przegląd Twojego środowiska w Cloudportal.' })));
 
   const metricCards = node('section', { class: 'dashboard-metrics', 'aria-label': 'Metryki środowiska' },
-    dashboardMetric('users', 'Użytkownicy', allowed('users.read') ? (counts.users ?? '—') : '—', allowed('users.read') ? 'konta widoczne dla Ciebie' : 'brak uprawnienia'),
-    dashboardMetric('server', 'Platformy', allowed('providers.read') ? (counts.providers ?? '—') : '—', allowed('providers.read') ? 'skonfigurowane połączenia' : 'brak uprawnienia'),
-    dashboardMetric('rocket', 'Wdrożenia', allowed('deployments.read') ? (counts.deployments ?? '—') : '—', allowed('deployments.read') ? 'wszystkie wdrożenia' : 'brak uprawnienia'),
-    dashboardMetric('list-check', 'Zadania', allowed('jobs.read') ? (counts.jobs ?? '—') : '—', allowed('jobs.read') ? 'ostatnie 200 rekordów' : 'brak uprawnienia'));
+    dashboardMetric('users', 'Użytkownicy', allowed('users.read') ? (counts.users ?? '—') : '—', allowed('users.read') ? 'konta widoczne dla Ciebie' : 'brak uprawnienia', allowed('users.read') ? 'users' : null),
+    dashboardMetric('server', 'Platformy', allowed('providers.read') ? (counts.providers ?? '—') : '—', allowed('providers.read') ? 'skonfigurowane połączenia' : 'brak uprawnienia', allowed('providers.read') ? 'providers' : null),
+    dashboardMetric('rocket', 'Wdrożenia', allowed('deployments.read') ? (counts.deployments ?? '—') : '—', allowed('deployments.read') ? 'wszystkie wdrożenia' : 'brak uprawnienia', allowed('deployments.read') ? 'deployments' : null),
+    dashboardMetric('list-check', 'Zadania', allowed('jobs.read') ? (counts.jobs ?? '—') : '—', allowed('jobs.read') ? 'ostatnie 200 rekordów' : 'brak uprawnienia', allowed('jobs.read') ? 'jobs' : null));
 
   const recentDeployments = deployments
     .slice()
