@@ -65,17 +65,22 @@ async function deploymentsView() {
     && allowed('blueprints.execute')
     && allowed('deployments.create');
 
-  const [deploymentResult, providerResult, blueprintResult] = await Promise.all([
+  const [deploymentResult, providerResult, blueprintResult, templateResult] = await Promise.all([
     api('/deployments?limit=200'),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
     canUseProducts ? api('/blueprints?available=true&limit=200') : Promise.resolve({ items: [] }),
+    canUseProducts && allowed('terraform.read') ? api('/templates') : Promise.resolve({ items: [] }),
   ]);
 
   const deployments = deploymentResult.items;
   const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
+  const enabledTemplates = new Set(
+    (templateResult.items || []).filter(item => item.enabled !== false).map(item => item.id)
+  );
   const products = (blueprintResult.items || []).filter(item =>
     item.is_active
     && item.deployment?.template
+    && enabledTemplates.has(item.deployment.template)
     && (!item.requires_approval || allowed('blueprints.approve'))
   );
 
@@ -718,7 +723,7 @@ async function createDeployment() {
     await refreshTemplate();
 
     openModal({
-      title: 'Nowe wdrożenie',
+      title: 'Ręczne wdrożenie (zaawansowane)',
       eyebrow: 'Terraform / OpenTofu',
       body: fields,
       submitLabel: 'Utwórz i uruchom',
