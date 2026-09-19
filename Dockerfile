@@ -1,5 +1,7 @@
 FROM hashicorp/terraform:1.13.5 AS terraform
 FROM python:3.12-slim-bookworm
+ARG BUILD_COMMIT=unknown
+ENV CP_BUILD_COMMIT=$BUILD_COMMIT
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client sshpass \
     && rm -rf /var/lib/apt/lists/* \
