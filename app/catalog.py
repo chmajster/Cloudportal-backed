@@ -60,6 +60,37 @@ def template_definition(template_id):
     return data, folder
 
 
+
+def template_source_preview(template_id):
+    """Return approved Terraform HCL source files for read-only UI preview."""
+    data, folder = template_definition(template_id)
+    files = []
+    total_size = 0
+    for path in sorted(folder.glob('*.tf')):
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            raise RuntimeError(f'Unable to read Terraform template source: {path}') from None
+        size = len(content.encode('utf-8'))
+        total_size += size
+        if size > 262144 or total_size > 1048576:
+            raise HTTPException(413, 'Terraform template source is too large to preview')
+        files.append({
+            'name': path.name,
+            'content': content,
+            'size': size,
+        })
+    return {
+        'id': data['id'],
+        'name': data['name'],
+        'provider': data['provider'],
+        'version': data['version'],
+        'files': files,
+    }
+
+
 def template_model(template_id):
     data, _ = template_definition(template_id)
     module_name, class_name = data['schema_model'].split(':', 1)
