@@ -19,7 +19,7 @@ PERMISSIONS = {
         'schedules': 'read create update delete',
         'webhooks': 'read create update delete',
         'metrics': 'read',
-        'tokens': 'read create revoke', 'settings': 'read update', 'portal': 'connect',
+        'tokens': 'read create revoke', 'settings': 'read update', 'updates': 'read execute update', 'portal': 'connect',
     }.items()}
 }
 ALL_PERMISSIONS = {f'{area}.{action}' for area, actions in PERMISSIONS.items() for action in actions}
@@ -35,10 +35,10 @@ def seed(db):
     db.flush()
     defaults = {
         'Administrator': ALL_PERMISSIONS,
-        'Infrastructure Administrator': {p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings'}},
+        'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates'}} | {'updates.read'}),
         'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.create', 'jobs.read', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update'},
         'Viewer': {'providers.read', 'deployments.read', 'jobs.read', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'schedules.read'},
-        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'deployments.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'schedules.read', 'metrics.read'},
+        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'deployments.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'schedules.read', 'metrics.read', 'updates.read'},
         'Portal Service': {'portal.connect'},
     }
     for name, permissions in defaults.items():

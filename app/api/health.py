@@ -21,6 +21,7 @@ from app.models import (
     now,
 )
 from app.security.core import encryption_key, redis_client, require
+from app.version import build_commit, build_version
 
 router = APIRouter(tags=['health'])
 
@@ -85,7 +86,7 @@ def health():
 def info(actor=Depends(require('portal.connect'))):
     return {
         'name': 'Cloudportal-backed',
-        'version': '1.0.0',
+        'version': build_version(),
         'api_version': 'v1',
         'providers': sorted({item['provider'] for item in list_templates()}),
         'credential_types': ['proxmox', 'vmware', 'ssh', 'winrm', 'aws', 'azure', 'openstack', 'other'],
@@ -119,7 +120,7 @@ def prometheus_metrics():
         '# HELP cloudportal_build_info Cloudportal-backed build information.',
         '# TYPE cloudportal_build_info gauge',
     ]
-    _metric(lines, 'cloudportal_build_info', 1, {'version': '1.0.0'})
+    _metric(lines, 'cloudportal_build_info', 1, {'version': build_version(), 'commit': build_commit()})
 
     status = health_status()
     _metric(lines, 'cloudportal_workers_online', status['checks']['workers']['online'])

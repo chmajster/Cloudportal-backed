@@ -6,6 +6,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from app.config import settings
+from app.version import build_version
 
 
 _configured = False
@@ -21,7 +22,7 @@ def configure_telemetry(app):
     provider = TracerProvider(
         resource=Resource.create({
             'service.name': settings().otel_service_name,
-            'service.version': '1.0.0',
+            'service.version': build_version(),
         })
     )
     exporter = OTLPSpanExporter(endpoint=endpoint.rstrip('/') + '/v1/traces')
