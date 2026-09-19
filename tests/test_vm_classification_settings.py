@@ -46,3 +46,16 @@ def test_vm_classification_requires_settings_permissions(client, headers):
         'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
         'apmids': ['IAASTEAM'],
     }).status_code == 403
+
+
+def test_proxmox_vm_tags_accept_apmid_environment_code():
+    from app.api.schemas import VMVariables
+
+    values = VMVariables.model_validate({
+        'name': 'vm01',
+        'node': 'pve01',
+        'template_id': 9000,
+        'storage': 'local-lvm',
+        'tags': ['IAASTEAM.DEV', 'env-dev', 'apmid-iaasteam'],
+    })
+    assert values.tags == ['apmid-iaasteam', 'env-dev', 'iaasteam.dev']
