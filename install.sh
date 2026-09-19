@@ -221,6 +221,7 @@ stop_cloudportal_application() {
   systemctl stop cloudportal-backup.timer cloudportal-backup.service >/dev/null 2>&1 || true
   systemctl stop cloudportal-dispatcher.service cloudportal-api.service >/dev/null 2>&1 || true
 
+  ui_stage 2 3 'Usunięcie runtime i integracji systemowej'
   local worker_units=()
   mapfile -t worker_units < <(
     systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null       | awk '{print $1}'       | grep -E '^cloudportal-worker@.+\.service$' || true
@@ -349,7 +350,7 @@ acquire_install_lock() {
   fi
 
   if ((takeover_running_install == 0)); then
-    echo 'Another installation is running. Re-run without --no-takeover to stop it automatically.' >&2
+    ui_fail 'Inna instalacja jest aktywna, a --no-takeover zabrania jej zatrzymania. Usuń --no-takeover albo zakończ poprzedni proces.'
     exit 1
   fi
 
@@ -376,8 +377,8 @@ acquire_install_lock() {
     sleep 1
   done
 
-  echo 'Could not take over /run/cloudportal-install.lock even after /proc lock-owner scan.' >&2
-  echo 'Use --force-uninstall to remove the Cloudportal runtime and stale installer state.' >&2
+  ui_fail 'Nie udało się przejąć /run/cloudportal-install.lock nawet po skanowaniu /proc/*/fd.'
+  ui_info 'Sprawdź: sudo ./install.sh --status. Awaryjnie użyj: sudo ./install.sh --uninstall'
   exit 1
 }
 
@@ -513,6 +514,7 @@ preflight_checks() {
 }
 
 force_uninstall_cloudportal() {
+  ui_stage 1 3 'Zatrzymanie usług i procesów'
   ui_warn 'FORCE UNINSTALL: zatrzymuję runtime Cloudportal i stare procesy instalatora...'
   stop_cloudportal_application
   stop_previous_installer TERM
@@ -554,6 +556,7 @@ force_uninstall_cloudportal() {
   rm -rf "$app_root"
   rm -f "$lock_file" "$lock_owner_file" /run/cloudportal-install.ready.*
 
+  ui_stage 3 3 'Polityka danych'
   if ((purge_data)); then
     ui_warn 'PURGE DATA: usuwam bazę Cloudportal, konfigurację, dane i backupy...'
     if command -v runuser >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
@@ -727,13 +730,13 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl_args=(-fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 --retry 3)
 if [[ -n "$github_config" ]]; then
-  [[ -r "$github_config" && "$(stat -c %a "$github_config")" == 600 ]] || { echo 'GitHub curl configuration must be readable with mode 600.' >&2; exit 1; }
+  [[ -r "$github_config" && "$(stat -c %a "$github_config")" == 600 ]] || { ui_fail 'Plik --github-config musi istnieć, być czytelny i mieć tryb 600.'; exit 1; }
   curl_args+=(--config "$github_config")
 fi
 if [[ -n "$github_token_file" ]]; then
-  [[ -r "$github_token_file" && "$(stat -c %a "$github_token_file")" == 600 ]] || { echo 'GitHub token file must be readable with mode 600.' >&2; exit 1; }
+  [[ -r "$github_token_file" && "$(stat -c %a "$github_token_file")" == 600 ]] || { ui_fail 'Plik --github-token-file musi istnieć, być czytelny i mieć tryb 600.'; exit 1; }
   github_token=$(tr -d '\r\n' < "$github_token_file")
-  [[ "$github_token" =~ ^[A-Za-z0-9._-]{20,512}$ ]] || { echo 'Invalid GitHub token format.' >&2; exit 1; }
+  [[ "$github_token" =~ ^[A-Za-z0-9._-]{20,512}$ ]] || { ui_fail 'Token GitHub ma nieprawidłowy format. Sprawdź plik i uprawnienie Contents: read.'; exit 1; }
   printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$tmp/curl.conf"
   unset github_token
   curl_args+=(--config "$tmp/curl.conf")
@@ -745,7 +748,7 @@ curl "${curl_args[@]}" "https://api.github.com/repos/$repo/tarball/$ref" -o "$tm
 }
 mkdir "$tmp/source"
 tar -xzf "$tmp/source.tar.gz" -C "$tmp/source" --strip-components=1 --no-same-owner
-[[ -f "$tmp/source/app/main.py" && -f "$tmp/source/requirements.txt" ]] || { echo 'Invalid release archive.' >&2; exit 1; }
+[[ -f "$tmp/source/app/main.py" && -f "$tmp/source/requirements.txt" ]] || { ui_fail 'Pobrane archiwum nie wygląda jak Cloudportal-backed. Sprawdź --ref oraz dostęp do repozytorium.'; exit 1; }
 release=$(mktemp -d "$app_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-$(sha256sum "$tmp/source.tar.gz" | cut -c1-12)-XXXXXX")
 cp -a "$tmp/source/." "$release/"
 chmod -R go-w "$release"
