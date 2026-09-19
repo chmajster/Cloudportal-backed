@@ -603,7 +603,7 @@ gui_message() {
 }
 gui_input() {
   local label=$1 value=$2 result
-  if ! result=$(dialog --stdout --title 'Cloudportal-backed installer' --inputbox "$label" 10 72 "$value" </dev/tty 9>&-); then
+  if ! result=$(dialog --stdout --title 'Cloudportal-backed installer' --inputbox "$label" 10 72 "$value" </dev/tty); then
     gui_cancel
   fi
   printf '%s' "$result"
@@ -615,11 +615,11 @@ if ((gui)); then
     case "$os_family" in
       debian)
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update 9>&-
-        apt-get install -y dialog 9>&-
+        apt-get update
+        apt-get install -y dialog
         ;;
       rhel)
-        dnf install -y dialog 9>&-
+        dnf install -y dialog
         ;;
     esac
   fi
@@ -646,7 +646,7 @@ if ((gui)); then
   else
     backup_default=(--defaultno)
   fi
-  if dialog "${backup_default[@]}" --title 'Cloudportal-backed installer' --yesno 'Włączyć codzienny backup PostgreSQL?' 9 68 </dev/tty 9>&-; then
+  if dialog "${backup_default[@]}" --title 'Cloudportal-backed installer' --yesno 'Włączyć codzienny backup PostgreSQL?' 9 68 </dev/tty; then
     backup_schedule=true
   else
     rc=$?
@@ -670,7 +670,7 @@ Git ref: $ref"
 
 $summary
 
-Rozpocząć instalację?" 16 72 </dev/tty 9>&-; then
+Rozpocząć instalację?" 16 72 </dev/tty; then
     gui_cancel
   fi
   dialog --clear </dev/tty 2>/dev/tty || true
