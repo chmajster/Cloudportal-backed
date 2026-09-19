@@ -51,6 +51,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/inventory.js',
         'features/deployments.js',
         'features/operations.js',
+        'features/search.js',
         'features/updates.js',
     } == set(manifest['scripts'])
     assert {
