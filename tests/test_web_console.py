@@ -129,6 +129,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'deployment_ansible_enabled' in script
     assert 'function permissionPicker(' in script
     assert 'function permissionSummary(' in script
+    assert 'account-overview-grid' in script
+    assert 'account-permissions-panel' in script
+    assert 'Skuteczne uprawnienia' in script
+    assert 'Ochrona dostępu' in script
     assert 'function discoverVmOptions(' in script
     assert 'function storageLabel(' in script
     assert 'function hostnameValueFields(' in script
@@ -242,6 +246,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.table-pagination' in stylesheet
     assert '.advanced-table.compact' in stylesheet
     assert '.permission-group' in stylesheet
+    assert '.account-overview-grid' in stylesheet
+    assert '.account-profile-head' in stylesheet
+    assert '.account-meta-grid' in stylesheet
+    assert '.account-permissions-grid' in stylesheet
+    assert 'column-count: 3' in stylesheet
     assert '.modal-form-error' in stylesheet
     assert '.form-error.success' in stylesheet
     assert '.clipboard-fallback' in stylesheet
