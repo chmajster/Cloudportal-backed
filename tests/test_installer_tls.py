@@ -26,4 +26,4 @@ def test_https_healthcheck_keeps_verification_enabled():
     assert 'tls_health_curl_args+=(--cacert "$config/tls/server.crt")' in INSTALLER
     assert "--insecure" not in INSTALLER
     assert "-k " not in INSTALLER
-    assert "For a private-CA certificate, install the issuing CA in the operating-system trust store" in INSTALLER
+    assert "Dla prywatnego CA zainstaluj certyfikat CA w systemowym trust store" in INSTALLER
