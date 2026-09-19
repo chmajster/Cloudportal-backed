@@ -68,6 +68,274 @@ async function createTerraformJob(item, operation) {
   catch (error) { toast(error.message, 'error'); }
 }
 
+
+function deploymentVariableValue(container, name) {
+  return container.querySelector('[name="' + name + '"]')?.value || '';
+}
+
+function deploymentVariableWrapper(container, name) {
+  return container.querySelector('[data-template-variable="' + name + '"]');
+}
+
+function deploymentVariableRequired(template, name) {
+  return new Set(template?.variables_schema?.required || []).has(name);
+}
+
+function deploymentSetSelectChoices(select, choices, selected = '', placeholder = '') {
+  select.replaceChildren();
+  if (placeholder) select.append(node('option', { value: '', text: placeholder }));
+  choices.forEach(choice => select.append(node('option', {
+    value: choice.value,
+    text: choice.label,
+    selected: String(choice.value) === String(selected),
+  })));
+  if (!select.value && choices.length === 1) select.value = String(choices[0].value);
+}
+
+function deploymentReplaceVariableWithSelect(container, template, name, label, choices, selected, placeholder, help) {
+  const current = deploymentVariableWrapper(container, name);
+  if (!current) return null;
+  const replacement = selectField(label, name, choices, selected, {
+    required: deploymentVariableRequired(template, name),
+    placeholder,
+  });
+  replacement.setAttribute('data-template-variable', name);
+  if (help) replacement.append(node('small', { class: 'field-help', text: help }));
+  current.replaceWith(replacement);
+  return replacement.querySelector('select');
+}
+
+function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedNode = '') {
+  const current = deploymentVariableWrapper(container, 'template_id');
+  if (!current) return null;
+
+  const hiddenId = node('input', { type: 'hidden', name: 'template_id', value: selectedId });
+  const hiddenNode = node('input', { type: 'hidden', name: 'template_node', value: selectedNode });
+  const search = node('input', {
+    type: 'search',
+    class: 'proxmox-template-search',
+    placeholder: 'Szukaj po nazwie, VMID lub węźle…',
+    'aria-label': 'Szukaj szablonu Proxmox',
+  });
+  const nodeFilter = node('select', { class: 'proxmox-template-node-filter', 'aria-label': 'Filtruj szablony po węźle' });
+  const nodes = [...new Set(rows.map(row => String(row.node || '')).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  nodeFilter.append(node('option', { value: '', text: 'Wszystkie węzły' }));
+  nodes.forEach(value => nodeFilter.append(node('option', { value, text: value })));
+
+  const summary = node('div', { class: 'proxmox-template-selection', 'aria-live': 'polite' });
+  const grid = node('div', { class: 'proxmox-template-grid', role: 'listbox', 'aria-label': 'Szablony Proxmox' });
+
+  const selectTemplate = row => {
+    hiddenId.value = String(row?.vmid || '');
+    hiddenNode.value = String(row?.node || '');
+    render();
+  };
+
+  const render = () => {
+    const query = search.value.trim().toLowerCase();
+    const filterNode = nodeFilter.value;
+    const visible = rows.filter(row => {
+      if (filterNode && String(row.node || '') !== filterNode) return false;
+      if (!query) return true;
+      return [row.name, row.vmid, row.node]
+        .map(value => String(value || '').toLowerCase())
+        .some(value => value.includes(query));
+    });
+
+    grid.replaceChildren();
+    visible.forEach(row => {
+      const selected = String(row.vmid) === String(hiddenId.value)
+        && String(row.node || '') === String(hiddenNode.value || '');
+      const facts = [];
+      if (Number.isFinite(Number(row.maxcpu)) && Number(row.maxcpu) > 0) facts.push(String(row.maxcpu) + ' vCPU');
+      if (Number.isFinite(Number(row.maxmem)) && Number(row.maxmem) > 0) facts.push(formatBytes(row.maxmem) + ' RAM');
+      if (Number.isFinite(Number(row.maxdisk)) && Number(row.maxdisk) > 0) facts.push(formatBytes(row.maxdisk) + ' dysk');
+
+      const card = node('button', {
+        type: 'button',
+        class: 'proxmox-template-card' + (selected ? ' selected' : ''),
+        role: 'option',
+        'aria-selected': String(selected),
+      },
+        node('span', { class: 'proxmox-template-card-icon' }, appIcon('box')),
+        node('span', { class: 'proxmox-template-card-copy' },
+          node('strong', { text: row.name || ('VM template ' + row.vmid) }),
+          node('span', { class: 'proxmox-template-card-meta' },
+            node('span', { class: 'badge info', text: 'VMID ' + row.vmid }),
+            node('span', { class: 'badge', text: row.node || 'brak węzła' })),
+          facts.length ? node('small', { text: facts.join(' · ') }) : null),
+        selected ? node('span', { class: 'proxmox-template-card-check', 'aria-hidden': 'true' }, appIcon('check')) : null
+      );
+      card.addEventListener('click', () => selectTemplate(row));
+      grid.append(card);
+    });
+
+    if (!visible.length) {
+      grid.append(node('div', { class: 'proxmox-template-empty', text: rows.length
+        ? 'Brak szablonów pasujących do filtra.'
+        : 'Na tej platformie Proxmox nie znaleziono szablonów QEMU.' }));
+    }
+
+    const selected = rows.find(row =>
+      String(row.vmid) === String(hiddenId.value)
+      && String(row.node || '') === String(hiddenNode.value || ''));
+    summary.replaceChildren(
+      selected
+        ? node('div', { class: 'proxmox-template-selected-summary' },
+          node('span', { class: 'proxmox-template-selected-icon' }, appIcon('check')),
+          node('span', {},
+            node('strong', { text: selected.name || ('VM template ' + selected.vmid) }),
+            node('small', { text: 'VMID ' + selected.vmid + ' · węzeł źródłowy ' + (selected.node || '—') })))
+        : node('span', { class: 'muted', text: 'Kliknij kafelek, aby wybrać bazowy szablon VM. VMID i węzeł źródłowy zostaną ustawione automatycznie.' })
+    );
+  };
+
+  search.addEventListener('input', render);
+  nodeFilter.addEventListener('change', render);
+
+  const picker = node('section', {
+    class: 'proxmox-template-picker wide',
+    'data-template-variable': 'template_id',
+  },
+    hiddenId,
+    hiddenNode,
+    node('div', { class: 'proxmox-template-picker-header' },
+      node('div', {},
+        node('strong', { text: 'Obraz / szablon Proxmox' }),
+        node('small', { text: 'Bez ręcznego wpisywania VMID. Wybierz szablon bezpośrednio z aktualnego inventory Proxmox.' }))),
+    node('div', { class: 'proxmox-template-toolbar' }, search, nodeFilter),
+    summary,
+    grid
+  );
+
+  current.replaceWith(picker);
+  const oldTemplateNode = deploymentVariableWrapper(container, 'template_node');
+  if (oldTemplateNode && oldTemplateNode !== picker) oldTemplateNode.remove();
+
+  const exact = rows.find(row =>
+    String(row.vmid) === String(selectedId)
+    && (!selectedNode || String(row.node || '') === String(selectedNode)));
+  if (exact) selectTemplate(exact);
+  else if (rows.length === 1) selectTemplate(rows[0]);
+  else render();
+
+  return { picker, hiddenId, hiddenNode };
+}
+
+async function enhanceProxmoxDeploymentVariables(container, template, providerSelect) {
+  if (template?.provider !== 'proxmox') return;
+
+  const providerId = providerSelect.value;
+  if (!providerId) return;
+
+  const previous = {
+    node: deploymentVariableValue(container, 'node'),
+    templateId: deploymentVariableValue(container, 'template_id'),
+    templateNode: deploymentVariableValue(container, 'template_node'),
+    storage: deploymentVariableValue(container, 'storage'),
+    network: deploymentVariableValue(container, 'network') || 'vmbr0',
+  };
+
+  const [nodeResult, templateResult] = await Promise.all([
+    api('/providers/' + providerId + '/nodes'),
+    api('/providers/' + providerId + '/templates'),
+  ]);
+
+  const nodeChoices = nodeResult.items
+    .filter(item => item.node)
+    .map(item => ({
+      value: item.node,
+      label: item.node + (item.status ? ' · ' + statusLabel(item.status) : ''),
+    }));
+
+  const nodeSelect = deploymentReplaceVariableWithSelect(
+    container,
+    template,
+    'node',
+    'Węzeł / lokalizacja',
+    nodeChoices,
+    previous.node,
+    'Wybierz docelowy węzeł',
+    'Lista jest pobierana bezpośrednio z wybranej platformy Proxmox.'
+  );
+
+  createProxmoxTemplatePicker(container, templateResult.items || [], previous.templateId, previous.templateNode);
+
+  const storageSelect = deploymentReplaceVariableWithSelect(
+    container,
+    template,
+    'storage',
+    'Storage',
+    [],
+    previous.storage,
+    'Najpierw wybierz węzeł',
+    'Pokazywane są storage dostępne na wybranym węźle.'
+  );
+  const networkSelect = deploymentReplaceVariableWithSelect(
+    container,
+    template,
+    'network',
+    'Sieć / bridge',
+    [],
+    previous.network,
+    'Najpierw wybierz węzeł',
+    'Bridge jest wybierany z sieci wykrytych na wybranym węźle.'
+  );
+
+  const loadNodeResources = async () => {
+    if (!nodeSelect?.value) {
+      if (storageSelect) deploymentSetSelectChoices(storageSelect, [], '', 'Wybierz docelowy węzeł');
+      if (networkSelect) deploymentSetSelectChoices(networkSelect, [], '', 'Wybierz docelowy węzeł');
+      return;
+    }
+
+    const keepStorage = storageSelect?.value || previous.storage;
+    const keepNetwork = networkSelect?.value || previous.network || 'vmbr0';
+    const [storageResult, networkResult] = await Promise.all([
+      api('/providers/' + providerId + '/storages?node=' + encodeURIComponent(nodeSelect.value)),
+      api('/providers/' + providerId + '/networks?node=' + encodeURIComponent(nodeSelect.value)),
+    ]);
+
+    if (storageSelect) {
+      const storages = storageResult.items
+        .filter(item => {
+          if (item.disable) return false;
+          const content = Array.isArray(item.content) ? item.content.join(',') : String(item.content || '');
+          return !content || content.includes('images');
+        })
+        .map(item => ({
+          value: item.storage || item.id,
+          label: (item.storage || item.id || 'storage')
+            + (item.type ? ' [' + item.type + ']' : '')
+            + (Number.isFinite(Number(item.avail)) ? ' · wolne ' + formatBytes(item.avail) : ''),
+        }));
+      deploymentSetSelectChoices(storageSelect, storages, keepStorage, storages.length ? 'Wybierz storage' : 'Brak storage dla VM');
+    }
+
+    if (networkSelect) {
+      const networks = networkResult.items
+        .filter(item => item.iface)
+        .map(item => ({
+          value: item.iface,
+          label: item.iface
+            + (item.type ? ' [' + item.type + ']' : '')
+            + (item.active === 1 || item.active === true ? ' · aktywna' : ''),
+        }));
+      const preferred = networks.some(item => String(item.value) === String(keepNetwork))
+        ? keepNetwork
+        : (networks.some(item => String(item.value) === 'vmbr0') ? 'vmbr0' : '');
+      deploymentSetSelectChoices(networkSelect, networks, preferred, networks.length ? 'Wybierz bridge' : 'Brak sieci na węźle');
+    }
+  };
+
+  if (nodeSelect) {
+    nodeSelect.addEventListener('change', () => {
+      loadNodeResources().catch(error => toast(error.message, 'error'));
+    });
+  }
+  await loadNodeResources();
+}
+
 async function createDeployment() {
   try {
     const [providerResult, credentialResult, templateResult, playbookResult] = await Promise.all([
@@ -160,20 +428,27 @@ async function createDeployment() {
       refreshPlaybook();
     };
 
-    const refreshTemplate = () => {
+    const refreshTemplate = async () => {
       const template = currentTemplate();
       if (!template) return;
       const matchingProviders = providers.filter(item => item.type === template.provider).map(item => ({ id: item.id, label: item.name }));
       refill(providerSelect, matchingProviders, matchingProviders.length ? 'Wybierz provider' : 'Brak połączenia z tą platformą');
       refreshCredentials();
       renderTemplateVariables(variableFields, template);
+      await enhanceProxmoxDeploymentVariables(variableFields, template, providerSelect);
       renderAnsible();
     };
 
-    templateSelect.addEventListener('change', refreshTemplate);
-    providerSelect.addEventListener('change', refreshCredentials);
+    templateSelect.addEventListener('change', () => {
+      refreshTemplate().catch(error => toast(error.message, 'error'));
+    });
+    providerSelect.addEventListener('change', () => {
+      refreshCredentials();
+      enhanceProxmoxDeploymentVariables(variableFields, currentTemplate(), providerSelect)
+        .catch(error => toast(error.message, 'error'));
+    });
     ansibleToggle.querySelector('input').addEventListener('change', renderAnsible);
-    refreshTemplate();
+    await refreshTemplate();
 
     openModal({
       title: 'Nowe wdrożenie',
@@ -185,6 +460,9 @@ async function createDeployment() {
         const template = currentTemplate();
         if (!providerSelect.value) throw new Error('Brak providera zgodnego z wybranym szablonem.');
         if (!credentialSelect.value) throw new Error('Brak credentiala zgodnego z wybraną platformą.');
+        if (template?.provider === 'proxmox' && !form.elements.template_id?.value) {
+          throw new Error('Wybierz bazowy szablon Proxmox z kreatora.');
+        }
         const body = {
           name: form.elements.name.value,
           provider_id: Number(providerSelect.value),
