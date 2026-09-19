@@ -59,11 +59,14 @@ def postgres_command(url, dump):
     if port:
         command += ['--port', port]
     command.append(str(dump))
-    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+    env = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
     if parsed.password:
         env['PGPASSWORD'] = parsed.password
     if not parsed.password and host.startswith('/') and os.geteuid() == 0:
-        command = ['runuser', '-u', username, '--', *command]
+        runuser = shutil.which('runuser', path=env['PATH'])
+        if not runuser:
+            raise SystemExit('runuser is required for local PostgreSQL peer authentication but was not found in PATH')
+        command = [runuser, '-u', username, '--', *command]
     return command, env
 
 
