@@ -159,7 +159,9 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
         # authoritative deployment and VM name. User-supplied/manual names must
         # not override the reserved sequence.
         deployment['name'] = '{{ hostname }}'
-        deployment.setdefault('variables', {})['name'] = '{{ hostname }}'
+        deployment_variables = deployment.setdefault('variables', {})
+        if 'name' in deployment_variables:
+            deployment_variables['name'] = '{{ hostname }}'
     if ipam_pool_id:
         ip_allocation = allocate_address(
             db, ipam_pool_id, actor_id, hostname=variables.get('hostname')
