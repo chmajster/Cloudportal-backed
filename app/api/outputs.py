@@ -197,6 +197,7 @@ class AuditOutput(Output):
 class TemplateOutput(Output):
     id: str
     name: str
+    enabled: bool
     provider: str
     version: int
     importable: bool
@@ -206,6 +207,7 @@ class TemplateOutput(Output):
 class PlaybookOutput(Output):
     id: str
     name: str
+    enabled: bool
     description: str | None = None
     category: str = 'Inne'
     version: int
