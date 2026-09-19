@@ -1,6 +1,4 @@
-import pytest
-
-from tests.conftest import new_user
+from conftest import new_user
 
 
 def fake_status():
