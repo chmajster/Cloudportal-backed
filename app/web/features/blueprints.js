@@ -1,6 +1,85 @@
 'use strict';
 
 (() => {
+function blueprintTemplateVariableField(name, spec, value) {
+  const type = schemaType(spec);
+  const label = FIELD_LABELS[name] || spec.title || name;
+  const current = value ?? spec.default ?? '';
+  const help = `Typ: ${type}. Możesz użyć wartości lub placeholdera, np. {{ cpu }}.`;
+  const wrapper = field(label, `deployment_var_${name}`, {
+    tag: type === 'array' ? 'textarea' : 'input',
+    value: Array.isArray(current) ? current.join('\n') : String(current),
+    wide: type === 'array' || ['ssh_public_key', 'subnet_id'].includes(name),
+    help,
+  });
+  wrapper.dataset.blueprintTemplateVariable = name;
+  return wrapper;
+}
+
+function readBlueprintTemplateVariables(root, template) {
+  const result = {};
+  const properties = template?.variables_schema?.properties || {};
+  for (const [name, spec] of Object.entries(properties)) {
+    const control = root.elements?.[`deployment_var_${name}`] || root.querySelector?.(`[name="deployment_var_${name}"]`);
+    if (!control) continue;
+    const raw = String(control.value ?? '').trim();
+    if (!raw) continue;
+    if (/{{\s*[^}]+\s*}}/.test(raw)) {
+      result[name] = raw;
+      continue;
+    }
+    const type = schemaType(spec);
+    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
+    else if (type === 'number') result[name] = Number(raw);
+    else if (type === 'boolean') result[name] = ['true', '1', 'tak', 'yes'].includes(raw.toLowerCase());
+    else if (type === 'array') result[name] = splitValues(raw);
+    else result[name] = raw;
+  }
+  return result;
+}
+
+const HOSTNAME_TOKEN_LABELS = {
+  location: 'Lokalizacja',
+  environment: 'Środowisko',
+  env: 'Środowisko (skrót)',
+  application: 'Aplikacja',
+  service: 'Usługa',
+  role: 'Rola serwera',
+  os: 'System operacyjny',
+  cluster: 'Klaster',
+  site: 'Site',
+};
+
+function hostnameTokens(pattern = '') {
+  return [...new Set([...String(pattern).matchAll(/{([a-z]+)}/g)].map(match => match[1]))]
+    .filter(token => !['number', 'random', 'year'].includes(token));
+}
+
+function hostnameValueFields(pattern, values = {}, required = true) {
+  const wrapper = node('div', { class: 'form-grid hostname-values wide' });
+  const tokens = hostnameTokens(pattern);
+  tokens.forEach(token => {
+    const item = field(HOSTNAME_TOKEN_LABELS[token] || token, `hostname_${token}`, {
+      value: values[token] || '',
+      required,
+    });
+    item.dataset.hostnameToken = token;
+    wrapper.append(item);
+  });
+  if (!tokens.length) wrapper.append(node('p', { class: 'muted wide', text: 'Ten wzorzec nie wymaga dodatkowych wartości.' }));
+  return wrapper;
+}
+
+function readHostnameValues(form) {
+  const result = {};
+  form.querySelectorAll('[data-hostname-token]').forEach(wrapper => {
+    const token = wrapper.dataset.hostnameToken;
+    const input = wrapper.querySelector('input,select,textarea');
+    if (input?.value) result[token] = input.value.trim();
+  });
+  return result;
+}
+
 async function blueprintsView() {
   const blueprints = (await api('/blueprints?limit=200')).items;
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
