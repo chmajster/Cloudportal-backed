@@ -53,18 +53,21 @@ const CREDENTIAL_TYPE_CONFIG = {
   },
   ssh: {
     label: 'SSH / Linux',
-    description: 'Dane dostępowe do Ansible i SSH. Weryfikacja known_hosts jest obowiązkowa.',
-    endpoint: { label: 'Endpoint SSH (opcjonalnie)', placeholder: 'ssh://server.example.com:22', required: false, help: 'Używany przez Testuj; workflow Ansible korzysta z listy wykrytych hostów.' },
+    description: 'Dane dostępowe do Ansible i SSH. Możesz użyć hasła, istniejącego klucza albo wygenerować nowy klucz i automatycznie wgrać go na serwer.',
+    endpoint: { label: 'Endpoint SSH', placeholder: 'ssh://server.example.com:22', required: false, help: 'Dla generowania klucza i testu połączenia podaj ssh://host:port.' },
     username: { label: 'Użytkownik SSH', placeholder: 'clouduser', required: true },
-    tls: false, defaultAuth: 'private_key',
+    tls: false, defaultAuth: 'password',
     authModes: {
-      private_key: { label: 'Klucz prywatny', fields: [
+      password: { label: 'Hasło SSH', fields: [
+        { key: 'password', label: 'Hasło SSH', type: 'password', required: true, autocomplete: 'current-password' },
+        { key: 'known_hosts', label: 'known_hosts', tag: 'textarea', required: true, wide: true, placeholder: 'host.example.com ssh-ed25519 AAAA...' },
+      ]},
+      private_key: { label: 'Istniejący klucz prywatny', fields: [
         { key: 'private_key', label: 'Klucz prywatny SSH', tag: 'textarea', required: true, wide: true, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
         { key: 'known_hosts', label: 'known_hosts', tag: 'textarea', required: true, wide: true, placeholder: 'host.example.com ssh-ed25519 AAAA...' },
       ]},
-      password: { label: 'Hasło', fields: [
-        { key: 'password', label: 'Hasło SSH', type: 'password', required: true, autocomplete: 'new-password' },
-        { key: 'known_hosts', label: 'known_hosts', tag: 'textarea', required: true, wide: true, placeholder: 'host.example.com ssh-ed25519 AAAA...' },
+      generate_key: { label: 'Hasło → wygeneruj i wgraj klucz (zalecane)', createOnly: true, fields: [
+        { key: 'password', label: 'Hasło SSH (tylko do jednorazowego wgrania klucza)', type: 'password', required: true, autocomplete: 'current-password', wide: true },
       ]},
     },
   },
