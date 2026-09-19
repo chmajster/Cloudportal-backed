@@ -164,6 +164,12 @@ async function assignHostname(item) {
 }
 
 function hostnameSchemeForm(item = null) {
+  const schemeId = item == null ? null : Number(item.id);
+  const editing = Number.isInteger(schemeId) && schemeId > 0;
+  if (item != null && !editing) {
+    toast('Nieprawidłowy identyfikator patternu hostname. Odśwież widok i spróbuj ponownie.', 'error');
+    return;
+  }
   const patternField = field('Pattern hostname', 'pattern', {
     required: true,
     value: item?.pattern || '{location}-{env}-{role}-{number}',
@@ -173,7 +179,7 @@ function hostnameSchemeForm(item = null) {
   });
   const numberField = field('Następny numer', 'next_number', {
     type: 'number', min: 1, value: item?.next_number || 1,
-    help: item ? 'Sekwencji nie można cofnąć poniżej aktualnej wartości.' : 'Pierwszy numer użyty przy rezerwacji.',
+    help: editing ? 'Sekwencji nie można cofnąć poniżej aktualnej wartości.' : 'Pierwszy numer użyty przy rezerwacji.',
   });
   const paddingField = field('Liczba cyfr', 'padding', {
     type: 'number', min: 1, max: 9, value: item?.padding || 3,
@@ -197,14 +203,14 @@ function hostnameSchemeForm(item = null) {
   refreshPreview();
 
   openModal({
-    title: item ? 'Edytuj pattern hostname' : 'Nowy pattern hostname',
+    title: editing ? 'Edytuj pattern hostname' : 'Nowy pattern hostname',
     eyebrow: 'Narzędzia · Generator hostname',
     body: fields,
-    submitLabel: item ? 'Zapisz pattern' : 'Utwórz pattern',
+    submitLabel: editing ? 'Zapisz pattern' : 'Utwórz pattern',
     onSubmit: async data => {
       const normalized = normalizeGeneratorPattern(data.get('pattern'), data.get('padding'));
-      await api(item ? `/hostname-schemes/${item.id}` : '/hostname-schemes', {
-        method: item ? 'PUT' : 'POST',
+      await api(editing ? `/hostname-schemes/${schemeId}` : '/hostname-schemes', {
+        method: editing ? 'PUT' : 'POST',
         body: {
           name: data.get('name'),
           pattern: normalized.pattern,
