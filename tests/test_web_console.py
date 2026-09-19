@@ -123,6 +123,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "label: 'Realm'" in script
     assert "default: 'pam'" in script
     assert "placeholder: 'root'" in script
+    assert 'if (proxmoxIdentityRow) secretPanel.append(proxmoxIdentityRow);' in script
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert 'data-workflow-row' in script
