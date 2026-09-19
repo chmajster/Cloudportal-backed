@@ -124,6 +124,7 @@ function renderCredentialDynamic(container, type, item) {
       }));
     }
   }
+  let proxmoxIdentityRow = null;
   if (config.username) {
     if (type === 'proxmox' && config.realm) {
       const parsedIdentity = splitProxmoxUsername(sameType ? item.username : '');
@@ -145,7 +146,7 @@ function renderCredentialDynamic(container, type, item) {
         usernameInput.value = parsed.username;
         if (parsed.realm) realmInput.value = parsed.realm;
       });
-      identity.append(node('div', { class: 'credential-user-row wide' }, usernameField, realmField));
+      proxmoxIdentityRow = node('div', { class: 'credential-user-row wide' }, usernameField, realmField);
     } else {
       identity.append(field(config.username.label, 'username', {
         value: sameType ? item.username : '', required: config.username.required, placeholder: config.username.placeholder,
@@ -178,7 +179,9 @@ function renderCredentialDynamic(container, type, item) {
   const authWrapper = selectField('Metoda uwierzytelnienia', 'auth_mode', choices, config.defaultAuth, { required: true, wide: true });
   const authSelect = authWrapper.querySelector('select');
   const secretGrid = node('div', { class: 'form-grid credential-secret-grid' });
-  secretPanel.append(authWrapper, secretGrid);
+  secretPanel.append(authWrapper);
+  if (proxmoxIdentityRow) secretPanel.append(proxmoxIdentityRow);
+  secretPanel.append(secretGrid);
   const refresh = () => {
     const enabled = !item || mustReplace || Boolean(replaceInput?.checked);
     authSelect.disabled = !enabled;
