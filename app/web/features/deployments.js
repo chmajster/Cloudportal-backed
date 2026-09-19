@@ -950,6 +950,6 @@ async function showJobLogs(job) {
 registerCommand('deployments.create', createDeployment);
 registerCommand('deployments.open', showDeploymentDetails);
 registerCommand('ansible.run', runStandaloneAnsible);
-registerView({ id: 'deployments', label: 'Wdrożenia', icon: 'D', permission: 'deployments.read', order: 110 }, deploymentsView);
+registerView({ id: 'deployments', label: 'Produkty', icon: 'P', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
 })();
