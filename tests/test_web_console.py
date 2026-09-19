@@ -58,6 +58,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/deployments.js',
         'features/operations.js',
         'features/search.js',
+        'features/settings.js',
         'features/tools.js',
         'features/updates.js',
     } == set(manifest['scripts'])
@@ -68,6 +69,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/inventory.css',
         'styles/features/dashboard.css',
         'styles/features/tools.css',
+        'styles/features/settings.css',
         'styles/features/updates.css',
     } <= set(manifest['styles'])
 
@@ -250,6 +252,16 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "navigationParent: 'tools'" in script
     assert 'navigation: false' in script
     assert "registerView({ id: 'tools'" in script
+    assert "id: 'settings'" in script
+    assert "label: 'Ustawienia'" in script
+    assert "permission: 'settings.read'" in script
+    assert "'Wygląd'" in script
+    assert "'Konto i sesja'" in script
+    assert "'System'" in script
+    assert "'Aktualizacje'" in script
+    assert "'Bezpieczeństwo'" in script
+    assert ".settings-grid" in stylesheet
+    assert ".settings-choice" in stylesheet
     assert "iconName: 'wrench'" in script
     assert 'Centrum narzędzi' in script
     assert 'Otwórz Auto-update' in script
