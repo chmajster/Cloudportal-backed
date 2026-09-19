@@ -149,6 +149,12 @@
 .update-progress-panel {
   display: grid;
   gap: 18px;
+  padding: 22px 24px 20px;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--surface), var(--panel-end));
+}
+.update-progress-panel .update-section-heading {
+  align-items: center;
 }
 .update-section-heading {
   display: flex;
@@ -157,8 +163,23 @@
   gap: 16px;
 }
 .update-section-heading h2 {
-  margin: 4px 0 0;
-  font-size: 1rem;
+  margin: 5px 0 0;
+  font-size: 1.05rem;
+  letter-spacing: -.02em;
+}
+.update-progress-metric {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  min-width: 84px;
+}
+.update-progress-metric-label {
+  color: var(--muted);
+  font-size: .66rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
 }
 .update-progress-number {
   display: flex;
@@ -167,6 +188,7 @@
   line-height: 1;
 }
 .update-progress-number strong {
+  color: var(--text);
   font-size: 2rem;
   letter-spacing: -.06em;
 }
@@ -176,84 +198,161 @@
   font-weight: 800;
 }
 .update-progress-track {
+  position: relative;
   width: 100%;
-  height: 10px;
+  height: 8px;
   overflow: hidden;
+  border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface-3);
 }
 .update-progress-fill {
+  position: relative;
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width .3s ease;
+  box-shadow: 0 0 14px var(--accent-soft);
+  transition: width .35s ease;
+}
+.update-progress-fill.is-running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 34%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent);
+  animation: update-progress-sheen 1.35s linear infinite;
+}
+@keyframes update-progress-sheen {
+  from { transform: translateX(-130%); }
+  to { transform: translateX(330%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-progress-fill.is-running::after { animation: none; }
+  .update-progress-fill { transition: none; }
 }
 .update-hero-warning + .update-version-grid + .update-progress-panel .update-progress-fill { background: var(--warning); }
 .update-hero-danger + .update-version-grid + .update-progress-panel .update-progress-fill { background: var(--danger); }
 
+.update-pipeline-shell {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.update-pipeline-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: .71rem;
+}
+.update-pipeline-caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 750;
+}
+.update-pipeline-count {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: .65rem;
+  font-weight: 800;
+}
 .update-pipeline {
   display: grid;
-  grid-template-columns: repeat(14, minmax(58px, 1fr));
+  grid-template-columns: repeat(14, minmax(76px, 1fr));
   gap: 0;
   overflow-x: auto;
-  padding: 4px 2px 7px;
-  scrollbar-gutter: stable;
+  padding: 5px 2px 8px;
+  scrollbar-width: thin;
+  scroll-snap-type: x proximity;
 }
 .update-pipeline-step {
   position: relative;
-  min-width: 58px;
+  min-width: 76px;
   display: grid;
   justify-items: center;
-  gap: 8px;
+  align-content: start;
+  gap: 9px;
+  padding: 0 4px;
   color: var(--muted);
   text-align: center;
-  font-size: .66rem;
+  font-size: .67rem;
   font-weight: 750;
+  scroll-snap-align: center;
 }
 .update-pipeline-step::before {
   content: '';
   position: absolute;
-  top: 14px;
-  left: 0;
-  right: 0;
+  top: 15px;
+  left: -50%;
+  right: 50%;
   height: 2px;
   background: var(--line);
   z-index: 0;
 }
-.update-pipeline-step:first-child::before { left: 50%; }
-.update-pipeline-step:last-child::before { right: 50%; }
+.update-pipeline-step:first-child::before { display: none; }
 .update-pipeline-marker {
   position: relative;
   z-index: 1;
-  width: 29px;
-  height: 29px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border: 2px solid var(--line);
-  border-radius: 50%;
+  border-radius: 10px;
   background: var(--surface);
   color: var(--muted);
+  box-shadow: 0 1px 0 rgba(0,0,0,.04);
   font-size: .68rem;
   font-weight: 900;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
-.update-pipeline-step.complete { color: var(--text); }
-.update-pipeline-step.complete::before { background: var(--accent-border); }
+.update-pipeline-label {
+  max-width: 92px;
+  min-height: 2.35em;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.18;
+}
+.update-pipeline-step.complete {
+  color: var(--text);
+}
+.update-pipeline-step.complete::before,
+.update-pipeline-step.active::before,
+.update-pipeline-step.failed::before {
+  background: var(--accent-border);
+}
 .update-pipeline-step.complete .update-pipeline-marker {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
 }
-.update-pipeline-step.active { color: var(--warning); }
+.update-pipeline-step.active {
+  color: var(--warning);
+}
 .update-pipeline-step.active .update-pipeline-marker {
+  transform: translateY(-1px);
   border-color: var(--warning);
   background: var(--warning-soft);
   color: var(--warning);
+  box-shadow: 0 0 0 4px var(--warning-soft);
 }
-.update-pipeline-step.failed { color: var(--danger); }
+.update-pipeline-step.failed {
+  color: var(--danger);
+}
 .update-pipeline-step.failed .update-pipeline-marker {
   border-color: var(--danger);
   background: var(--danger-soft);
   color: var(--danger);
+  box-shadow: 0 0 0 4px var(--danger-soft);
 }
 
 .update-detail-grid {
@@ -640,7 +739,10 @@
   .update-hero-main { display: grid; }
   .update-hero-kicker { align-items: flex-start; flex-direction: column; }
   .update-version-grid { gap: 9px; }
-  .update-pipeline { grid-template-columns: repeat(14, 70px); }
+  .update-progress-panel { padding: 18px; }
+  .update-pipeline { grid-template-columns: repeat(14, 84px); }
+  .update-pipeline-meta { align-items: flex-start; }
+  .update-pipeline-caption { white-space: normal; }
   .update-master-toggle { align-items: flex-start; }
 }
 
