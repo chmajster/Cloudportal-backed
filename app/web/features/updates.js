@@ -554,5 +554,13 @@ document.addEventListener('cloudportal:app-hidden', () => {
   try { sessionStorage.removeItem(STATUS_SESSION_KEY); } catch { /* ignore */ }
 });
 
-registerView({ id: 'updates', label: 'Aktualizacje', icon: 'U', permission: 'updates.read', order: 170 }, updatesView);
+registerView({
+  id: 'updates',
+  label: 'Auto-update',
+  icon: 'U',
+  permission: 'updates.read',
+  order: 166,
+  navigation: false,
+  navigationParent: 'tools',
+}, updatesView);
 })();
