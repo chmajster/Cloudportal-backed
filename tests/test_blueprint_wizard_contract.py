@@ -46,6 +46,8 @@ state.hostnameSchemeId = '11';
 state.hostnameValues = { location: 'wro', env: 'prod', role: 'web' };
 state.ipMode = 'ipam';
 state.ipamPoolId = '13';
+state.environment = 'dev';
+state.apmid = 'IAASTEAM';
 state.tags = 'linux, production';
 state.ansibleEnabled = true;
 state.playbookId = 'bootstrap-linux';
@@ -79,6 +81,9 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['ansible']['playbook'] == 'bootstrap-linux'
     assert deployment['ansible']['credentials_id'] == 17
     assert deployment['ansible']['variables']['hostname'] == '{{ hostname }}'
+    assert deployment['variables']['tags'] == [
+        'linux', 'production', 'apmid-iaasteam', 'env-dev', 'iaasteam.dev'
+    ]
 
     workflow_types = [step['type'] for step in result['workflow']]
     assert workflow_types == [
