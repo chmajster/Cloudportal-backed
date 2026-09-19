@@ -105,6 +105,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function registerCommand(' in core
     assert 'function registerExtension(' in core
     assert 'function emitUiEvent(' in core
+    assert 'function navigationGroup(' in core
+    assert "'aria-current': exact ? 'page' : null" in core
     assert 'const routes = [];' in core
     assert 'const views = Object.create(null);' in core
     assert 'route.navigation !== false' in core
@@ -190,6 +192,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
+    assert 'metric-action' in script
+    assert 'check-label' in script
+    assert 'Dane dostępowe' in script
     assert "id: 'updates'" in script
     assert "navigationParent: 'tools'" in script
     assert 'navigation: false' in script
@@ -248,6 +253,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert ':root {' in stylesheet
     assert 'html[data-theme="dark"]' in stylesheet
     assert '--sidebar-bg:' in stylesheet
+    assert '.nav-group-label' in stylesheet
+    assert '.nav-link.active .nav-icon' in stylesheet
+    assert '.metric-action' in stylesheet
+    assert '.check-label' in stylesheet
     assert '.sidebar-backdrop' in stylesheet
     assert '.credential-secret-panel' in stylesheet
     assert '.credential-tls-control' in stylesheet
@@ -255,6 +264,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-user-row' in stylesheet
     assert '.credential-connection-check' in stylesheet
     assert '.credential-connection-result' in stylesheet
+    assert '.credential-connection-result.pending' in stylesheet
     assert '.form-section' in stylesheet
     assert '.required-mark' in stylesheet
     assert 'input:user-invalid' in stylesheet
