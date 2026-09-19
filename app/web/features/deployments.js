@@ -457,8 +457,8 @@ async function createDeployment() {
     ]);
     const providers = providerResult.items;
     const credentials = credentialResult.items;
-    const templates = templateResult.items;
-    const playbooks = playbookResult.items;
+    const templates = templateResult.items.filter(item => item.enabled !== false);
+    const playbooks = playbookResult.items.filter(item => item.enabled !== false);
     if (!providers.length) throw new Error('Najpierw dodaj provider infrastruktury.');
     if (!credentials.length) throw new Error('Najpierw dodaj credential infrastruktury.');
     if (!templates.length) throw new Error('Katalog nie zawiera żadnego szablonu wdrożenia.');
@@ -711,9 +711,9 @@ async function runStandaloneAnsible(initialPlaybookId = null) {
       api('/ansible/playbooks'),
       api('/credentials?limit=200'),
     ]);
-    const playbooks = playbookResult.items;
+    const playbooks = playbookResult.items.filter(item => item.enabled !== false);
     const credentials = credentialResult.items;
-    if (!playbooks.length) throw new Error('Katalog nie zawiera playbooków Ansible.');
+    if (!playbooks.length) throw new Error('Katalog nie zawiera aktywnych playbooków Ansible.');
 
     const categories = [...new Set(playbooks.map(playbook => playbook.category || 'Inne'))].sort((a, b) => a.localeCompare(b));
     const categoryField = selectField('Kategoria', 'playbook_category', [
