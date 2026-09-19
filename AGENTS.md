@@ -20,3 +20,19 @@ Before handing off work, run:
 In the PR description, record what is finished, what remains, which shared files were touched, and the exact tests run. This is required so another agent can continue without rediscovering branch state.
 
 See `docs/architecture/modularity.md` for the full architecture rules.
+
+## Bash terminal UI standard
+
+For user-facing Bash scripts, use the same terminal interface pattern as `install.sh` unless the script is intentionally machine-only.
+
+- Show numbered stages such as `[1/7]`.
+- Use `[ OK ]`, `[INFO]`, `[WARN]`, and `[FAIL]` consistently.
+- Print clear section headers before major operations.
+- Emit ANSI colors only when stdout is an interactive terminal; honor `NO_COLOR`.
+- Never emit ANSI escape codes into pipes, cron output, CI logs, or redirected files.
+- Run preflight checks for required commands, environment, disk space, ports and external connectivity before destructive/mutating operations.
+- Failure messages must state what failed and what command, service, file or connection the operator should inspect.
+- Print a final summary with the effective endpoint, important paths and the result of the operation.
+- Add `--status`, `--help`, and `--uninstall` modes when they are meaningful for the script.
+- Do not print secrets, tokens, passwords, command lines containing secrets, or secret environment variables in status/error output.
+
