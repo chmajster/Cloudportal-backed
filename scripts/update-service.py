@@ -658,13 +658,29 @@ def main() -> None:
         save_state(current_version=str(release["commit_sha"])[:12], ref=release.get("ref") or state.get("ref"))
         state = load_state()
     if state.get("status") in {"running", "checking"}:
-        event(
-            "interrupted",
-            state.get("progress", 0),
-            "Poprzedni proces aktualizacji został przerwany przed zakończeniem.",
-            status="failed",
-            finished_at=utcnow(),
-        )
+        if state.get("phase") == "complete" and int(state.get("progress") or 0) >= 100:
+            save_state(
+                status="success",
+                progress=100,
+                update_available=False,
+                finished_at=state.get("finished_at") or utcnow(),
+            )
+            event(
+                "complete",
+                100,
+                "Aktualizacja zakończona pomyślnie.",
+                status="success",
+                update_available=False,
+                finished_at=state.get("finished_at") or utcnow(),
+            )
+        else:
+            event(
+                "interrupted",
+                state.get("progress", 0),
+                "Poprzedni proces aktualizacji został przerwany przed zakończeniem.",
+                status="failed",
+                finished_at=utcnow(),
+            )
     threading.Thread(target=scheduler, daemon=True, name="cloudportal-update-scheduler").start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.serve_forever()

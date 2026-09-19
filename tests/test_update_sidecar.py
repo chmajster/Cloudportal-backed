@@ -116,3 +116,86 @@ def test_update_sidecar_remains_independent_and_protects_control_plane(tmp_path)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=3)
+
+
+def test_update_sidecar_recovers_complete_state_as_success(tmp_path):
+    config = tmp_path / 'etc'
+    data = tmp_path / 'data'
+    app_root = tmp_path / 'app'
+    current = app_root / 'current'
+    config.mkdir()
+    data.mkdir()
+    current.mkdir(parents=True)
+
+    control = 'control-' + 'c' * 48
+    status = 'status-' + 'd' * 48
+    (config / 'updater.token').write_text(control)
+    (config / 'updater-status.token').write_text(status)
+    (config / 'updater.json').write_text(json.dumps({
+        'enabled': False,
+        'interval_hours': 24,
+        'ref': 'main',
+        'github_token_file': '',
+        'github_config': '',
+    }))
+    (current / '.cloudportal-release.json').write_text(json.dumps({
+        'commit_sha': '2' * 40,
+        'ref': 'main',
+    }))
+    state_dir = data / 'update'
+    state_dir.mkdir(parents=True)
+    (state_dir / 'state.json').write_text(json.dumps({
+        'status': 'running',
+        'phase': 'complete',
+        'progress': 100,
+        'message': 'Instalacja lub aktualizacja zakończona pomyślnie.',
+        'current_version': '222222222222',
+        'target_version': '222222222222',
+        'update_available': False,
+        'events': [],
+        'output': [],
+    }))
+
+    port = free_port()
+    env = {
+        **os.environ,
+        'CP_UPDATER_CONFIG_DIR': str(config),
+        'CP_UPDATER_DATA_DIR': str(data),
+        'CP_UPDATER_APP_ROOT': str(app_root),
+        'CP_UPDATER_PORT': str(port),
+    }
+    process = subprocess.Popen(
+        [sys.executable, str(ROOT / 'scripts' / 'update-service.py')],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    base = f'http://127.0.0.1:{port}'
+    try:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                assert request(base + '/health')[0] == 200
+                break
+            except Exception:
+                if time.monotonic() >= deadline:
+                    stdout, stderr = process.communicate(timeout=1)
+                    raise AssertionError(f'Updater did not start: {stdout}\n{stderr}')
+                time.sleep(0.05)
+
+        code, recovered = request(base + '/status', status_token=status)
+        assert code == 200
+        assert recovered['status'] == 'success'
+        assert recovered['phase'] == 'complete'
+        assert recovered['progress'] == 100
+        assert recovered['update_available'] is False
+        assert recovered['finished_at']
+        assert recovered['message'] == 'Aktualizacja zakończona pomyślnie.'
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=3)

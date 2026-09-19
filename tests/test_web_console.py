@@ -354,6 +354,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Updater nie wykona downgrade’u' in script
     assert 'UPDATE_PHASES' in script
     assert 'updatePipeline' in script
+    assert 'function normalizedUpdateStatus(' in script
+    assert "status.phase === 'complete'" in script
+    assert "status: 'success'" in script
     assert 'Polityka auto-update' in script
     assert 'Backup przed wdrożeniem' in script
     assert 'Następne sprawdzenie' in script
