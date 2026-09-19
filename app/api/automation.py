@@ -110,9 +110,13 @@ def release_hostname(id: str, request: Request, actor=Depends(require('hostnames
 
 def validate_blueprint_references(db, data, blueprint_id=None):
     provider = find(db, Provider, data.deployment.provider_id)
-    require_catalog_item_enabled(db, 'templates', data.deployment.template)
+    existing = db.get(Blueprint, blueprint_id) if blueprint_id is not None else None
+    existing_template = existing.deployment.get('template') if existing else None
+    existing_playbook = (existing.deployment.get('ansible') or {}).get('playbook') if existing else None
+    if data.deployment.template != existing_template:
+        require_catalog_item_enabled(db, 'templates', data.deployment.template)
     template_meta, _ = template_definition(data.deployment.template)
-    if data.deployment.ansible:
+    if data.deployment.ansible and data.deployment.ansible.playbook != existing_playbook:
         require_catalog_item_enabled(db, 'playbooks', data.deployment.ansible.playbook)
     if provider.type != template_meta['provider']:
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
