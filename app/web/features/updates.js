@@ -21,7 +21,7 @@ const UPDATE_PHASES = [
 let updatePollTimer = null;
 
 function updateStatusKind(status) {
-  if (status === 'success' || status === 'up_to_date') return 'ok';
+  if (status === 'success' || status === 'up_to_date' || status === 'local_ahead') return 'ok';
   if (status === 'failed') return 'danger';
   if (status === 'running' || status === 'checking') return 'warning';
   if (status === 'update_available') return 'info';
@@ -36,7 +36,8 @@ function updateStatusLabel(status) {
     running: 'Aktualizacja trwa',
     success: 'Zakończono',
     failed: 'Błąd',
-    up_to_date: 'Aktualny',
+    up_to_date: 'Aktualny commit',
+    local_ahead: 'Zainstalowany commit nowszy',
   };
   return labels[status] || status || '—';
 }
@@ -51,6 +52,7 @@ function phaseLabel(phase) {
     install: 'Uruchamianie instalatora',
     failed: 'Błąd aktualizacji',
     interrupted: 'Przerwany proces',
+    local_ahead: 'Zainstalowany commit nowszy',
   };
   return new Map(UPDATE_PHASES).get(phase) || special[phase] || phase || 'Oczekiwanie';
 }
@@ -59,7 +61,7 @@ function updateTone(status) {
   if (status === 'failed') return 'danger';
   if (status === 'running' || status === 'checking') return 'warning';
   if (status === 'update_available') return 'info';
-  if (status === 'success' || status === 'up_to_date') return 'ok';
+  if (status === 'success' || status === 'up_to_date' || status === 'local_ahead') return 'ok';
   return 'neutral';
 }
 
@@ -94,14 +96,44 @@ function versionValue(value) {
   return value || 'nieznana';
 }
 
+function commitRelationLabel(status) {
+  const labels = {
+    identical: 'Ten sam commit',
+    target_newer: 'Kanał ma nowszy commit',
+    target_newer_diverged: 'Kanał ma nowszy commit na rozbieżnej historii',
+    current_newer: 'Zainstalowany commit jest nowszy',
+    current_newer_diverged: 'Zainstalowany commit jest nowszy na rozbieżnej historii',
+    unknown_current: 'Nieznany commit lokalny',
+  };
+  return labels[status.commit_relation] || 'Nieustalona';
+}
+
+function commitDifference(status) {
+  const ahead = Number(status.ahead_by || 0);
+  const behind = Number(status.behind_by || 0);
+  if (status.commit_relation === 'target_newer') return '+' + ahead + ' commitów w kanale';
+  if (status.commit_relation === 'current_newer') return '+' + behind + ' commitów lokalnie';
+  if (status.commit_relation === 'identical') return '0 commitów';
+  if (status.commit_relation && status.commit_relation.includes('diverged')) {
+    return 'Historie rozbieżne';
+  }
+  return '—';
+}
+
 function statusDescription(status) {
-  if (status.status === 'running') return 'Nowa wersja jest wdrażana. Panel statusu działa niezależnie od głównego API.';
-  if (status.status === 'checking') return 'Updater sprawdza wybrany kanał i porównuje wersję zainstalowaną z repozytorium.';
-  if (status.status === 'update_available') return 'Nowa wersja jest gotowa do instalacji.';
-  if (status.status === 'up_to_date') return 'Zainstalowana wersja odpowiada aktualnej wersji wybranego kanału.';
-  if (status.status === 'success') return 'Ostatnia aktualizacja zakończyła się poprawnie.';
+  if (status.status === 'running') return 'Nowszy commit jest wdrażany. Panel statusu działa niezależnie od głównego API.';
+  if (status.status === 'checking') return 'Updater porównuje zainstalowany commit z HEAD wybranego kanału Git.';
+  if (status.status === 'update_available') {
+    const count = Number(status.ahead_by || 0);
+    return count > 0
+      ? 'Kanał ma ' + count + ' nowszych commitów. Najnowszy commit jest gotowy do instalacji.'
+      : 'Kanał wskazuje nowszy commit gotowy do instalacji.';
+  }
+  if (status.status === 'up_to_date') return 'Zainstalowany SHA jest identyczny z HEAD wybranego kanału.';
+  if (status.status === 'local_ahead') return 'Zainstalowany commit jest nowszy niż commit kanału. Updater nie wykona downgrade’u.';
+  if (status.status === 'success') return 'Ostatnia aktualizacja zakończyła się instalacją nowszego commita.';
   if (status.status === 'failed') return 'Proces aktualizacji został zatrzymany. Szczegóły znajdują się w logu technicznym.';
-  return 'Niezależny serwis aktualizacji jest gotowy do pracy.';
+  return 'Wersja Cloudportal jest identyfikowana przez commit Git.';
 }
 
 async function updateStatusToken() {
@@ -164,7 +196,12 @@ function updatePipeline(status) {
 
 function updateFacts(status, settings) {
   return node('div', { class: 'update-facts' },
+    info('Model wersji', 'Git commit'),
+    info('Relacja commitów', commitRelationLabel(status)),
+    info('Różnica', commitDifference(status)),
     info('Tryb uruchomienia', status.automatic ? 'Automatyczny' : 'Ręczny'),
+    info('Commit lokalny', formatDate(status.current_commit_at)),
+    info('Commit kanału', formatDate(status.target_commit_at)),
     info('Ostatnie sprawdzenie', formatDate(status.last_check_at)),
     info('Rozpoczęto', formatDate(status.started_at)),
     info('Zakończono', formatDate(status.finished_at)),
@@ -241,11 +278,14 @@ function statusActions(status, container, settings) {
   group.append(checkButton);
 
   if (allowed('updates.execute')) {
-    const installLabel = status.status === 'update_available' ? 'Zainstaluj aktualizację' : 'Aktualizuj teraz';
+    const noNewerCommit = ['up_to_date', 'local_ahead'].includes(status.status);
+    const installLabel = status.status === 'update_available'
+      ? 'Zainstaluj nowszy commit'
+      : noNewerCommit ? 'Brak nowszego commita' : 'Aktualizuj teraz';
     group.append(node('button', {
       class: 'button primary',
       type: 'button',
-      disabled: busy,
+      disabled: busy || noNewerCommit,
       onClick: () => {
         confirmAction(
           'Aktualizacja Cloudportal',
@@ -271,9 +311,11 @@ function statusPanel(status, settings, container) {
     ? '!'
     : status.status === 'update_available'
       ? '↓'
-      : ['running', 'checking'].includes(status.status)
-        ? '↻'
-        : ['success', 'up_to_date'].includes(status.status) ? '✓' : 'U';
+      : status.status === 'local_ahead'
+        ? '↑'
+        : ['running', 'checking'].includes(status.status)
+          ? '↻'
+          : ['success', 'up_to_date'].includes(status.status) ? '✓' : 'G';
 
   return node('div', { class: 'stack update-status-stack' },
     node('section', { class: 'update-hero update-hero-' + tone },
@@ -291,10 +333,10 @@ function statusPanel(status, settings, container) {
     ),
 
     node('div', { class: 'update-version-grid' },
-      versionCard('Wersja zainstalowana', status.current_version, 'Aktualnie uruchomiony release'),
+      versionCard('Commit zainstalowany', status.current_version, status.current_commit_at ? 'Commit: ' + formatDate(status.current_commit_at) : 'Aktualnie uruchomiony release'),
       node('div', { class: 'update-version-arrow', 'aria-hidden': 'true', text: '→' }),
-      versionCard('Wersja docelowa', status.target_version, status.update_available ? 'Gotowa do instalacji' : 'Ostatnio wykryta wersja', status.update_available ? 'available' : ''),
-      versionCard('Kanał aktualizacji', status.ref || settings.ref, 'Git ref używany przez updater')
+      versionCard('Commit kanału', status.target_version, status.target_commit_at ? 'HEAD: ' + formatDate(status.target_commit_at) : (status.update_available ? 'Gotowy do instalacji' : 'Ostatnio wykryty commit'), status.update_available ? 'available' : ''),
+      versionCard('Kanał Git', status.ref || settings.ref, 'Branch, tag lub commit obserwowany przez updater')
     ),
 
     node('section', { class: 'panel update-progress-panel' },
