@@ -60,11 +60,9 @@ const CREDENTIAL_TYPE_CONFIG = {
     authModes: {
       password: { label: 'Hasło SSH', fields: [
         { key: 'password', label: 'Hasło SSH', type: 'password', required: true, autocomplete: 'current-password' },
-        { key: 'known_hosts', label: 'known_hosts', tag: 'textarea', required: true, wide: true, placeholder: 'host.example.com ssh-ed25519 AAAA...' },
       ]},
       private_key: { label: 'Istniejący klucz prywatny', fields: [
         { key: 'private_key', label: 'Klucz prywatny SSH', tag: 'textarea', required: true, wide: true, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
-        { key: 'known_hosts', label: 'known_hosts', tag: 'textarea', required: true, wide: true, placeholder: 'host.example.com ssh-ed25519 AAAA...' },
       ]},
       generate_key: { label: 'Hasło → wygeneruj i wgraj klucz (zalecane)', createOnly: true, fields: [
         { key: 'password', label: 'Hasło SSH (tylko do jednorazowego wgrania klucza)', type: 'password', required: true, autocomplete: 'current-password', wide: true },
