@@ -482,3 +482,154 @@
 .ansible-playbook-info small {
   font-size: .67rem;
 }
+
+
+.product-catalog-panel,
+.product-history-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.product-catalog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.product-catalog-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.product-catalog-header h2,
+.product-history-panel h2 {
+  margin: 0;
+}
+
+.product-catalog-header p {
+  max-width: 760px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.product-catalog-kicker {
+  color: var(--accent-strong);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.product-card {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+  transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+}
+
+.product-card:hover {
+  border-color: var(--accent-border);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .08);
+}
+
+.product-card-top {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.product-card-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.product-card-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.product-card-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.product-card-copy strong,
+.product-card-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-card-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: .76rem;
+  line-height: 1.55;
+}
+
+.product-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.product-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.product-card-actions .button {
+  width: 100%;
+  justify-content: center;
+}
+
+.product-catalog-empty {
+  grid-column: 1 / -1;
+  padding: 28px 18px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .product-catalog-header {
+    flex-direction: column;
+  }
+
+  .product-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .product-card {
+    transition: none;
+  }
+}
