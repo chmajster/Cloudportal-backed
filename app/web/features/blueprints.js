@@ -332,6 +332,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const playbookSelect = playbookField.querySelector('select');
     const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
     let templateRows = [];
+    let hydratedHostnameSchemeId = null;
 
     const updateHostnameFields = () => {
       const selected = schemeSelect.value;
@@ -339,11 +340,13 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const custom = selected === '__new__';
       newScheme.hidden = !custom;
       existingSchemeEditor.hidden = custom || !scheme;
-      if (scheme && !custom) {
+      if (custom) hydratedHostnameSchemeId = null;
+      if (scheme && !custom && String(hydratedHostnameSchemeId) !== String(scheme.id)) {
         existingSchemeEditor.querySelector('[name="existing_hostname_scheme_name"]').value = scheme.name;
         existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]').value = scheme.pattern;
         existingSchemeEditor.querySelector('[name="existing_hostname_padding"]').value = scheme.padding;
         existingSchemeEditor.querySelector('[data-hostname-next-number]').textContent = String(scheme.next_number);
+        hydratedHostnameSchemeId = scheme.id;
       }
       const pattern = custom
         ? normalizeHostnamePattern(
