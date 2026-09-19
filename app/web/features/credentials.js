@@ -92,6 +92,29 @@ function proxmoxAuthModeLabel(mode) {
   return mode === 'token' ? 'Token API' : 'Login i hasło';
 }
 
+function proxmoxDuplicateTokenDetail(error) {
+  const detail = error?.data?.detail;
+  if (error?.status !== 409 || !detail || typeof detail !== 'object') return null;
+  return detail.code === 'proxmox_token_duplicate' ? detail : null;
+}
+
+function applyProxmoxDuplicateTokenSuggestion(form, error) {
+  const detail = proxmoxDuplicateTokenDetail(error);
+  if (!detail) return null;
+  const tokenInput = form.querySelector('[data-secret-key="token_name"]');
+  const suggested = String(detail.suggested_token_name || '').trim();
+  if (tokenInput && suggested) {
+    tokenInput.value = suggested;
+    tokenInput.focus();
+    tokenInput.select();
+  }
+  return {
+    message: detail.message || 'Token API Proxmox o tej nazwie już istnieje.',
+    suggested,
+  };
+}
+
+
 function renderProxmoxConnectionResult(container, result = null, error = null) {
   container.hidden = false;
   container.classList.toggle('success', Boolean(result));
@@ -416,11 +439,23 @@ function credentialForm(item = null) {
         const password = form.querySelector('[data-secret-key="password"]')?.value || '';
         const tokenName = form.querySelector('[data-secret-key="token_name"]')?.value || '';
         if (!password || !tokenName) throw new Error('Podaj hasło Proxmox i nazwę tokenu.');
-        const saved = await api('/credentials/proxmox/bootstrap', { method: 'POST', body: {
-          name: payload.name, endpoint, username, password, token_name: tokenName,
-          verify_ssl: verifySsl, privilege_separation: false,
-          expires_at: payload.expires_at, rotation_due_at: payload.rotation_due_at,
-        }});
+        let saved;
+        try {
+          saved = await api('/credentials/proxmox/bootstrap', { method: 'POST', body: {
+            name: payload.name, endpoint, username, password, token_name: tokenName,
+            verify_ssl: verifySsl, privilege_separation: false,
+            expires_at: payload.expires_at, rotation_due_at: payload.rotation_due_at,
+          }});
+        } catch (error) {
+          const duplicate = applyProxmoxDuplicateTokenSuggestion(form, error);
+          if (duplicate) {
+            const suggestion = duplicate.suggested
+              ? ` Proponowana nowa nazwa: „${duplicate.suggested}”. Została wpisana do formularza — zatwierdź ponownie, aby jej użyć.`
+              : ' Podaj inną nazwę tokenu i spróbuj ponownie.';
+            throw new Error(duplicate.message + suggestion);
+          }
+          throw error;
+        }
         if (data.has('test_after_save')) {
           try {
             const result = await api('/credentials/' + saved.id + '/test', { method: 'POST' });
