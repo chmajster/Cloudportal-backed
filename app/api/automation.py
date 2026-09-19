@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
+from app.catalog_control import require_catalog_item_enabled
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items)
 from app.api.schemas import BlueprintExecuteInput, BlueprintInput, DeploymentInput, HostnameGenerateInput, HostnameSchemeInput
@@ -109,7 +110,10 @@ def release_hostname(id: str, request: Request, actor=Depends(require('hostnames
 
 def validate_blueprint_references(db, data, blueprint_id=None):
     provider = find(db, Provider, data.deployment.provider_id)
+    require_catalog_item_enabled(db, 'templates', data.deployment.template)
     template_meta, _ = template_definition(data.deployment.template)
+    if data.deployment.ansible:
+        require_catalog_item_enabled(db, 'playbooks', data.deployment.ansible.playbook)
     if provider.type != template_meta['provider']:
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
@@ -232,6 +236,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id)
         blueprint_variables = rendered.pop('blueprint_variables')
         parsed = DeploymentInput.model_validate(rendered)
+        require_catalog_item_enabled(db, 'templates', parsed.template)
         provider = find(db, Provider, parsed.provider_id)
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
