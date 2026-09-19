@@ -355,6 +355,75 @@ async function createDeployment() {
     const templateField = selectField('Szablon', 'template', templates.map(item => ({
       value: item.id, label: `${item.name} · v${item.version} · ${CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider}`,
     })), templates[0].id, { required: true });
+
+    const terraformPreviewBody = node('div', { class: 'terraform-template-preview-body' },
+      node('div', { class: 'muted', text: 'Kliknij „Podgląd Terraform”, aby wczytać pliki HCL wybranego szablonu.' }));
+    const terraformPreview = node('section', { class: 'terraform-template-preview wide', hidden: true },
+      node('div', { class: 'terraform-template-preview-header' },
+        node('div', {},
+          node('strong', { text: 'Podgląd szablonu Terraform / OpenTofu' }),
+          node('small', { text: 'Widok tylko do odczytu. Pokazywany jest dokładny HCL używany przez backend.' })),
+        button('Ukryj podgląd', () => { terraformPreview.hidden = true; }, 'ghost')),
+      terraformPreviewBody);
+    let terraformPreviewTemplateId = null;
+
+    const renderTerraformPreview = source => {
+      const files = source?.files || [];
+      if (!files.length) {
+        terraformPreviewBody.replaceChildren(node('div', { class: 'muted', text: 'Szablon nie zawiera plików .tf.' }));
+        return;
+      }
+      const tabs = node('div', { class: 'terraform-template-tabs', role: 'tablist', 'aria-label': 'Pliki Terraform' });
+      const code = node('pre', { class: 'terraform-template-code mono', tabindex: '0' });
+      const meta = node('div', { class: 'terraform-template-preview-meta' },
+        node('span', { class: 'badge info', text: source.name || source.id }),
+        node('span', { class: 'badge', text: 'v' + source.version }),
+        node('span', { class: 'badge', text: CREDENTIAL_TYPE_CONFIG[source.provider]?.label || source.provider }));
+
+      const selectFile = (file, tab) => {
+        tabs.querySelectorAll('button').forEach(value => {
+          value.classList.toggle('active', value === tab);
+          value.setAttribute('aria-selected', String(value === tab));
+        });
+        code.textContent = file.content || '';
+        code.setAttribute('aria-label', 'Kod pliku ' + file.name);
+      };
+
+      files.forEach((file, index) => {
+        const tab = node('button', {
+          type: 'button',
+          class: 'terraform-template-tab' + (index === 0 ? ' active' : ''),
+          role: 'tab',
+          'aria-selected': String(index === 0),
+          text: file.name,
+        });
+        tab.addEventListener('click', () => selectFile(file, tab));
+        tabs.append(tab);
+      });
+
+      terraformPreviewBody.replaceChildren(meta, tabs, code);
+      selectFile(files[0], tabs.querySelector('button'));
+    };
+
+    const loadTerraformPreview = async () => {
+      const templateId = templateField.querySelector('select').value;
+      if (!templateId) throw new Error('Wybierz szablon Terraform.');
+      terraformPreview.hidden = false;
+      if (terraformPreviewTemplateId === templateId && terraformPreviewBody.querySelector('.terraform-template-code')) return;
+      terraformPreviewTemplateId = templateId;
+      terraformPreviewBody.replaceChildren(node('div', { class: 'loading terraform-template-preview-loading' }, node('div', { class: 'spinner' })));
+      try {
+        renderTerraformPreview(await api('/templates/' + encodeURIComponent(templateId) + '/source'));
+      } catch (error) {
+        terraformPreviewTemplateId = null;
+        terraformPreviewBody.replaceChildren(node('div', { class: 'form-error', text: error.message }));
+      }
+    };
+
+    const terraformPreviewButton = button('Podgląd Terraform', () => {
+      loadTerraformPreview().catch(error => toast(error.message, 'error'));
+    }, 'ghost');
+
     const providerField = selectField('Platforma', 'provider_id', [], '', { required: true });
     const credentialField = selectField('Dane dostępowe', 'credentials_id', [], '', { required: true });
     const variableFields = node('div', { class: 'form-grid wide template-variable-grid' });
@@ -367,6 +436,8 @@ async function createDeployment() {
         node('div', { class: 'form-grid' },
           field('Nazwa wdrożenia', 'name', { required: true, placeholder: 'np. web-prod-01' }),
           templateField,
+          node('div', { class: 'terraform-template-preview-actions wide' }, terraformPreviewButton),
+          terraformPreview,
           providerField,
           credentialField,
           selectField('Silnik IaC', 'executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], 'terraform'))),
@@ -440,6 +511,10 @@ async function createDeployment() {
     };
 
     templateSelect.addEventListener('change', () => {
+      terraformPreviewTemplateId = null;
+      if (!terraformPreview.hidden) {
+        loadTerraformPreview().catch(error => toast(error.message, 'error'));
+      }
       refreshTemplate().catch(error => toast(error.message, 'error'));
     });
     providerSelect.addEventListener('change', () => {
