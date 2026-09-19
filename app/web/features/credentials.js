@@ -115,6 +115,30 @@ function applyProxmoxDuplicateTokenSuggestion(form, error) {
 }
 
 
+function setProxmoxTokenVerificationState(form, active, message = '') {
+  let status = form.querySelector('.proxmox-token-verification');
+  if (!status && active) {
+    status = node('div', { class: 'proxmox-token-verification', role: 'status', 'aria-live': 'polite' },
+      node('span', { class: 'proxmox-token-verification-spinner', 'aria-hidden': 'true' }),
+      node('span', { class: 'proxmox-token-verification-text' }));
+    const secretPanel = form.querySelector('.credential-secret-panel');
+    (secretPanel || form).append(status);
+  }
+  if (!status) return;
+  status.hidden = !active;
+  status.classList.toggle('is-checking', active);
+  const text = status.querySelector('.proxmox-token-verification-text');
+  if (text) text.textContent = message;
+}
+
+function proxmoxTokenRejectedDetail(error) {
+  const detail = error?.data?.detail;
+  if (!detail || typeof detail !== 'object') return null;
+  if (!['proxmox_token_create_rejected', 'proxmox_token_duplicate_check_failed'].includes(detail.code)) return null;
+  return detail;
+}
+
+
 function renderProxmoxConnectionResult(container, result = null, error = null) {
   container.hidden = false;
   container.classList.toggle('success', Boolean(result));
@@ -440,6 +464,11 @@ function credentialForm(item = null) {
         const tokenName = form.querySelector('[data-secret-key="token_name"]')?.value || '';
         if (!password || !tokenName) throw new Error('Podaj hasło Proxmox i nazwę tokenu.');
         let saved;
+        setProxmoxTokenVerificationState(
+          form,
+          true,
+          'Tworzenie tokenu. Jeśli Proxmox zwróci HTTP 400, Cloudportal sprawdzi, czy nazwa tokenu jest duplikatem…'
+        );
         try {
           saved = await api('/credentials/proxmox/bootstrap', { method: 'POST', body: {
             name: payload.name, endpoint, username, password, token_name: tokenName,
@@ -452,9 +481,18 @@ function credentialForm(item = null) {
             const suggestion = duplicate.suggested
               ? ` Proponowana nowa nazwa: „${duplicate.suggested}”. Została wpisana do formularza — zatwierdź ponownie, aby jej użyć.`
               : ' Podaj inną nazwę tokenu i spróbuj ponownie.';
-            throw new Error(duplicate.message + suggestion);
+            throw new Error(duplicate.message + ' Duplikat został potwierdzony przez odczyt listy tokenów z Proxmox.' + suggestion);
+          }
+          const rejected = proxmoxTokenRejectedDetail(error);
+          if (rejected?.code === 'proxmox_token_create_rejected') {
+            throw new Error(rejected.message || 'Proxmox odrzucił utworzenie tokenu. Sprawdzono, że nie jest to duplikat nazwy.');
+          }
+          if (rejected?.code === 'proxmox_token_duplicate_check_failed') {
+            throw new Error(rejected.message || 'Nie udało się potwierdzić, czy błąd HTTP 400 oznacza duplikat tokenu.');
           }
           throw error;
+        } finally {
+          setProxmoxTokenVerificationState(form, false);
         }
         if (data.has('test_after_save')) {
           try {

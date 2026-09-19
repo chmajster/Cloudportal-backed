@@ -144,20 +144,50 @@ def _proxmox_http_exception(error, operation):
     )
 
 
-def _proxmox_duplicate_token_response(response):
-    if response.status_code not in {400, 409}:
-        return False
+def _proxmox_token_exists(client, base, username, token_name, headers):
+    """Verify a suspected duplicate by reading the user's actual token list."""
     try:
-        body = response.text.lower()
-    except Exception:
-        body = ''
-    markers = (
-        'already exists',
-        'already exist',
-        'duplicate',
-        'value exists',
+        response = client.get(
+            base + '/access/users/' + quote(username, safe='') + '/token',
+            headers=headers,
+        )
+        response.raise_for_status()
+        rows = response.json().get('data') or []
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            502,
+            {
+                'code': 'proxmox_token_duplicate_check_failed',
+                'message': (
+                    'Proxmox zwrócił HTTP 400 podczas tworzenia tokenu, ale Cloudportal nie mógł '
+                    'sprawdzić listy istniejących tokenów. Nie można bezpiecznie uznać tego błędu za duplikat.'
+                ),
+                'proxmox_status': 400,
+                'check_error': error.__class__.__name__,
+            },
+        ) from None
+    except (KeyError, ValueError, TypeError):
+        raise HTTPException(
+            502,
+            {
+                'code': 'proxmox_token_duplicate_check_failed',
+                'message': (
+                    'Proxmox zwrócił HTTP 400 podczas tworzenia tokenu, a odpowiedź z listą tokenów '
+                    'miała nieprawidłowy format. Nie można potwierdzić duplikatu.'
+                ),
+                'proxmox_status': 400,
+            },
+        ) from None
+
+    expected_full_id = f'{username}!{token_name}'
+    return any(
+        isinstance(row, dict) and (
+            row.get('tokenid') == token_name
+            or row.get('full-tokenid') == expected_full_id
+            or row.get('full_tokenid') == expected_full_id
+        )
+        for row in rows
     )
-    return any(marker in body for marker in markers)
 
 
 def _suggest_proxmox_token_name(token_name):
@@ -282,8 +312,30 @@ def create_api_token(endpoint, username, password, token_name, *, verify_ssl=Tru
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as error:
-                if _proxmox_duplicate_token_response(error.response):
-                    raise _proxmox_duplicate_token_exception(username, token_name) from None
+                if error.response.status_code == 400:
+                    duplicate = _proxmox_token_exists(
+                        client,
+                        base,
+                        username,
+                        token_name,
+                        {'CSRFPreventionToken': ticket['CSRFPreventionToken']},
+                    )
+                    if duplicate:
+                        raise _proxmox_duplicate_token_exception(username, token_name) from None
+                    raise HTTPException(
+                        502,
+                        {
+                            'code': 'proxmox_token_create_rejected',
+                            'message': (
+                                'Proxmox odrzucił utworzenie tokenu (HTTP 400). '
+                                'Cloudportal sprawdził listę tokenów i potwierdził, że wskazana nazwa '
+                                'nie jest duplikatem. Sprawdź parametry tokenu i uprawnienia użytkownika.'
+                            ),
+                            'proxmox_status': 400,
+                            'duplicate_checked': True,
+                            'duplicate': False,
+                        },
+                    ) from None
                 raise
             data = response.json()['data']
             token_secret = data.get('value')
