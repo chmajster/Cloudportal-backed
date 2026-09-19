@@ -181,6 +181,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Została wpisana do formularza' in script
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
+    assert "registerCommand('ansible.run'" in script
+    assert 'ansible-playbook-info' in script
+    assert 'Wszystkie kategorie' in script
+    assert '.ansible-playbook-info' in stylesheet
     assert 'createProxmoxTemplatePicker' in script
     assert "function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedNode = '', onSelect = null)" in script
     assert "if (!nodeSelect.value) nodeSelect.value = String(row.node);" in script
