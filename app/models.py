@@ -36,6 +36,8 @@ class User(Timestamp, Base):
     username: Mapped[str] = mapped_column(String(64), unique=True)
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(Text)
+    auth_source: Mapped[str] = mapped_column(String(16), default="local", index=True)
+    external_id: Mapped[str | None] = mapped_column(String(1024), unique=True)
     first_name: Mapped[str] = mapped_column(String(100), default="")
     last_name: Mapped[str] = mapped_column(String(100), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
