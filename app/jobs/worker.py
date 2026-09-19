@@ -253,6 +253,69 @@ def wait_for_vm(context, workspace):
     raise ExecutionFailed('Timed out waiting for VM guest-agent address')
 
 
+def _provider_retry_delay(attempt):
+    cfg = settings()
+    return min(cfg.provider_retry_max_seconds, cfg.provider_retry_base_seconds * (2 ** max(0, attempt - 1)))
+
+
+def defer_for_provider(job_id, reason='unreachable'):
+    with session() as db:
+        current = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+        if current is None or current.cancel_requested:
+            return
+        payload = dict(current.payload or {})
+        wait = dict(payload.get('_provider_wait') or {})
+        attempt = int(wait.get('attempts') or 0) + 1
+        delay = _provider_retry_delay(attempt)
+        next_attempt = now() + timedelta(seconds=delay)
+        payload['_provider_wait'] = {
+            'attempts': attempt,
+            'reason': reason,
+            'next_attempt_at': next_attempt.isoformat(),
+        }
+        current.payload = payload
+        current.status = 'queued'
+        current.error = None
+        current.heartbeat_at = None
+        if current.deployment_id:
+            deployment = db.get(Deployment, current.deployment_id)
+            if deployment is not None:
+                deployment.status = 'waiting_provider'
+                deployment.active_job_id = current.id
+        db.add(JobLog(
+            job_id=current.id,
+            message=f'provider.waiting: Proxmox niedostępny; ponowna próba za {delay} s',
+        ))
+        db.add(Audit(
+            user_id=current.created_by,
+            token_id=current.token_id,
+            ip=current.ip,
+            source=current.source,
+            action='provider.waiting',
+            resource='jobs',
+            resource_id=current.id,
+            result='queued',
+            request_id=current.request_id,
+        ))
+        db.commit()
+
+
+def clear_provider_wait(job_id):
+    with session() as db:
+        current = db.get(Job, job_id)
+        if current is None:
+            return
+        payload = dict(current.payload or {})
+        if '_provider_wait' in payload:
+            payload.pop('_provider_wait', None)
+            current.payload = payload
+        if current.deployment_id:
+            deployment = db.get(Deployment, current.deployment_id)
+            if deployment is not None and deployment.status == 'waiting_provider':
+                deployment.status = 'running'
+        db.commit()
+
+
 def execute(job_id):
     os.umask(0o077)
     with session() as db:
@@ -274,6 +337,24 @@ def execute(job_id):
             if job.payload.get('ansible'):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
+        if (
+            settings().provider_offline_queue_enabled
+            and job.operation == 'terraform.apply'
+            and context.deployment is not None
+            and context.deployment.provider == 'proxmox'
+        ):
+            availability = provider_for(context.credential).execution_availability()
+            if not availability.get('ok'):
+                if availability.get('retryable'):
+                    defer_for_provider(job.id, availability.get('reason') or 'unreachable')
+                    return
+                reason = availability.get('reason') or 'configuration'
+                raise ExecutionFailed(
+                    'Proxmox is reachable but cannot be used for provisioning; '
+                    f'check credentials, TLS and provider configuration ({reason})'
+                )
+            clear_provider_wait(job.id)
+
         context.stage('job.running')
         if job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
