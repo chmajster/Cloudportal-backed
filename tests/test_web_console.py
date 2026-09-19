@@ -19,6 +19,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-open"' in page.text
     assert 'id="global-search-dialog"' in page.text
     assert 'id="global-search-input"' in page.text
+    assert 'id="sidebar-profile"' in page.text
     assert 'href="./favicon.ico"' in page.text
     assert 'type="image/x-icon"' in page.text
     assert 'src="./theme-init.js"' in page.text
@@ -41,7 +42,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert manifest['shared'] == sorted(manifest['shared'])
     assert manifest['scripts'] == sorted(manifest['scripts'])
     assert manifest['styles'] == sorted(manifest['styles'])
-    assert manifest['shared'] == ['shared/platforms.js']
+    assert manifest['shared'] == ['shared/icons.js', 'shared/platforms.js']
     assert {
         'features/dashboard.js',
         'features/identity.js',
@@ -62,6 +63,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
         'styles/features/inventory.css',
+        'styles/features/dashboard.css',
         'styles/features/tools.css',
         'styles/features/updates.css',
     } <= set(manifest['styles'])
@@ -109,6 +111,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'const views = Object.create(null);' in core
     assert 'route.navigation !== false' in core
     assert 'currentRoute?.navigationParent === route.id' in core
+    assert 'appRouteIcon(route)' in core
+    assert "text: route.icon" not in core
+    assert 'function renderSidebarProfile()' in core
+    assert "appIcon('search')" in core
+    assert "appIcon('refresh')" in core
     assert len(bootstrap.splitlines()) < 120
     assert 'async function usersView(' not in bootstrap
     assert 'async function blueprintsView(' not in bootstrap
@@ -194,6 +201,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "navigationParent: 'tools'" in script
     assert 'navigation: false' in script
     assert "registerView({ id: 'tools'" in script
+    assert "iconName: 'wrench'" in script
     assert 'Centrum narzędzi' in script
     assert 'Otwórz Auto-update' in script
     assert '← Narzędzia' in script
@@ -211,6 +219,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Następne sprawdzenie' in script
     assert 'update-interval-presets' in script
     assert "'X-Update-Status-Token': token" in script
+    assert 'Witaj, ${greetingName}!' in script
+    assert 'dashboard-metrics' in script
+    assert 'dashboard-quick-actions' in script
+    assert 'Ostatnie wdrożenia' in script
+    assert "api('/providers?limit=200')" in script
+    assert "api('/deployments?limit=200')" in script
+    assert "api('/jobs?limit=200')" in script
+    assert "api('/users?limit=200')" in script
     assert "registerExtension('global-search'" in script
     assert 'function loadIndex(' in script
     assert 'function renderSearch(' in script
@@ -290,6 +306,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.toast-close' in stylesheet
     assert '.modal.modal-wide' in stylesheet
     assert '.global-search-trigger' in stylesheet
+    assert '.sidebar-profile-card' in stylesheet
+    assert '.nav-link.active::before' in stylesheet
+    assert '.dashboard-metrics' in stylesheet
+    assert '.dashboard-quick-action' in stylesheet
     assert '.global-search-dialog' in stylesheet
     assert '.global-search-result' in stylesheet
     assert '.vm-detail-header' in stylesheet
