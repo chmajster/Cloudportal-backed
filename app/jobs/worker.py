@@ -338,7 +338,8 @@ def execute(job_id):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
         if (
-            job.operation == 'terraform.apply'
+            settings().provider_offline_queue_enabled
+            and job.operation == 'terraform.apply'
             and context.deployment is not None
             and context.deployment.provider == 'proxmox'
         ):
