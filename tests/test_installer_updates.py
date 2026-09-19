@@ -23,3 +23,13 @@ def test_update_service_is_stdlib_only_and_stable():
     assert '127.0.0.1' in source
     assert 'CLOUDPORTAL_RELEASE_SHA' in source
     assert 'cloudportal-backup' in source
+
+
+def test_backup_and_restore_include_system_sbin_for_runuser():
+    backup = (ROOT / 'scripts' / 'backend-backup.py').read_text()
+    restore = (ROOT / 'scripts' / 'backend-restore.py').read_text()
+    expected_path = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+    for source in (backup, restore):
+        assert expected_path in source
+        assert "shutil.which('runuser', path=env['PATH'])" in source
+        assert "['runuser', '-u'" not in source
