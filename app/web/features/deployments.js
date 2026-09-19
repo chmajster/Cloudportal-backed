@@ -359,6 +359,94 @@ async function enhanceProxmoxDeploymentVariables(container, template, providerSe
   await loadNodeResources();
 }
 
+
+function createAnsiblePlaybookPreview(playbookSelect) {
+  const body = node('div', { class: 'ansible-playbook-preview-body' },
+    node('div', { class: 'muted', text: 'Kliknij „Podgląd playbooka”, aby wczytać YAML.' }));
+  const panel = node('section', { class: 'ansible-playbook-preview wide', hidden: true },
+    node('div', { class: 'ansible-playbook-preview-header' },
+      node('div', {},
+        node('strong', { text: 'Podgląd playbooka Ansible' }),
+        node('small', { text: 'Widok tylko do odczytu. Pokazywane są zatwierdzone pliki YAML używane przez backend.' })),
+      button('Ukryj podgląd', () => { panel.hidden = true; }, 'ghost')),
+    body);
+  let loadedId = null;
+
+  const roleLabel = role => ({
+    main: 'Główny playbook',
+    wait: 'Oczekiwanie',
+    validate: 'Walidacja',
+  }[role] || role || 'Playbook');
+
+  const render = source => {
+    const files = source?.files || [];
+    if (!files.length) {
+      body.replaceChildren(node('div', { class: 'muted', text: 'Brak plików YAML do wyświetlenia.' }));
+      return;
+    }
+
+    const meta = node('div', { class: 'ansible-playbook-preview-meta' },
+      node('span', { class: 'badge info', text: source.name || source.id }),
+      node('span', { class: 'badge', text: 'v' + source.version }),
+      node('span', { class: 'badge', text: String(source.transport || '').toUpperCase() }));
+    const tabs = node('div', { class: 'ansible-playbook-tabs', role: 'tablist', 'aria-label': 'Pliki playbooka Ansible' });
+    const role = node('div', { class: 'ansible-playbook-role muted' });
+    const code = node('pre', { class: 'ansible-playbook-code mono', tabindex: '0' });
+
+    const selectFile = (file, tab) => {
+      tabs.querySelectorAll('button').forEach(value => {
+        value.classList.toggle('active', value === tab);
+        value.setAttribute('aria-selected', String(value === tab));
+      });
+      role.textContent = roleLabel(file.role);
+      code.textContent = file.content || '';
+      code.setAttribute('aria-label', 'Kod playbooka ' + file.name);
+    };
+
+    files.forEach((file, index) => {
+      const tab = node('button', {
+        type: 'button',
+        class: 'ansible-playbook-tab' + (index === 0 ? ' active' : ''),
+        role: 'tab',
+        'aria-selected': String(index === 0),
+        text: file.name,
+      });
+      tab.addEventListener('click', () => selectFile(file, tab));
+      tabs.append(tab);
+    });
+
+    body.replaceChildren(meta, tabs, role, code);
+    selectFile(files[0], tabs.querySelector('button'));
+  };
+
+  const load = async () => {
+    const playbookId = playbookSelect.value;
+    if (!playbookId) throw new Error('Wybierz playbook Ansible.');
+    panel.hidden = false;
+    if (loadedId === playbookId && body.querySelector('.ansible-playbook-code')) return;
+    loadedId = playbookId;
+    body.replaceChildren(node('div', { class: 'loading ansible-playbook-preview-loading' }, node('div', { class: 'spinner' })));
+    try {
+      const source = await api('/ansible/playbooks/' + encodeURIComponent(playbookId) + '/source');
+      render(source);
+    } catch (error) {
+      loadedId = null;
+      body.replaceChildren(node('div', { class: 'form-error', text: error.message }));
+    }
+  };
+
+  const actions = node('div', { class: 'ansible-playbook-preview-actions wide' },
+    button('Podgląd playbooka', () => load().catch(error => toast(error.message, 'error')), 'ghost'));
+
+  playbookSelect.addEventListener('change', () => {
+    loadedId = null;
+    if (!panel.hidden) load().catch(error => toast(error.message, 'error'));
+  });
+
+  return { actions, panel };
+}
+
+
 async function createDeployment() {
   try {
     const [providerResult, credentialResult, templateResult, playbookResult] = await Promise.all([
@@ -501,13 +589,15 @@ async function createDeployment() {
         value: playbook.id,
         label: `${playbook.name} · v${playbook.version}`,
       })), playbooks[0]?.id || '', { required: enabled });
+      const playbookSelect = playbookField.querySelector('select');
+      const playbookPreview = createAnsiblePlaybookPreview(playbookSelect);
       const credentialField = selectField('Systemowe dane dostępowe', 'ansible_credentials_id', [], '', { required: enabled });
       const variablesContainer = node('div', { class: 'form-grid wide' });
-      ansibleFields.replaceChildren(playbookField, credentialField, variablesContainer);
+      ansibleFields.replaceChildren(playbookField, playbookPreview.actions, playbookPreview.panel, credentialField, variablesContainer);
       ansibleFields.querySelectorAll('input,select,textarea').forEach(control => { control.disabled = !enabled; });
 
       const refreshPlaybook = () => {
-        const playbook = playbooks.find(value => value.id === playbookField.querySelector('select').value) || playbooks[0];
+        const playbook = playbooks.find(value => value.id === playbookSelect.value) || playbooks[0];
         const matchingCredentials = credentials.filter(value => value.type === playbook?.transport);
         const select = credentialField.querySelector('select');
         refill(select, matchingCredentials.map(value => ({ id: value.id, label: `${value.name} · ${credentialTypeLabel(value.type)}` })),
@@ -518,7 +608,7 @@ async function createDeployment() {
             help: 'Opcjonalna zmienna zatwierdzonego playbooka.',
           })));
       };
-      playbookField.querySelector('select').addEventListener('change', refreshPlaybook);
+      playbookSelect.addEventListener('change', refreshPlaybook);
       refreshPlaybook();
     };
 
@@ -629,12 +719,16 @@ async function runStandaloneAnsible() {
       value: playbook.id,
       label: `${playbook.name} · v${playbook.version}`,
     })), playbooks[0].id, { required: true });
+    const playbookSelect = playbookField.querySelector('select');
+    const playbookPreview = createAnsiblePlaybookPreview(playbookSelect);
     const credentialField = selectField('Dane dostępowe hosta', 'credentials_id', [], '', { required: true });
     const variables = node('div', { class: 'form-grid wide' });
     const fields = node('div', { class: 'form-grid' },
       formSection('Cel', 'Podaj adresy IP hostów, na których ma zostać uruchomiony zatwierdzony playbook.',
         node('div', { class: 'form-grid' },
           playbookField,
+          playbookPreview.actions,
+          playbookPreview.panel,
           credentialField,
           field('Adresy IP hostów', 'hosts', {
             tag: 'textarea',
@@ -646,7 +740,7 @@ async function runStandaloneAnsible() {
       formSection('Zmienne playbooka', 'Puste pola opcjonalne nie są wysyłane.', variables));
 
     const refresh = () => {
-      const playbook = playbooks.find(value => value.id === playbookField.querySelector('select').value) || playbooks[0];
+      const playbook = playbooks.find(value => value.id === playbookSelect.value) || playbooks[0];
       const matching = credentials.filter(value => value.type === playbook.transport);
       const select = credentialField.querySelector('select');
       select.replaceChildren(node('option', { value: '', text: matching.length ? 'Wybierz dane dostępowe' : `Brak danych typu ${playbook.transport}` }));
@@ -659,7 +753,7 @@ async function runStandaloneAnsible() {
         { help: 'Zmienna zatwierdzonego playbooka.' },
       )));
     };
-    playbookField.querySelector('select').addEventListener('change', refresh);
+    playbookSelect.addEventListener('change', refresh);
     refresh();
 
     openModal({
