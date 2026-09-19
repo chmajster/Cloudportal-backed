@@ -1133,6 +1133,29 @@ async function blueprintForm(item = null) {
     const schemeChoices = [{ value: '', label: 'Bez automatycznego hostname' }].concat(schemes.filter(value => value.is_active || Number(value.id) === Number(deployment.hostname_scheme_id)).map(value => ({
       value: value.id, label: `${value.name} · ${value.pattern}`,
     })));
+    const deploymentNameField = field('Nazwa wdrożenia', 'deployment_name', {
+      required: !deployment.hostname_scheme_id,
+      value: deployment.hostname_scheme_id ? '{{ hostname }}' : (deployment.name || ''),
+      wide: true,
+      placeholder: 'np. web-prod-01',
+      help: 'Pole jest używane tylko bez generatora hostname.',
+    });
+    const deploymentHostnameSchemeField = selectField(
+      'Schemat hostname', 'deployment_hostname_scheme_id', schemeChoices, deployment.hostname_scheme_id || ''
+    );
+    const automaticHostnameNotice = node('div', {
+      class: 'field-help wide',
+      text: 'Nazwa deploymentu i nazwa VM będą generowane automatycznie z wybranego wzorca hostname.',
+    });
+    const syncDeploymentNameMode = () => {
+      const automatic = Boolean(deploymentHostnameSchemeField.querySelector('select').value);
+      deploymentNameField.hidden = automatic;
+      automaticHostnameNotice.hidden = !automatic;
+      const input = deploymentNameField.querySelector('input');
+      input.required = !automatic;
+      if (automatic) input.value = '{{ hostname }}';
+      else if (input.value === '{{ hostname }}') input.value = '';
+    };
     const poolChoices = [{ value: '', label: 'Bez automatycznego IPAM' }].concat(pools.filter(value => value.is_active || Number(value.id) === Number(deployment.ipam_pool_id)).map(value => ({
       value: value.id, label: `${value.name} · ${value.cidr}`,
     })));
@@ -1173,12 +1196,13 @@ async function blueprintForm(item = null) {
         node('div', { class: 'editor-add-row' }, button('Dodaj pole', () => addVariable('', { type: 'string' }), 'primary'))),
       formSection('Wdrożenie', 'Wybierz platformę i wartości przekazywane do zatwierdzonego szablonu IaC.',
         node('div', { class: 'form-grid' },
-          field('Nazwa wdrożenia', 'deployment_name', { required: true, value: deployment.name || '{{ hostname }}', wide: true, help: 'Możesz użyć {{ hostname }}.' }),
+          deploymentNameField,
+          automaticHostnameNotice,
           templateField,
           providerField,
           credentialField,
           selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
-          selectField('Schemat hostname', 'deployment_hostname_scheme_id', schemeChoices, deployment.hostname_scheme_id || ''),
+          deploymentHostnameSchemeField,
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
           ansibleSection)),
@@ -1189,6 +1213,8 @@ async function blueprintForm(item = null) {
           workflowList,
           node('div', { class: 'editor-add-row' }, button('Dodaj krok', () => addWorkflowStep({ type: 'terraform_apply' }), 'primary')))));
 
+    deploymentHostnameSchemeField.querySelector('select').addEventListener('change', syncDeploymentNameMode);
+    syncDeploymentNameMode();
     refreshDeploymentTemplate();
 
     openModal({
@@ -1248,18 +1274,25 @@ async function blueprintForm(item = null) {
         if (workflow.some(step => !step.id)) throw new Error('Każdy krok workflow musi mieć ID.');
 
         const template = currentTemplate();
+        const hostnameSchemeId = Number(form.elements.deployment_hostname_scheme_id.value || 0);
+        const deploymentVariables = {
+          ...(variableState.get(template.id) || readBlueprintTemplateVariables(form, template)),
+        };
+        if (hostnameSchemeId && Object.prototype.hasOwnProperty.call(template.variables_schema?.properties || {}, 'name')) {
+          deploymentVariables.name = '{{ hostname }}';
+        }
         const deploymentPayload = {
-          name: form.elements.deployment_name.value,
+          name: hostnameSchemeId ? '{{ hostname }}' : form.elements.deployment_name.value,
           provider_id: Number(form.elements.deployment_provider_id.value),
           credentials_id: Number(form.elements.deployment_credentials_id.value),
           template: template.id,
           executor: form.elements.deployment_executor.value,
-          variables: variableState.get(template.id) || readBlueprintTemplateVariables(form, template),
+          variables: deploymentVariables,
           hostname_values: deployment.hostname_values || {},
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
-        if (form.elements.deployment_hostname_scheme_id.value) deploymentPayload.hostname_scheme_id = Number(form.elements.deployment_hostname_scheme_id.value);
+        if (hostnameSchemeId) deploymentPayload.hostname_scheme_id = hostnameSchemeId;
         if (form.elements.deployment_ipam_pool_id.value) deploymentPayload.ipam_pool_id = Number(form.elements.deployment_ipam_pool_id.value);
 
         if (!allowed('ansible.execute') && existingAnsible) {
