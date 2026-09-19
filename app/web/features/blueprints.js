@@ -80,6 +80,13 @@ function readHostnameValues(form) {
   return result;
 }
 
+function canManageBlueprintByRole(item) {
+  const required = new Set((item?.manager_role_ids || []).map(Number));
+  if (!required.size) return true;
+  const owned = new Set((state.identity?.roles || []).map(role => Number(role.id)));
+  return [...required].some(id => owned.has(id));
+}
+
 async function blueprintsView() {
   const blueprints = (await api('/blueprints?limit=200')).items;
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
@@ -93,14 +100,18 @@ async function blueprintsView() {
       { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
       { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => ({ backend: 'Backend', cloudportal: 'CloudPortal', api: 'API' }[key] || key)).join(', ') || '—' },
       { label: 'Kroki', value: item => item.workflow.length },
+      { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
+        ? node('span', { class: 'mono', text: (item.manager_role_ids || []).map(id => '#' + id).join(', ') })
+        : badge('Bez roli dedykowanej', 'warning') },
       { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Wymaga akceptacji', 'warning') : badge('Bez akceptacji', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
       if (allowed('blueprints.execute') && (!item.requires_approval || allowed('blueprints.approve')) && item.is_active && item.visibility.backend) result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
-      if (allowed('blueprints.update') && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
-      if (allowed('blueprints.update') && canDesignBlueprint) result.push(button('Edytuj', () => blueprintForm(item)));
-      if (allowed('blueprints.delete')) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
+      const canManage = canManageBlueprintByRole(item);
+      if (allowed('blueprints.update') && canManage && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
+      if (allowed('blueprints.update') && canManage && canDesignBlueprint) result.push(button('Edytuj', () => blueprintForm(item)));
+      if (allowed('blueprints.delete') && canManage) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
 }
@@ -167,12 +178,13 @@ function blueprintWorkflow(options) {
 
 async function proxmoxBlueprintForm(item = null, options = {}) {
   try {
-    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult] = await Promise.all([
+    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult] = await Promise.all([
       api('/providers?limit=200'),
       api('/hostname-schemes?limit=200'),
       api('/ipam/pools?limit=200'),
       allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
       api('/credentials?limit=200'),
+      allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
     ]);
     const providers = providerResult.items.filter(value => value.type === 'proxmox');
     if (!providers.length) throw new Error('Najpierw dodaj platformę Proxmox.');
@@ -181,6 +193,10 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const pools = poolResult.items.filter(value => value.is_active);
     const playbooks = playbookResult.items;
     const credentials = credentialResult.items;
+    const roleChoices = roleResult.items.map(role => ({ value: role.id, label: role.name }));
+    (item?.manager_role_ids || []).forEach(id => {
+      if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: 'Rola #' + id });
+    });
     const deployment = item?.deployment || {};
     const variables = deployment.variables || {};
     const templateWizard = options.mode === 'template';
@@ -309,7 +325,11 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       playbookField, ansibleCredentialField,
       node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),
 
-      node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp i recovery' })),
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp, role i recovery' })),
+      multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, item?.manager_role_ids || [], {
+        help: 'Użytkownik musi mieć globalne uprawnienie do zarządzania Blueprintami oraz co najmniej jedną z tych ról. Jedna rola może zarządzać tylko jednym szablonem.',
+        empty: 'Brak ról dostępnych do przypisania.',
+      }),
       checkboxField('Aktywny', 'is_active', item?.is_active ?? true),
       checkboxField('Panel backendu', 'visibility_backend', item?.visibility?.backend ?? true),
       checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
@@ -607,6 +627,11 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ansible: Boolean(ansible),
         });
 
+        const managerRoleIds = [...form.querySelectorAll('[name="manager_role_ids"]:checked')].map(input => Number(input.value));
+        if (templateWizard && !item && roleChoices.length && !managerRoleIds.length) {
+          throw new Error('Wybierz co najmniej jedną rolę zarządzającą szablonem.');
+        }
+
         const payload = {
           slug: data.get('slug'),
           name: data.get('name'),
@@ -619,6 +644,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           },
           allowed_role_ids: item?.allowed_role_ids || [],
           allowed_user_ids: item?.allowed_user_ids || [],
+          manager_role_ids: managerRoleIds,
           variables_schema: preservedVariablesSchema,
           deployment: {
             name: '{{ hostname }}',
@@ -1009,6 +1035,9 @@ async function blueprintForm(item = null) {
     (item?.allowed_role_ids || []).forEach(id => {
       if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
     });
+    (item?.manager_role_ids || []).forEach(id => {
+      if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
+    });
     const userChoices = userResult.items.map(user => ({ value: user.id, label: user.username + (user.email ? ' · ' + user.email : '') }));
     (item?.allowed_user_ids || []).forEach(id => {
       if (!userChoices.some(choice => Number(choice.value) === Number(id))) userChoices.push({ value: id, label: `Użytkownik #${id}` });
@@ -1041,7 +1070,11 @@ async function blueprintForm(item = null) {
       formSection('Dostęp', 'Puste listy oznaczają brak dodatkowego ograniczenia.',
         node('div', { class: 'form-grid' },
           multiCheckboxField('Dozwolone role', 'allowed_role_ids', roleChoices, item?.allowed_role_ids || [], {
-            help: 'Brak zaznaczeń oznacza brak dodatkowego ograniczenia roli.',
+            help: 'Brak zaznaczeń oznacza brak dodatkowego ograniczenia roli przy uruchamianiu.',
+            empty: 'Brak ról dostępnych do wyboru.',
+          }),
+          multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, item?.manager_role_ids || [], {
+            help: 'Wymagane dodatkowo do edycji i usuwania. Jedna rola może być przypisana jako zarządzająca tylko do jednego szablonu.',
             empty: 'Brak ról dostępnych do wyboru.',
           }),
           multiCheckboxField('Dozwoleni użytkownicy', 'allowed_user_ids', userChoices, item?.allowed_user_ids || [], {
@@ -1176,6 +1209,7 @@ async function blueprintForm(item = null) {
           },
           allowed_role_ids: selectedIds('allowed_role_ids'),
           allowed_user_ids: selectedIds('allowed_user_ids'),
+          manager_role_ids: selectedIds('manager_role_ids'),
           variables_schema: variablesSchema,
           deployment: deploymentPayload,
           workflow,
