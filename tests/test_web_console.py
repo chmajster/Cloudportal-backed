@@ -162,6 +162,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'template-variable-grid' in script
     assert 'createProxmoxTemplatePicker' in script
     assert 'Podgląd Terraform' in script
+    assert 'Podgląd playbooka' in script
+    assert "'/ansible/playbooks/'" in script
+    assert '.ansible-playbook-code' in stylesheet
     assert "'/source'" in script or "+ '/source'" in script
     assert '.terraform-template-code' in stylesheet
     assert 'Obraz / szablon Proxmox' in script
