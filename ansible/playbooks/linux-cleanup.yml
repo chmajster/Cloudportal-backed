@@ -1,0 +1,14 @@
+- name: Clean unused Linux packages
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Autoremove unused APT packages
+      ansible.builtin.apt:
+        autoremove: true
+        autoclean: true
+      when: ansible_facts.os_family == 'Debian'
+    - name: Autoremove unused DNF packages
+      ansible.builtin.dnf:
+        autoremove: true
+      when: ansible_facts.os_family == 'RedHat'
