@@ -46,13 +46,24 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+  color: var(--text);
   box-shadow: var(--panel-shadow);
+  text-align: left;
+  font: inherit;
   transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
 }
-.dashboard-metric-card:hover {
+.dashboard-metric-action {
+  cursor: pointer;
+}
+.dashboard-metric-action:hover,
+.dashboard-metric-action:focus-visible {
   transform: translateY(-2px);
   border-color: var(--accent-border);
   box-shadow: var(--shadow);
+  outline: none;
+}
+.dashboard-metric-action:focus-visible {
+  box-shadow: 0 0 0 3px var(--focus-ring), var(--shadow);
 }
 .dashboard-metric-icon {
   width: 46px;
@@ -296,5 +307,9 @@
   .dashboard-deployment-row,
   .dashboard-quick-action {
     transition: none;
+  }
+  .dashboard-metric-action:hover,
+  .dashboard-metric-action:focus-visible {
+    transform: none;
   }
 }

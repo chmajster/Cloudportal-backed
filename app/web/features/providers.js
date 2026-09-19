@@ -136,5 +136,6 @@ async function discoverProvider(provider) {
   });
 }
 
+registerCommand('providers.create', () => providerForm());
 registerView({ id: 'providers', label: 'Platformy', icon: 'P', permission: 'providers.read', order: 50 }, providersView);
 })();

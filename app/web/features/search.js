@@ -7,6 +7,7 @@ const searchDom = {
   open: document.querySelector('#global-search-open'),
   dialog: document.querySelector('#global-search-dialog'),
   input: document.querySelector('#global-search-input'),
+  close: document.querySelector('#global-search-close'),
   status: document.querySelector('#global-search-status'),
   results: document.querySelector('#global-search-results'),
 };
@@ -35,6 +36,7 @@ function searchSources() {
         title: item.name || short(item.id, 18),
         subtitle: `${item.template || 'szablon'} · ${statusLabel(item.status)}`,
         keywords: [item.id, item.provider, item.template, item.executor, item.status],
+        entity: { type: 'deployment', item },
       }),
     },
     {
@@ -157,6 +159,12 @@ async function activateResult(result) {
     && allowed('vms.read')
   ) {
     await runCommand('inventory.openVm', result.entity.item);
+  } else if (
+    result.entity?.type === 'deployment'
+    && hasCommand('deployments.open')
+    && allowed('deployments.read')
+  ) {
+    await runCommand('deployments.open', result.entity.item);
   }
 }
 
@@ -233,6 +241,10 @@ registerExtension('global-search', () => {
   }
 
   searchDom.open.addEventListener('click', openSearch);
+  searchDom.close.addEventListener('click', closeSearch);
+  searchDom.dialog.addEventListener('click', event => {
+    if (event.target === searchDom.dialog) closeSearch();
+  });
   searchDom.input.addEventListener('input', () => { renderSearch(searchDom.input.value); });
   searchDom.input.addEventListener('keydown', event => {
     const count = searchDom.results.querySelectorAll('.global-search-result').length;
