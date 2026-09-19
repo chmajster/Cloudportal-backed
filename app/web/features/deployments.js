@@ -63,7 +63,8 @@ function productsPanel(blueprints, canUseProducts) {
 async function deploymentsView() {
   const canUseProducts = allowed('blueprints.read')
     && allowed('blueprints.execute')
-    && allowed('deployments.create');
+    && allowed('deployments.create')
+    && allowed('terraform.read');
 
   const [deploymentResult, providerResult, blueprintResult, templateResult] = await Promise.all([
     api('/deployments?limit=200'),
