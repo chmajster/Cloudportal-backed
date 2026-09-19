@@ -16,3 +16,250 @@
 @media (max-width: 760px) {
   .permission-group > summary { padding: 11px 12px; }
 }
+
+
+/* Account view */
+.account-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr);
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.account-card {
+  min-width: 0;
+  padding: 22px;
+}
+.account-profile-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.account-avatar {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: .86rem;
+  font-weight: 900;
+  letter-spacing: .02em;
+}
+.account-profile-copy {
+  min-width: 0;
+}
+.account-profile-copy h2,
+.account-card-heading h2,
+.account-permissions-header h2 {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-size: 1rem;
+  letter-spacing: -.02em;
+}
+.account-profile-copy p {
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-kicker {
+  display: block;
+  color: var(--muted);
+  font-size: .66rem;
+  font-weight: 850;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.account-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  padding-top: 16px;
+}
+.account-meta-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.account-meta-item > span {
+  color: var(--muted);
+  font-size: .7rem;
+}
+.account-meta-item > strong,
+.account-meta-item > code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-meta-item > strong {
+  font-size: .76rem;
+}
+.account-card-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.account-security-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 900;
+}
+.account-security-copy {
+  max-width: 620px;
+  margin: 18px 0;
+  line-height: 1.55;
+}
+.account-security-actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.account-security-actions .button {
+  min-width: 128px;
+}
+
+.account-permissions-panel {
+  padding: 22px;
+}
+.account-permissions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+.account-permissions-header p {
+  margin: 5px 0 0;
+  line-height: 1.45;
+}
+.account-permission-count {
+  flex: 0 0 auto;
+  min-width: 78px;
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  padding: 10px 13px;
+  border: 1px solid var(--info-border);
+  border-radius: 12px;
+  background: var(--info-soft);
+  color: var(--info);
+}
+.account-permission-count strong {
+  font-size: 1.18rem;
+  line-height: 1;
+}
+.account-permission-count span {
+  font-size: .62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+
+.account-permissions-grid > .permission-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+.account-permissions-grid .permission-group {
+  min-width: 0;
+  border-radius: 11px;
+  box-shadow: none;
+}
+.account-permissions-grid .permission-group > summary {
+  min-height: 42px;
+  padding: 9px 11px;
+  background: var(--surface-2);
+}
+.account-permissions-grid .permission-group > summary > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-permissions-grid .permission-chip-list {
+  gap: 6px;
+  padding: 9px 10px 10px;
+}
+.account-permissions-grid .permission-chip {
+  min-height: 26px;
+  padding: 4px 8px;
+  font-size: .67rem;
+  background: var(--surface);
+}
+.account-permissions-grid .permission-group[open] {
+  background: var(--surface);
+}
+
+@media (max-width: 1180px) {
+  .account-overview-grid {
+    grid-template-columns: 1fr;
+  }
+  .account-permissions-grid > .permission-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .account-card,
+  .account-permissions-panel {
+    padding: 16px;
+  }
+  .account-profile-head,
+  .account-card-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .account-profile-head > .badge,
+  .account-card-heading > .badge {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .account-meta-grid {
+    grid-template-columns: 1fr;
+  }
+  .account-permissions-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .account-permission-count {
+    min-width: 0;
+    grid-auto-flow: column;
+    justify-items: start;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .account-permissions-grid > .permission-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .account-meta-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .account-meta-item > strong,
+  .account-meta-item > code {
+    text-align: left;
+  }
+}
