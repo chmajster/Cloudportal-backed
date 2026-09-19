@@ -52,7 +52,7 @@ def test_help_is_plain_text_without_ansi_sequences():
         capture_output=True,
         check=True,
     )
-    assert '\\x1b[' not in result.stdout
+    assert '\x1b[' not in result.stdout
     assert '--status' in result.stdout
     assert '--uninstall' in result.stdout
     assert '--non-interactive' in result.stdout
