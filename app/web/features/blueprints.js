@@ -1348,10 +1348,10 @@ async function executeBlueprint(item) {
     }
 
     openModal({
-      title: `Uruchom ${item.name}`,
-      eyebrow: `Blueprint v${item.version}`,
+      title: `Utwórz VM · ${item.name}`,
+      eyebrow: `Produkt z Blueprintu v${item.version}`,
       body: fields,
-      submitLabel: 'Utwórz serwer',
+      submitLabel: 'Utwórz VM',
       wide: true,
       onSubmit: async (_data, form) => {
         const variables = {};
