@@ -19,15 +19,77 @@ function renderCredentialSecretFields(container, config, authMode, enabled) {
   container.replaceChildren(...mode.fields.map(spec => credentialSecretField(spec, enabled)));
 }
 
+function splitProxmoxEndpoint(value) {
+  const raw = String(value || '').trim().replace(/\/$/, '');
+  if (!raw) return { address: '', port: 8006 };
+
+  if (raw.includes('://')) {
+    try {
+      const parsed = new URL(raw);
+      const address = parsed.protocol + '//' + parsed.hostname.replace(/^\[(.*)\]$/, '[$1]');
+      return { address, port: Number(parsed.port || 8006) };
+    } catch {
+      return { address: raw, port: 8006 };
+    }
+  }
+
+  const bracketed = raw.match(/^(\[[^\]]+\])(?::(\d+))?$/);
+  if (bracketed) return { address: bracketed[1], port: Number(bracketed[2] || 8006) };
+
+  const hostPort = raw.match(/^(.+):(\d+)$/);
+  if (hostPort && !hostPort[1].includes(':')) {
+    return { address: hostPort[1], port: Number(hostPort[2]) };
+  }
+  return { address: raw, port: 8006 };
+}
+
+function buildProxmoxEndpoint(address, port) {
+  const parsed = splitProxmoxEndpoint(address);
+  const selectedPort = Number(port || parsed.port || 8006);
+  if (!Number.isInteger(selectedPort) || selectedPort < 1 || selectedPort > 65535) {
+    throw new Error('Port Proxmox musi być liczbą od 1 do 65535.');
+  }
+
+  let base = parsed.address.trim().replace(/\/$/, '');
+  if (!base) throw new Error('Podaj adres Proxmox.');
+  if (base.includes('://')) {
+    const url = new URL(base);
+    url.port = String(selectedPort);
+    return url.origin;
+  }
+  return base + ':' + selectedPort;
+}
+
 function renderCredentialDynamic(container, type, item) {
   const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
   const sameType = Boolean(item && item.type === type);
   const mustReplace = Boolean(item && !sameType);
   const identity = node('div', { class: 'form-grid credential-identity' });
-  if (config.endpoint) identity.append(field(config.endpoint.label, 'endpoint', {
-    value: sameType ? item.endpoint : '', required: config.endpoint.required,
-    placeholder: config.endpoint.placeholder, wide: true, help: config.endpoint.help,
-  }));
+  if (config.endpoint) {
+    if (type === 'proxmox' && config.port) {
+      const parsedEndpoint = splitProxmoxEndpoint(sameType ? item.endpoint : '');
+      const endpointField = field(config.endpoint.label, 'endpoint', {
+        value: parsedEndpoint.address,
+        required: config.endpoint.required,
+        placeholder: config.endpoint.placeholder,
+        help: config.endpoint.help,
+      });
+      const portField = field(config.port.label, 'port', {
+        type: 'number',
+        value: parsedEndpoint.port || config.port.default,
+        required: true,
+        min: config.port.min,
+        max: config.port.max,
+        help: config.port.help,
+      });
+      identity.append(node('div', { class: 'credential-endpoint-row wide' }, endpointField, portField));
+    } else {
+      identity.append(field(config.endpoint.label, 'endpoint', {
+        value: sameType ? item.endpoint : '', required: config.endpoint.required,
+        placeholder: config.endpoint.placeholder, wide: true, help: config.endpoint.help,
+      }));
+    }
+  }
   if (config.username) identity.append(field(config.username.label, 'username', {
     value: sameType ? item.username : '', required: config.username.required, placeholder: config.username.placeholder,
   }));
@@ -123,7 +185,9 @@ function credentialForm(item = null) {
       const type = data.get('type');
       const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
       const sameType = Boolean(item && item.type === type);
-      const endpoint = form.elements.endpoint ? form.elements.endpoint.value : (sameType ? item.endpoint : '');
+      const endpoint = type === 'proxmox'
+        ? buildProxmoxEndpoint(form.elements.endpoint?.value || '', form.elements.port?.value || config.port?.default)
+        : (form.elements.endpoint ? form.elements.endpoint.value : (sameType ? item.endpoint : ''));
       const username = form.elements.username ? form.elements.username.value : (sameType ? item.username : '');
       const verifySsl = config.tls ? !data.has('accept_untrusted_tls') : (sameType ? item.verify_ssl : true);
       const replaceSecrets = !item || !sameType || data.has('replace_secrets');
