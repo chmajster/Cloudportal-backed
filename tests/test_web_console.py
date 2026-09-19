@@ -54,6 +54,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/deployments.js',
         'features/operations.js',
         'features/search.js',
+        'features/tools.js',
         'features/updates.js',
     } == set(manifest['scripts'])
     assert {
@@ -61,6 +62,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
         'styles/features/inventory.css',
+        'styles/features/tools.css',
         'styles/features/updates.css',
     } <= set(manifest['styles'])
 
@@ -105,6 +107,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function emitUiEvent(' in core
     assert 'const routes = [];' in core
     assert 'const views = Object.create(null);' in core
+    assert 'route.navigation !== false' in core
+    assert 'currentRoute?.navigationParent === route.id' in core
     assert len(bootstrap.splitlines()) < 120
     assert 'async function usersView(' not in bootstrap
     assert 'async function blueprintsView(' not in bootstrap
@@ -181,7 +185,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
-    assert "registerView({ id: 'updates'" in script
+    assert "id: 'updates'" in script
+    assert "navigationParent: 'tools'" in script
+    assert 'navigation: false' in script
+    assert "registerView({ id: 'tools'" in script
+    assert 'Centrum narzędzi' in script
+    assert 'Otwórz Auto-update' in script
+    assert '← Narzędzia' in script
     assert 'Aktualizuj teraz' in script
     assert 'Zainstaluj nowszy commit' in script
     assert 'Commit zainstalowany' in script
@@ -199,6 +209,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerExtension('global-search'" in script
     assert 'function loadIndex(' in script
     assert 'function renderSearch(' in script
+    assert "kind: 'Narzędzie'" in script
+    assert 'route.navigation === false && route.navigationParent' in script
     assert "event.key.toLocaleLowerCase() === 'k'" in script
     assert 'Zmienne template JSON' not in script
     assert 'Schemat zmiennych JSON' not in script
@@ -276,6 +288,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.vm-detail-header' in stylesheet
     assert '.vm-tabs' in stylesheet
     assert '.vm-overview-grid' in stylesheet
+    assert '.tools-hero' in stylesheet
+    assert '.tools-grid' in stylesheet
+    assert '.tool-card' in stylesheet
     assert '.update-hero' in stylesheet
     assert '.update-version-grid' in stylesheet
     assert '.update-pipeline' in stylesheet
