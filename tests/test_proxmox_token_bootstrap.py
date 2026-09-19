@@ -242,6 +242,57 @@ def test_proxmox_draft_connection_test_is_detailed_and_does_not_persist_secret(c
         assert len(db.query(Credential).all()) == before
 
 
+def test_proxmox_bootstrap_detects_duplicate_token_and_suggests_new_name(client, headers, monkeypatch):
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.cookies = SimpleNamespace(set=lambda *args: None)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def post(self, url, data=None, headers=None):
+            if url.endswith('/access/ticket'):
+                return Response({'data': {'ticket': 'ticket', 'CSRFPreventionToken': 'csrf'}})
+            request = httpx.Request('POST', url)
+            return httpx.Response(
+                400,
+                request=request,
+                json={'errors': {'tokenid': 'value already exists'}},
+            )
+
+    monkeypatch.setattr('app.providers.proxmox.httpx.Client', FakeClient)
+    with session() as db:
+        before = len(db.query(Credential).all())
+
+    response = client.post('/api/v1/credentials/proxmox/bootstrap', headers=headers, json={
+        'name': 'PVE duplicate token',
+        'endpoint': 'https://pve.example.com:8006',
+        'username': 'root@pam',
+        'password': 'one-shot-password',
+        'token_name': 'cloudportal',
+        'verify_ssl': True,
+    })
+
+    assert response.status_code == 409, response.text
+    detail = response.json()['detail']
+    assert detail['code'] == 'proxmox_token_duplicate'
+    assert detail['token_name'] == 'cloudportal'
+    assert detail['suggested_token_name'] == 'cloudportal-2'
+    assert 'root@pam!cloudportal' in detail['message']
+    assert 'już istnieje' in detail['message']
+    assert 'one-shot-password' not in response.text
+    with session() as db:
+        assert len(db.query(Credential).all()) == before
+
+
 def test_proxmox_bootstrap_failure_is_reported_in_polish_with_phase_and_http_status(client, headers, monkeypatch):
     class FakeClient:
         def __init__(self, **kwargs):
