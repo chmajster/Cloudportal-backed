@@ -262,14 +262,14 @@ def test_blueprint_reuses_saved_hostname_tags_and_cloud_init(client, headers):
         'name': 'Fast Proxmox VM',
         'variables_schema': {},
         'deployment': {
-            'name': '{{ hostname }}',
+            'name': 'manual-deployment-name',
             'provider_id': provider['id'],
             'credentials_id': credential['id'],
             'template': 'proxmox-vm',
             'hostname_scheme_id': scheme.json()['id'],
             'hostname_values': {'env': 'prod', 'role': 'web'},
             'variables': {
-                'name': '{{ hostname }}',
+                'name': 'manual-vm-name',
                 'node': 'pve01',
                 'template_id': 9000,
                 'template_node': 'pve01',
@@ -307,6 +307,8 @@ def test_blueprint_reuses_saved_hostname_tags_and_cloud_init(client, headers):
     result = execution.json()
     assert result['name'] == 'prod-web-001'
     assert result['variables']['name'] == 'prod-web-001'
+    assert result['name'] != 'manual-deployment-name'
+    assert result['variables']['name'] != 'manual-vm-name'
     assert result['variables']['tags'] == ['linux', 'production', 'web']
     assert result['variables']['dns_servers'] == ['1.1.1.1', '8.8.8.8']
     assert result['variables']['dns_domain'] == 'lab.example.com'
