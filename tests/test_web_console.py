@@ -221,7 +221,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'workflow-preview-visual' in script
     assert 'Szybki Blueprint Proxmox' in script
     assert 'Obraz / szablon Proxmox' in script
-    assert 'Wzorzec nazwy hosta' in script
+    assert 'Sposób nadawania hostname' in script
     assert 'Nowy szablon Terraform / OpenTofu' in script
     assert "registerCommand('blueprints.proxmoxTemplateWizard'" in script
     assert "registerCommand('blueprints.execute'" in script
