@@ -42,7 +42,8 @@ def login(data: Login, request: Request, db=Depends(get_db, scope='function')):
     if user and user.auth_source == 'local':
         valid = verify_password(data.password, user.password_hash)
     elif not locked and (not user or user.auth_source == 'ldap'):
-        ldap_profile = authenticate_ldap(db, identity, data.password)
+        ldap_identity = user.username if user and user.auth_source == 'ldap' else identity
+        ldap_profile = authenticate_ldap(db, ldap_identity, data.password)
         valid = ldap_profile is not None
 
     if valid and ldap_profile:
