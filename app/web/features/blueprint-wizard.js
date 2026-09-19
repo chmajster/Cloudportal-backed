@@ -987,7 +987,9 @@
       function renderNavigation() {
         const nav = node('div', { class: 'blueprint-wizard-steps', role: 'tablist', 'aria-label': 'Kroki kreatora Blueprintu' });
         STEPS.forEach(([short], index) => {
-          const status = index === state.step ? 'active' : index < state.step || index <= state.maxStep ? 'done' : 'pending';
+          const status = index === state.step && Object.keys(state.errors || {}).length
+            ? 'invalid'
+            : index === state.step ? 'active' : index < state.step || index <= state.maxStep ? 'done' : 'pending';
           const buttonEl = node('button', {
             type: 'button',
             class: 'blueprint-wizard-step-tab ' + status,
