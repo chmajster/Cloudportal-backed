@@ -35,7 +35,7 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def postgres_command(binary, url, destination):
+def postgres_command(binary, url):
     parsed = make_url(url)
     if not parsed.drivername.startswith('postgresql'):
         raise SystemExit('Backup supports PostgreSQL only')
@@ -48,8 +48,6 @@ def postgres_command(binary, url, destination):
         '--format=custom',
         '--no-owner',
         '--no-privileges',
-        '--file',
-        str(destination),
         '--username',
         username,
         '--dbname',
@@ -94,10 +92,14 @@ def main():
     command, process_env = postgres_command(
         'pg_dump',
         config.get('CP_DATABASE_URL', 'postgresql+psycopg:///cloudportal?host=/var/run/postgresql'),
-        dump,
     )
-    subprocess.run(command, env=process_env, check=True)
-    os.chmod(dump, 0o600)
+    try:
+        with dump.open('xb') as stream:
+            os.chmod(dump, 0o600)
+            subprocess.run(command, env=process_env, stdout=stream, check=True)
+    except Exception:
+        dump.unlink(missing_ok=True)
+        raise
 
     release = ''
     current = Path('/opt/cloudportal-backed/current')
