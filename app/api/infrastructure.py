@@ -9,7 +9,7 @@ from app.api.outputs import (Items, CredentialOutput, ProviderOutput, Deployment
 from app.api.schemas import (CredentialInput, DeploymentInput, JobInput, ProviderInput, ProxmoxTokenBootstrapInput,
                              SSHHostKeyInput, SSHKeyBootstrapInput)
 from app.catalog import (list_playbooks, list_templates, playbook_definition, template_definition,
-                         template_public, template_source_preview, validate_template_variables)
+                         template_public, template_source_preview, playbook_source_preview, validate_template_variables)
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
@@ -82,26 +82,14 @@ def ssh_host_key(data: SSHHostKeyInput, request: Request,
 def bootstrap_ssh_credential(data: SSHKeyBootstrapInput, request: Request,
                              actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
     try:
-        generated = install_generated_key(
-            data.endpoint,
-            data.username,
-            data.password,
-            data.known_hosts,
-        )
+        generated = install_generated_key(data.endpoint, data.username, data.password, data.known_hosts)
     except HTTPException:
         audit(db, request, 'credential.ssh_key_bootstrapped', 'credentials', None, 'failure')
         db.commit()
         raise
-
     credential = Credential(
-        name=data.name,
-        type='ssh',
-        endpoint=data.endpoint,
-        username=data.username,
-        verify_ssl=True,
-        expires_at=data.expires_at,
-        rotation_due_at=data.rotation_due_at,
-        encrypted_secret=b'',
+        name=data.name, type='ssh', endpoint=data.endpoint, username=data.username, verify_ssl=True,
+        expires_at=data.expires_at, rotation_due_at=data.rotation_due_at, encrypted_secret=b'',
     )
     db.add(credential)
     db.flush()
@@ -321,6 +309,11 @@ def template_source(id: str, actor=Depends(require('terraform.read'))):
 @router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
 def playbooks(actor=Depends(require('ansible.read'))):
     return {'items': list_playbooks()}
+
+
+@router.get('/ansible/playbooks/{id}/source')
+def playbook_source(id: str, actor=Depends(require('ansible.read'))):
+    return playbook_source_preview(id)
 
 
 def check_job_permissions(request, operation):
