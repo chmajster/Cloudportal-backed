@@ -219,6 +219,20 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         help: 'Dla zapisu SRLXXX liczba cyfr zostanie rozpoznana automatycznie jako 3.',
       })
     );
+    const existingSchemeEditor = node('div', { class: 'form-grid designer-subsection wide' },
+      field('Nazwa wzorca', 'existing_hostname_scheme_name', { value: '', placeholder: 'Nazwa schematu' }),
+      field('Wzorzec', 'existing_hostname_pattern', {
+        value: '',
+        placeholder: 'SRLXXX lub srl{number}',
+        help: 'Edycja wzorca nie resetuje licznika. Aktualny następny numer jest zachowywany.',
+        wide: true,
+      }),
+      field('Dopełnienie numeru', 'existing_hostname_padding', { type: 'number', min: 1, max: 9, value: 3 }),
+      node('div', { class: 'field wide' },
+        node('span', { class: 'field-label', text: 'Następny numer' }),
+        node('strong', { class: 'mono', 'data-hostname-next-number': 'true', text: '—' }),
+        node('small', { class: 'field-help', text: 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' }))
+    );
     const hostnameDefaults = node('div', { class: 'form-grid designer-subsection wide' });
 
     const ipMode = selectField(
@@ -280,8 +294,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         help: 'Tagi zostaną zapisane w Blueprintcie, dodane do workflow i automatycznie ustawione na VM.',
       }),
 
-      node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Pattern i wartości są zapisywane w Blueprintcie.' })),
-      schemeField, newScheme, hostnameDefaults,
+      node('div', { class: 'designer-heading wide' }, node('strong', { text: '3. Hostname' }), node('span', { text: 'Pattern i wartości są zapisywane w Blueprintcie. Edycja nie resetuje licznika.' })),
+      schemeField, newScheme, existingSchemeEditor, hostnameDefaults,
 
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '4. Cloud-init' }), node('span', { text: 'Konfiguracja sieci, DNS i konta trafia do template Proxmox.' })),
       ipMode, ipamField, staticIp, staticGateway,
@@ -324,12 +338,22 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const scheme = schemes.find(value => String(value.id) === String(selected));
       const custom = selected === '__new__';
       newScheme.hidden = !custom;
+      existingSchemeEditor.hidden = custom || !scheme;
+      if (scheme && !custom) {
+        existingSchemeEditor.querySelector('[name="existing_hostname_scheme_name"]').value = scheme.name;
+        existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]').value = scheme.pattern;
+        existingSchemeEditor.querySelector('[name="existing_hostname_padding"]').value = scheme.padding;
+        existingSchemeEditor.querySelector('[data-hostname-next-number]').textContent = String(scheme.next_number);
+      }
       const pattern = custom
         ? normalizeHostnamePattern(
             newScheme.querySelector('[name="hostname_pattern"]').value,
             newScheme.querySelector('[name="hostname_padding"]').value
           ).pattern
-        : (scheme?.pattern || '');
+        : normalizeHostnamePattern(
+            existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]')?.value || scheme?.pattern || '',
+            existingSchemeEditor.querySelector('[name="existing_hostname_padding"]')?.value || scheme?.padding || 3
+          ).pattern;
       const defaults = deployment.hostname_values || {};
       hostnameDefaults.replaceChildren();
       const tokens = hostnamePatternTokens(pattern);
@@ -445,6 +469,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     nodeSelect.addEventListener('change', loadNodeResources);
     schemeSelect.addEventListener('change', updateHostnameFields);
     newScheme.querySelector('[name="hostname_pattern"]').addEventListener('input', updateHostnameFields);
+    existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]').addEventListener('input', updateHostnameFields);
     ipModeSelect.addEventListener('change', updateIpMode);
     playbookSelect.addEventListener('change', updateAnsible);
     fields.querySelector('[name="tags"]').addEventListener('input', updateWorkflowPreview);
@@ -487,7 +512,33 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           selectedPattern = created.pattern;
         } else {
           const selectedScheme = schemes.find(value => String(value.id) === String(schemeId));
-          selectedPattern = selectedScheme?.pattern || '';
+          if (!selectedScheme) throw new Error('Wybrany schemat hostname nie istnieje.');
+
+          const normalized = normalizeHostnamePattern(
+            data.get('existing_hostname_pattern') || selectedScheme.pattern,
+            data.get('existing_hostname_padding') || selectedScheme.padding
+          );
+          const editedName = data.get('existing_hostname_scheme_name') || selectedScheme.name;
+          const changed = editedName !== selectedScheme.name
+            || normalized.pattern.toLowerCase() !== selectedScheme.pattern.toLowerCase()
+            || Number(normalized.padding) !== Number(selectedScheme.padding);
+
+          if (changed) {
+            if (!allowed('hostnames.update')) throw new Error('Brak uprawnienia do edycji schematu hostname.');
+            const updated = await api('/hostname-schemes/' + selectedScheme.id, {
+              method: 'PUT',
+              body: {
+                name: editedName,
+                pattern: normalized.pattern,
+                next_number: selectedScheme.next_number,
+                padding: normalized.padding,
+                is_active: selectedScheme.is_active,
+              },
+            });
+            selectedPattern = updated.pattern;
+          } else {
+            selectedPattern = selectedScheme.pattern;
+          }
         }
 
         const hostnameValues = {};
