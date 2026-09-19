@@ -2,6 +2,22 @@
 
 (() => {
 const STATUS_SESSION_KEY = 'cloudportal.update.status_token';
+const UPDATE_PHASES = [
+  ['preflight', 'Przygotowanie'],
+  ['backup', 'Backup'],
+  ['packages', 'Pakiety'],
+  ['download', 'Pobieranie'],
+  ['python', 'Python'],
+  ['updater', 'Updater'],
+  ['database', 'Baza danych'],
+  ['systemd', 'Usługi'],
+  ['tls', 'TLS'],
+  ['proxy', 'Reverse proxy'],
+  ['services', 'Restart'],
+  ['healthcheck', 'Healthcheck'],
+  ['bootstrap', 'Finalizacja'],
+  ['complete', 'Gotowe'],
+];
 let updatePollTimer = null;
 
 function updateStatusKind(status) {
@@ -23,6 +39,59 @@ function updateStatusLabel(status) {
     up_to_date: 'Aktualny',
   };
   return labels[status] || status || '—';
+}
+
+function phaseLabel(phase) {
+  return new Map(UPDATE_PHASES).get(phase) || phase || 'Oczekiwanie';
+}
+
+function updateTone(status) {
+  if (status === 'failed') return 'danger';
+  if (status === 'running' || status === 'checking') return 'warning';
+  if (status === 'update_available') return 'info';
+  if (status === 'success' || status === 'up_to_date') return 'ok';
+  return 'neutral';
+}
+
+function updateBusy(status) {
+  return ['running', 'checking'].includes(status);
+}
+
+function formatDuration(start, end) {
+  if (!start) return '—';
+  const from = new Date(start);
+  const to = end ? new Date(end) : new Date();
+  if (Number.isNaN(from.valueOf()) || Number.isNaN(to.valueOf())) return '—';
+  const seconds = Math.max(0, Math.round((to - from) / 1000));
+  if (seconds < 60) return seconds + ' s';
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return rest ? minutes + ' min ' + rest + ' s' : minutes + ' min';
+  const hours = Math.floor(minutes / 60);
+  return hours + ' h ' + (minutes % 60) + ' min';
+}
+
+function nextCheckText(status, settings) {
+  if (!settings.enabled) return 'Auto-update wyłączony';
+  if (!status.last_check_at) return 'Po uruchomieniu harmonogramu';
+  const last = new Date(status.last_check_at);
+  if (Number.isNaN(last.valueOf())) return '—';
+  const next = new Date(last.getTime() + Number(settings.interval_hours || 24) * 3600000);
+  return formatDate(next.toISOString());
+}
+
+function versionValue(value) {
+  return value || 'nieznana';
+}
+
+function statusDescription(status) {
+  if (status.status === 'running') return 'Nowa wersja jest wdrażana. Panel statusu działa niezależnie od głównego API.';
+  if (status.status === 'checking') return 'Updater sprawdza wybrany kanał i porównuje wersję zainstalowaną z repozytorium.';
+  if (status.status === 'update_available') return 'Nowa wersja jest gotowa do instalacji.';
+  if (status.status === 'up_to_date') return 'Zainstalowana wersja odpowiada aktualnej wersji wybranego kanału.';
+  if (status.status === 'success') return 'Ostatnia aktualizacja zakończyła się poprawnie.';
+  if (status.status === 'failed') return 'Proces aktualizacji został zatrzymany. Szczegóły znajdują się w logu technicznym.';
+  return 'Niezależny serwis aktualizacji jest gotowy do pracy.';
 }
 
 async function updateStatusToken() {
@@ -50,83 +119,269 @@ async function resilientUpdateStatus() {
   return response.json();
 }
 
-function statusPanel(status) {
-  const fill = node('div', { class: 'update-progress-fill' });
-  fill.style.width = Math.max(0, Math.min(100, Number(status.progress || 0))) + '%';
-  const events = (status.events || []).slice().reverse();
-  const output = (status.output || []).slice(-80).join('\n');
-  return node('div', { class: 'stack update-status-stack' },
-    node('div', { class: 'update-summary' },
-      node('div', {}, node('span', { class: 'muted', text: 'Stan' }), node('div', {}, badge(updateStatusLabel(status.status), updateStatusKind(status.status)))),
-      node('div', {}, node('span', { class: 'muted', text: 'Zainstalowana' }), node('strong', { class: 'mono', text: status.current_version || 'nieznana' })),
-      node('div', {}, node('span', { class: 'muted', text: 'Docelowa' }), node('strong', { class: 'mono', text: status.target_version || '—' })),
-      node('div', {}, node('span', { class: 'muted', text: 'Ref' }), node('strong', { class: 'mono', text: status.ref || '—' }))
-    ),
-    node('section', { class: 'panel update-progress-panel' },
-      node('div', { class: 'panel-header' },
-        node('div', {}, node('h2', { text: status.message || 'Aktualizacja' }), node('p', { class: 'muted', text: 'Etap: ' + (status.phase || '—') })),
-        node('strong', { class: 'update-progress-value', text: String(status.progress || 0) + '%' })
-      ),
-      node('div', { class: 'update-progress-track', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(status.progress || 0) }, fill)
-    ),
-    node('div', { class: 'update-detail-grid' },
-      node('section', { class: 'panel' },
-        node('div', { class: 'panel-header' }, node('h2', { text: 'Przebieg' })),
-        events.length ? node('div', { class: 'update-events' }, events.map(item =>
-          node('div', { class: 'update-event' },
-            node('span', { class: 'mono muted', text: String(item.progress) + '%' }),
-            node('div', {}, node('strong', { text: item.message }), node('small', { class: 'muted', text: item.phase + ' · ' + formatDate(item.at) }))
-          )
-        )) : node('div', { class: 'empty', text: 'Brak zdarzeń aktualizacji.' })
-      ),
-      node('section', { class: 'panel' },
-        node('div', { class: 'panel-header' }, node('h2', { text: 'Log serwisu aktualizacji' }), badge('live', 'info')),
-        node('pre', { class: 'log-output mono update-log', text: output || 'Brak logów.' })
-      )
-    )
+function versionCard(label, value, description, emphasis) {
+  return node('div', { class: 'update-version-card ' + (emphasis || '') },
+    node('span', { class: 'update-card-label', text: label }),
+    node('strong', { class: 'mono update-version-value', text: versionValue(value) }),
+    node('small', { class: 'muted', text: description })
   );
 }
 
-async function renderLiveStatus(container) {
+function updatePipeline(status) {
+  const currentIndex = UPDATE_PHASES.findIndex(item => item[0] === status.phase);
+  const complete = ['success', 'up_to_date'].includes(status.status);
+  const failed = status.status === 'failed';
+  return node('div', { class: 'update-pipeline' },
+    ...UPDATE_PHASES.map((item, index) => {
+      const key = item[0];
+      const label = item[1];
+      let stateClass = '';
+      let marker = String(index + 1);
+      if (complete || index < currentIndex) {
+        stateClass = 'complete';
+        marker = '✓';
+      } else if (index === currentIndex) {
+        stateClass = failed ? 'failed' : 'active';
+        marker = failed ? '!' : '•';
+      }
+      return node('div', { class: 'update-pipeline-step ' + stateClass },
+        node('div', { class: 'update-pipeline-marker', text: marker }),
+        node('span', { text: label })
+      );
+    })
+  );
+}
+
+function updateFacts(status, settings) {
+  return node('div', { class: 'update-facts' },
+    info('Tryb uruchomienia', status.automatic ? 'Automatyczny' : 'Ręczny'),
+    info('Ostatnie sprawdzenie', formatDate(status.last_check_at)),
+    info('Rozpoczęto', formatDate(status.started_at)),
+    info('Zakończono', formatDate(status.finished_at)),
+    info('Czas operacji', formatDuration(status.started_at, status.finished_at)),
+    info('Następne sprawdzenie', nextCheckText(status, settings))
+  );
+}
+
+function updateEventTimeline(status) {
+  const events = (status.events || []).slice(-24).reverse();
+  if (!events.length) {
+    return node('div', { class: 'update-empty-state' },
+      node('strong', { text: 'Brak historii operacji' }),
+      node('span', { class: 'muted', text: 'Po sprawdzeniu lub uruchomieniu aktualizacji pojawią się tutaj kolejne etapy.' })
+    );
+  }
+  return node('div', { class: 'update-events' }, ...events.map((item, index) =>
+    node('div', { class: 'update-event ' + (index === 0 ? 'latest' : '') },
+      node('div', { class: 'update-event-rail' },
+        node('span', { class: 'update-event-dot' }),
+        node('span', { class: 'update-event-line' })),
+      node('div', { class: 'update-event-copy' },
+        node('div', { class: 'update-event-head' },
+          node('strong', { text: item.message }),
+          node('span', { class: 'mono muted', text: String(item.progress) + '%' })),
+        node('small', { class: 'muted', text: phaseLabel(item.phase) + ' · ' + formatDate(item.at) })
+      )
+    )
+  ));
+}
+
+function technicalLog(status) {
+  const output = (status.output || []).slice(-120).join('\n');
+  const expanded = ['running', 'failed'].includes(status.status);
+  return node('details', { class: 'panel update-log-panel', open: expanded },
+    node('summary', {},
+      node('div', {},
+        node('strong', { text: 'Log techniczny' }),
+        node('small', { class: 'muted', text: output ? Math.min((status.output || []).length, 120) + ' ostatnich wpisów' : 'Brak wpisów' })),
+      node('span', { class: 'update-log-chevron', 'aria-hidden': 'true', text: '⌄' })),
+    node('div', { class: 'update-log-toolbar' },
+      node('span', { class: 'muted', text: 'Sekrety i tokeny są maskowane przez serwis aktualizacji.' }),
+      output ? button('Kopiuj log', async () => {
+        try {
+          await copyText(output);
+          toast('Log skopiowany.');
+        } catch (error) {
+          toast(error.message, 'error');
+        }
+      }) : null),
+    node('pre', { class: 'log-output mono update-log', text: output || 'Brak logów dla bieżącej sesji aktualizacji.' })
+  );
+}
+
+function statusActions(status, container, settings) {
+  const busy = updateBusy(status.status);
+  const group = node('div', { class: 'update-hero-actions' });
+  const checkButton = node('button', {
+    class: 'button ghost',
+    type: 'button',
+    disabled: busy,
+    onClick: async () => {
+      checkButton.disabled = true;
+      try {
+        await api('/updates/check', { method: 'POST', body: {}, idempotent: true });
+        await renderLiveStatus(container, settings);
+      } catch (error) {
+        toast(error.message, 'error');
+      } finally {
+        checkButton.disabled = false;
+      }
+    },
+  }, status.status === 'checking' ? 'Sprawdzanie…' : 'Sprawdź aktualizacje');
+  group.append(checkButton);
+
+  if (allowed('updates.execute')) {
+    const installLabel = status.status === 'update_available' ? 'Zainstaluj aktualizację' : 'Aktualizuj teraz';
+    group.append(node('button', {
+      class: 'button primary',
+      type: 'button',
+      disabled: busy,
+      onClick: () => {
+        confirmAction(
+          'Aktualizacja Cloudportal',
+          'Zostanie utworzony backup PostgreSQL, pobrana nowa wersja i zrestartowane usługi aplikacji. Serwis aktualizacji i ten podgląd pozostaną aktywne.',
+          async () => {
+            await api('/updates/run', { method: 'POST', body: {}, idempotent: true });
+            toast('Aktualizacja uruchomiona.');
+            await renderLiveStatus(container, settings);
+          }
+        );
+      },
+    }, busy ? 'Aktualizacja trwa…' : installLabel));
+  }
+  return group;
+}
+
+function statusPanel(status, settings, container) {
+  const progress = Math.max(0, Math.min(100, Number(status.progress || 0)));
+  const fill = node('div', { class: 'update-progress-fill' });
+  fill.style.width = progress + '%';
+  const tone = updateTone(status.status);
+  const symbol = status.status === 'failed' ? '!' : status.status === 'update_available' ? '↓' : status.status === 'running' ? '↻' : '✓';
+
+  return node('div', { class: 'stack update-status-stack' },
+    node('section', { class: 'update-hero update-hero-' + tone },
+      node('div', { class: 'update-hero-main' },
+        node('div', { class: 'update-status-orb', 'aria-hidden': 'true' }, node('span', { text: symbol })),
+        node('div', { class: 'update-hero-copy' },
+          node('div', { class: 'update-hero-kicker' },
+            badge(updateStatusLabel(status.status), updateStatusKind(status.status)),
+            node('span', { class: 'update-live-indicator' }, node('span', { class: 'update-live-dot' }), 'Updater online')),
+          node('h2', { text: status.message || 'Centrum aktualizacji' }),
+          node('p', { text: statusDescription(status) })
+        )
+      ),
+      statusActions(status, container, settings)
+    ),
+
+    node('div', { class: 'update-version-grid' },
+      versionCard('Wersja zainstalowana', status.current_version, 'Aktualnie uruchomiony release'),
+      node('div', { class: 'update-version-arrow', 'aria-hidden': 'true', text: '→' }),
+      versionCard('Wersja docelowa', status.target_version, status.update_available ? 'Gotowa do instalacji' : 'Ostatnio wykryta wersja', status.update_available ? 'available' : ''),
+      versionCard('Kanał aktualizacji', status.ref || settings.ref, 'Git ref używany przez updater')
+    ),
+
+    node('section', { class: 'panel update-progress-panel' },
+      node('div', { class: 'update-section-heading' },
+        node('div', {},
+          node('span', { class: 'update-card-label', text: 'Postęp operacji' }),
+          node('h2', { text: phaseLabel(status.phase) })),
+        node('div', { class: 'update-progress-number' },
+          node('strong', { text: String(progress) }),
+          node('span', { text: '%' }))
+      ),
+      node('div', { class: 'update-progress-track', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(progress) }, fill),
+      updatePipeline(status)
+    ),
+
+    node('div', { class: 'update-detail-grid' },
+      node('section', { class: 'panel update-history-panel' },
+        node('div', { class: 'update-section-heading' },
+          node('div', {}, node('span', { class: 'update-card-label', text: 'Historia' }), node('h2', { text: 'Przebieg aktualizacji' })),
+          badge((status.events || []).length + ' zdarzeń', 'info')),
+        updateEventTimeline(status)
+      ),
+      node('section', { class: 'panel update-facts-panel' },
+        node('div', { class: 'update-section-heading' },
+          node('div', {}, node('span', { class: 'update-card-label', text: 'Szczegóły' }), node('h2', { text: 'Informacje o procesie' }))),
+        updateFacts(status, settings),
+        node('div', { class: 'update-service-note' },
+          node('strong', { text: 'Niezależny serwis systemd' }),
+          node('span', { class: 'muted', text: 'Podgląd pozostaje dostępny podczas restartu API, dispatchera i workerów.' }))
+      )
+    ),
+
+    technicalLog(status)
+  );
+}
+
+async function renderLiveStatus(container, settings) {
   try {
     const status = await resilientUpdateStatus();
-    container.replaceChildren(statusPanel(status));
+    container.replaceChildren(statusPanel(status, settings, container));
   } catch (error) {
-    container.replaceChildren(node('div', { class: 'panel' },
-      node('h2', { text: 'Nie można odczytać stanu aktualizacji' }),
-      node('p', { class: 'form-error', text: error.message })
+    container.replaceChildren(node('section', { class: 'panel update-unavailable' },
+      node('div', { class: 'update-status-orb', 'aria-hidden': 'true' }, node('span', { text: '!' })),
+      node('div', {},
+        node('h2', { text: 'Serwis aktualizacji jest niedostępny' }),
+        node('p', { class: 'form-error', text: error.message }),
+        node('p', { class: 'muted', text: 'Główna aplikacja nadal może działać. Sprawdź usługę cloudportal-updater.service.' }))
     ));
   }
 }
 
-function scheduleStatusPoll(container) {
+function scheduleStatusPoll(container, settings) {
   if (updatePollTimer) clearTimeout(updatePollTimer);
   if (state.view !== 'updates') return;
   updatePollTimer = window.setTimeout(async () => {
-    await renderLiveStatus(container);
-    scheduleStatusPoll(container);
+    await renderLiveStatus(container, settings);
+    scheduleStatusPoll(container, settings);
   }, 1500);
 }
 
-async function updatesView() {
-  const [settings, initialStatus] = await Promise.all([
-    api('/updates/settings'),
-    resilientUpdateStatus(),
-  ]);
+function intervalPresets(intervalInput) {
+  return node('div', { class: 'update-interval-presets' },
+    ...[[6, '6 h'], [12, '12 h'], [24, '24 h'], [72, '3 dni'], [168, '7 dni']].map(item =>
+      node('button', {
+        type: 'button',
+        class: 'update-preset ' + (Number(intervalInput.value) === item[0] ? 'active' : ''),
+        disabled: intervalInput.disabled,
+        onClick: event => {
+          intervalInput.value = String(item[0]);
+          event.currentTarget.parentElement.querySelectorAll('.update-preset').forEach(preset => {
+            preset.classList.toggle('active', preset === event.currentTarget);
+          });
+          intervalInput.dispatchEvent(new Event('input', { bubbles: true }));
+        },
+      }, item[1])
+    )
+  );
+}
 
-  const statusRoot = node('div', { class: 'stack' });
-  statusRoot.replaceChildren(statusPanel(initialStatus));
-
+function settingsPanel(settings, statusRoot) {
   const canUpdateSettings = allowed('updates.update');
   const autoEnabled = node('input', { type: 'checkbox', name: 'enabled', checked: settings.enabled, disabled: !canUpdateSettings });
-  const interval = node('input', { type: 'number', name: 'interval_hours', min: '1', max: '168', value: settings.interval_hours, class: 'input', disabled: !canUpdateSettings });
-  const ref = node('input', { type: 'text', name: 'ref', value: settings.ref, maxlength: '200', class: 'input mono', disabled: !canUpdateSettings });
-  const settingsForm = node('form', {
-    class: 'panel stack update-settings',
+  const interval = node('input', { type: 'number', name: 'interval_hours', min: '1', max: '168', value: settings.interval_hours, disabled: !canUpdateSettings });
+  const ref = node('input', { type: 'text', name: 'ref', value: settings.ref, maxlength: '200', class: 'mono', disabled: !canUpdateSettings });
+  const save = node('button', { class: 'button primary', type: 'submit', disabled: true }, 'Zapisz zmiany');
+  const dirty = node('span', { class: 'update-unsaved', hidden: true, text: 'Niezapisane zmiany' });
+
+  const markDirty = () => {
+    const changed = autoEnabled.checked !== Boolean(settings.enabled)
+      || Number(interval.value) !== Number(settings.interval_hours)
+      || ref.value.trim() !== settings.ref;
+    dirty.hidden = !changed;
+    save.disabled = !canUpdateSettings || !changed;
+  };
+  autoEnabled.addEventListener('change', markDirty);
+  interval.addEventListener('input', markDirty);
+  ref.addEventListener('input', markDirty);
+
+  return node('form', {
+    class: 'panel update-settings',
     onSubmit: async event => {
       event.preventDefault();
-      const submit = event.currentTarget.querySelector('button[type="submit"]');
-      if (submit) submit.disabled = true;
+      save.disabled = true;
       try {
         const saved = await api('/updates/settings', {
           method: 'PUT',
@@ -136,53 +391,86 @@ async function updatesView() {
             ref: ref.value.trim(),
           },
         });
+        Object.assign(settings, saved);
         autoEnabled.checked = saved.enabled;
         interval.value = saved.interval_hours;
         ref.value = saved.ref;
+        dirty.hidden = true;
         toast('Ustawienia aktualizacji zapisane.');
+        await renderLiveStatus(statusRoot, settings);
       } catch (error) {
         toast(error.message, 'error');
       } finally {
-        if (submit) submit.disabled = false;
+        markDirty();
       }
     },
   },
-    node('div', { class: 'panel-header' }, node('div', {}, node('h2', { text: 'Auto-update' }), node('p', { class: 'muted', text: 'Oddzielny serwis sprawdza GitHub i wykonuje aktualizację bez utraty podglądu postępu.' }))),
-    node('label', { class: 'switch-row' }, autoEnabled, node('span', {}, node('strong', { text: 'Automatycznie instaluj aktualizacje' }), node('small', { class: 'muted', text: 'Domyślnie wyłączone. Aktualizacja restartuje API, dispatcher i workery.' }))),
-    node('div', { class: 'form-grid' },
-      node('label', { class: 'field' }, node('span', { text: 'Interwał sprawdzania [h]' }), interval),
-      node('label', { class: 'field' }, node('span', { text: 'Git ref / kanał' }), ref)
+    node('div', { class: 'update-settings-header' },
+      node('div', {},
+        node('span', { class: 'update-card-label', text: 'Automatyzacja' }),
+        node('h2', { text: 'Polityka auto-update' }),
+        node('p', { class: 'muted', text: 'Updater okresowo sprawdza repozytorium. Po wykryciu nowej wersji może sam wykonać backup i wdrożenie.' })),
+      node('div', { class: 'update-settings-state' },
+        badge(settings.enabled ? 'Auto-update włączony' : 'Auto-update wyłączony', settings.enabled ? 'ok' : ''),
+        dirty)
     ),
-    canUpdateSettings ? node('div', { class: 'actions' }, node('button', { class: 'button primary', type: 'submit' }, 'Zapisz ustawienia')) : null
+    node('label', { class: 'update-master-toggle' },
+      node('div', { class: 'update-toggle-control' }, autoEnabled, node('span', { class: 'update-toggle-track' })),
+      node('div', {},
+        node('strong', { text: 'Automatycznie instaluj nowe wersje' }),
+        node('span', { class: 'muted', text: 'Po wykryciu nowego commita aktualizacja rozpocznie się bez ręcznego zatwierdzania.' }))
+    ),
+    node('div', { class: 'update-settings-grid' },
+      node('div', { class: 'update-setting-block' },
+        node('label', {}, node('span', { text: 'Interwał sprawdzania' }), interval),
+        intervalPresets(interval),
+        node('small', { class: 'muted', text: 'Zakres: od 1 do 168 godzin.' })
+      ),
+      node('div', { class: 'update-setting-block' },
+        node('label', {}, node('span', { text: 'Kanał / Git ref' }), ref),
+        node('small', { class: 'muted', text: 'Branch, tag lub commit używany jako źródło aktualizacji.' }),
+        node('div', { class: 'update-channel-preview' },
+          node('span', { class: 'muted', text: 'Aktywny kanał' }),
+          node('strong', { class: 'mono', text: settings.ref }))
+      )
+    ),
+    node('div', { class: 'update-settings-footer' },
+      canUpdateSettings
+        ? node('span', { class: 'muted', text: 'Zmiana kanału aktualizacji wymaga uprawnienia updates.update.' })
+        : node('span', { class: 'muted', text: 'Tryb tylko do odczytu. Brak uprawnienia updates.update.' }),
+      canUpdateSettings ? save : null
+    )
   );
+}
 
-  const actions = node('div', { class: 'actions' });
-  actions.append(button('Sprawdź aktualizacje', async () => {
-    try {
-      await api('/updates/check', { method: 'POST', body: {}, idempotent: true });
-      await renderLiveStatus(statusRoot);
-    } catch (error) { toast(error.message, 'error'); }
-  }));
-  if (allowed('updates.execute')) {
-    actions.append(button('Aktualizuj teraz', () => {
-      confirmAction(
-        'Aktualizacja Cloudportal',
-        'Zostanie utworzony backup PostgreSQL, pobrana nowa wersja i zrestartowane usługi aplikacji. Serwis aktualizacji oraz ten podgląd pozostaną aktywne.',
-        async () => {
-          await api('/updates/run', { method: 'POST', body: {}, idempotent: true });
-          toast('Aktualizacja uruchomiona.');
-          await renderLiveStatus(statusRoot);
-        }
-      );
-    }, 'primary'));
-  }
+async function updatesView() {
+  const results = await Promise.all([
+    api('/updates/settings'),
+    resilientUpdateStatus(),
+  ]);
+  const settings = { ...results[0] };
+  const initialStatus = results[1];
+  const statusRoot = node('div', { class: 'stack update-live-root' });
+  statusRoot.replaceChildren(statusPanel(initialStatus, settings, statusRoot));
 
   dom.content.replaceChildren(
-    heading('Aktualizacja aplikacji jest wykonywana przez niezależny serwis systemd. Postęp pozostaje widoczny także podczas restartu głównego API.', [actions]),
-    settingsForm,
-    statusRoot
+    heading('Bezpieczne aktualizacje Cloudportal z ciągłym podglądem procesu, backupem bazy i niezależnym serwisem wykonawczym.'),
+    statusRoot,
+    settingsPanel(settings, statusRoot),
+    node('section', { class: 'update-safety-grid' },
+      node('div', { class: 'panel update-safety-card' },
+        node('span', { class: 'update-safety-icon', text: 'DB' }),
+        node('div', {}, node('strong', { text: 'Backup przed wdrożeniem' }), node('span', { class: 'muted', text: 'Przed zmianą release wykonywany jest backup PostgreSQL.' }))),
+      node('div', { class: 'panel update-safety-card' },
+        node('span', { class: 'update-safety-icon', text: 'API' }),
+        node('div', {}, node('strong', { text: 'Podgląd niezależny od API' }), node('span', { class: 'muted', text: 'Status aktualizacji jest serwowany przez osobny proces na loopback.' }))),
+      node('div', { class: 'panel update-safety-card' },
+        node('span', { class: 'update-safety-icon', text: 'RBAC' }),
+        node('div', {}, node('strong', { text: 'Kontrola uprawnień' }), node('span', { class: 'muted', text: 'Odczyt, wykonanie i zmiana kanału mają oddzielne uprawnienia.' })))
+    )
   );
-  scheduleStatusPoll(statusRoot);
+
+  scheduleStatusPoll(statusRoot, settings);
 }
 
 document.addEventListener('cloudportal:app-hidden', () => {
