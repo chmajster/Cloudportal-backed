@@ -58,6 +58,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/deployments.js',
         'features/operations.js',
         'features/search.js',
+        'features/settings.js',
         'features/tools.js',
         'features/updates.js',
     } == set(manifest['scripts'])
@@ -208,6 +209,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Jedna rola może zarządzać tylko jednym szablonem.' in script
     assert 'canManageBlueprintByRole' in script
     assert 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' in script
+    assert "registerView({ id: 'settings'" in script
+    assert 'Konfiguracja LDAP' in script
+    assert '/settings/ldap/test' in script
+    assert 'JIT provisioning i RBAC' in script
+    assert 'auth_source=ldap' in script
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
