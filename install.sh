@@ -17,6 +17,8 @@ gui=0
 non_interactive=0
 check_platform=0
 takeover_running_install=1
+force_uninstall=0
+purge_data=0
 while (($#)); do
   case "$1" in
     --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days)
@@ -33,7 +35,9 @@ while (($#)); do
     --check-platform) check_platform=1; shift;;
     --takeover) takeover_running_install=1; shift;;
     --no-takeover) takeover_running_install=0; shift;;
-    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--enable-backups|--disable-backups] [--backup-retention-days 14] [--gui|-gui] [--non-interactive] [--takeover|--no-takeover] [--check-platform] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
+    --force-uninstall) force_uninstall=1; shift;;
+    --purge-data) purge_data=1; shift;;
+    --help) echo 'install.sh [--host DNS_NAME] [--port 8443] [--workers 1] [--enable-backups|--disable-backups] [--backup-retention-days 14] [--gui|-gui] [--non-interactive] [--takeover|--no-takeover] [--force-uninstall [--purge-data]] [--check-platform] [--ref REF] [--github-token-file FILE | --github-config FILE] [--cert-file PEM --cert-key PEM]'; exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -112,37 +116,61 @@ valid_retention() {
   [[ "$1" =~ ^[0-9]{1,4}$ ]] && ((10#$1 >= 1 && 10#$1 <= 3650))
 }
 ((gui == 0 || non_interactive == 0)) || { echo '--gui/-gui cannot be combined with --non-interactive.' >&2; exit 2; }
+((purge_data == 0 || force_uninstall == 1)) || { echo '--purge-data requires --force-uninstall.' >&2; exit 2; }
 
 lock_file=/run/cloudportal-install.lock
+lock_owner_file=/run/cloudportal-install.owner
+lock_holder_pid=''
 
 stop_cloudportal_application() {
-  echo 'Stopping Cloudportal application services before installer takeover...'
+  echo 'Stopping Cloudportal application services...'
   systemctl stop cloudportal-updater.service >/dev/null 2>&1 || true
+  systemctl stop cloudportal-backup.timer cloudportal-backup.service >/dev/null 2>&1 || true
   systemctl stop cloudportal-dispatcher.service cloudportal-api.service >/dev/null 2>&1 || true
 
   local worker_units=()
-  mapfile -t worker_units < <(systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null | awk '{print $1}' | grep -E '^cloudportal-worker@.+\.service$' || true)
+  mapfile -t worker_units < <(
+    systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null       | awk '{print $1}'       | grep -E '^cloudportal-worker@.+\.service$' || true
+  )
   if ((${#worker_units[@]})); then
     systemctl stop "${worker_units[@]}" >/dev/null 2>&1 || true
   fi
 }
 
+proc_lock_pids() {
+  local fd target pid
+  shopt -s nullglob
+  for fd in /proc/[0-9]*/fd/*; do
+    target=$(readlink "$fd" 2>/dev/null || true)
+    case "$target" in
+      "$lock_file"|"$lock_file (deleted)")
+        pid=${fd#/proc/}
+        pid=${pid%%/*}
+        [[ "$pid" =~ ^[0-9]+$ ]] && printf '%s\n' "$pid"
+        ;;
+    esac
+  done
+  shopt -u nullglob
+}
+
 lock_owner_pids() {
-  local pid path recorded=''
+  local pid path recorded='' owner_source
+  for owner_source in "$lock_owner_file" "$lock_file"; do
+    if [[ -r "$owner_source" ]]; then
+      recorded=$(head -n 1 "$owner_source" 2>/dev/null || true)
+      if [[ "$recorded" =~ ^[0-9]+$ ]] && kill -0 "$recorded" 2>/dev/null; then
+        printf '%s\n' "$recorded"
+      fi
+    fi
+  done
+
   if command -v lslocks >/dev/null 2>&1; then
     while read -r pid path; do
       [[ "$path" == "$lock_file" && "$pid" =~ ^[0-9]+$ ]] || continue
       printf '%s\n' "$pid"
     done < <(lslocks -n -o PID,PATH 2>/dev/null || true)
-    return 0
   fi
-
-  if [[ -r "$lock_file" ]]; then
-    recorded=$(head -n 1 "$lock_file" 2>/dev/null || true)
-    if [[ "$recorded" =~ ^[0-9]+$ ]] && kill -0 "$recorded" 2>/dev/null; then
-      printf '%s\n' "$recorded"
-    fi
-  fi
+  proc_lock_pids
 }
 
 collect_descendants() {
@@ -154,50 +182,74 @@ collect_descendants() {
   done < <(ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$parent" '$2 == parent {print $1}')
 }
 
-terminate_previous_installer() {
-  local owner=$1
+terminate_process_tree() {
+  local owner=$1 signal=${2:-TERM}
   [[ "$owner" =~ ^[0-9]+$ ]] || return 0
   ((owner > 1)) || return 0
   ((owner != $$)) || return 0
   kill -0 "$owner" 2>/dev/null || return 0
 
-  local command_line=''
-  if [[ -r "/proc/$owner/cmdline" ]]; then
-    command_line=$(tr '\0' ' ' < "/proc/$owner/cmdline" 2>/dev/null || true)
-  fi
-  echo "Stopping previous installer process PID $owner${command_line:+ ($command_line)}..."
-
-  local descendants=()
-  mapfile -t descendants < <(collect_descendants "$owner")
-  kill -TERM "$owner" 2>/dev/null || true
-  if ((${#descendants[@]})); then
-    kill -TERM "${descendants[@]}" 2>/dev/null || true
-  fi
-}
-
-force_stop_previous_installer() {
-  local owner=$1
-  [[ "$owner" =~ ^[0-9]+$ ]] || return 0
-  ((owner > 1)) || return 0
-  ((owner != $$)) || return 0
-
   local descendants=()
   mapfile -t descendants < <(collect_descendants "$owner")
   if ((${#descendants[@]})); then
-    kill -KILL "${descendants[@]}" 2>/dev/null || true
+    kill "-$signal" "${descendants[@]}" 2>/dev/null || true
   fi
-  kill -KILL "$owner" 2>/dev/null || true
+  kill "-$signal" "$owner" 2>/dev/null || true
 }
 
-record_install_lock_owner() {
-  printf '%s\n' "$$" > "$lock_file"
-  chmod 0600 "$lock_file" 2>/dev/null || true
+stop_previous_installer() {
+  local signal=${1:-TERM} owner
+  local owners=()
+  mapfile -t owners < <(lock_owner_pids | awk '!seen[$0]++')
+  for owner in "${owners[@]}"; do
+    local command_line=''
+    if [[ -r "/proc/$owner/cmdline" ]]; then
+      command_line=$(tr '\0' ' ' < "/proc/$owner/cmdline" 2>/dev/null || true)
+    fi
+    echo "Stopping lock holder PID $owner${command_line:+ ($command_line)}..."
+    terminate_process_tree "$owner" "$signal"
+  done
+}
+
+try_acquire_install_lock() {
+  local ready_file holder attempt
+  ready_file=$(mktemp /run/cloudportal-install.ready.XXXXXX)
+  rm -f "$ready_file"
+
+  flock --exclusive --nonblock --close "$lock_file" sh -c '
+    installer_pid=$1
+    ready_file=$2
+    owner_file=$3
+    printf "%s\n" "$installer_pid" > "$owner_file"
+    chmod 0600 "$owner_file" 2>/dev/null || true
+    : > "$ready_file"
+    trap "rm -f \"$owner_file\" \"$ready_file\"" EXIT
+    while kill -0 "$installer_pid" 2>/dev/null; do sleep 1; done
+  ' cloudportal-lock "$$" "$ready_file" "$lock_owner_file" &
+  holder=$!
+
+  for ((attempt=1; attempt<=40; attempt++)); do
+    if [[ -e "$ready_file" ]]; then
+      lock_holder_pid=$holder
+      rm -f "$ready_file"
+      return 0
+    fi
+    if ! kill -0 "$holder" 2>/dev/null; then
+      wait "$holder" 2>/dev/null || true
+      rm -f "$ready_file"
+      return 1
+    fi
+    sleep 0.05
+  done
+
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  rm -f "$ready_file"
+  return 1
 }
 
 acquire_install_lock() {
-  exec 9>>"$lock_file"
-  if flock -n 9; then
-    record_install_lock_owner
+  if try_acquire_install_lock; then
     return 0
   fi
 
@@ -206,42 +258,89 @@ acquire_install_lock() {
     exit 1
   fi
 
-  echo 'Another installation is running. Stopping the Cloudportal application and taking over the installer lock...'
+  echo 'Another installation is running. Stopping Cloudportal and taking over the installer lock...'
   stop_cloudportal_application
+  stop_previous_installer TERM
 
-  local owners=() owner attempt
-  mapfile -t owners < <(lock_owner_pids | awk '!seen[$0]++')
-  for owner in "${owners[@]}"; do
-    terminate_previous_installer "$owner"
-  done
-
+  local attempt
   for ((attempt=1; attempt<=15; attempt++)); do
-    if flock -n 9; then
-      record_install_lock_owner
+    if try_acquire_install_lock; then
       echo 'Previous installation stopped. Installer lock acquired.'
       return 0
     fi
     sleep 1
   done
 
-  # Refresh lock owners because a child may have inherited the lock after
-  # the original installer parent exited.
-  mapfile -t owners < <(lock_owner_pids | awk '!seen[$0]++')
-  for owner in "${owners[@]}"; do
-    force_stop_previous_installer "$owner"
-  done
+  echo 'Previous installer still owns the lock. Forcing its remaining lock holders to stop...'
+  stop_previous_installer KILL
   for ((attempt=1; attempt<=10; attempt++)); do
-    if flock -n 9; then
-      record_install_lock_owner
+    if try_acquire_install_lock; then
       echo 'Previous installation force-stopped. Installer lock acquired.'
       return 0
     fi
     sleep 1
   done
 
-  echo 'Could not take over /run/cloudportal-install.lock. Inspect: lslocks | grep cloudportal-install.lock' >&2
+  echo 'Could not take over /run/cloudportal-install.lock even after /proc lock-owner scan.' >&2
+  echo 'Use --force-uninstall to remove the Cloudportal runtime and stale installer state.' >&2
   exit 1
 }
+
+force_uninstall_cloudportal() {
+  echo 'FORCE UNINSTALL: stopping Cloudportal runtime and stale installer processes...'
+  stop_cloudportal_application
+  stop_previous_installer TERM
+  sleep 2
+  stop_previous_installer KILL
+
+  if id cloudportal >/dev/null 2>&1; then
+    pkill -TERM -u cloudportal >/dev/null 2>&1 || true
+    sleep 1
+    pkill -KILL -u cloudportal >/dev/null 2>&1 || true
+  fi
+
+  local worker_units=()
+  mapfile -t worker_units < <(
+    systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null       | awk '{print $1}'       | grep -E '^cloudportal-worker@.+\.service$' || true
+  )
+  if ((${#worker_units[@]})); then
+    systemctl disable --now "${worker_units[@]}" >/dev/null 2>&1 || true
+  fi
+
+  systemctl disable --now     cloudportal-api.service     cloudportal-dispatcher.service     cloudportal-redis.service     cloudportal-backup.timer     cloudportal-backup.service     cloudportal-updater.service >/dev/null 2>&1 || true
+
+  rm -f     /etc/systemd/system/cloudportal-api.service     /etc/systemd/system/cloudportal-dispatcher.service     /etc/systemd/system/cloudportal-worker@.service     /etc/systemd/system/cloudportal-redis.service     /etc/systemd/system/cloudportal-backup.service     /etc/systemd/system/cloudportal-backup.timer     /etc/systemd/system/cloudportal-updater.service     /etc/systemd/system/cloudportal-updater.timer     /usr/local/sbin/cloudportal-backup     /usr/local/sbin/cloudportal-restore     /etc/nginx/conf.d/cloudportal-backed.conf
+
+  systemctl daemon-reload
+  systemctl reset-failed >/dev/null 2>&1 || true
+
+  if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx >/dev/null 2>&1 || true
+  fi
+
+  rm -rf "$app_root"
+  rm -f "$lock_file" "$lock_owner_file" /run/cloudportal-install.ready.*
+
+  if ((purge_data)); then
+    echo 'PURGE DATA: removing Cloudportal database, configuration and runtime data...'
+    if command -v runuser >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+      runuser -u postgres -- dropdb --if-exists cloudportal >/dev/null 2>&1 || true
+      runuser -u postgres -- dropuser --if-exists cloudportal >/dev/null 2>&1 || true
+    fi
+    rm -rf "$config" "$data" /var/backups/cloudportal-backed
+    userdel cloudportal >/dev/null 2>&1 || true
+    echo 'Cloudportal fully removed, including database and local data.'
+  else
+    echo 'Cloudportal application removed. Database, /etc/cloudportal-backed and /var/lib/cloudportal-backed were preserved.'
+    echo 'For a destructive reset use: --force-uninstall --purge-data'
+  fi
+}
+
+if ((force_uninstall)); then
+  force_uninstall_cloudportal
+  drain_script_input
+  exit 0
+fi
 
 acquire_install_lock
 
