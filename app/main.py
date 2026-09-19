@@ -12,8 +12,17 @@ from app.config import settings
 from app.observability import configure_telemetry
 from app.security.core import throttle
 from app.version import build_version
+from app.bootstrap import sync_existing_rbac
 
 app = FastAPI(title='Cloudportal-backed', version=build_version(), docs_url='/docs', redoc_url=None)
+
+
+@app.on_event('startup')
+def synchronize_builtin_rbac_on_startup():
+    # Keep the built-in Administrator authoritative even when a previous update
+    # stopped before the final bootstrap step. This repairs settings/LDAP access
+    # without granting permissions based on role names inside authorization.
+    sync_existing_rbac()
 
 
 @app.middleware('http')

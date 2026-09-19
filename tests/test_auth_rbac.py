@@ -51,6 +51,45 @@ def test_existing_administrator_recovers_all_permissions_on_bootstrap(system):
     assert {'settings.read', 'settings.update', 'updates.read', 'updates.execute', 'updates.update'} <= set(after.json()['permissions'])
 
 
+
+def test_runtime_rbac_sync_restores_admin_ldap_settings_access(system):
+    from app.bootstrap import sync_existing_rbac
+    from app.models import Role
+
+    client, headers, _admin = system
+    with session() as db:
+        role = db.scalar(select(Role).where(Role.name == 'Administrator'))
+        role.permissions = [
+            permission for permission in role.permissions
+            if permission.name not in {'settings.read', 'settings.update'}
+        ]
+        db.commit()
+
+    before = client.get('/api/v1/settings/ldap', headers=headers)
+    assert before.status_code == 403
+
+    assert sync_existing_rbac() is True
+
+    after = client.get('/api/v1/settings/ldap', headers=headers)
+    assert after.status_code == 200, after.text
+
+    payload = {
+        'enabled': False,
+        'url': 'ldap://localhost:389',
+        'start_tls': False,
+        'verify_tls': True,
+        'bind_dn': '',
+        'base_dn': '',
+        'user_filter': '(uid={username})',
+        'username_attribute': 'uid',
+        'email_attribute': 'mail',
+        'first_name_attribute': 'givenName',
+        'last_name_attribute': 'sn',
+    }
+    saved = client.put('/api/v1/settings/ldap', headers=headers, json=payload)
+    assert saved.status_code == 200, saved.text
+
+
 def test_default_admin_session_requires_password_change(system):
     client, bootstrap_headers, admin = system
     login = client.post('/api/v1/auth/login', json={'username': 'admin', 'password': 'admin'})
