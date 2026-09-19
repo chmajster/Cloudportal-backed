@@ -332,3 +332,114 @@
     align-self: flex-start;
   }
 }
+
+
+.ansible-playbook-preview-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: -4px;
+}
+
+.ansible-playbook-preview {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.ansible-playbook-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ansible-playbook-preview-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ansible-playbook-preview-header strong {
+  font-size: .84rem;
+}
+
+.ansible-playbook-preview-header small {
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.45;
+}
+
+.ansible-playbook-preview-body {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.ansible-playbook-preview-loading {
+  min-height: 96px;
+}
+
+.ansible-playbook-preview-meta,
+.ansible-playbook-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.ansible-playbook-tab {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .72rem;
+  font-weight: 750;
+}
+
+.ansible-playbook-tab:hover,
+.ansible-playbook-tab:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--text);
+  outline: none;
+}
+
+.ansible-playbook-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.ansible-playbook-role {
+  font-size: .7rem;
+  font-weight: 750;
+}
+
+.ansible-playbook-code {
+  max-height: 440px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--log-bg);
+  color: var(--log-text);
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+
+@media (max-width: 760px) {
+  .ansible-playbook-preview-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ansible-playbook-preview-header .button {
+    align-self: flex-start;
+  }
+}
