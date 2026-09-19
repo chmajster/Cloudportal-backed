@@ -10,7 +10,6 @@ import hmac
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -551,6 +550,19 @@ def main() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     if not STATE_FILE.exists():
         atomic_json(STATE_FILE, default_state())
+    state = load_state()
+    release = release_info()
+    if not state.get("current_version") and release.get("commit_sha"):
+        save_state(current_version=str(release["commit_sha"])[:12], ref=release.get("ref") or state.get("ref"))
+        state = load_state()
+    if state.get("status") in {"running", "checking"}:
+        event(
+            "interrupted",
+            state.get("progress", 0),
+            "Poprzedni proces aktualizacji został przerwany przed zakończeniem.",
+            status="failed",
+            finished_at=utcnow(),
+        )
     threading.Thread(target=scheduler, daemon=True, name="cloudportal-update-scheduler").start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.serve_forever()
