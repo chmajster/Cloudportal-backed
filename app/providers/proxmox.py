@@ -1,5 +1,6 @@
 import ipaddress
 import re
+from time import monotonic
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
@@ -22,7 +23,7 @@ def _certificate_verification_failed(error):
 def _canonical_proxmox_endpoint(endpoint, scheme=None):
     raw = endpoint.strip().rstrip('/')
     if not raw:
-        raise HTTPException(422, 'Proxmox endpoint is required')
+        raise HTTPException(422, 'Adres Proxmox jest wymagany.')
     explicit_scheme = '://' in raw
     if not explicit_scheme:
         try:
@@ -32,7 +33,7 @@ def _canonical_proxmox_endpoint(endpoint, scheme=None):
         except ValueError:
             pass
         if scheme is None:
-            raise HTTPException(422, 'Proxmox endpoint protocol could not be determined')
+            raise HTTPException(422, 'Nie udało się ustalić protokołu adresu Proxmox.')
         raw = f'{scheme}://{raw}'
 
     parsed = urlsplit(raw)
@@ -47,12 +48,12 @@ def _canonical_proxmox_endpoint(endpoint, scheme=None):
     ):
         raise HTTPException(
             422,
-            'Proxmox endpoint must use HTTP or HTTPS and contain only host/IP and optional port',
+            'Adres Proxmox musi używać HTTP lub HTTPS i zawierać wyłącznie host/IP oraz opcjonalny port.',
         )
     try:
         port = parsed.port
     except ValueError:
-        raise HTTPException(422, 'Invalid Proxmox endpoint port') from None
+        raise HTTPException(422, 'Nieprawidłowy port endpointu Proxmox.') from None
     if port is None and not explicit_scheme:
         port = 8006
     host = parsed.hostname
@@ -87,14 +88,122 @@ def resolve_proxmox_endpoint(endpoint, *, verify_ssl=True):
     if certificate_error:
         raise HTTPException(
             502,
-            'TLS certificate verification failed while detecting the Proxmox endpoint. '
-            'Enable acceptance of an untrusted/self-signed certificate and try again.',
+            'Weryfikacja certyfikatu TLS nie powiodła się podczas wykrywania endpointu Proxmox. '
+            'Włącz akceptację certyfikatu self-signed / niezaufanego albo zainstaluj zaufany certyfikat i spróbuj ponownie.',
         )
     raise HTTPException(
         502,
-        'Unable to detect the Proxmox protocol. Verify the IP/hostname and port (default 8006), '
-        'or enter http:// or https:// explicitly.',
+        'Nie udało się wykryć protokołu Proxmox. Sprawdź adres IP/hostname i port (domyślnie 8006) '
+        'albo podaj jawnie http:// lub https://.',
     )
+
+
+def _proxmox_http_exception(error, operation):
+    if _certificate_verification_failed(error):
+        return HTTPException(
+            502,
+            f'{operation}: weryfikacja certyfikatu TLS nie powiodła się. '
+            'Włącz akceptację certyfikatu self-signed / niezaufanego albo popraw certyfikat serwera.',
+        )
+    if isinstance(error, httpx.ConnectTimeout):
+        return HTTPException(
+            502,
+            f'{operation}: przekroczono czas nawiązania połączenia z Proxmox. '
+            'Sprawdź adres, port, routing i reguły firewalla.',
+        )
+    if isinstance(error, httpx.ReadTimeout):
+        return HTTPException(
+            502,
+            f'{operation}: Proxmox nie odpowiedział w wymaganym czasie. '
+            'Sprawdź stan API i obciążenie serwera.',
+        )
+    if isinstance(error, httpx.ConnectError):
+        return HTTPException(
+            502,
+            f'{operation}: nie można połączyć się z API Proxmox. '
+            'Sprawdź adres, port, protokół HTTP/HTTPS, routing i firewall.',
+        )
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        reasons = {
+            400: 'Proxmox odrzucił parametry żądania.',
+            401: 'Logowanie zostało odrzucone. Sprawdź użytkownika, realm i hasło lub token.',
+            403: 'Konto nie ma wymaganych uprawnień do tej operacji.',
+            404: 'Nie znaleziono zasobu API. Sprawdź endpoint, użytkownika i nazwę tokenu.',
+            409: 'Zasób już istnieje albo wystąpił konflikt po stronie Proxmox.',
+        }
+        reason = reasons.get(status, 'Proxmox zwrócił błąd HTTP.')
+        return HTTPException(
+            502,
+            f'{operation}: {reason} Kod odpowiedzi Proxmox: HTTP {status}.',
+        )
+    return HTTPException(
+        502,
+        f'{operation}: połączenie z API Proxmox zakończyło się błędem. '
+        'Sprawdź endpoint, protokół, dane uwierzytelniające i uprawnienia.',
+    )
+
+
+def test_proxmox_connection(endpoint, username, secret, *, verify_ssl=True):
+    """Test a draft Proxmox credential without persisting the supplied secret."""
+    base = endpoint.rstrip('/') + '/api2/json'
+    started = monotonic()
+    auth_mode = 'token' if secret.get('token_id') and secret.get('token_secret') else 'password'
+    try:
+        with httpx.Client(
+            verify=verify_ssl,
+            timeout=httpx.Timeout(15, connect=5),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            headers = {}
+            if auth_mode == 'token':
+                token_id = secret['token_id']
+                if '!' not in token_id:
+                    token_id = username + '!' + token_id
+                headers['Authorization'] = 'PVEAPIToken=' + token_id + '=' + secret['token_secret']
+            else:
+                password = secret.get('password')
+                if not password:
+                    raise HTTPException(422, 'Podaj hasło Proxmox albo komplet danych tokenu API.')
+                try:
+                    auth = client.post(
+                        base + '/access/ticket',
+                        data={'username': username, 'password': password},
+                    )
+                    auth.raise_for_status()
+                except httpx.HTTPError as error:
+                    raise _proxmox_http_exception(error, 'Test logowania do Proxmox VE') from None
+                ticket = auth.json()['data']
+                client.cookies.set('PVEAuthCookie', ticket['ticket'])
+                headers['CSRFPreventionToken'] = ticket['CSRFPreventionToken']
+
+            try:
+                response = client.get(base + '/version', headers=headers)
+                response.raise_for_status()
+            except httpx.HTTPError as error:
+                raise _proxmox_http_exception(error, 'Test dostępu do API Proxmox VE') from None
+            data = response.json()['data']
+    except HTTPException:
+        raise
+    except (KeyError, ValueError, TypeError):
+        raise HTTPException(
+            502,
+            'Proxmox zwrócił nieprawidłową odpowiedź podczas testu połączenia. '
+            'Sprawdź wersję Proxmox VE, endpoint i konfigurację reverse proxy.',
+        ) from None
+
+    return {
+        'ok': True,
+        'provider': 'proxmox',
+        'version': str(data.get('version')) if data.get('version') is not None else None,
+        'endpoint': endpoint,
+        'username': username,
+        'auth_mode': auth_mode,
+        'verify_ssl': verify_ssl,
+        'latency_ms': max(0, round((monotonic() - started) * 1000)),
+        'message': 'Połączenie z Proxmox VE działa poprawnie.',
+    }
 
 
 def create_api_token(endpoint, username, password, token_name, *, verify_ssl=True, privilege_separation=True):
@@ -103,6 +212,7 @@ def create_api_token(endpoint, username, password, token_name, *, verify_ssl=Tru
     The password is used only for the ticket request and is never returned or persisted.
     """
     base = endpoint.rstrip('/') + '/api2/json'
+    phase = 'Logowanie do Proxmox VE'
     try:
         with httpx.Client(
             verify=verify_ssl,
@@ -117,6 +227,7 @@ def create_api_token(endpoint, username, password, token_name, *, verify_ssl=Tru
             auth.raise_for_status()
             ticket = auth.json()['data']
             client.cookies.set('PVEAuthCookie', ticket['ticket'])
+            phase = 'Tworzenie tokenu API Proxmox'
             response = client.post(
                 base + '/access/users/' + quote(username, safe='') + '/token/' + quote(token_name, safe=''),
                 headers={'CSRFPreventionToken': ticket['CSRFPreventionToken']},
@@ -129,26 +240,24 @@ def create_api_token(endpoint, username, password, token_name, *, verify_ssl=Tru
             data = response.json()['data']
             token_secret = data.get('value')
             if not token_secret:
-                raise ValueError('Proxmox did not return token value')
+                raise ValueError('missing-token-value')
             return {
                 'token_id': data.get('full-tokenid') or f'{username}!{token_name}',
                 'token_secret': token_secret,
             }
     except httpx.HTTPError as error:
-        if _certificate_verification_failed(error):
+        raise _proxmox_http_exception(error, phase) from None
+    except (KeyError, ValueError):
+        if phase == 'Tworzenie tokenu API Proxmox':
             raise HTTPException(
                 502,
-                'Proxmox TLS certificate verification failed. '
-                'Enable acceptance of an untrusted/self-signed certificate and try again.',
+                'Tworzenie tokenu API Proxmox nie powiodło się: serwer nie zwrócił kompletnego tokenu. '
+                'Sprawdź nazwę tokenu, uprawnienia do zarządzania tokenami użytkownika i logi Proxmox.',
             ) from None
         raise HTTPException(
             502,
-            'Proxmox API token creation failed; verify endpoint, protocol, password and user-management permissions',
-        ) from None
-    except (KeyError, ValueError):
-        raise HTTPException(
-            502,
-            'Proxmox API token creation failed; verify endpoint, protocol, password and user-management permissions',
+            'Logowanie do Proxmox VE nie powiodło się: odpowiedź API była niekompletna. '
+            'Sprawdź użytkownika, realm, hasło i endpoint.',
         ) from None
 
 
@@ -190,17 +299,17 @@ class ProxmoxProvider(InfrastructureProvider):
             if _certificate_verification_failed(error):
                 raise HTTPException(
                     502,
-                    'Proxmox TLS certificate verification failed. '
-                    'Enable acceptance of an untrusted/self-signed certificate and try again.',
+                    'Weryfikacja certyfikatu TLS Proxmox nie powiodła się. '
+                    'Włącz akceptację certyfikatu self-signed / niezaufanego albo popraw certyfikat serwera.',
                 ) from None
             raise HTTPException(
                 502,
-                'Proxmox connection or authentication failed; verify endpoint, protocol and credential permissions',
+                'Połączenie lub uwierzytelnienie Proxmox nie powiodło się. Sprawdź endpoint, protokół, dane dostępowe i uprawnienia.',
             ) from None
         except (KeyError, ValueError):
             raise HTTPException(
                 502,
-                'Proxmox connection or authentication failed; verify endpoint, protocol and credential permissions',
+                'Połączenie lub uwierzytelnienie Proxmox nie powiodło się. Sprawdź endpoint, protokół, dane dostępowe i uprawnienia.',
             ) from None
 
     def _get(self, path):
