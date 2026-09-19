@@ -1365,7 +1365,7 @@ async function executeBlueprint(item) {
           idempotent: true,
           body: { variables, hostname_values: readHostnameValues(form) },
         });
-        toast(`Utworzono „${result.name}”. Zadanie ${short(result.job.id)} zostało dodane do kolejki.`);
+        toast(`Utworzono „${result.name}”. Konfiguracja została zapisana w lokalnej bazie i dodana do kolejki. Jeśli Proxmox jest offline, VM utworzy się automatycznie po odzyskaniu połączenia.`);
         navigate('jobs');
       },
     });
