@@ -67,7 +67,7 @@ async function hostnamesView() {
     blueprintUsage.get(schemeId).push(blueprint);
   });
   const actions = [];
-  if (allowed('hostnames.create')) actions.push(button('Nowy pattern', hostnameSchemeForm, 'primary'));
+  if (allowed('hostnames.create')) actions.push(button('Nowy pattern', () => hostnameSchemeForm(), 'primary'));
   if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => generateHostname(schemes.items)));
   if (allowed('blueprints.read')) actions.push(button('Przejdź do Blueprintów', () => navigate('blueprints')));
   dom.content.replaceChildren(
