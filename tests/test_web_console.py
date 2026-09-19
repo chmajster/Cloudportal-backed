@@ -161,7 +161,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function stopTaskPolling(' in script
     assert "registerView({ id: 'updates'" in script
     assert 'Aktualizuj teraz' in script
-    assert '/update-status?key=' in script
+    assert "'X-Update-Status-Token': token" in script
     assert "registerExtension('global-search'" in script
     assert 'function loadIndex(' in script
     assert 'function renderSearch(' in script
