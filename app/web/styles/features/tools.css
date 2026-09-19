@@ -142,9 +142,121 @@
   line-height: 1.5;
 }
 
+.ansible-entry-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(380px, .92fr);
+  gap: 18px;
+  align-items: start;
+}
+.ansible-entry-form,
+.ansible-entry-preview,
+.ansible-entry-help {
+  padding: 22px;
+}
+.ansible-entry-form,
+.ansible-entry-preview {
+  display: grid;
+  gap: 18px;
+}
+.ansible-entry-form-head h2,
+.ansible-entry-preview-head h2 {
+  margin: 4px 0 6px;
+  font-size: 1.12rem;
+  letter-spacing: -.02em;
+}
+.ansible-entry-form-head p,
+.ansible-entry-preview-head p {
+  margin: 0;
+  line-height: 1.5;
+}
+.ansible-entry-options {
+  display: grid;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.ansible-entry-options[hidden] {
+  display: none;
+}
+.ansible-entry-options-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ansible-entry-options-head strong {
+  font-size: .8rem;
+}
+.ansible-entry-options-head span {
+  font-size: .68rem;
+}
+.ansible-entry-preview {
+  position: sticky;
+  top: 18px;
+}
+.ansible-entry-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.ansible-entry-code {
+  min-height: 220px;
+  max-height: 520px;
+  overflow: auto;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: .78rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ansible-entry-validation {
+  min-height: 18px;
+  font-size: .72rem;
+  font-weight: 700;
+}
+.ansible-entry-validation.ok {
+  color: var(--success, #238636);
+}
+.ansible-entry-validation.error {
+  color: var(--danger, #d1242f);
+}
+.ansible-entry-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.ansible-entry-help {
+  margin-top: 18px;
+}
+.ansible-entry-help h2 {
+  margin: 0 0 7px;
+  font-size: .92rem;
+}
+.ansible-entry-help p {
+  margin: 0;
+  line-height: 1.55;
+}
+
 @media (max-width: 1050px) {
   .tools-grid {
     grid-template-columns: 1fr;
+  }
+  .ansible-entry-layout {
+    grid-template-columns: 1fr;
+  }
+  .ansible-entry-preview {
+    position: static;
   }
 }
 
@@ -176,6 +288,22 @@
     flex-direction: column;
   }
   .tool-card-footer .button {
+    width: 100%;
+  }
+  .ansible-entry-form,
+  .ansible-entry-preview,
+  .ansible-entry-help {
+    padding: 17px;
+  }
+  .ansible-entry-preview-head,
+  .ansible-entry-options-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .ansible-entry-preview-actions {
+    flex-direction: column;
+  }
+  .ansible-entry-preview-actions .button {
     width: 100%;
   }
 }
