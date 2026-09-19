@@ -336,6 +336,7 @@ async function showJobLogs(job) {
   } catch (error) { dom.modalBody.replaceChildren(node('p', { class: 'form-error', text: error.message })); }
 }
 
+registerCommand('deployments.create', createDeployment);
 registerView({ id: 'deployments', label: 'Wdrożenia', icon: 'D', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
 })();
