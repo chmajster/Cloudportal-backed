@@ -9,12 +9,21 @@ function openProxmoxTemplateWizard(item = null) {
   return runCommand('blueprints.proxmoxTemplateWizard', item, { mode: 'template', returnTo: 'catalog' });
 }
 
+function canManageCatalogTemplate(item) {
+  const required = new Set((item?.manager_role_ids || []).map(Number));
+  if (!required.size) return true;
+  const owned = new Set((state.identity?.roles || []).map(role => Number(role.id)));
+  return [...required].some(id => owned.has(id));
+}
+
 async function catalogView() {
-  const [templates, playbooks, blueprintResult] = await Promise.all([
+  const [templates, playbooks, blueprintResult, roleResult] = await Promise.all([
     api('/templates'),
     allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
     allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
+    allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
   ]);
+  const rolesById = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
 
   const canCreateTemplate = allowed('blueprints.create')
     && allowed('providers.read')
@@ -59,10 +68,14 @@ async function catalogView() {
           return nodeName + ' / VMID ' + vmid;
         } },
         { label: 'Wersja', value: item => 'v' + item.version },
+        { label: 'Role zarządzające', value: item => (item.manager_role_ids || []).length
+          ? (item.manager_role_ids || []).map(id => rolesById.get(Number(id)) || ('Rola #' + id)).join(', ')
+          : 'Brak dedykowanej roli' },
         { label: 'Status', value: item => badge(item.is_active ? 'Aktywny' : 'Nieaktywny', item.is_active ? 'ok' : 'danger') },
       ], generated, item => {
         const rowActions = [];
-        if (allowed('blueprints.update') && canCreateTemplate) {
+        const canManage = canManageCatalogTemplate(item);
+        if (allowed('blueprints.update') && canCreateTemplate && canManage) {
           rowActions.push(button('Edytuj', () => openProxmoxTemplateWizard(item)));
         }
         if (allowed('blueprints.execute')) {
