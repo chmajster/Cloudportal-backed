@@ -237,7 +237,8 @@ def check_remote(ref: str | None = None) -> dict:
     try:
         target = remote_sha(ref, settings)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
-        save_state(status="failed", finished_at=utcnow())
+        attempted_at = utcnow()
+        save_state(status="failed", finished_at=attempted_at, last_check_at=attempted_at)
         event("check_failed", 0, "Nie udało się sprawdzić aktualizacji: " + str(exc))
         raise
     current = str(release_info().get("commit_sha") or "")
