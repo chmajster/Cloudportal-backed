@@ -38,11 +38,11 @@ async function updateStatusToken() {
 
 async function resilientUpdateStatus() {
   const token = await updateStatusToken();
-  const response = await fetch('/update-status?key=' + encodeURIComponent(token), { cache: 'no-store' });
+  const response = await fetch('/update-status', { cache: 'no-store', headers: { 'X-Update-Status-Token': token } });
   if (response.status === 401) {
     try { sessionStorage.removeItem(STATUS_SESSION_KEY); } catch { /* ignore */ }
     const refreshed = await updateStatusToken();
-    const retry = await fetch('/update-status?key=' + encodeURIComponent(refreshed), { cache: 'no-store' });
+    const retry = await fetch('/update-status', { cache: 'no-store', headers: { 'X-Update-Status-Token': refreshed } });
     if (!retry.ok) throw new Error('Serwis aktualizacji jest niedostępny.');
     return retry.json();
   }
