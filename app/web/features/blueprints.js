@@ -197,7 +197,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
 
     const schemes = schemeResult.items.filter(value => value.is_active);
     const pools = poolResult.items.filter(value => value.is_active);
-    const playbooks = playbookResult.items;
+    const playbooks = playbookResult.items.filter(value =>
+      value.enabled !== false || value.id === item?.deployment?.ansible?.playbook);
     const credentials = credentialResult.items;
     const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
     const dedicatedElsewhere = new Set(
@@ -769,10 +770,12 @@ async function blueprintForm(item = null) {
     ]);
     const providers = providerResult.items;
     const credentials = credentialResult.items;
-    const templates = templateResult.items;
+    const templates = templateResult.items.filter(value =>
+      value.enabled !== false || value.id === item?.deployment?.template);
     const schemes = schemeResult.items;
     const pools = poolResult.items;
-    const playbooks = playbookResult.items;
+    const playbooks = playbookResult.items.filter(value =>
+      value.enabled !== false || value.id === item?.deployment?.ansible?.playbook);
     if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 
     const variableList = node('div', { class: 'editor-list wide' });
