@@ -200,10 +200,25 @@ def _github_headers(settings: dict) -> dict:
     return headers
 
 
+def _read_url(url: str, settings: dict, accept: str) -> bytes:
+    github_config = str(settings.get("github_config") or "")
+    if github_config:
+        command = [
+            "curl", "-fsSL", "--proto", "=https", "--tlsv1.2",
+            "--connect-timeout", "15", "--max-time", "180", "--retry", "3",
+            "--config", github_config, "-H", "Accept: " + accept, url,
+        ]
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode("utf-8", "replace").strip() or "GitHub download failed")
+        return result.stdout
+    request = Request(url, headers={**_github_headers(settings), "Accept": accept})
+    with urlopen(request, timeout=60) as response:
+        return response.read()
+
+
 def _http_json(url: str, settings: dict) -> dict:
-    request = Request(url, headers=_github_headers(settings))
-    with urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return json.loads(_read_url(url, settings, "application/vnd.github+json").decode("utf-8"))
 
 
 def remote_sha(ref: str, settings: dict) -> str:
@@ -293,12 +308,8 @@ def installer_args(ref: str) -> list[str]:
 
 def download_installer(ref: str, target: Path) -> None:
     settings = load_settings()
-    headers = _github_headers(settings)
-    headers["Accept"] = "application/vnd.github.raw+json"
     url = "https://api.github.com/repos/" + REPOSITORY + "/contents/install.sh?ref=" + quote(ref, safe="")
-    request = Request(url, headers=headers)
-    with urlopen(request, timeout=60) as response:
-        content = response.read()
+    content = _read_url(url, settings, "application/vnd.github.raw+json")
     if not content.startswith(b"#!/usr/bin/env bash"):
         raise RuntimeError("Downloaded installer is invalid")
     target.write_bytes(content)
