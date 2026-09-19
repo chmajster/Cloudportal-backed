@@ -24,12 +24,33 @@ class UserOutput(Output):
     is_active: bool
     is_locked: bool
     is_service_account: bool
+    auth_source: Literal['local', 'ldap']
     must_change_password: bool
     created_at: datetime
     updated_at: datetime
     last_login_at: datetime | None
     failed_login_attempts: int
     locked_until: datetime | None
+
+
+class LDAPSettingsOutput(Output):
+    enabled: bool
+    url: str
+    start_tls: bool
+    verify_tls: bool
+    bind_dn: str
+    bind_password_configured: bool
+    base_dn: str
+    user_filter: str
+    username_attribute: str
+    email_attribute: str
+    first_name_attribute: str
+    last_name_attribute: str
+
+
+class LDAPTestOutput(Output):
+    ok: bool
+    message: str
 
 
 class RoleReference(Output):
