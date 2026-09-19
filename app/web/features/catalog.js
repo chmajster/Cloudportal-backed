@@ -40,7 +40,9 @@ async function catalogView() {
   ]);
   const rolesById = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
 
-  const canCreateTemplate = allowed('blueprints.create')
+  const proxmoxModuleEnabled = templates.items.some(item => item.id === 'proxmox-vm' && item.enabled !== false);
+  const canCreateTemplate = proxmoxModuleEnabled
+    && allowed('blueprints.create')
     && allowed('providers.read')
     && allowed('credentials.read')
     && allowed('hostnames.read')
@@ -100,7 +102,9 @@ async function catalogView() {
         if (allowed('blueprints.update') && canCreateTemplate && canManage) {
           rowActions.push(button('Edytuj', () => openProxmoxTemplateWizard(item)));
         }
-        if (allowed('blueprints.execute')) {
+        const deploymentTemplateEnabled = templates.items.some(template =>
+          template.id === item.deployment?.template && template.enabled !== false);
+        if (allowed('blueprints.execute') && deploymentTemplateEnabled && item.is_active) {
           rowActions.push(button('Użyj', () => {
             if (!hasCommand('blueprints.execute')) {
               toast('Uruchamianie szablonu nie jest dostępne.', 'error');
