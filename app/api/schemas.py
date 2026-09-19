@@ -36,6 +36,37 @@ class ChangePassword(Input):
     password: Password
 
 
+class VMClassificationSettingsInput(Input):
+    environments: dict[str, bool] = Field(default_factory=lambda: {
+        'test': True,
+        'dev': True,
+        'nonprod': True,
+        'prod': True,
+    })
+    apmids: Annotated[list[str], Field(max_length=200)] = Field(default_factory=list)
+
+    @field_validator('environments')
+    @classmethod
+    def valid_environments(cls, value):
+        expected = {'test', 'dev', 'nonprod', 'prod'}
+        if set(value) != expected:
+            raise ValueError('Environments must contain exactly test, dev, nonprod and prod')
+        return {name: bool(value[name]) for name in ('test', 'dev', 'nonprod', 'prod')}
+
+    @field_validator('apmids')
+    @classmethod
+    def valid_apmids(cls, value):
+        import re
+        result = []
+        for item in value:
+            normalized = str(item).strip().upper()
+            if not re.fullmatch(r'[A-Z0-9][A-Z0-9_-]{0,62}', normalized):
+                raise ValueError('APMID must use letters, digits, underscore or hyphen')
+            if normalized not in result:
+                result.append(normalized)
+        return result
+
+
 class LDAPSettingsInput(Input):
     enabled: bool = False
     url: Annotated[str, Field(min_length=8, max_length=2048)] = 'ldap://localhost:389'
