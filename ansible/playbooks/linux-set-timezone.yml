@@ -1,0 +1,8 @@
+- name: Set Linux timezone
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Configure timezone
+      community.general.timezone:
+        name: "{{ timezone }}"
