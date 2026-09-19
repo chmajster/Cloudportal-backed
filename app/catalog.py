@@ -194,6 +194,46 @@ def playbook_public(playbook_id):
     }
 
 
+def playbook_source_preview(playbook_id):
+    """Return approved Ansible playbook YAML files for read-only UI preview."""
+    item = playbook_definition(playbook_id)
+    root = (settings().source_dir / 'ansible' / 'playbooks').resolve()
+    names = []
+    for key in ('file', 'wait', 'validate'):
+        filename = item.get(key)
+        if filename and filename not in names:
+            names.append(filename)
+
+    files = []
+    total_size = 0
+    for filename in names:
+        path = (root / filename).resolve()
+        if path.parent != root or not PLAYBOOK_FILE.fullmatch(filename) or not path.is_file():
+            raise RuntimeError(f'Invalid Ansible playbook source: {filename}')
+        try:
+            content = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            raise RuntimeError(f'Unable to read Ansible playbook source: {path}') from None
+        size = len(content.encode('utf-8'))
+        total_size += size
+        if size > 262144 or total_size > 1048576:
+            raise HTTPException(413, 'Ansible playbook source is too large to preview')
+        files.append({
+            'name': filename,
+            'role': 'main' if filename == item.get('file') else ('wait' if filename == item.get('wait') else 'validate'),
+            'content': content,
+            'size': size,
+        })
+
+    return {
+        'id': item['id'],
+        'name': item['name'],
+        'version': item['version'],
+        'transport': item['transport'],
+        'files': files,
+    }
+
+
 def list_playbooks():
     return [playbook_public(identifier) for identifier in sorted(_playbook_catalog(str(settings().source_dir)))]
 
