@@ -16,6 +16,16 @@ backup_retention_days=''
 gui=0
 non_interactive=0
 check_platform=0
+update_in_progress=${CLOUDPORTAL_UPDATE_IN_PROGRESS:-0}
+[[ "$update_in_progress" == 1 ]] || update_in_progress=0
+install_progress() {
+  local percent=$1 phase=$2 message=$3
+  if ((update_in_progress)); then
+    printf '::cloudportal-progress::%s::%s::%s\n' "$percent" "$phase" "$message"
+  else
+    printf '[%s%%] %s\n' "$percent" "$message"
+  fi
+}
 while (($#)); do
   case "$1" in
     --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days)
@@ -100,7 +110,7 @@ valid_host() {
   [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]]
 }
 valid_port() {
-  [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535 && 10#$1 != 6389))
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535 && 10#$1 != 6389 && 10#$1 != 8765 && 10#$1 != 8766))
 }
 valid_workers() {
   [[ "$1" =~ ^[0-9]{1,2}$ ]] && ((10#$1 >= 1 && 10#$1 <= 64))
@@ -152,9 +162,9 @@ if ((gui)); then
     gui_message 'Nieprawidłowy hostname. Użyj liter, cyfr, kropek i myślników.'
   done
   while :; do
-    backend_port=$(gui_input 'Port HTTPS backendu (1-65535; 6389 jest zarezerwowany):' "$backend_port")
+    backend_port=$(gui_input 'Port HTTPS backendu (1-65535; 6389, 8765 i 8766 są zarezerwowane):' "$backend_port")
     valid_port "$backend_port" && break
-    gui_message 'Nieprawidłowy port. Dozwolone 1-65535 z wyjątkiem 6389.'
+    gui_message 'Nieprawidłowy port. Dozwolone 1-65535 z wyjątkiem 6389, 8765 i 8766.'
   done
   while :; do
     workers=$(gui_input 'Liczba workerów (1-64):' "$workers")
@@ -208,6 +218,8 @@ backup_retention_days=$((10#$backup_retention_days))
 [[ -z "$github_token_file" || -z "$github_config" ]] || { echo 'Use either --github-token-file or --github-config.' >&2; exit 2; }
 [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || { echo 'Invalid git ref.' >&2; exit 2; }
 [[ -z "$cert_file" && -z "$cert_key" || -r "$cert_file" && -r "$cert_key" ]] || { echo 'Both certificate files are required.' >&2; exit 2; }
+install_progress 5 preflight 'Sprawdzono platformę i konfigurację.'
+install_progress 10 packages 'Instalowanie i aktualizowanie zależności systemowych.'
 case "$os_family" in
   debian)
     export DEBIAN_FRONTEND=noninteractive
@@ -246,17 +258,37 @@ if [[ -n "$github_token_file" ]]; then
   unset github_token
   curl_args+=(--config "$tmp/curl.conf")
 fi
-curl "${curl_args[@]}" "https://api.github.com/repos/$repo/tarball/$ref" -o "$tmp/source.tar.gz" || {
+install_progress 25 download 'Pobieranie źródeł wybranej wersji.'
+release_sha=${CLOUDPORTAL_RELEASE_SHA:-}
+effective_tarball_url=$(curl "${curl_args[@]}" -w '%{url_effective}' "https://api.github.com/repos/$repo/tarball/$ref" -o "$tmp/source.tar.gz") || {
   echo 'Download failed. A private repository requires --github-token-file FILE; public repositories do not.' >&2; exit 1;
 }
+if [[ -z "$release_sha" ]]; then
+  candidate_sha=${effective_tarball_url##*/}
+  [[ "$candidate_sha" =~ ^[0-9a-fA-F]{40}$ ]] && release_sha=${candidate_sha,,} || true
+fi
 mkdir "$tmp/source"
 tar -xzf "$tmp/source.tar.gz" -C "$tmp/source" --strip-components=1 --no-same-owner
 [[ -f "$tmp/source/app/main.py" && -f "$tmp/source/requirements.txt" ]] || { echo 'Invalid release archive.' >&2; exit 1; }
-release=$(mktemp -d "$app_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-$(sha256sum "$tmp/source.tar.gz" | cut -c1-12)-XXXXXX")
+archive_sha=$(sha256sum "$tmp/source.tar.gz" | awk '{print $1}')
+release=$(mktemp -d "$app_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-${archive_sha:0:12}-XXXXXX")
 cp -a "$tmp/source/." "$release/"
 chmod -R go-w "$release"
 find "$release" -type d -exec chmod 0755 {} +
 find "$release" -type f -exec chmod 0644 {} +
+"$python_binary" - "$release/.cloudportal-release.json" "$repo" "$ref" "$release_sha" "$archive_sha" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    'repository': sys.argv[2],
+    'ref': sys.argv[3],
+    'commit_sha': sys.argv[4],
+    'archive_sha256': sys.argv[5],
+    'installed_at': datetime.now(timezone.utc).isoformat(),
+}, indent=2) + '\n')
+PY
+install_progress 35 python 'Tworzenie środowiska Python i instalowanie zależności aplikacji.'
 "$python_binary" -m venv "$release/.venv"
 "$release/.venv/bin/pip" install --disable-pip-version-check -r "$release/requirements.txt" 'ansible>=10,<13' 'pywinrm>=0.5,<1'
 chmod -R a+rX "$release/.venv"
@@ -315,6 +347,43 @@ if grep -q '^CP_BACKUP_RETENTION_DAYS=' "$config/backend.env"; then
 else
   printf 'CP_BACKUP_RETENTION_DAYS=%s\n' "$backup_retention_days" >> "$config/backend.env"
 fi
+install_progress 42 updater 'Konfigurowanie niezależnego serwisu aktualizacji.'
+for token_file in "$config/updater.token" "$config/updater-status.token"; do
+  if [[ ! -s "$token_file" ]]; then
+    openssl rand -hex 32 > "$token_file"
+  fi
+  chown root:cloudportal "$token_file"
+  chmod 0640 "$token_file"
+done
+updater_config="$config/updater.json"
+"$python_binary" - "$updater_config" "$ref" "$github_token_file" "$github_config" <<'PY'
+import json, os, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text()) if path.exists() else {}
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+data.setdefault('enabled', False)
+data.setdefault('interval_hours', 24)
+data['ref'] = sys.argv[2]
+if sys.argv[3]:
+    data['github_token_file'] = sys.argv[3]
+else:
+    data.setdefault('github_token_file', '')
+if sys.argv[4]:
+    data['github_config'] = sys.argv[4]
+else:
+    data.setdefault('github_config', '')
+path.write_text(json.dumps(data, indent=2) + '\n')
+os.chmod(path, 0o640)
+PY
+chown root:cloudportal "$updater_config"
+install -d -m 0755 /usr/local/lib/cloudportal-updater
+install -m 0755 "$release/scripts/update-service.py" /usr/local/lib/cloudportal-updater/update-service.py
+install -d -m 0700 -o root -g root "$data/update"
 install -d -m 0700 -o cloudportal -g cloudportal "$data/redis"
 cat > /etc/systemd/system/cloudportal-redis.service <<EOF
 [Unit]
@@ -380,8 +449,10 @@ os.chdir(sys.argv[2])
 os.execv(sys.argv[3], sys.argv[3:])
 PY
 }
+install_progress 50 database 'Aktualizowanie schematu bazy danych.'
 run_backend "$release/.venv/bin/python" -m app.bootstrap --key-only
 run_backend "$release/.venv/bin/alembic" upgrade head
+install_progress 62 systemd 'Przygotowywanie jednostek systemd aplikacji.'
 for service in api worker@ dispatcher; do
   case "$service" in
     api) command="$release/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --proxy-headers --forwarded-allow-ips 127.0.0.1";;
@@ -420,6 +491,26 @@ UMask=0077
 WantedBy=multi-user.target
 EOF
 done
+cat > /etc/systemd/system/cloudportal-updater.service <<EOF
+[Unit]
+Description=Cloudportal independent auto-update service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=$python_binary /usr/local/lib/cloudportal-updater/update-service.py
+Environment=CP_UPDATER_REPOSITORY=$repo
+Environment=CP_UPDATER_PORT=8766
+Restart=always
+RestartSec=3
+PrivateTmp=true
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+[Install]
+WantedBy=multi-user.target
+EOF
+install_progress 72 tls 'Weryfikowanie konfiguracji TLS.'
 tls_source_file="$config/tls/certificate-source"
 tls_source=''
 tls_certificate_changed=0
@@ -517,6 +608,7 @@ fi
 if [[ "$os_family" == rhel ]] && command -v selinuxenabled >/dev/null && selinuxenabled; then
   restorecon -R "$config/tls"
 fi
+install_progress 82 proxy 'Konfigurowanie reverse proxy i kanału podglądu aktualizacji.'
 cat > /etc/nginx/conf.d/cloudportal-backed.conf <<EOF
 server {
     listen $backend_port ssl;
@@ -527,6 +619,13 @@ server {
     client_max_body_size 1m;
     client_body_timeout 15s;
     add_header Strict-Transport-Security "max-age=31536000" always;
+    location = /update-status {
+        limit_except GET { deny all; }
+        proxy_pass http://127.0.0.1:8766/status\$is_args\$args;
+        proxy_set_header Host \$host;
+        proxy_read_timeout 5s;
+        proxy_connect_timeout 2s;
+    }
     location / {
         proxy_pass http://127.0.0.1:8765;
         proxy_set_header Host \$host;
@@ -576,8 +675,15 @@ RandomizedDelaySec=30m
 WantedBy=timers.target
 EOF
 printf 'host=%s\nport=%s\n' "$backend_host" "$backend_port" > "$config/public.conf"
+install_progress 90 services 'Przełączanie usług na nową wersję.'
 systemctl daemon-reload
 systemctl enable --now cloudportal-redis
+systemctl enable cloudportal-updater
+if ((update_in_progress)); then
+  systemctl is-active --quiet cloudportal-updater || systemctl start cloudportal-updater
+else
+  systemctl restart cloudportal-updater
+fi
 systemctl enable cloudportal-api cloudportal-dispatcher
 systemctl restart cloudportal-api cloudportal-dispatcher
 for ((i=1;i<=workers;i++)); do systemctl enable "cloudportal-worker@$i"; systemctl restart "cloudportal-worker@$i"; done
@@ -598,6 +704,7 @@ if [[ "$os_family" == rhel ]] && systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-port="$backend_port/tcp"
   firewall-cmd --reload
 fi
+install_progress 96 healthcheck 'Sprawdzanie stanu nowej wersji.'
 ready=0
 for ((attempt=0;attempt<60;attempt++)); do
   if curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:8765/api/v1/health > "$tmp/health.json"; then ready=1; break; fi
@@ -627,4 +734,6 @@ if ((tls_ready != 1)); then
   exit 1
 fi
 # Secrets are created only after services are healthy, printed only here and never written to logs/files.
+install_progress 99 bootstrap 'Finalizowanie konfiguracji aplikacji.'
 run_backend "$release/.venv/bin/python" -m app.bootstrap --url "https://$backend_host:$backend_port"
+install_progress 100 complete 'Instalacja lub aktualizacja zakończona pomyślnie.'
