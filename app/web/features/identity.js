@@ -9,6 +9,7 @@ async function usersView() {
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
       { label: 'Typ', value: user => badge(user.is_service_account ? 'serwisowe' : 'osobowe', user.is_service_account ? 'info' : '') },
+      { label: 'Logowanie', value: user => badge(user.auth_source === 'ldap' ? 'LDAP' : 'Lokalne', user.auth_source === 'ldap' ? 'info' : '') },
       { label: 'Status', value: user => { const status = user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive'; return badge(statusLabel(status), statusKind(status)); } },
       { label: 'Ostatnie logowanie', value: user => formatDate(user.last_login_at) },
     ], users, user => userActions(user)));
@@ -21,7 +22,7 @@ function userActions(user) {
     actions.push(button('Edytuj', () => editUser(user)));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
     actions.push(button(user.is_active ? 'Wyłącz' : 'Włącz', () => userCommand(user, user.is_active ? 'disable' : 'enable')));
-    if (!user.is_service_account && user.is_active) actions.push(button('Reset hasła', () => resetUserPassword(user)));
+    if (!user.is_service_account && user.is_active && user.auth_source !== 'ldap') actions.push(button('Reset hasła', () => resetUserPassword(user)));
   }
   if (allowed('users.delete')) actions.push(button('Usuń', () => confirmAction('Usuń użytkownika', `Konto ${user.username} zostanie zanonimizowane i utraci dostęp.`, async () => { await api(`/users/${user.id}`, { method: 'DELETE' }); toast('Użytkownik usunięty.'); navigate('users'); }), 'danger'));
   return actions;
