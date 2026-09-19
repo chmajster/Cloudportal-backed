@@ -51,12 +51,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/inventory.js',
         'features/deployments.js',
         'features/operations.js',
+        'features/updates.js',
     } == set(manifest['scripts'])
     assert {
         'styles/features/identity.css',
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
         'styles/features/inventory.css',
+        'styles/features/updates.css',
     } <= set(manifest['styles'])
 
     script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
@@ -156,6 +158,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
+    assert "registerView({ id: 'updates'" in script
+    assert 'Aktualizuj teraz' in script
+    assert '/update-status?key=' in script
     assert "registerExtension('global-search'" in script
     assert 'function loadIndex(' in script
     assert 'function renderSearch(' in script
