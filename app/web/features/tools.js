@@ -78,13 +78,61 @@ function unavailableUpdateTool(error) {
   );
 }
 
+
+function hostnameGeneratorTool(schemes = []) {
+  const active = schemes.filter(item => item.is_active);
+  const next = active[0] || schemes[0] || null;
+  return node('article', { class: 'panel tool-card tool-card-featured' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('network')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Automatyzacja VM' }),
+        node('h2', { text: 'Generator hostname' }),
+        node('p', { class: 'muted', text: 'Twórz wzorce nazw hostów, numeruj je automatycznie i przypisuj patterny do Blueprintów VM.' })),
+      badge(active.length ? 'Gotowy' : 'Konfiguracja', active.length ? 'ok' : 'warning')),
+    node('div', { class: 'tool-meta-grid' },
+      toolMeta('Aktywne patterny', active.length),
+      toolMeta('Wszystkie patterny', schemes.length),
+      toolMeta('Przykładowy pattern', next?.pattern || '—', true),
+      toolMeta('Następny numer', next?.next_number ?? '—')),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot ' + (active.length ? 'ok' : 'warn') }),
+        active.length ? 'Pattern może być użyty w Blueprint' : 'Utwórz pierwszy pattern hostname'),
+      button(active.length ? 'Otwórz generator' : 'Skonfiguruj generator', () => navigate('hostnames'), 'primary'))
+  );
+}
+
 async function toolsView() {
-  let updateCard;
-  try {
-    const status = await api('/updates/status');
-    updateCard = autoUpdateTool(status);
-  } catch (error) {
-    updateCard = unavailableUpdateTool(error);
+  const cards = [];
+
+  if (allowed('hostnames.read')) {
+    try {
+      const schemes = await api('/hostname-schemes?limit=200');
+      cards.push(hostnameGeneratorTool(schemes.items || []));
+    } catch (error) {
+      cards.push(node('article', { class: 'panel tool-card' },
+        node('div', { class: 'tool-card-head' },
+          node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('network')),
+          node('div', { class: 'tool-title' },
+            node('span', { class: 'tool-category', text: 'Automatyzacja VM' }),
+            node('h2', { text: 'Generator hostname' }),
+            node('p', { class: 'muted', text: 'Tworzenie i zarządzanie patternami hostname dla Blueprintów.' })),
+          badge('Niedostępny', 'warning')),
+        node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać patternów hostname.' }),
+        node('div', { class: 'tool-card-footer' },
+          node('span', { class: 'tool-health' }, node('span', { class: 'status-dot' }), 'Stan generatora nieznany'),
+          button('Otwórz generator', () => navigate('hostnames'), 'primary'))));
+    }
+  }
+
+  if (allowed('updates.read')) {
+    try {
+      const status = await api('/updates/status');
+      cards.push(autoUpdateTool(status));
+    } catch (error) {
+      cards.push(unavailableUpdateTool(error));
+    }
   }
 
   dom.content.replaceChildren(
@@ -93,13 +141,15 @@ async function toolsView() {
       node('div', {},
         node('span', { class: 'tools-eyebrow', text: 'Centrum narzędzi' }),
         node('h2', { text: 'Narzędzia' }),
-        node('p', { class: 'muted', text: 'Operacje systemowe dostępne dla bieżącego użytkownika. Kolejne narzędzia będą pojawiały się w tym miejscu.' })),
+        node('p', { class: 'muted', text: 'Operacje systemowe i automatyzacja infrastruktury dostępne dla bieżącego użytkownika.' })),
       node('div', { class: 'tools-count' },
-        node('strong', { text: '1' }),
-        node('span', { text: 'narzędzie' }))),
-    node('div', { class: 'tools-grid' }, updateCard)
+        node('strong', { text: String(cards.length) }),
+        node('span', { text: cards.length === 1 ? 'narzędzie' : 'narzędzia' }))),
+    cards.length
+      ? node('div', { class: 'tools-grid' }, cards)
+      : node('div', { class: 'empty', text: 'Brak narzędzi dostępnych dla bieżących uprawnień.' })
   );
 }
 
-registerView({ id: 'tools', label: 'Narzędzia', iconName: 'wrench', permission: 'updates.read', order: 155 }, toolsView);
+registerView({ id: 'tools', label: 'Narzędzia', iconName: 'wrench', order: 155 }, toolsView);
 })();
