@@ -19,7 +19,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 CONFIG_DIR = Path(os.environ.get("CP_UPDATER_CONFIG_DIR", "/etc/cloudportal-backed"))
@@ -465,8 +465,7 @@ def status_authorized(handler: BaseHTTPRequestHandler) -> bool:
     if control_authorized(handler.headers):
         return True
     expected = read_token(STATUS_TOKEN)
-    query = parse_qs(urlparse(handler.path).query)
-    supplied = (query.get("key") or [""])[0]
+    supplied = handler.headers.get("X-Update-Status-Token", "")
     return bool(expected and supplied and hmac.compare_digest(expected, supplied))
 
 
