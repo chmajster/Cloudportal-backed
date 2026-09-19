@@ -34,14 +34,19 @@ class AnsibleExecutor(Executor):
         with tempfile.TemporaryDirectory(prefix='ansible-', dir=root) as folder:
             workspace = Path(folder)
             env = execution_environment(workspace)
-            env.update(ANSIBLE_HOST_KEY_CHECKING='True', ANSIBLE_RETRY_FILES_ENABLED='False', ANSIBLE_NOCOLOR='1',
+            env.update(ANSIBLE_RETRY_FILES_ENABLED='False', ANSIBLE_NOCOLOR='1',
                        ANSIBLE_LOCAL_TEMP=str(workspace / 'tmp'), ANSIBLE_CONFIG=str(settings().source_dir / 'ansible' / 'ansible.cfg'))
             variables = {'ansible_user': context.ansible_credential.username}
             if context.ansible_credential.type == 'ssh':
-                known_hosts = workspace / 'known_hosts'
-                known_hosts.write_text(secret['known_hosts'])
-                os.chmod(known_hosts, 0o600)
-                variables['ansible_ssh_common_args'] = '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=' + str(known_hosts)
+                if secret.get('known_hosts'):
+                    known_hosts = workspace / 'known_hosts'
+                    known_hosts.write_text(secret['known_hosts'])
+                    os.chmod(known_hosts, 0o600)
+                    env['ANSIBLE_HOST_KEY_CHECKING'] = 'True'
+                    variables['ansible_ssh_common_args'] = '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=' + str(known_hosts)
+                else:
+                    env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
+                    variables['ansible_ssh_common_args'] = '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
                 if 'private_key' in secret:
                     key = workspace / 'id_key'
                     key.write_text(secret['private_key'])

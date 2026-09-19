@@ -35,8 +35,6 @@ def save_secret(db, c, value):
     elif c.type == 'ssh':
         if not (value.get('password') or value.get('private_key')):
             raise HTTPException(422, 'SSH requires password or private_key')
-        if not value.get('known_hosts'):
-            raise HTTPException(422, 'SSH requires known_hosts for host identity verification')
     elif c.type == 'winrm':
         if not value.get('password'):
             raise HTTPException(422, 'WinRM requires password')

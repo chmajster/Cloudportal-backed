@@ -19,17 +19,20 @@ def test_connection(credential):
             if not endpoint.hostname:
                 raise HTTPException(422, 'SSH connection test requires ssh://hostname:22 endpoint')
             with tempfile.TemporaryDirectory(prefix='cp-ssh-test-') as folder:
-                known_hosts = Path(folder) / 'known_hosts'
-                known_hosts.write_text(secret['known_hosts'])
-                os.chmod(known_hosts, 0o600)
                 key_file = None
                 if secret.get('private_key'):
                     key_file = str(Path(folder) / 'key')
                     Path(key_file).write_text(secret['private_key'])
                     os.chmod(key_file, 0o600)
                 with paramiko.SSHClient() as client:
-                    client.load_host_keys(str(known_hosts))
-                    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+                    if secret.get('known_hosts'):
+                        known_hosts = Path(folder) / 'known_hosts'
+                        known_hosts.write_text(secret['known_hosts'])
+                        os.chmod(known_hosts, 0o600)
+                        client.load_host_keys(str(known_hosts))
+                        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+                    else:
+                        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     client.connect(endpoint.hostname, port=endpoint.port or 22, username=credential.username,
                                    password=secret.get('password'), key_filename=key_file,
                                    timeout=10, auth_timeout=10, banner_timeout=10, look_for_keys=False, allow_agent=False)
@@ -71,5 +74,5 @@ def test_connection(credential):
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(502, 'Credential authentication test failed; verify endpoint, TLS/host key and required fields') from None
+        raise HTTPException(502, 'Credential authentication test failed; verify endpoint, authentication data and required fields') from None
     return {'ok': True, 'provider': credential.type}

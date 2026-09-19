@@ -18,7 +18,7 @@ def test_provider_specific_credential_validation(client, headers):
     valid = [
         {'name': 'Proxmox HTTP valid', 'type': 'proxmox', 'endpoint': 'http://pve.example.com:8006', 'username': 'root@pam', 'secrets': {'token_id': 'root@pam!portal', 'token_secret': 'private'}},
         {'name': 'VMware valid', 'type': 'vmware', 'endpoint': 'https://vc.example.com', 'username': 'administrator@vsphere.local', 'secrets': {'password': 'private'}},
-        {'name': 'SSH valid', 'type': 'ssh', 'username': 'clouduser', 'secrets': {'private_key': 'private-key-data', 'known_hosts': 'host ssh-ed25519 example'}},
+        {'name': 'SSH valid', 'type': 'ssh', 'username': 'clouduser', 'secrets': {'private_key': 'private-key-data'}},
         {'name': 'AWS valid', 'type': 'aws', 'secrets': {'access_key_id': 'AKIATEST', 'secret_access_key': 'private'}},
         {'name': 'Azure valid', 'type': 'azure', 'secrets': {'tenant_id': 'tenant', 'client_id': 'client', 'client_secret': 'private', 'subscription_id': 'sub'}},
         {'name': 'OpenStack valid', 'type': 'openstack', 'endpoint': 'https://os.example.com:5000/v3', 'username': 'cloudportal', 'secrets': {'password': 'private', 'project_name': 'admin', 'domain_name': 'Default'}},
@@ -29,6 +29,23 @@ def test_provider_specific_credential_validation(client, headers):
         assert response.status_code == 201, (payload['type'], response.text)
         assert response.json()['configured'] is True
         assert response.json()['secret'] == '********'
+
+
+
+def test_ssh_credentials_do_not_require_known_hosts(client, headers):
+    for name, secrets in [
+        ('SSH password without known hosts', {'password': 'private-password'}),
+        ('SSH key without known hosts', {'private_key': 'private-key-data'}),
+    ]:
+        response = client.post('/api/v1/credentials', headers=headers, json={
+            'name': name,
+            'type': 'ssh',
+            'endpoint': 'ssh://server.example.com:22',
+            'username': 'clouduser',
+            'secrets': secrets,
+        })
+        assert response.status_code == 201, response.text
+        assert response.json()['configured'] is True
 
 
 def test_winrm_connection_test_honors_verify_ssl(client, headers, monkeypatch):
