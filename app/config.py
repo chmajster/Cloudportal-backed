@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     request_limit: int = 300
     worker_count: int = Field(default=1, ge=1, le=64)
     execution_timeout: int = 3600
+    provider_retry_base_seconds: int = Field(default=15, ge=5, le=3600)
+    provider_retry_max_seconds: int = Field(default=300, ge=15, le=86400)
     allow_http: bool = False
     webhook_allowed_hosts: list[str] = Field(default_factory=list)
     otel_exporter_otlp_endpoint: str | None = None
