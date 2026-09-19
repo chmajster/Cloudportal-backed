@@ -9,8 +9,10 @@ check_supported() {
   local id=$1 version=$2 family=$3 store=$4 python=$5 output
   printf 'ID=%s\nVERSION_ID=%s\nNAME="Test %s"\n' "$id" "$version" "$id" > "$fixture"
   output=$(CLOUDPORTAL_OS_RELEASE_FILE="$fixture" "$repo_root/install.sh" --check-platform)
-  grep -Fq "($family," <<< "$output"
-  grep -Fq ", $store, $python)." <<< "$output"
+  grep -Fq "[ OK ] Obsługiwany system: Test $id $version" <<< "$output"
+  grep -Fq "Rodzina: $family" <<< "$output"
+  grep -Fq "KV: $store" <<< "$output"
+  grep -Fq "Python: $python" <<< "$output"
 }
 
 check_supported ubuntu 24.04 debian redis-server python3
@@ -22,8 +24,10 @@ check_supported rhel 10.1 rhel valkey python3
 
 help_long=$("$repo_root/install.sh" --gui --help)
 help_short=$("$repo_root/install.sh" -gui --help)
-grep -Fq -- '--gui|-gui' <<< "$help_long"
-grep -Fq -- '--gui|-gui' <<< "$help_short"
+grep -Fq -- '--gui, -gui' <<< "$help_long"
+grep -Fq -- '--gui, -gui' <<< "$help_short"
+grep -Fq -- '--status' <<< "$help_long"
+grep -Fq -- '--uninstall' <<< "$help_long"
 grep -Fq 'GUI mode requires an interactive TTY.' "$repo_root/install.sh"
 grep -Fq 'dialog --stdout' "$repo_root/install.sh"
 grep -Fq '</dev/tty' "$repo_root/install.sh"
