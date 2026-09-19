@@ -16,6 +16,7 @@ const dom = {
   pageEyebrow: document.querySelector('#page-eyebrow'),
   currentUser: document.querySelector('#current-user'),
   currentRoles: document.querySelector('#current-roles'),
+  sidebarProfile: document.querySelector('#sidebar-profile'),
   apiStatus: document.querySelector('#api-status'),
   sidebar: document.querySelector('#sidebar'),
   sidebarBackdrop: document.querySelector('#sidebar-backdrop'),
@@ -147,11 +148,49 @@ function updateThemeControls() {
   const dark = document.documentElement.dataset.theme === 'dark';
   document.querySelectorAll('[data-theme-toggle]').forEach(control => {
     const label = dark ? 'Włącz jasny motyw' : 'Włącz ciemny motyw';
-    control.textContent = dark ? '☀' : '☾';
+    control.replaceChildren(appIcon(dark ? 'sun' : 'moon'));
     control.setAttribute('aria-label', label);
     control.setAttribute('title', label);
     control.setAttribute('aria-pressed', String(dark));
   });
+}
+
+function hydrateShellIcons() {
+  const searchIcon = document.querySelector('#global-search-open .global-search-icon');
+  if (searchIcon) searchIcon.replaceChildren(appIcon('search'));
+  dom.refreshView.replaceChildren(appIcon('refresh'));
+  dom.menuToggle.replaceChildren(appIcon('menu'));
+  const logout = document.querySelector('#logout');
+  if (logout && !logout.querySelector('svg')) logout.prepend(appIcon('log-out', { className: 'button-icon' }));
+}
+
+function identityDisplayName(user = {}) {
+  const full = [user.first_name, user.last_name].map(value => String(value || '').trim()).filter(Boolean).join(' ');
+  return full || user.username || 'Użytkownik';
+}
+
+function identityInitials(user = {}) {
+  const parts = [user.first_name, user.last_name].map(value => String(value || '').trim()).filter(Boolean);
+  const source = parts.length ? parts : [user.username || 'U'];
+  return source.slice(0, 2).map(value => value.charAt(0)).join('').toUpperCase();
+}
+
+function renderSidebarProfile() {
+  if (!dom.sidebarProfile || !state.identity?.user) return;
+  const user = state.identity.user;
+  const role = state.identity.roles?.[0]?.name || 'Brak roli';
+  const profile = node('button', {
+    class: 'sidebar-profile-card',
+    type: 'button',
+    onClick: () => navigate('account'),
+    'aria-label': 'Otwórz moje konto',
+  },
+    node('span', { class: 'sidebar-avatar', text: identityInitials(user) }),
+    node('span', { class: 'sidebar-profile-copy' },
+      node('strong', { text: identityDisplayName(user) }),
+      node('small', { text: role })),
+    node('span', { class: 'sidebar-profile-chevron', 'aria-hidden': 'true' }, appIcon('chevron-right')));
+  dom.sidebarProfile.replaceChildren(profile);
 }
 
 function setTheme(theme, persist = true) {
@@ -1051,8 +1090,10 @@ function showLogin(message = '', type = 'error') {
 function showApp() {
   dom.loginView.hidden = true;
   dom.appView.hidden = false;
-  dom.currentUser.textContent = state.identity.user.username;
+  dom.currentUser.textContent = identityDisplayName(state.identity.user);
   dom.currentRoles.textContent = state.identity.roles.map(role => role.name).join(', ') || 'Brak roli';
+  hydrateShellIcons();
+  renderSidebarProfile();
   emitUiEvent('app-shown', { identity: state.identity });
   renderNavigation();
   const mustChangePassword = state.identity.user.must_change_password;
@@ -1066,7 +1107,8 @@ function renderNavigation() {
   routes.filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account')).forEach(route => {
     const active = state.view === route.id || currentRoute?.navigationParent === route.id;
     const item = node('button', { class: `nav-link ${active ? 'active' : ''}`, type: 'button', onClick: () => navigate(route.id) },
-      node('span', { class: 'nav-icon', text: route.icon }), route.label);
+      node('span', { class: 'nav-icon', 'aria-hidden': 'true' }, appRouteIcon(route)),
+      node('span', { class: 'nav-label', text: route.label }));
     item.dataset.route = route.id;
     dom.navigation.append(item);
   });
