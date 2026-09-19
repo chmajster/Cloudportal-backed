@@ -542,6 +542,7 @@ class BlueprintInput(Input):
     visibility: BlueprintVisibility = Field(default_factory=BlueprintVisibility)
     allowed_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
     allowed_user_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
+    manager_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
     variables_schema: Annotated[dict[Slug, BlueprintVariable], Field(max_length=100)] = Field(default_factory=dict)
     deployment: BlueprintDeployment
     workflow: Annotated[list[BlueprintStep], Field(min_length=1, max_length=100)]
