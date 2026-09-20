@@ -84,7 +84,7 @@ class TerraformExecutor(Executor):
             raise ExecutionFailed('Unapproved Terraform template') from None
         secret = decrypt_secret(credential)
         env = execution_environment(workspace)
-        plugin_cache = settings().data_dir / 'terraform-plugin-cache'
+        plugin_cache = settings().data_dir / (self.binary + '-plugin-cache')
         plugin_cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         env['TF_PLUGIN_CACHE_DIR'] = str(plugin_cache)
         provider_type = definition['provider']
