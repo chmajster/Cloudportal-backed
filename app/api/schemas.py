@@ -670,6 +670,9 @@ class BlueprintDeployment(Input):
     ipam_pool_id: int | None = Field(default=None, gt=0)
     hostname_values: dict[Slug, Annotated[str, Field(min_length=1, max_length=253)]] = Field(default_factory=dict)
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
+    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
+    select_apmid_on_execute: bool = False
+    select_environment_on_execute: bool = False
 
 
 class BlueprintInput(Input):
@@ -721,6 +724,7 @@ class BlueprintExecuteInput(Input):
     variables: Annotated[dict[str, Any], Field(max_length=100)] = Field(default_factory=dict)
     hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
+    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
 
 
 class ScheduledOperationInput(Input):
