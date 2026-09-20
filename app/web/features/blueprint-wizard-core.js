@@ -264,6 +264,7 @@
     };
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
+    if (state.apmid) deployment.apmid = String(state.apmid).trim().toUpperCase();
 
     if (state.ansibleEnabled && state.playbookId) {
       const selectedPlaybook = data.playbooks.find(value => value.id === state.playbookId);
