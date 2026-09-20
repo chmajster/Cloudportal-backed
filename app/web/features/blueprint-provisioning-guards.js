@@ -46,6 +46,7 @@
     if (stepTypes.has('run_ansible_playbook')) required.add('ansible.execute');
     if (stepTypes.has('create_snapshot')) required.add('snapshots.create');
     if (stepTypes.has('release_ip')) required.add('ipam.release');
+    if (stepTypes.has('terraform_destroy')) required.add('deployments.destroy');
     return [...required].sort();
   }
 
