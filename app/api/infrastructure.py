@@ -291,6 +291,15 @@ def delete_provider(id: int, request: Request, actor=Depends(require('providers.
     return {'deleted': True}
 
 
+@router.get('/providers/{id}/qemu-agent-readiness')
+def qemu_agent_readiness(id: int, actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
+    provider = find(db, Provider, id)
+    if provider.type != 'proxmox':
+        raise HTTPException(422, 'QEMU Guest Agent readiness is available only for Proxmox providers')
+    credential = find(db, Credential, provider.credentials_id)
+    return provider_for(credential).ssh_preflight()
+
+
 @router.get('/providers/{id}/{resource}', response_model=Items[dict])
 def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templates', 'vms', 'pools'],
              node: Annotated[str | None, Query(pattern=r'^[A-Za-z0-9_.-]{1,63}$')] = None,
