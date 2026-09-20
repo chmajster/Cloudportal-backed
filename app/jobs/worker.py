@@ -406,6 +406,13 @@ BLUEPRINT_SUPPORTED_STEPS = (
 )
 
 
+def workflow_step_timeout(step_type, configured=600):
+    timeout = int(configured or 600)
+    if step_type in {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
+        return max(timeout, settings().execution_timeout)
+    return timeout
+
+
 def blueprint_workflow_order(steps):
     rows = [dict(step or {}) for step in (steps or [])]
     ids = [row.get('id') for row in rows]
@@ -611,9 +618,9 @@ def run_blueprint_workflow(context, executor):
         if rollback_step is None:
             raise ExecutionFailed(f'Rollback target {target_id} does not exist')
         rollback_type = str(rollback_step.get('type'))
-        rollback_timeout = int(rollback_step.get('timeout') or 600)
-        if rollback_type == 'terraform_destroy':
-            rollback_timeout = max(rollback_timeout, settings().execution_timeout)
+        rollback_timeout = workflow_step_timeout(
+            rollback_type, rollback_step.get('timeout') or 600
+        )
         previous_deadline = context.step_deadline
         context.step_deadline = time.monotonic() + rollback_timeout
         try:
@@ -692,9 +699,7 @@ def run_blueprint_workflow(context, executor):
             continue
 
         retry = int(step.get('retry') or 0)
-        timeout = int(step.get('timeout') or 600)
-        if step_type in {'terraform_plan', 'terraform_apply'}:
-            timeout = max(timeout, settings().execution_timeout)
+        timeout = workflow_step_timeout(step_type, step.get('timeout') or 600)
 
         if not blueprint_conditions_match(step, context):
             runtime['step_states'][step_id] = 'skipped'
