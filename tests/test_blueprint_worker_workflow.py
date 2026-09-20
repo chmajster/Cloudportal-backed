@@ -288,3 +288,36 @@ def test_snapshot_waits_for_proxmox_task(monkeypatch):
     )
 
     assert any('workflow.snapshot.created: bp-job-1234-snapshot task=UPID:test' in value for value in context.logs)
+
+
+def test_vm_agent_and_ip_waits_have_distinct_semantics(monkeypatch, tmp_path):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":109}}}'
+    )
+    context = FakeContext([])
+    calls = []
+
+    class Provider:
+        def vm_status(self, node, vm_id):
+            calls.append(('vm_status', node, vm_id))
+            return {'status': 'running'}
+
+        def guest_agent_ready(self, node, vm_id):
+            calls.append(('agent', node, vm_id))
+            return True
+
+        def guest_addresses(self, node, vm_id):
+            calls.append(('addresses', node, vm_id))
+            return ['2001:db8::10', '192.0.2.109']
+
+    monkeypatch.setattr(worker, 'provider_for', lambda credential: Provider())
+    observed_ip = []
+    monkeypatch.setattr(worker, 'update_inventory_primary_ip', lambda context, address: observed_ip.append(address))
+
+    assert worker.wait_for_vm(context, workspace, timeout=5) is True
+    assert worker.wait_for_agent(context, workspace, timeout=5) is True
+    assert worker.wait_for_ip(context, workspace, timeout=5) == ['192.0.2.109']
+    assert observed_ip == ['192.0.2.109']
+    assert [item[0] for item in calls] == ['vm_status', 'agent', 'addresses']
