@@ -38,12 +38,12 @@ def test_hostname_manager_reserves_unique_names(client, headers):
         'name': 'Linux production', 'pattern': '{location}-{env}-{role}-{number}', 'padding': 3,
     })
     assert scheme.status_code == 201, scheme.text
-    body = {'scheme_id': scheme.json()['id'], 'values': {'location': 'wro', 'env': 'prod', 'role': 'web'}}
+    body = {'scheme_id': scheme.json()['id'], 'values': {'env': 'prod'}}
     first = client.post('/api/v1/hostnames/generate', headers=headers, json=body)
     second = client.post('/api/v1/hostnames/generate', headers=headers, json=body)
     assert first.status_code == second.status_code == 200
-    assert first.json()['hostname'] == 'wro-prod-web-001'
-    assert second.json()['hostname'] == 'wro-prod-web-002'
+    assert first.json()['hostname'] == 'wro-prod-server-001'
+    assert second.json()['hostname'] == 'wro-prod-server-002'
     released = client.post('/api/v1/hostnames/' + first.json()['reservation']['id'] + '/release', headers=headers)
     assert released.status_code == 200 and released.json()['status'] == 'released'
 
