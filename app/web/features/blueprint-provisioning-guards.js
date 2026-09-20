@@ -63,6 +63,17 @@
     );
   }
 
+  function executionControl(item, onExecute) {
+    const missing = missingExecutionPermissions(item);
+    if (!item.is_active || !item.visibility?.backend) return null;
+    if (!missing.length) return button('Uruchom', onExecute, 'primary');
+    return node('span', {
+      class: 'badge warning',
+      title: 'Brak uprawnień: ' + missing.join(', '),
+      text: 'Brak uprawnień do uruchomienia',
+    });
+  }
+
   registerExtension('blueprint-provisioning-guards', () => {
     window.BlueprintProvisioningGuards = {
       keyBasedSshCredentials,
@@ -72,6 +83,7 @@
       requiredExecutionPermissions,
       missingExecutionPermissions,
       workflowNeedsTags,
+      executionControl,
     };
   });
 })();
