@@ -864,11 +864,9 @@ async function blueprintForm(item = null) {
       ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
       ['run_ansible_playbook', 'Uruchom Ansible'], ['create_snapshot', 'Utwórz snapshot'],
       ['health_check', 'Health check'], ['condition', 'Warunek'], ['approval', 'Akceptacja'],
-      ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
-      ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
+      ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'], ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
     ];
-    let workflowProvider = templates.find(template => template.id === (item?.deployment?.template || 'proxmox-vm'))?.provider || 'proxmox';
-    const workflowChoices = currentType => window.BlueprintProvisioningGuards.workflowChoicesForProvider(workflowTypes, workflowProvider, currentType);
+    let workflowProvider = templates.find(template => template.id === (item?.deployment?.template || 'proxmox-vm'))?.provider || 'proxmox'; const workflowChoices = currentType => window.BlueprintProvisioningGuards.workflowChoicesForProvider(workflowTypes, workflowProvider, currentType);
     const addWorkflowStep = (step = {}) => {
       workflowCounter += 1;
       const advanced = node('details', { class: 'advanced-options wide' },
