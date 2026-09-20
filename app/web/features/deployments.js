@@ -1,6 +1,9 @@
 'use strict';
 
 (() => {
+let jobLogPollNonce = 0;
+let myResourcesPollTimer = null;
+
 async function launchProductBlueprint(item) {
   if (!hasCommand('blueprints.execute')) {
     toast('Uruchamianie Blueprintu nie jest dostępne.', 'error');
@@ -191,6 +194,11 @@ function resourceSection(id, iconName, title, description, count, content) {
 }
 
 async function myResourcesView() {
+  if (myResourcesPollTimer) {
+    clearTimeout(myResourcesPollTimer);
+    myResourcesPollTimer = null;
+  }
+  const preservedScrollY = window.scrollY;
   const canReadInventory = allowed('inventory.read');
   const [deploymentResult, vmResult, resourceResult, providerResult] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
@@ -247,6 +255,18 @@ async function myResourcesView() {
     resourceSection('my-resources-other', 'box', 'Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
     resourceSection('my-resources-deployments', 'rocket', 'Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent)
   );
+
+  if (preservedScrollY > 0) {
+    requestAnimationFrame(() => window.scrollTo({ top: preservedScrollY, behavior: 'auto' }));
+  }
+
+  const provisioningActive = deployments.some(item =>
+    item.active_job_id || ['queued', 'running', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
+  if (provisioningActive) {
+    myResourcesPollTimer = window.setTimeout(() => {
+      if (state.view === 'my-resources') myResourcesView().catch(error => toast(error.message, 'error'));
+    }, 2000);
+  }
 }
 
 function deploymentActions(item, returnTo = 'my-resources') {
@@ -1087,16 +1107,101 @@ async function runStandaloneAnsible(initialPlaybookId = null) {
 }
 
 async function showJobLogs(job) {
+  const nonce = ++jobLogPollNonce;
+  const statusHost = node('div', { class: 'job-log-status' });
+  const logOutput = node('div', { class: 'log-output mono job-live-log', text: 'Oczekiwanie na logi…' });
+  const inventoryState = node('div', { class: 'job-log-inventory-state muted' });
+
   dom.modalTitle.textContent = `Logi ${short(job.id, 18)}`;
   dom.modalEyebrow.textContent = operationLabel(job.operation);
-  dom.modalBody.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner' })));
-  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  dom.modalBody.replaceChildren(statusHost, inventoryState, logOutput);
+  dom.modalActions.replaceChildren(button('Zamknij', () => {
+    jobLogPollNonce += 1;
+    closeModal();
+  }));
   dom.modal.showModal();
-  try {
-    const result = await api(`/jobs/${job.id}/logs?limit=200`);
-    const text = result.items.map(item => `[${formatDate(item.timestamp)}] ${item.message}`).join('\n') || 'Brak logów.';
-    dom.modalBody.replaceChildren(node('div', { class: 'log-output mono', text }));
-  } catch (error) { dom.modalBody.replaceChildren(node('p', { class: 'form-error', text: error.message })); }
+
+  let firstRender = true;
+
+  const renderLogs = rows => {
+    const previousHeight = logOutput.scrollHeight;
+    const previousTop = logOutput.scrollTop;
+    const atBottom = firstRender || previousHeight - previousTop - logOutput.clientHeight <= 24;
+    const text = rows.map(item => `[${formatDate(item.timestamp)}] ${item.message}`).join('\n') || 'Brak logów.';
+    logOutput.textContent = text;
+    if (atBottom) logOutput.scrollTop = logOutput.scrollHeight;
+    else logOutput.scrollTop = Math.min(previousTop, Math.max(0, logOutput.scrollHeight - logOutput.clientHeight));
+    firstRender = false;
+  };
+
+  const terminal = value => ['successful', 'failed', 'cancelled'].includes(value);
+
+  const poll = async () => {
+    if (nonce !== jobLogPollNonce || !dom.modal.open) return;
+    try {
+      const [current, logs] = await Promise.all([
+        api(`/jobs/${job.id}`),
+        api(`/jobs/${job.id}/logs?limit=200`),
+      ]);
+
+      statusHost.replaceChildren(
+        node('div', { class: 'action-group' },
+          badge(statusLabel(current.status), statusKind(current.status)),
+          current.provider_waiting ? badge('Oczekuje na Proxmox', 'warning') : null,
+          node('span', { class: 'muted', text: current.error || (terminal(current.status) ? 'Zadanie zakończone.' : 'Log jest odświeżany automatycznie.') }))
+      );
+      renderLogs(logs.items || []);
+
+      const actions = [button('Zamknij', () => {
+        jobLogPollNonce += 1;
+        closeModal();
+      })];
+
+      if (current.operation === 'terraform.apply' && current.deployment_id && current.status === 'successful') {
+        let managedVm = null;
+        if (allowed('inventory.read')) {
+          const inventory = await api('/inventory/vms?limit=200');
+          managedVm = (inventory.items || []).find(item => item.deployment_id === current.deployment_id) || null;
+        }
+        if (managedVm) {
+          inventoryState.className = 'job-log-inventory-state form-error success';
+          inventoryState.textContent = `VM zsynchronizowana z inventory: ${managedVm.node} / VMID ${managedVm.vm_id}.`;
+          if (allowed('vms.read') && hasCommand('inventory.openVm')) {
+            actions.unshift(button('Otwórz VM', async () => {
+              jobLogPollNonce += 1;
+              closeModal();
+              await runCommand('inventory.openVm', managedVm, 'overview', 'my-resources');
+            }, 'primary'));
+          }
+        } else if (allowed('inventory.read')) {
+          inventoryState.className = 'job-log-inventory-state form-error';
+          inventoryState.textContent = 'Terraform zakończył się sukcesem, ale VM nie jest jeszcze widoczna w inventory. Odświeżenie zostanie wykonane po ponownym zastosowaniu lub synchronizacji backendu.';
+        }
+        actions.unshift(button('Moje zasoby', () => {
+          jobLogPollNonce += 1;
+          closeModal();
+          navigate('my-resources');
+        }, managedVm ? 'ghost' : 'primary'));
+      } else {
+        inventoryState.textContent = current.operation === 'terraform.apply' && !terminal(current.status)
+          ? 'Po zakończeniu Terraform backend automatycznie doda VM do „Moje zasoby”.'
+          : '';
+      }
+
+      dom.modalActions.replaceChildren(...actions);
+
+      if (!terminal(current.status)) {
+        window.setTimeout(poll, 1500);
+      } else if (state.view === 'my-resources') {
+        myResourcesView().catch(() => {});
+      }
+    } catch (error) {
+      statusHost.replaceChildren(node('p', { class: 'form-error', text: error.message }));
+      if (nonce === jobLogPollNonce && dom.modal.open) window.setTimeout(poll, 3000);
+    }
+  };
+
+  await poll();
 }
 
 registerCommand('deployments.create', createDeployment);
