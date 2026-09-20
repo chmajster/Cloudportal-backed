@@ -831,3 +831,57 @@ def test_blueprint_rejects_runtime_controls_on_legacy_markers(client, headers):
     })
     assert response.status_code == 422
     assert 'cannot use conditions, retry or rollback' in response.text
+
+
+def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    base = {
+        'name': 'Workflow validation',
+        'deployment': {
+            'name': 'workflow-validation',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+    }
+
+    missing_apply = client.post('/api/v1/blueprints', headers=headers, json={
+        **base,
+        'slug': 'missing-apply',
+        'workflow': [{'id': 'vm', 'type': 'wait_for_vm'}],
+    })
+    assert missing_apply.status_code == 422
+    assert 'exactly one terraform_apply' in missing_apply.text
+
+    duplicate_apply = client.post('/api/v1/blueprints', headers=headers, json={
+        **base,
+        'slug': 'duplicate-apply',
+        'workflow': [
+            {'id': 'apply1', 'type': 'terraform_apply'},
+            {'id': 'apply2', 'type': 'terraform_apply'},
+        ],
+    })
+    assert duplicate_apply.status_code == 422
+    assert 'exactly one terraform_apply' in duplicate_apply.text
+
+    vm_before_apply = client.post('/api/v1/blueprints', headers=headers, json={
+        **base,
+        'slug': 'vm-before-apply',
+        'workflow': [
+            {'id': 'vm', 'type': 'wait_for_vm'},
+            {'id': 'apply', 'type': 'terraform_apply'},
+        ],
+    })
+    assert vm_before_apply.status_code == 422
+    assert 'must depend on terraform_apply' in vm_before_apply.text
+
+    plan_after_apply = client.post('/api/v1/blueprints', headers=headers, json={
+        **base,
+        'slug': 'plan-after-apply',
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'plan', 'type': 'terraform_plan', 'depends_on': ['apply']},
+        ],
+    })
+    assert plan_after_apply.status_code == 422
+    assert 'terraform_plan must be an ancestor' in plan_after_apply.text
