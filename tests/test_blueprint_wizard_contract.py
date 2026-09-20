@@ -48,6 +48,8 @@ state.ipMode = 'ipam';
 state.ipamPoolId = '13';
 state.environment = 'dev';
 state.apmid = 'IAASTEAM';
+state.selectEnvironmentOnExecute = true;
+state.selectApmidOnExecute = true;
 state.tags = 'linux, production';
 state.ansibleEnabled = true;
 state.playbookId = 'bootstrap-linux';
@@ -80,6 +82,10 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['hostname_scheme_id'] == 11
     assert deployment['hostname_values'] == {'env': 'prod'}
     assert deployment['ipam_pool_id'] == 13
+    assert deployment['environment'] == 'dev'
+    assert deployment['apmid'] == 'IAASTEAM'
+    assert deployment['select_environment_on_execute'] is True
+    assert deployment['select_apmid_on_execute'] is True
     assert deployment['name'] == '{{ hostname }}'
     assert deployment['variables']['name'] == '{{ hostname }}'
     assert deployment['ansible']['playbook'] == 'bootstrap-linux'
@@ -191,3 +197,35 @@ const data = {
 console.log(JSON.stringify(core.buildDeployment(state, data)));
 """)
     assert result['hostname_values'] == {'environment': 'prod'}
+
+
+def test_wizard_runtime_classification_switches_default_to_fixed_values():
+    result = run_core("""
+const state = core.stateDefaults();
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.environment = 'test';
+state.apmid = 'LEO';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+
+console.log(JSON.stringify(core.buildDeployment(state, data)));
+""")
+    assert result['environment'] == 'test'
+    assert result['apmid'] == 'LEO'
+    assert result['select_environment_on_execute'] is False
+    assert result['select_apmid_on_execute'] is False
