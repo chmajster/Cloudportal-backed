@@ -696,6 +696,9 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
             apmid: deployment.apmid || null,
+            environment: deployment.environment || null,
+            select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
+            select_environment_on_execute: Boolean(deployment.select_environment_on_execute),
             template: 'proxmox-vm',
             executor: data.get('executor'),
             variables: vmVariables,
@@ -1261,6 +1264,9 @@ async function blueprintForm(item = null) {
             Object.entries(deployment.hostname_values || {}).filter(([name]) => !['location', 'role'].includes(name))
           ),
           apmid: deployment.apmid || null,
+          environment: deployment.environment || null,
+          select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
+          select_environment_on_execute: Boolean(deployment.select_environment_on_execute),
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
@@ -1383,8 +1389,9 @@ async function executeBlueprint(item) {
           variables,
           hostname_values: readHostnameValues(form),
         };
-        const runtimeApmid = window.BlueprintRuntimeApmid.read(form, apmidContext);
-        if (runtimeApmid) payload.apmid = runtimeApmid;
+        const runtimeClassification = window.BlueprintRuntimeApmid.read(form, apmidContext);
+        if (runtimeClassification.apmid) payload.apmid = runtimeClassification.apmid;
+        if (runtimeClassification.environment) payload.environment = runtimeClassification.environment;
 
         const result = await api(`/blueprints/${item.id}/execute`, {
           method: 'POST',
