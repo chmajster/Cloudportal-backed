@@ -164,7 +164,7 @@
       vlanId: '',
       preset: 'standard',
       environment: '',
-      apmid: '',
+      apmid: 'LEO',
       tags: '',
       sshUsername: 'clouduser',
       sshPublicKey: '',
