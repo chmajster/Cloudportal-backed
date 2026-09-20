@@ -431,39 +431,8 @@ def test_runtime_wait_logs_safe_provider_error(monkeypatch, tmp_path):
 
 
 def test_terraform_destroy_rollback_uses_global_execution_timeout(monkeypatch):
-    steps = [
-        {'id': 'rollback_destroy', 'type': 'terraform_destroy', 'depends_on': [], 'retry': 0, 'timeout': 30},
-        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
-        {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'rollback': 'rollback_destroy', 'retry': 0, 'timeout': 30},
-    ]
-    context = FakeContext(steps)
-    context.rollback_destroyed = False
-    executor = FakeExecutor()
-    deadlines = []
-
-    monkeypatch.setattr(
-        worker,
-        'register_managed_inventory',
-        lambda context, workspace: {'external_id': '113', 'vm_id': 113, 'node': 'pve01'},
-    )
-    monkeypatch.setattr(
-        worker,
-        'provider_for',
-        lambda credential: SimpleNamespace(
-            execution_availability=lambda: {'ok': False, 'reason': 'health failed'}
-        ),
-    )
-    monkeypatch.setattr(worker, 'mark_destroyed_after_rollback', lambda: None, raising=False)
-
-    original_execute = executor.execute
-    def execute(operation, ctx):
-        if operation == 'terraform.destroy':
-            deadlines.append(ctx.step_deadline)
-        return original_execute(operation, ctx)
-    executor.execute = execute
-
-    with pytest.raises(ExecutionFailed, match='health_check failed'):
-        worker.run_blueprint_workflow(context, executor)
-
-    assert 'terraform.destroy' in executor.operations
-    assert deadlines
+    monkeypatch.setattr(worker.settings(), 'execution_timeout', 3600)
+    assert worker.workflow_step_timeout('terraform_destroy', 30) == 3600
+    assert worker.workflow_step_timeout('terraform_apply', 30) == 3600
+    assert worker.workflow_step_timeout('terraform_plan', 30) == 3600
+    assert worker.workflow_step_timeout('wait_for_ip', 30) == 30
