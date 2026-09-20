@@ -64,7 +64,8 @@
     const steps = [];
     let previous = [];
     const add = (id, type) => {
-      steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout: 600, rollback: null });
+      const timeout = ['terraform_plan', 'terraform_apply'].includes(type) ? 3600 : 600;
+      steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout, rollback: null });
       previous = [id];
     };
     if (options.hostname) add('hostname', 'generate_hostname');
