@@ -14,6 +14,7 @@ class FakeContext:
         )
         self.deployment = SimpleNamespace(
             id='deployment-1',
+            name='vm01',
             provider=provider,
             executor=executor,
             variables=variables or {'node': 'pve01', 'tags': ['env-dev', 'apmid-leo']},
@@ -132,3 +133,35 @@ def test_unknown_workflow_step_fails_explicitly():
     ])
     with pytest.raises(ExecutionFailed, match='Unsupported Blueprint workflow steps'):
         worker.run_blueprint_workflow(context, FakeExecutor())
+
+
+def test_wait_for_agent_runs_without_ansible(monkeypatch):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'agent', 'type': 'wait_for_agent', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    executor = FakeExecutor()
+    observed = []
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {
+            'external_id': '103',
+            'vm_id': 103,
+            'node': 'pve01',
+        },
+    )
+    monkeypatch.setattr(
+        worker,
+        'wait_for_vm',
+        lambda context, workspace, timeout=600: observed.append((workspace, timeout)) or ['192.0.2.10'],
+    )
+
+    worker.run_blueprint_workflow(context, executor)
+
+    assert context.ansible is None
+    assert executor.operations == ['terraform.apply']
+    assert observed == [('/tmp/workspace', 30)]
+    assert any('workflow.step.completed:agent:wait_for_agent' in value for value in context.stages)

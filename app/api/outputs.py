@@ -122,6 +122,7 @@ class CredentialOutput(Output):
     created_at: datetime
     updated_at: datetime
     configured: bool
+    supports_cloud_init_ssh_key: bool = False
     secret: Literal['********']
 
 

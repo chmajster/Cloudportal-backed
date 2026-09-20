@@ -252,9 +252,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       credentials.filter(value => ['ssh', 'winrm'].includes(value.type)).map(value => ({
         value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')',
       })), deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' });
-    const guestCredentialChoices = credentials.filter(value => value.type === 'ssh').map(value => ({
-      value: value.id, label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
-    }));
+    const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(credentials);
     const guestCredentialField = selectField('Credential ustawiany na VM', 'guest_credential_id',
       [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...guestCredentialChoices],
       deployment.guest_credential_id || '', { wide: true,
@@ -331,7 +329,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const playbookSelect = playbookField.querySelector('select');
     const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
     let templateRows = [];
-    let cloudInitSnippetStorage = variables.cloud_init_snippet_storage || 'local';
+    let cloudInitSnippetStorage = variables.cloud_init_snippet_storage || '';
     let hydratedHostnameSchemeId = null;
     const updateHostnameFields = () => {
       const selected = schemeSelect.value;
@@ -465,10 +463,9 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       ]);
       const availableStorages = storageResult.items.filter(value => !value.disable);
       const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
-      const snippetStorages = availableStorages.filter(value => String(value.content || '').includes('snippets'));
-      const preferredSnippet = snippetStorages.find(value => String(value.storage) === String(cloudInitSnippetStorage))
-        || snippetStorages.find(value => value.storage === 'local') || snippetStorages[0];
-      if (preferredSnippet) cloudInitSnippetStorage = preferredSnippet.storage;
+      const snippetState = window.BlueprintProvisioningGuards.selectSnippetStorage(availableStorages, cloudInitSnippetStorage);
+      cloudInitSnippetStorage = snippetState.storage;
+      window.BlueprintProvisioningGuards.syncWaitAgentControl(fields.querySelector('[name="wait_agent"]'), snippetState.snippets);
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
@@ -536,6 +533,10 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       onSubmit: async (data, form) => {
         const provider = providers.find(value => String(value.id) === String(data.get('provider_id')));
         if (!provider) throw new Error('Wybierz platformę Proxmox.');
+
+        if (data.has('wait_agent') && !cloudInitSnippetStorage) {
+          throw new Error('QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.');
+        }
         let schemeId = data.get('hostname_scheme_id');
         let selectedPattern = '';
         if (schemeId === '__new__') {
@@ -606,7 +607,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
           install_qemu_guest_agent: data.has('wait_agent'),
-          cloud_init_snippet_storage: cloudInitSnippetStorage || 'local',
+          cloud_init_snippet_storage: data.has('wait_agent') ? cloudInitSnippetStorage : null,
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,

@@ -52,6 +52,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/credentials.js',
         'features/providers.js',
         'features/catalog.js',
+        'features/blueprint-provisioning-guards.js',
         'features/blueprint-runtime-apmid.js',
         'features/blueprint-wizard-core.js',
         'features/blueprint-wizard-hostname.js',
@@ -312,6 +313,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "ipam_pool_id" in script
     assert "guest_credential_id" in script
     assert "Credential dostępu do VM" in script
+    assert "supports_cloud_init_ssh_key === true" in script
+    assert "Brak credentiali SSH zawierających klucz prywatny" in script
+    assert "QEMU Guest Agent niedostępny" in script
+    assert "storage obsługującego snippets" in script
     assert "Credential ustawiany na VM" in script
     assert "zainstaluj qemu-guest-agent przez cloud-init" in script
     assert "install_qemu_guest_agent" in script
@@ -439,7 +444,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "apmid + '.' + environment" in script
     assert "'apmid-' + apmid" in script
     assert "'env-' + environment" in script
-    assert 'auth_source=ldap' in script
+    assert 'JIT provisioning i RBAC' in script
+    assert 'Hasło pozostaje wyłącznie w LDAP' in script
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script

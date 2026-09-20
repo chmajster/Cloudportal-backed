@@ -1,9 +1,11 @@
 import json
 import uuid
+from types import SimpleNamespace
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from sqlalchemy import select
+from app.config import settings
 from app.database import session
 from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
 from app.security.core import decrypt_secret

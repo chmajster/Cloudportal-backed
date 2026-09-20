@@ -255,7 +255,11 @@
             String(value.storage || value.id) === String(state.cloudInitSnippetStorage))) {
             const preferredSnippet = state.snippetStorages.find(value => String(value.storage || value.id) === 'local')
               || state.snippetStorages[0];
-            state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || 'local');
+            state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || '');
+          }
+          if (!state.snippetStorages.length) {
+            state.cloudInitSnippetStorage = '';
+            state.waitAgent = false;
           }
           state.networks = (networkResult.items || []).filter(value => value.iface);
           if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
@@ -471,6 +475,9 @@
           }
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
+          if (state.providerType === 'proxmox' && state.waitAgent && !state.cloudInitSnippetStorage) {
+            errors.wait_agent = 'QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.';
+          }
         }
         state.errors = errors;
         return !Object.keys(errors).length;
@@ -751,7 +758,8 @@
               })
         );
 
-        const guestCredentials = (data.credentials || []).filter(value => value.type === 'ssh');
+        const guestCredentials = (data.credentials || []).filter(value =>
+          value.type === 'ssh' && value.supports_cloud_init_ssh_key === true);
         const guestCredentialField = selectField(
           'Credential dostępu do VM',
           'guest_credential_id',
@@ -765,7 +773,9 @@
           state.guestCredentialId,
           {
             wide: true,
-            help: 'Po utworzeniu VM cloud-init ustawi użytkownika oraz publiczny klucz SSH wynikający z wybranego credentiala. Klucz prywatny nie trafia do Terraform ani do VM.',
+            help: guestCredentials.length
+              ? 'Po utworzeniu VM cloud-init ustawi użytkownika oraz publiczny klucz SSH wynikający z wybranego credentiala. Klucz prywatny nie trafia do Terraform ani do VM.'
+              : 'Brak credentiali SSH zawierających klucz prywatny. Credential password-only nie może zostać użyty do wstrzyknięcia klucza przez cloud-init.',
           }
         );
         guestCredentialField.querySelector('select').addEventListener('change', event => {
@@ -1004,8 +1014,11 @@
           if (state.advancedWorkflow) state.workflow = auto.map(value => ({ ...value, depends_on: [...value.depends_on] }));
           render();
         });
+        const snippetAvailable = state.providerType !== 'proxmox' || Boolean(state.cloudInitSnippetStorage);
         const wait = checkboxField('Czekaj na QEMU Agent po Terraform apply — zainstaluj qemu-guest-agent przez cloud-init', 'wait_agent', state.waitAgent);
-        wait.querySelector('input').addEventListener('change', event => {
+        const waitControl = wait.querySelector('input');
+        waitControl.disabled = !snippetAvailable;
+        waitControl.addEventListener('change', event => {
           state.waitAgent = event.currentTarget.checked;
           if (!state.advancedWorkflow) state.workflow = currentAutoWorkflow();
           render();
@@ -1017,6 +1030,9 @@
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki, zależności, retry, timeout, rollback i conditions.'
               : 'Wizard dobiera kroki do hostname, IPAM, tagów i Ansible.' })),
+          !snippetAvailable ? node('div', { class: 'callout warning' },
+            node('strong', { text: 'QEMU Guest Agent niedostępny' }),
+            node('p', { text: 'Na wybranym node nie wykryto storage obsługującego snippets. Włącz content „Snippets” na storage w Proxmox albo wybierz inny node.' })) : null,
           wait,
           toggle,
           workflowVisual(state.advancedWorkflow ? state.workflow : auto));

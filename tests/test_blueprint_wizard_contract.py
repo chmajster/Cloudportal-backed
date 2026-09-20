@@ -234,3 +234,43 @@ console.log(JSON.stringify(core.buildDeployment(state, data)));
     assert result['apmid'] == 'LEO'
     assert result['select_environment_on_execute'] is False
     assert result['select_apmid_on_execute'] is False
+
+
+def test_wizard_rejects_qemu_agent_without_snippet_storage():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node is required for Blueprint wizard contract tests')
+    script = f"""
+global.window = {{}};
+global.registerExtension = (_name, initialize) => initialize();
+eval(require('fs').readFileSync({json.dumps(str(CORE))}, 'utf8'));
+const core = window.BlueprintWizardParts.core;
+const state = core.stateDefaults();
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.waitAgent = true;
+state.cloudInitSnippetStorage = '';
+const data = {{
+  providers: [{{ id: 7, type: 'proxmox', credentials_id: 5 }}],
+  templates: [{{ id: 'proxmox-vm', provider: 'proxmox', variables_schema: {{ properties: {{ name: {{ type: 'string' }} }} }} }}],
+  playbooks: [],
+  schemes: [],
+}};
+try {{
+  core.buildDeployment(state, data);
+  console.log(JSON.stringify({{ ok: true }}));
+}} catch (error) {{
+  console.log(JSON.stringify({{ ok: false, message: error.message }}));
+}}
+"""
+    result = subprocess.run([node, '-e', script], check=True, capture_output=True, text=True)
+    payload = json.loads(result.stdout)
+    assert payload['ok'] is False
+    assert 'storage' in payload['message'].lower()
+    assert 'snippets' in payload['message'].lower()
