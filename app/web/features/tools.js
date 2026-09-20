@@ -354,6 +354,97 @@ function ansibleHostEntryView() {
 }
 
 
+function hostnameDefaultsTool(config) {
+  const defaults = config?.hostname_defaults || {};
+  return node('article', { class: 'panel tool-card' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('network')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Automatyzacja VM' }),
+        node('h2', { text: 'Location i Role' }),
+        node('p', { class: 'muted', text: 'Ustaw globalne wartości {location} i {role} używane automatycznie przez patterny hostname.' })),
+      badge('Automatyczne', 'ok')),
+    node('div', { class: 'tool-meta-grid' },
+      toolMeta('Location', defaults.location || 'wro', true),
+      toolMeta('Role', defaults.role || 'server', true)),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot ok' }),
+        'Blueprint nie pyta o te wartości'),
+      button('Konfiguruj Location i Role', () => navigate('hostname-defaults'), 'primary'))
+  );
+}
+
+async function hostnameDefaultsView() {
+  const config = await api('/settings/vm-classification');
+  const defaults = config.hostname_defaults || { location: 'wro', role: 'server' };
+  const canEdit = allowed('settings.update');
+
+  const locationField = field('Location', 'location', {
+    value: defaults.location || 'wro',
+    required: true,
+    placeholder: 'np. wro',
+    help: 'Globalna wartość używana automatycznie dla tokenu {location}.',
+  });
+  const roleField = field('Role', 'role', {
+    value: defaults.role || 'server',
+    required: true,
+    placeholder: 'np. web',
+    help: 'Globalna wartość używana automatycznie dla tokenu {role}.',
+  });
+  if (!canEdit) {
+    locationField.querySelector('input').disabled = true;
+    roleField.querySelector('input').disabled = true;
+  }
+
+  const form = node('form', { class: 'panel hostname-defaults-form' },
+    node('div', { class: 'hostname-defaults-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Domyślne tokeny hostname' }),
+        node('h2', { text: 'Location i Role' }),
+        node('p', { class: 'muted', text: 'Te wartości są wstawiane automatycznie do patternów hostname. Kreator Blueprintu nie wymaga ich ręcznego podawania.' }))),
+    node('div', { class: 'form-grid' }, locationField, roleField),
+    canEdit
+      ? node('div', { class: 'hostname-defaults-actions' },
+          node('button', { class: 'button primary', type: 'submit', text: 'Zapisz ustawienia' }))
+      : node('div', { class: 'callout info' },
+          node('strong', { text: 'Tryb tylko do odczytu' }),
+          node('p', { text: 'Do zmiany Location i Role wymagane jest uprawnienie settings.update.' }))
+  );
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const locationValue = String(data.get('location') || '').trim().toLowerCase();
+    const roleValue = String(data.get('role') || '').trim().toLowerCase();
+    const valid = value => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
+    if (!valid(locationValue)) {
+      toast('Location musi być poprawnym fragmentem hostname: litery, cyfry i myślnik.', 'error');
+      return;
+    }
+    if (!valid(roleValue)) {
+      toast('Role musi być poprawnym fragmentem hostname: litery, cyfry i myślnik.', 'error');
+      return;
+    }
+    await api('/settings/vm-classification', {
+      method: 'PUT',
+      body: {
+        environments: config.environments,
+        apmids: config.apmids || [],
+        hostname_defaults: { location: locationValue, role: roleValue },
+      },
+    });
+    toast('Domyślne Location i Role zapisane.');
+    await hostnameDefaultsView();
+  });
+
+  dom.content.replaceChildren(
+    heading('Domyślne wartości hostname.', [button('← Narzędzia', () => navigate('tools'))]),
+    form
+  );
+}
+
+
 function apmidTool(config) {
   const apmids = config?.apmids || [];
   return node('article', { class: 'panel tool-card' },
@@ -535,16 +626,17 @@ async function toolsView() {
     try {
       const vmClassification = await api('/settings/vm-classification');
       cards.push(apmidTool(vmClassification));
+      cards.push(hostnameDefaultsTool(vmClassification));
     } catch (error) {
       cards.push(node('article', { class: 'panel tool-card' },
         node('div', { class: 'tool-card-head' },
           node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('list-check')),
           node('div', { class: 'tool-title' },
             node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
-            node('h2', { text: 'APMID' }),
-            node('p', { class: 'muted', text: 'Lista identyfikatorów aplikacji używanych przez kreator VM.' })),
+            node('h2', { text: 'APMID i hostname defaults' }),
+            node('p', { class: 'muted', text: 'Lista APMID oraz globalne Location i Role.' })),
           badge('Niedostępny', 'warning')),
-        node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać listy APMID.' })));
+        node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać ustawień klasyfikacji VM.' })));
     }
   }
 
@@ -605,6 +697,15 @@ registerView({
   permission: 'settings.read',
   order: 156,
 }, apmidView);
+registerView({
+  id: 'hostname-defaults',
+  label: 'Location i Role',
+  iconName: 'network',
+  navigation: false,
+  navigationParent: 'tools',
+  permission: 'settings.read',
+  order: 157,
+}, hostnameDefaultsView);
 registerView({
   id: 'ansible-host-entry',
   label: 'Generator hosta Ansible',
