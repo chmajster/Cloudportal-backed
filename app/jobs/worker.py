@@ -322,10 +322,15 @@ def execute(job_id):
         # Atomic claim prevents duplicate dispatch or RQ retry from executing twice.
         claimed = db.execute(update(Job).where(Job.id == job_id, Job.status == 'queued', Job.cancel_requested.is_(False))
                              .values(status='running', heartbeat_at=now()))
-        db.commit()
         if claimed.rowcount != 1:
+            db.commit()
             return
         job = db.get(Job, job_id)
+        if job.deployment_id:
+            deployment = db.get(Deployment, job.deployment_id)
+            if deployment is not None and deployment.active_job_id == job.id:
+                deployment.status = 'running'
+        db.commit()
         context = Context(job)
     status, error = 'successful', None
     try:
