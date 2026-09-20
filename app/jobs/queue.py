@@ -46,7 +46,6 @@ def reconcile_deployment_job_statuses(db):
         if job is None:
             deployment.active_job_id = None
             deployment.status = 'failed'
-            db.add(JobLog(job_id=deployment.id, message='deployment.reconcile: active job record missing'))
             continue
         if job.status == 'running':
             if deployment.status not in {'waiting_provider', 'recovery_queued'}:
