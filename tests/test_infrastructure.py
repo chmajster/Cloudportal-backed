@@ -175,6 +175,10 @@ def test_running_cancel_is_visible_and_orphan_is_finalized(client, headers):
     assert response.json()['cancel_requested'] is True
     assert client.get('/api/v1/deployments/' + d['id'], headers=headers).json()['status'] == 'cancelling'
 
+    repeated = client.post('/api/v1/jobs/' + d['job']['id'] + '/cancel', headers=headers)
+    assert repeated.status_code == 200
+    assert repeated.json()['status'] == 'cancelling'
+
     with session() as db:
         reconcile_cancelled_jobs(db)
         db.commit()
