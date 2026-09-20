@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 
 from app.database import session
 from app.executors.base import ExecutionFailed
@@ -75,6 +76,20 @@ def test_blueprint_approval_permission_is_enforced(client, headers):
     assert requested.json()['job']['status'] == 'waiting_approval'
     assert requested.json()['status'] == 'waiting_approval'
 
+    calls = []
+    original_execute = TerraformExecutor.execute
+    TerraformExecutor.execute = lambda *args: calls.append('called')
+    try:
+        execute(requested.json()['job']['id'])
+    finally:
+        TerraformExecutor.execute = original_execute
+    assert calls == []
+    still_waiting = client.get(
+        f"/api/v1/jobs/{requested.json()['job']['id']}",
+        headers=headers,
+    )
+    assert still_waiting.json()['status'] == 'waiting_approval'
+
     approved = client.post(
         f"/api/v1/jobs/{requested.json()['job']['id']}/approve",
         headers=headers,
@@ -134,3 +149,58 @@ def test_failed_blueprint_apply_queues_explicit_recovery_destroy(client, headers
         assert recovery.status == 'successful'
         assert deployment.status == 'destroyed'
         assert deployment.destroyed_at is not None
+
+
+def test_failed_workflow_rollback_destroy_marks_deployment_destroyed(client, headers, monkeypatch, tmp_path):
+    credential, provider = infrastructure(client, headers)
+    payload = blueprint_payload(credential, provider)
+    payload['slug'] = 'rollback-destroy-vm'
+    payload['name'] = 'Rollback Destroy VM'
+    payload['workflow'] = [
+        {'id': 'rollback_destroy', 'type': 'terraform_destroy'},
+        {'id': 'apply', 'type': 'terraform_apply'},
+        {
+            'id': 'health',
+            'type': 'health_check',
+            'depends_on': ['apply'],
+            'rollback': 'rollback_destroy',
+        },
+    ]
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+
+    launched = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(headers),
+        json={},
+    )
+    assert launched.status_code == 202, launched.text
+
+    workspace = tmp_path / 'rollback-workspace'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":777}}}'
+    )
+    operations = []
+    monkeypatch.setattr(
+        TerraformExecutor,
+        'execute',
+        lambda self, operation, context: operations.append(operation) or workspace,
+    )
+    monkeypatch.setattr(
+        'app.jobs.worker.provider_for',
+        lambda credential: SimpleNamespace(
+            vm_status=lambda node, vm_id: {'status': 'stopped'},
+        ),
+    )
+
+    execute(launched.json()['job']['id'])
+
+    with session() as db:
+        job = db.get(Job, launched.json()['job']['id'])
+        deployment = db.get(Deployment, launched.json()['id'])
+        assert job.status == 'failed'
+        assert deployment.status == 'destroyed'
+        assert deployment.active_job_id is None
+        assert deployment.destroyed_at is not None
+    assert operations == ['terraform.apply', 'terraform.destroy']
