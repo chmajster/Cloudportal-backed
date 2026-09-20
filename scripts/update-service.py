@@ -298,18 +298,29 @@ def commit_order(current_sha: str, target: dict, settings: dict) -> dict:
     }
 
 
-def check_remote(ref: str | None = None) -> dict:
+def check_remote(ref: str | None = None, *, update_context: bool = False) -> dict:
     settings = load_settings()
     ref = validate_ref(ref or settings.get("ref", "main"))
-    event("checking", 3, "Porównywanie commitów wybranego kanału.", status="checking", ref=ref, finished_at=None)
+    if update_context:
+        event(
+            "preflight",
+            3,
+            "Weryfikowanie nowszego commita przed aktualizacją.",
+            status="running",
+            ref=ref,
+            finished_at=None,
+        )
+    else:
+        event("checking", 3, "Porównywanie commitów wybranego kanału.", status="checking", ref=ref, finished_at=None)
     current = str(release_info().get("commit_sha") or "")
     try:
         target = remote_commit(ref, settings)
         ordering = commit_order(current, target, settings)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, RuntimeError) as exc:
         attempted_at = utcnow()
-        save_state(status="failed", finished_at=attempted_at, last_check_at=attempted_at)
-        event("check_failed", 0, "Nie udało się sprawdzić aktualizacji: " + str(exc))
+        if not update_context:
+            save_state(status="failed", finished_at=attempted_at, last_check_at=attempted_at)
+            event("check_failed", 0, "Nie udało się sprawdzić aktualizacji: " + str(exc))
         raise
 
     available = ordering["update_available"]
@@ -318,36 +329,43 @@ def check_remote(ref: str | None = None) -> dict:
         "local_ahead" if relation.startswith("current_newer") else "up_to_date"
     )
     now = utcnow()
-    save_state(
-        status=status,
-        current_version=current[:12] or "nieznana",
-        target_version=target["sha"][:12],
-        current_commit_at=ordering.get("current_commit_at"),
-        target_commit_at=target.get("committed_at"),
-        commit_relation=relation,
-        ahead_by=ordering.get("ahead_by", 0),
-        behind_by=ordering.get("behind_by", 0),
-        version_strategy="git_commit",
-        update_available=available,
-        last_check_at=now,
-        finished_at=now,
-        ref=ref,
-    )
+    state_changes = {
+        "current_version": current[:12] or "nieznana",
+        "target_version": target["sha"][:12],
+        "current_commit_at": ordering.get("current_commit_at"),
+        "target_commit_at": target.get("committed_at"),
+        "commit_relation": relation,
+        "ahead_by": ordering.get("ahead_by", 0),
+        "behind_by": ordering.get("behind_by", 0),
+        "version_strategy": "git_commit",
+        "update_available": available,
+        "last_check_at": now,
+        "ref": ref,
+    }
 
-    if available:
-        message = "Dostępny jest nowszy commit."
-        phase = "available"
-        progress = 8
-    elif status == "local_ahead":
-        message = "Zainstalowany commit jest nowszy niż commit kanału."
-        phase = "local_ahead"
-        progress = 100
+    if available and update_context:
+        save_state(status="running", finished_at=None, **state_changes)
+        event(
+            "preflight",
+            8,
+            "Nowszy commit potwierdzony. Przygotowanie do instalacji.",
+            status="running",
+        )
     else:
-        message = "Zainstalowany commit jest aktualny."
-        phase = "up_to_date"
-        progress = 100
-
-    event(phase, progress, message)
+        save_state(status=status, finished_at=now, **state_changes)
+        if available:
+            message = "Dostępny jest nowszy commit."
+            phase = "available"
+            progress = 8
+        elif status == "local_ahead":
+            message = "Zainstalowany commit jest nowszy niż commit kanału."
+            phase = "local_ahead"
+            progress = 100
+        else:
+            message = "Zainstalowany commit jest aktualny."
+            phase = "up_to_date"
+            progress = 100
+        event(phase, progress, message, status=status)
     return {
         "ref": ref,
         "current_version": current[:12] or "nieznana",
@@ -452,10 +470,10 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
                 "events": [],
                 "output": [],
             })
-        checked = check_remote(ref)
+        checked = check_remote(ref, update_context=True)
         if not checked["update_available"]:
             return
-        save_state(status="running", started_at=utcnow(), finished_at=None, automatic=automatic)
+        save_state(status="running", finished_at=None, automatic=automatic)
         event("backup", 10, "Tworzenie backupu PostgreSQL przed aktualizacją.")
         pre_update_backup()
         event("download", 15, "Pobieranie aktualnego instalatora.")
@@ -518,6 +536,20 @@ def start_update(ref: str | None = None, automatic: bool = False) -> bool:
         update_thread = threading.Thread(target=run_update, args=(ref, automatic), daemon=True, name="cloudportal-update")
         update_thread.start()
         return True
+
+
+def runtime_state() -> dict:
+    state = load_state()
+    with lock:
+        active = bool(update_thread and update_thread.is_alive())
+    state["operation_active"] = active
+    if active and state.get("status") not in {"running", "failed", "success"}:
+        state["status"] = "running"
+        if state.get("phase") in {"checking", "available", "up_to_date", "local_ahead", "idle"}:
+            state["phase"] = "preflight"
+            state["message"] = "Aktualizacja jest już uruchomiona."
+            state["finished_at"] = None
+    return state
 
 
 def parse_time(value: str | None) -> datetime | None:
@@ -607,7 +639,7 @@ class Handler(BaseHTTPRequestHandler):
             if not status_authorized(self):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "Unauthorized"})
                 return
-            self.send_json(HTTPStatus.OK, load_state())
+            self.send_json(HTTPStatus.OK, runtime_state())
             return
         if path == "/settings":
             if not control_authorized(self.headers):
@@ -625,6 +657,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = self.body()
             if path == "/check":
+                with lock:
+                    active = bool(update_thread and update_thread.is_alive())
+                if active:
+                    state = runtime_state()
+                    state["already_running"] = True
+                    self.send_json(HTTPStatus.OK, state)
+                    return
                 self.send_json(HTTPStatus.OK, check_remote(payload.get("ref")))
                 return
             if path == "/run":
@@ -632,9 +671,13 @@ class Handler(BaseHTTPRequestHandler):
                 if ref is not None:
                     validate_ref(ref)
                 if not start_update(ref, automatic=False):
-                    self.send_json(HTTPStatus.CONFLICT, {"detail": "Update already in progress"})
+                    self.send_json(HTTPStatus.ACCEPTED, {
+                        "accepted": False,
+                        "already_running": True,
+                        "status": runtime_state(),
+                    })
                     return
-                self.send_json(HTTPStatus.ACCEPTED, {"accepted": True})
+                self.send_json(HTTPStatus.ACCEPTED, {"accepted": True, "already_running": False})
                 return
             if path == "/settings":
                 self.send_json(HTTPStatus.OK, update_settings(payload))
