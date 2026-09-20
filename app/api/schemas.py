@@ -87,6 +87,7 @@ class VMClassificationSettingsInput(Input):
 
 class BlueprintExecutionSettingsInput(Input):
     auto_approve_for_executors: bool = True
+    approval_timeout_hours: int = Field(default=48, ge=1, le=720)
 
 
 class LDAPSettingsInput(Input):
