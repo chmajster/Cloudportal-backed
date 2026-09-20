@@ -386,14 +386,16 @@ async function vmAuditContent(item) {
     ], rows));
 }
 
-async function showVmDetailsPage(item, initialTab = 'overview') {
+async function showVmDetailsPage(item, initialTab = 'overview', parentView = null) {
+  const returnView = parentView || (state.view === 'my-resources' ? 'my-resources' : 'inventory');
+  const returnLabel = returnView === 'my-resources' ? 'Moje zasoby' : 'Zasoby';
   try {
     const status = await api(`${vmBase(item)}/status`);
-    state.view = 'inventory';
-    location.hash = 'inventory';
-    dom.pageEyebrow.textContent = `Zasoby / ${item.node || 'Proxmox'} / VMID ${item.vm_id}`;
+    state.view = returnView;
+    location.hash = returnView;
+    dom.pageEyebrow.textContent = `${returnLabel} / ${item.node || 'Proxmox'} / VMID ${item.vm_id}`;
     dom.pageTitle.textContent = status.name || item.name || `VM ${item.vm_id}`;
-    dom.navigation.querySelectorAll('.nav-link').forEach(link => link.classList.toggle('active', link.dataset.route === 'inventory'));
+    dom.navigation.querySelectorAll('.nav-link').forEach(link => link.classList.toggle('active', link.dataset.route === returnView));
 
     const tabContent = node('div', { class: 'vm-tab-content' });
     const tabs = [
@@ -439,7 +441,7 @@ async function showVmDetailsPage(item, initialTab = 'overview') {
 
     const header = node('section', { class: 'vm-detail-header' },
       node('div', { class: 'vm-breadcrumbs' },
-        node('button', { type: 'button', class: 'button link', onClick: () => navigate('inventory') }, 'Zasoby'),
+        node('button', { type: 'button', class: 'button link', onClick: () => navigate(returnView) }, returnLabel),
         node('span', { text: '/' }),
         node('span', { text: item.node || 'Proxmox' }),
         node('span', { text: '/' }),
@@ -449,7 +451,7 @@ async function showVmDetailsPage(item, initialTab = 'overview') {
           node('div', { class: 'vm-title-meta' }, badge(statusLabel(status.status || item.live?.status || 'unknown'), statusKind(status.status || item.live?.status)), badge(`VMID ${item.vm_id}`, 'info')),
           node('p', { class: 'muted', text: `${item.node || '—'} · ${status.tags || 'bez tagów'}` })),
         node('div', { class: 'action-group vm-detail-actions' },
-          button('Odśwież', () => showVmDetailsPage(item, activeTab)),
+          button('Odśwież', () => showVmDetailsPage(item, activeTab, returnView)),
           ...vmDetailActions(item))));
 
     dom.content.replaceChildren(header, tabBar, tabContent);
@@ -457,12 +459,12 @@ async function showVmDetailsPage(item, initialTab = 'overview') {
     dom.content.focus();
   } catch (error) {
     toast(error.message, 'error');
-    navigate('inventory');
+    navigate(returnView);
   }
 }
 
-async function openVmManager(item) {
-  return showVmDetailsPage(item);
+async function openVmManager(item, initialTab = 'overview', parentView = null) {
+  return showVmDetailsPage(item, initialTab, parentView);
 }
 
 async function vmPower(item, action) {
