@@ -157,6 +157,8 @@
       storages: [],
       snippetStorages: [],
       cloudInitSnippetStorage: 'local',
+      qemuAgentSshReady: true,
+      qemuAgentSshReason: '',
       networks: [],
       selectedTemplateVmid: '',
       selectedTemplateNode: '',
