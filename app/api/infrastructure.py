@@ -68,7 +68,7 @@ def credential_in_use(db, id, *, pending_only=False):
     else:
         deployments = deployments.where(Deployment.status != 'destroyed')
     return bool(db.scalar(deployments.limit(1)) or db.scalar(select(Job.id).where(
-        Job.status.in_(['queued', 'running']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)))
+        Job.status.in_(['queued', 'running', 'cancelling']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)))
 
 
 @router.get('/credentials', response_model=Items[CredentialOutput])
