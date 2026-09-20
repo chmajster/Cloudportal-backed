@@ -225,7 +225,11 @@ lock_holder_pid=''
 
 stop_cloudportal_application() {
   ui_info 'Zatrzymuję usługi aplikacyjne Cloudportal...'
-  systemctl stop cloudportal-updater.service >/dev/null 2>&1 || true
+  if ((update_in_progress)); then
+    ui_info 'Serwis updatera pozostaje aktywny na czas aktualizacji.'
+  else
+    systemctl stop cloudportal-updater.service >/dev/null 2>&1 || true
+  fi
   systemctl stop cloudportal-backup.timer cloudportal-backup.service >/dev/null 2>&1 || true
   systemctl stop cloudportal-dispatcher.service cloudportal-api.service >/dev/null 2>&1 || true
 
@@ -1275,6 +1279,16 @@ ui_info 'Finalizuję bootstrap administratora. Nowy sekret/token, jeżeli powsta
 install_progress 99 bootstrap 'Finalizowanie konfiguracji aplikacji.'
 run_backend "$release/.venv/bin/python" -m app.bootstrap --url "https://$backend_host:$backend_port"
 install_progress 100 complete 'Instalacja lub aktualizacja zakończona pomyślnie.'
+
+if ((update_in_progress)); then
+  updater_reload_unit="cloudportal-updater-reload-$"
+  if systemd-run --quiet --collect --unit="$updater_reload_unit" --on-active=8s \
+      /bin/systemctl restart cloudportal-updater.service >/dev/null 2>&1; then
+    ui_info 'Nowa wersja serwisu updatera zostanie aktywowana po zakończeniu bieżącej sesji.'
+  else
+    ui_warn 'Nie udało się zaplanować automatycznego restartu updatera; aktualizacja aplikacji jest zakończona.'
+  fi
+fi
 
 ui_header 'Podsumowanie'
 ui_ok 'Instalacja Cloudportal-backed zakończona.'
