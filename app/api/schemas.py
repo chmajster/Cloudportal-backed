@@ -776,27 +776,50 @@ class BlueprintInput(Input):
             if step.type in declarative and any(by_id[parent].type == 'terraform_apply' for parent in ancestors(step.id)):
                 raise ValueError('Declarative VM steps must run before terraform_apply')
 
-        if any(step.type == 'approval' for step in self.workflow) and not self.requires_approval:
+        approval_steps = [step for step in self.workflow if step.type == 'approval']
+        if approval_steps and not self.requires_approval:
             raise ValueError('Workflow approval step requires requires_approval=true')
+        if len(approval_steps) > 1:
+            raise ValueError('Workflow can contain at most one approval step')
+        if approval_steps:
+            approval_step = approval_steps[0]
+            if approval_step.conditions or approval_step.retry or approval_step.rollback:
+                raise ValueError('Workflow approval step cannot use conditions, retry or rollback')
 
         apply_steps = [step for step in self.workflow if step.type == 'terraform_apply']
-        if len(apply_steps) != 1:
-            raise ValueError('Workflow must contain exactly one terraform_apply step')
-        apply_id = apply_steps[0].id
+        if len(apply_steps) > 1:
+            raise ValueError('Workflow can contain exactly one terraform_apply step')
+        legacy_provisioning = any(step.type in legacy_markers for step in self.workflow)
+        if not apply_steps and not legacy_provisioning:
+            raise ValueError('Workflow must contain terraform_apply or a legacy provisioning marker')
 
         plan_steps = [step for step in self.workflow if step.type == 'terraform_plan']
         if len(plan_steps) > 1:
             raise ValueError('Workflow can contain at most one terraform_plan step')
-        if plan_steps and plan_steps[0].id not in ancestors(apply_id):
-            raise ValueError('terraform_plan must be an ancestor of terraform_apply')
+        if plan_steps and not apply_steps:
+            raise ValueError('terraform_plan requires an explicit terraform_apply step')
 
-        vm_runtime_types = {
-            'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-            'run_ansible_playbook', 'create_snapshot', 'health_check',
-        }
-        for step in self.workflow:
-            if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
-                raise ValueError(f'{step.type} must depend on terraform_apply')
+        if apply_steps:
+            apply_id = apply_steps[0].id
+            if plan_steps and plan_steps[0].id not in ancestors(apply_id):
+                raise ValueError('terraform_plan must be an ancestor of terraform_apply')
+
+            if approval_steps:
+                approval_id = approval_steps[0].id
+                if approval_id not in ancestors(apply_id):
+                    raise ValueError('approval must be an ancestor of terraform_apply')
+                if plan_steps and plan_steps[0].id not in ancestors(approval_id):
+                    raise ValueError('terraform_plan must be an ancestor of approval')
+
+            vm_runtime_types = {
+                'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+                'run_ansible_playbook', 'create_snapshot', 'health_check',
+            }
+            for step in self.workflow:
+                if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
+                    raise ValueError(f'{step.type} must depend on terraform_apply')
+        elif approval_steps:
+            raise ValueError('approval requires an explicit terraform_apply step')
 
         return self
 
