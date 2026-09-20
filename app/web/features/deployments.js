@@ -193,7 +193,7 @@ function resourceSection(id, iconName, title, description, count, content) {
     content);
 }
 
-async function myResourcesView() {
+async function myResourcesView(repairInventory = true) {
   if (myResourcesPollTimer) {
     clearTimeout(myResourcesPollTimer);
     myResourcesPollTimer = null;
@@ -201,6 +201,18 @@ async function myResourcesView() {
   const preserveScroll = Boolean(dom.content.querySelector('.my-resources-page-head'));
   const preservedScrollY = preserveScroll ? window.scrollY : 0;
   const canReadInventory = allowed('inventory.read');
+
+  if (repairInventory && canReadInventory && allowed('inventory.update')) {
+    try {
+      const repaired = await api('/inventory/reconcile', { method: 'POST', body: {} });
+      if (Number(repaired.repaired_count || 0) > 0) {
+        toast('Odbudowano inventory dla ' + repaired.repaired_count + ' wdrożeń.');
+      }
+    } catch (error) {
+      toast('Nie udało się automatycznie zsynchronizować inventory: ' + error.message, 'warning');
+    }
+  }
+
   const [deploymentResult, vmResult, resourceResult, providerResult] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/vms?limit=200') : Promise.resolve({ items: [] }),
@@ -265,11 +277,11 @@ async function myResourcesView() {
   }
 
   const provisioningActive = deployments.some(item =>
-    item.active_job_id || ['queued', 'running', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
+    item.active_job_id || ['queued', 'running', 'cancelling', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
   if (provisioningActive) {
     myResourcesPollTimer = window.setTimeout(() => {
       if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
-        myResourcesView().catch(error => toast(error.message, 'error'));
+        myResourcesView(false).catch(error => toast(error.message, 'error'));
       }
     }, 2000);
   }
@@ -277,6 +289,17 @@ async function myResourcesView() {
 
 function deploymentActions(item, returnTo = 'my-resources') {
   const actions = [button('Szczegóły', () => showDeploymentDetails(item))];
+  if (item.active_job_id && allowed('jobs.cancel') && item.status !== 'cancelling') {
+    actions.push(button('Anuluj', () => confirmAction(
+      'Anuluj aktywne zadanie',
+      'Backend przerwie Terraform/Ansible. Jeżeli worker już nie działa, dispatcher zamknie osierocony job automatycznie.',
+      async () => {
+        const cancelled = await api('/jobs/' + item.active_job_id + '/cancel', { method: 'POST' });
+        toast(cancelled.status === 'cancelled' ? 'Zadanie anulowane.' : 'Anulowanie rozpoczęte.');
+        navigate(returnTo);
+      },
+    ), 'danger'));
+  }
   if (allowed('jobs.execute') && allowed('terraform.execute') && !item.active_job_id && item.status !== 'destroyed') {
     actions.push(button('Plan', () => createTerraformJob(item, 'terraform.plan')));
     actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
