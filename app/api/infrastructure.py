@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
@@ -17,10 +17,11 @@ from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
-from app.models import Blueprint, Credential, Deployment, Job, JobLog, Provider, now
+from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
 from app.security.core import audit, require
+from app.terraform.state import delete_plan
 
 router = APIRouter(tags=['infrastructure'])
 DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace state_location variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
@@ -545,6 +546,7 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
             deployment = db.scalar(select(Deployment).where(Deployment.id == original.deployment_id).with_for_update())
             if deployment is None:
                 raise HTTPException(404, 'Deployment not found')
+            delete_plan(deployment.id)
         new = new_job(
             db,
             request,
@@ -623,6 +625,7 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
     if j.cancel_requested and j.status == 'cancelling':
         return job_public(j)
 
+    was_waiting_approval = j.status == 'waiting_approval'
     j.cancel_requested = True
     db.add(JobLog(job_id=j.id, message='job.cancel_requested: żądanie anulowania przyjęte'))
 
@@ -634,6 +637,17 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
             if d.active_job_id == j.id:
                 d.active_job_id = None
             d.status = 'cancelled'
+            if was_waiting_approval:
+                delete_plan(d.id)
+                released_at = now()
+                db.execute(update(HostnameReservation).where(
+                    HostnameReservation.resource_id == d.id,
+                    HostnameReservation.status != 'released',
+                ).values(status='released', released_at=released_at))
+                db.execute(update(IPAllocation).where(
+                    IPAllocation.resource_id == d.id,
+                    IPAllocation.status != 'released',
+                ).values(status='released', released_at=released_at))
     else:
         j.status = 'cancelling'
         if j.deployment_id:
