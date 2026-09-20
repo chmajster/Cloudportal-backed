@@ -113,61 +113,6 @@ function ldapSettingsForm(config) {
   });
 }
 
-function environmentSettingsForm(config) {
-  const environmentLabels = {
-    test: 'TEST',
-    dev: 'DEV',
-    nonprod: 'NONPROD',
-    prod: 'PROD',
-  };
-  const environmentControls = node('div', { class: 'settings-environment-grid wide' },
-    ...Object.entries(environmentLabels).map(([key, label]) =>
-      node('label', { class: 'settings-environment-card' },
-        node('input', {
-          type: 'checkbox',
-          name: 'environment_' + key,
-          checked: config.environments?.[key] !== false,
-        }),
-        node('span', {},
-          node('strong', { text: label }),
-          node('small', { text: 'Dostępne w kreatorze Blueprintu' }))))
-  );
-
-  const fields = node('div', { class: 'form-grid' },
-    node('div', { class: 'wide blueprint-wizard-info' },
-      node('strong', { text: 'Environment' }),
-      node('span', { text: 'Wybierz środowiska dostępne przy tworzeniu nowych Blueprintów i VM.' })),
-    node('div', { class: 'wide settings-form-heading' },
-      node('strong', { text: 'Dostępne środowiska' }),
-      node('span', { class: 'muted', text: 'Wyłączone środowiska nie pojawią się w kreatorze Blueprintu.' })),
-    environmentControls
-  );
-
-  openModal({
-    title: 'Environment',
-    eyebrow: 'Klasyfikacja VM',
-    body: fields,
-    submitLabel: 'Zapisz Environment',
-    wide: true,
-    onSubmit: async (data) => {
-      await api('/settings/vm-classification', {
-        method: 'PUT',
-        body: {
-          environments: {
-            test: data.has('environment_test'),
-            dev: data.has('environment_dev'),
-            nonprod: data.has('environment_nonprod'),
-            prod: data.has('environment_prod'),
-          },
-          apmids: config.apmids || [],
-        },
-      });
-      toast('Ustawienia Environment zapisane.');
-      navigate('settings');
-    },
-  });
-}
-
 async function testLdap() {
   try {
     const result = await api('/settings/ldap/test', { method: 'POST' });
@@ -178,9 +123,8 @@ async function testLdap() {
 }
 
 async function settingsView() {
-  const [config, vmClassification, health, updateSettings] = await Promise.all([
+  const [config, health, updateSettings] = await Promise.all([
     api('/settings/ldap'),
-    api('/settings/vm-classification'),
     api('/health', { auth: false, allow: [503] }),
     allowed('updates.read') ? api('/updates/settings').catch(() => null) : Promise.resolve(null),
   ]);
@@ -269,21 +213,6 @@ async function settingsView() {
       allowed('tokens.read') ? button('Tokeny API', () => navigate('tokens')) : null)
   );
 
-  const environmentCard = settingsCard(
-    'server',
-    'Environment',
-    'Środowiska dostępne przy tworzeniu Blueprintów i maszyn wirtualnych.',
-    node('div', { class: 'settings-values' },
-      settingsValue('TEST', vmClassification.environments?.test ? 'Włączony' : 'Wyłączony'),
-      settingsValue('DEV', vmClassification.environments?.dev ? 'Włączony' : 'Wyłączony'),
-      settingsValue('NONPROD', vmClassification.environments?.nonprod ? 'Włączony' : 'Wyłączony'),
-      settingsValue('PROD', vmClassification.environments?.prod ? 'Włączony' : 'Wyłączony')),
-    allowed('settings.update')
-      ? node('div', { class: 'settings-card-actions' },
-          button('Konfiguruj Environment', () => environmentSettingsForm(vmClassification), 'primary'))
-      : null
-  );
-
   const ldapActions = [];
   if (allowed('settings.update')) {
     ldapActions.push(button('Testuj połączenie', testLdap));
@@ -341,7 +270,7 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.'),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security, environmentCard),
+    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security),
     ldap
   );
 }

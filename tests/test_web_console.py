@@ -351,9 +351,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Konfiguracja LDAP' in script
     assert '/settings/ldap/test' in script
     assert 'JIT provisioning i RBAC' in script
-    assert "function environmentSettingsForm(config)" in script
-    assert "title: 'Environment'" in script
-    assert "button('Konfiguruj Environment'" in script
+    assert "function environmentTool(config)" in script
+    assert "function environmentsView()" in script
+    assert "button('Zarządzaj środowiskami'" in script
+    assert "id: 'environments'" in script
+    assert "label: 'Środowiska'" in script
+    assert "navigationParent: 'tools'" in script
+    assert "Zapisz środowiska" in script
     assert "function apmidView()" in script
     assert "function apmidTool(config)" in script
     assert "function apmidInputForm(" in script
@@ -375,7 +379,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "!['location', 'role'].includes(token)" in script
     assert "navigationParent: 'tools'" in script
     assert '/settings/vm-classification' in script
-    assert 'settings-environment-grid' in stylesheet
+    assert '.environment-manager-panel' in stylesheet
+    assert '.environment-manager-grid' in stylesheet
+    assert '.environment-manager-card' in stylesheet
     assert '.apmid-list' in stylesheet
     assert '.apmid-inline-form' in stylesheet
     assert '.hostname-defaults-form' in stylesheet

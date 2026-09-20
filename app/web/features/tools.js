@@ -354,6 +354,107 @@ function ansibleHostEntryView() {
 }
 
 
+function environmentTool(config) {
+  const environments = config?.environments || {};
+  const labels = { test: 'TEST', dev: 'DEV', nonprod: 'NONPROD', prod: 'PROD' };
+  const enabled = Object.keys(labels).filter(key => environments[key] !== false);
+  return node('article', { class: 'panel tool-card' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('server')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
+        node('h2', { text: 'Środowiska' }),
+        node('p', { class: 'muted', text: 'Zarządzaj środowiskami dostępnymi przy tworzeniu Blueprintów i maszyn wirtualnych.' })),
+      badge(enabled.length + '/4 aktywne', enabled.length ? 'ok' : 'warning')),
+    node('div', { class: 'tool-meta-grid' },
+      ...Object.entries(labels).map(([key, label]) => toolMeta(label, environments[key] !== false ? 'Włączone' : 'Wyłączone'))),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot ' + (enabled.length ? 'ok' : 'warn') }),
+        enabled.length ? 'Środowiska są dostępne w kreatorze VM' : 'Włącz co najmniej jedno środowisko'),
+      button('Zarządzaj środowiskami', () => navigate('environments'), 'primary'))
+  );
+}
+
+async function environmentsView() {
+  const config = await api('/settings/vm-classification');
+  const canEdit = allowed('settings.update');
+  const labels = {
+    test: ['TEST', 'Środowisko testowe'],
+    dev: ['DEV', 'Środowisko deweloperskie'],
+    nonprod: ['NONPROD', 'Środowisko przedprodukcyjne'],
+    prod: ['PROD', 'Środowisko produkcyjne'],
+  };
+
+  const controls = node('div', { class: 'environment-manager-grid' },
+    ...Object.entries(labels).map(([key, [label, description]]) => {
+      const input = node('input', {
+        type: 'checkbox',
+        name: 'environment_' + key,
+        checked: config.environments?.[key] !== false,
+        disabled: !canEdit,
+      });
+      return node('label', { class: 'environment-manager-card' },
+        input,
+        node('span', { class: 'environment-manager-copy' },
+          node('strong', { text: label }),
+          node('small', { class: 'muted', text: description })),
+        node('span', { class: 'environment-manager-state', text: input.checked ? 'Włączone' : 'Wyłączone' }));
+    }));
+
+  controls.querySelectorAll('input').forEach(input => input.addEventListener('change', () => {
+    const stateLabel = input.closest('.environment-manager-card')?.querySelector('.environment-manager-state');
+    if (stateLabel) stateLabel.textContent = input.checked ? 'Włączone' : 'Wyłączone';
+  }));
+
+  const form = node('form', { class: 'panel environment-manager-panel' },
+    node('div', { class: 'environment-manager-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Klasyfikacja VM' }),
+        node('h2', { text: 'Środowiska' }),
+        node('p', { class: 'muted', text: 'Włączone środowiska są dostępne w kreatorze Blueprintów i podczas tworzenia VM.' })),
+      canEdit ? badge('Edycja', 'ok') : badge('Tylko odczyt', 'info')),
+    controls,
+    canEdit
+      ? node('div', { class: 'environment-manager-actions' },
+          node('button', { class: 'button primary', type: 'submit', text: 'Zapisz środowiska' }))
+      : node('div', { class: 'callout info' },
+          node('strong', { text: 'Tryb tylko do odczytu' }),
+          node('p', { text: 'Do zmiany środowisk wymagane jest uprawnienie settings.update.' }))
+  );
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const environments = {
+      test: data.has('environment_test'),
+      dev: data.has('environment_dev'),
+      nonprod: data.has('environment_nonprod'),
+      prod: data.has('environment_prod'),
+    };
+    if (!Object.values(environments).some(Boolean)) {
+      toast('Włącz co najmniej jedno środowisko.', 'error');
+      return;
+    }
+    await api('/settings/vm-classification', {
+      method: 'PUT',
+      body: {
+        environments,
+        apmids: config.apmids || [],
+        hostname_defaults: config.hostname_defaults || { location: 'wro', role: 'server' },
+      },
+    });
+    toast('Środowiska zapisane.');
+    await environmentsView();
+  });
+
+  dom.content.replaceChildren(
+    heading('Zarządzanie środowiskami.', [button('← Narzędzia', () => navigate('tools'))]),
+    form
+  );
+}
+
+
 function hostnameDefaultsTool(config) {
   const defaults = config?.hostname_defaults || {};
   return node('article', { class: 'panel tool-card' },
@@ -636,6 +737,7 @@ async function toolsView() {
   if (allowed('settings.read')) {
     try {
       const vmClassification = await api('/settings/vm-classification');
+      cards.push(environmentTool(vmClassification));
       cards.push(apmidTool(vmClassification));
       cards.push(hostnameDefaultsTool(vmClassification));
     } catch (error) {
@@ -644,8 +746,8 @@ async function toolsView() {
           node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('list-check')),
           node('div', { class: 'tool-title' },
             node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
-            node('h2', { text: 'APMID i hostname defaults' }),
-            node('p', { class: 'muted', text: 'Lista APMID oraz globalne Location i Role.' })),
+            node('h2', { text: 'Klasyfikacja VM' }),
+            node('p', { class: 'muted', text: 'Środowiska, lista APMID oraz globalne Location i Role.' })),
           badge('Niedostępny', 'warning')),
         node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać ustawień klasyfikacji VM.' })));
     }
@@ -699,6 +801,15 @@ async function toolsView() {
 }
 
 registerView({ id: 'tools', label: 'Narzędzia', iconName: 'wrench', order: 155 }, toolsView);
+registerView({
+  id: 'environments',
+  label: 'Środowiska',
+  iconName: 'server',
+  navigation: false,
+  navigationParent: 'tools',
+  permission: 'settings.read',
+  order: 156,
+}, environmentsView);
 registerView({
   id: 'apmid',
   label: 'APMID',
