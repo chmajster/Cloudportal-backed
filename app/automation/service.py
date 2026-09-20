@@ -9,6 +9,7 @@ from app.api.schemas import AnsibleInput
 from app.catalog import validate_template_variables
 from app.ipam.service import allocate_address
 from app.models import Blueprint, HostnameReservation, HostnameScheme, now
+from app.vm_classification import vm_classification_settings
 
 
 HOSTNAME_FIELDS = 'id scheme_id hostname values status resource_id created_by created_at updated_at released_at'
@@ -151,8 +152,9 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
     if scheme_id:
+        global_hostname_defaults = vm_classification_settings(db)['hostname_defaults']
         defaults = render_template(default_hostname_values, variables)
-        merged_hostname_values = {**defaults, **hostname_values}
+        merged_hostname_values = {**global_hostname_defaults, **defaults, **hostname_values}
         hostname, reservation = generate_hostname(db, scheme_id, merged_hostname_values, actor_id, reserve=True)
         variables['hostname'] = hostname
         # A Blueprint with a hostname scheme uses the generated hostname as the
