@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, or_
@@ -12,6 +12,7 @@ from app.api.schemas import (CatalogItemStateInput, CredentialInput, DeploymentI
 from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, template_definition,
                          template_public, template_source_preview, playbook_source_preview, validate_template_variables)
 from app.catalog_control import catalog_item_public, require_catalog_item_enabled, set_catalog_item_enabled
+from app.blueprint_settings import blueprint_execution_settings
 from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
@@ -496,11 +497,20 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
         raise HTTPException(409, 'Job does not require Blueprint approval')
 
     payload = dict(job.payload or {})
-    payload['_approval'] = {
+    approval = dict(payload.get('_approval') or {})
+    expires_at = approval.get('expires_at')
+    if expires_at:
+        try:
+            if datetime.fromisoformat(expires_at) <= now():
+                raise HTTPException(409, 'Approval request has expired')
+        except ValueError:
+            raise HTTPException(409, 'Approval request expiry is invalid') from None
+    approval.update({
         'status': 'approved',
         'approved_by': actor.user_id,
         'approved_at': now().isoformat(),
-    }
+    })
+    payload['_approval'] = approval
     job.payload = payload
     job.status = 'queued'
     if job.deployment_id:
@@ -522,6 +532,9 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
         raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
     check_job_permissions(request, original.operation)
     payload = dict(original.payload or {})
+    payload.pop('_approval', None)
+    payload.pop('_workflow_runtime', None)
+    payload.pop('_provider_wait', None)
     if original.operation == 'ansible.execute' and payload.get('ansible'):
         from app.api.schemas import AnsibleInput
         validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))
@@ -542,6 +555,43 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
             retry_of=original.id,
             attempt=original.attempt + 1,
         )
+        blueprint = (new.payload or {}).get('blueprint') or {}
+        if original.operation == 'terraform.apply' and blueprint.get('requires_approval'):
+            approval_settings = blueprint_execution_settings(db)
+            new_payload = dict(new.payload or {})
+            if approval_settings['auto_approve_for_executors']:
+                new_payload['_approval'] = {
+                    'status': 'approved',
+                    'approved_by': actor.user_id,
+                    'approved_at': now().isoformat(),
+                    'automatic': True,
+                }
+                db.add(JobLog(
+                    job_id=new.id,
+                    message='workflow.approval.auto: retry zatwierdzony wg aktualnej polityki globalnej',
+                ))
+            else:
+                new_payload['_approval'] = {'status': 'pending'}
+                has_runtime_approval = any(
+                    str(step.get('type')) == 'approval'
+                    for step in (blueprint.get('steps') or [])
+                )
+                if not has_runtime_approval:
+                    expires_at = now() + timedelta(
+                        hours=approval_settings['approval_timeout_hours']
+                    )
+                    new_payload['_approval'].update({
+                        'requested_at': now().isoformat(),
+                        'expires_at': expires_at.isoformat(),
+                    })
+                    new.status = 'waiting_approval'
+                    if deployment is not None:
+                        deployment.status = 'waiting_approval'
+                db.add(JobLog(
+                    job_id=new.id,
+                    message='workflow.approval.pending: retry wymaga ponownej akceptacji',
+                ))
+            new.payload = new_payload
         audit(db, request, 'job.retried', 'jobs', new.id)
         return job_public(new)
 
