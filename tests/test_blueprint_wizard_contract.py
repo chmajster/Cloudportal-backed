@@ -109,6 +109,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'set_tags',
         'terraform_apply',
         'wait_for_agent',
+        'wait_for_ip',
         'run_ansible_playbook',
     ]
 
@@ -127,6 +128,7 @@ console.log(JSON.stringify({
         'cloud_init',
         'terraform_apply',
         'wait_for_agent',
+        'wait_for_ip',
     ]
     assert result['workflow'][1]['depends_on'] == ['hostname']
 

@@ -1,4 +1,6 @@
 import ipaddress
+import os
+import socket
 import re
 from time import monotonic
 from urllib.parse import quote, urlencode, urlsplit
@@ -370,6 +372,41 @@ class ProxmoxProvider(InfrastructureProvider):
         self.secret = decrypt_secret(credential)
         self.verify_ssl = credential.verify_ssl
 
+    def ssh_preflight(self, ssh_env=None):
+        ssh_env = ssh_env or os.environ
+        parsed = urlsplit(self.endpoint)
+        host = parsed.hostname
+        if not host:
+            return {'ok': False, 'reason': 'invalid_endpoint'}
+        try:
+            port = int(ssh_env.get('PROXMOX_VE_SSH_PORT') or 22)
+        except (TypeError, ValueError):
+            return {'ok': False, 'reason': 'invalid_ssh_port'}
+
+        has_auth = bool(
+            self.secret.get('password')
+            or ssh_env.get('PROXMOX_VE_SSH_PASSWORD')
+            or ssh_env.get('PROXMOX_VE_SSH_PRIVATE_KEY')
+            or str(ssh_env.get('PROXMOX_VE_SSH_AGENT') or '').lower() == 'true'
+        )
+        if not has_auth:
+            return {
+                'ok': False,
+                'reason': 'ssh_auth_missing',
+                'host': host,
+                'port': port,
+            }
+        try:
+            with socket.create_connection((host, port), timeout=5):
+                return {'ok': True, 'reason': None, 'host': host, 'port': port}
+        except OSError:
+            return {
+                'ok': False,
+                'reason': 'ssh_unreachable',
+                'host': host,
+                'port': port,
+            }
+
     def execution_availability(self):
         """Check whether Proxmox is temporarily reachable before starting Terraform.
 
@@ -508,6 +545,12 @@ class ProxmoxProvider(InfrastructureProvider):
                 for network in self._get('/nodes/' + quote(n['node'], safe='') + '/network')
             ]
         raise HTTPException(422, 'Unknown resource')
+
+    def guest_agent_ready(self, node, vm_id):
+        data = self._get(
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/ping'
+        )
+        return data is not None
 
     def guest_addresses(self, node, vm_id):
         data = self._get(

@@ -124,8 +124,7 @@ function blueprintWorkflow(options) {
   add('cloud_init', 'cloud_init');
   if (options.tags) add('tags', 'set_tags');
   add('apply', 'terraform_apply');
-  if (options.waitAgent || options.ansible) add('agent', 'wait_for_agent');
-  if (options.ansible) add('ansible', 'run_ansible_playbook');
+  if (options.waitAgent || options.ansible) { add('agent', 'wait_for_agent'); add('guest_ip', 'wait_for_ip'); }  if (options.ansible) add('ansible', 'run_ansible_playbook');
   return steps;
 }
 async function proxmoxBlueprintForm(item = null, options = {}) {
@@ -458,15 +457,16 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const providerId = providerSelect.value;
       const targetNode = nodeSelect.value;
       if (!providerId || !targetNode) return;
-      const [storageResult, networkResult] = await Promise.all([
+      const [storageResult, networkResult, qemuReadiness] = await Promise.all([
         api('/providers/' + providerId + '/storages?node=' + encodeURIComponent(targetNode)),
         api('/providers/' + providerId + '/networks?node=' + encodeURIComponent(targetNode)),
+        api('/providers/' + providerId + '/qemu-agent-readiness').catch(error => ({ ok: false, reason: error.message || 'readiness_check_failed' })),
       ]);
       const availableStorages = storageResult.items.filter(value => !value.disable);
       const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
       const snippetState = window.BlueprintProvisioningGuards.selectSnippetStorage(availableStorages, cloudInitSnippetStorage);
       cloudInitSnippetStorage = snippetState.storage;
-      window.BlueprintProvisioningGuards.syncWaitAgentControl(fields.querySelector('[name="wait_agent"]'), snippetState.snippets);
+      window.BlueprintProvisioningGuards.syncWaitAgentControl(fields.querySelector('[name="wait_agent"]'), snippetState.snippets, qemuReadiness);
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
@@ -861,7 +861,7 @@ async function blueprintForm(item = null) {
     };
 
     const workflowTypes = [
-      ['generate_hostname', 'Wygeneruj hostname'], ['allocate_ip', 'Przydziel IP'], ['release_ip', 'Zwolnij IP'],
+      ['generate_hostname', 'Wygeneruj hostname'], ['allocate_ip', 'Przydziel IP'],
       ['create_vm', 'Utwórz VM'], ['clone_vm', 'Sklonuj VM'], ['configure_vm', 'Skonfiguruj VM'],
       ['cloud_init', 'Cloud-init'], ['start_vm', 'Uruchom VM'], ['wait_for_vm', 'Czekaj na VM'],
       ['wait_for_agent', 'Czekaj na guest agent'], ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
@@ -1154,12 +1154,9 @@ async function blueprintForm(item = null) {
           selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
           deploymentHostnameSchemeField,
           selectField('Credential użytkownika VM', 'deployment_guest_credential_id',
-            [{ value: '', label: 'Nie twórz użytkownika z credentiala' },
-              ...window.BlueprintProvisioningGuards.guestCredentialChoices(credentials)],
-            deployment.guest_credential_id || '', {
-              wide: true,
-              help: 'Wybrany credential SSH zostanie użyty przez cloud-init do utworzenia konta w VM. Nazwa użytkownika pochodzi z credentiala, a odpowiadający mu publiczny klucz SSH zostanie dodany do authorized_keys. Klucz prywatny pozostaje zaszyfrowany w Cloudportal.',
-            }),
+            [{ value: '', label: 'Nie twórz użytkownika z credentiala' }, ...window.BlueprintProvisioningGuards.guestCredentialChoices(credentials)],
+            deployment.guest_credential_id || '', { wide: true,
+              help: 'Wybrany credential SSH zostanie użyty przez cloud-init do utworzenia konta w VM. Nazwa użytkownika pochodzi z credentiala, a odpowiadający mu publiczny klucz SSH zostanie dodany do authorized_keys. Klucz prywatny pozostaje zaszyfrowany w Cloudportal.' }),
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
           ansibleSection)),

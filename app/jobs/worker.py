@@ -26,6 +26,7 @@ class Context:
         self.last_check = 0
         self.step_deadline = None
         self.blueprint_workflow_completed = False
+        self.rollback_destroyed = False
         self.deployment = self.credential = self.ansible = self.ansible_credential = None
 
     def check(self):
@@ -95,6 +96,8 @@ def validate_authorization(db, job):
             needed.add('snapshots.create')
         if 'release_ip' in workflow_types:
             needed.add('ipam.release')
+        if 'terraform_destroy' in workflow_types:
+            needed.add('deployments.destroy')
     if job.operation == 'terraform.destroy':
         needed.add('deployments.destroy')
     if job.operation == 'terraform.import':
@@ -198,21 +201,73 @@ def register_adopted_resource(context):
             resource.destroyed_at = None
         db.commit()
 
+def _workflow_vm_identity(context, workspace):
+    node = str((context.deployment.variables or {}).get('node') or '')
+    if not node:
+        raise ExecutionFailed('Proxmox node missing from deployment variables')
+    return node, vm_id_from_state(workspace), provider_for(context.credential)
+
+
 def wait_for_vm(context, workspace, timeout=600):
-    vm_id = vm_id_from_state(workspace)
-    provider = provider_for(context.credential)
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
     context.stage('workflow.wait_for_vm')
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         context.check()
         try:
-            addresses = provider.guest_addresses(context.deployment.variables['node'], int(vm_id))
-            if addresses:
-                return addresses[:1]
+            status = provider.vm_status(node, vm_id)
+            if str((status or {}).get('status') or '').lower() == 'running':
+                return True
         except Exception:
-            pass  # Guest agent is expected to be unavailable during boot.
+            pass
         time.sleep(2)
-    raise ExecutionFailed('Timed out waiting for VM guest-agent address')
+    raise ExecutionFailed('Timed out waiting for VM running state')
+
+
+def wait_for_agent(context, workspace, timeout=600):
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
+    context.stage('workflow.wait_for_agent')
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        context.check()
+        try:
+            if provider.guest_agent_ready(node, vm_id):
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    raise ExecutionFailed('Timed out waiting for QEMU Guest Agent')
+
+
+def update_inventory_primary_ip(context, address):
+    if not address:
+        return
+    with session() as db:
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == context.deployment.id
+        ).with_for_update())
+        if resource is not None:
+            resource.primary_ip = str(address)
+            db.commit()
+
+
+def wait_for_ip(context, workspace, timeout=600):
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
+    context.stage('workflow.wait_for_ip')
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        context.check()
+        try:
+            addresses = provider.guest_addresses(node, vm_id)
+            ipv4 = [address for address in addresses if ':' not in address]
+            selected = (ipv4 or addresses)[:1]
+            if selected:
+                update_inventory_primary_ip(context, selected[0])
+                return selected
+        except Exception:
+            pass
+        time.sleep(2)
+    raise ExecutionFailed('Timed out waiting for VM IP address')
 
 
 def _provider_retry_delay(attempt):
@@ -228,6 +283,10 @@ def defer_for_provider(job_id, reason='unreachable'):
         payload = dict(current.payload or {})
         wait = dict(payload.get('_provider_wait') or {})
         attempt = int(wait.get('attempts') or 0) + 1
+        if attempt > settings().provider_retry_max_attempts:
+            raise ExecutionFailed(
+                f'Provider remained unavailable after {settings().provider_retry_max_attempts} retry attempts'
+            )
         delay = _provider_retry_delay(attempt)
         next_attempt = now() + timedelta(seconds=delay)
         payload['_provider_wait'] = {
@@ -292,7 +351,7 @@ BLUEPRINT_SUPPORTED_STEPS = (
     BLUEPRINT_DECLARATIVE_STEPS
     | BLUEPRINT_PRECOMPILED_STEPS
     | BLUEPRINT_POST_APPLY_STEPS
-    | {'release_ip', 'terraform_plan', 'terraform_apply', 'condition', 'approval', 'delay', 'notification'}
+    | {'release_ip', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'condition', 'approval', 'delay', 'notification'}
 )
 
 
@@ -370,7 +429,7 @@ def blueprint_conditions_match(step, context):
 
 
 def wait_for_ssh(context, workspace, timeout):
-    addresses = wait_for_vm(context, workspace, timeout=timeout)
+    addresses = wait_for_ip(context, workspace, timeout=timeout)
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
@@ -387,6 +446,16 @@ def wait_for_ssh(context, workspace, timeout):
 
 def release_blueprint_ip(context):
     with session() as db:
+        active_vm = db.scalar(select(ManagedVM.id).where(
+            ManagedVM.deployment_id == context.deployment.id,
+            ManagedVM.lifecycle_status == 'active',
+        ).limit(1))
+        active_resource = db.scalar(select(ManagedResource.id).where(
+            ManagedResource.deployment_id == context.deployment.id,
+            ManagedResource.lifecycle_status == 'active',
+        ).limit(1))
+        if active_vm or active_resource:
+            raise ExecutionFailed('Refusing to release IP while deployment still has an active VM/resource')
         allocation = db.scalar(select(IPAllocation).where(
             IPAllocation.resource_id == context.deployment.id,
             IPAllocation.status != 'released',
@@ -399,6 +468,20 @@ def release_blueprint_ip(context):
         db.commit()
 
 
+def wait_for_proxmox_task(context, provider, node, upid, timeout=600):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        context.check()
+        status = provider.task_status(node, upid) or {}
+        if str(status.get('status') or '').lower() == 'stopped':
+            exit_status = str(status.get('exitstatus') or '')
+            if exit_status == 'OK':
+                return status
+            raise ExecutionFailed(f'Proxmox task failed: {exit_status or "unknown exit status"}')
+        time.sleep(2)
+    raise ExecutionFailed('Timed out waiting for Proxmox task completion')
+
+
 def create_blueprint_snapshot(context, workspace, step):
     if context.deployment.provider != 'proxmox':
         raise ExecutionFailed('create_snapshot is supported only for Proxmox deployments')
@@ -407,14 +490,18 @@ def create_blueprint_snapshot(context, workspace, step):
     if not node:
         raise ExecutionFailed('Proxmox node missing from deployment variables')
     snapname = ('bp-' + context.job.id[:8] + '-' + str(step.get('id') or 'snapshot'))[:40]
-    result = provider_for(context.credential).create_snapshot(
+    provider = provider_for(context.credential)
+    upid = provider.create_snapshot(
         node,
         vm_id,
         snapname,
         'Cloudportal Blueprint workflow snapshot',
         False,
     )
-    context.log(f'workflow.snapshot.created: {snapname} task={result}')
+    if not isinstance(upid, str) or not upid:
+        raise ExecutionFailed('Proxmox did not return a snapshot task ID')
+    wait_for_proxmox_task(context, provider, node, upid, timeout=int(step.get('timeout') or 600))
+    context.log(f'workflow.snapshot.created: {snapname} task={upid}')
 
 
 def run_blueprint_workflow(context, executor):
@@ -436,10 +523,67 @@ def run_blueprint_workflow(context, executor):
         'prepared': [],
     }
 
+    by_id = {str(step.get('id')): step for step in steps}
+    rollback_targets = {str(step.get('rollback')) for step in steps if step.get('rollback')}
+
+
     def require_workspace():
         if runtime['workspace'] is None:
             raise ExecutionFailed('Workflow step requires terraform_apply to run first')
         return runtime['workspace']
+
+    def mark_destroyed_after_rollback():
+        released_at = now()
+        with session() as db:
+            deployment = db.get(Deployment, context.deployment.id)
+            if deployment is not None:
+                deployment.destroyed_at = released_at
+            db.execute(update(HostnameReservation).where(
+                HostnameReservation.resource_id == context.deployment.id,
+                HostnameReservation.status != 'released',
+            ).values(status='released', released_at=released_at))
+            db.execute(update(IPAllocation).where(
+                IPAllocation.resource_id == context.deployment.id,
+                IPAllocation.status != 'released',
+            ).values(status='released', released_at=released_at))
+            db.execute(update(ManagedVM).where(
+                ManagedVM.deployment_id == context.deployment.id,
+            ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+            db.execute(update(ManagedResource).where(
+                ManagedResource.deployment_id == context.deployment.id,
+            ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+            db.commit()
+
+    def execute_rollback(target_id, failed_step_id):
+        rollback_step = by_id.get(str(target_id))
+        if rollback_step is None:
+            raise ExecutionFailed(f'Rollback target {target_id} does not exist')
+        rollback_type = str(rollback_step.get('type'))
+        rollback_timeout = int(rollback_step.get('timeout') or 600)
+        previous_deadline = context.step_deadline
+        context.step_deadline = time.monotonic() + rollback_timeout
+        try:
+            context.stage(f'workflow.rollback.start:{failed_step_id}:{target_id}:{rollback_type}')
+            if rollback_type == 'terraform_destroy':
+                executor.execute('terraform.destroy', context)
+                mark_destroyed_after_rollback()
+                context.rollback_destroyed = True
+            elif rollback_type == 'notification':
+                message = str((rollback_step.get('conditions') or {}).get('message') or target_id)
+                context.log('workflow.rollback.notification: ' + message[:1000])
+            elif rollback_type == 'delay':
+                seconds = float((rollback_step.get('conditions') or {}).get('seconds', 1))
+                if seconds < 0 or seconds > rollback_timeout:
+                    raise ExecutionFailed('Rollback delay seconds must be between 0 and rollback timeout')
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    context.check()
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
+            else:
+                raise ExecutionFailed(f'Unsupported rollback step type: {rollback_type}')
+            context.stage(f'workflow.rollback.completed:{failed_step_id}:{target_id}:{rollback_type}')
+        finally:
+            context.step_deadline = previous_deadline
 
     def apply_and_sync():
         context.stage('workflow.terraform_apply')
@@ -461,6 +605,9 @@ def run_blueprint_workflow(context, executor):
     for step in steps:
         step_id = str(step.get('id'))
         step_type = str(step.get('type'))
+        if step_id in rollback_targets:
+            context.log(f'workflow.step.rollback_only: {step_id}:{step_type}')
+            continue
         retry = int(step.get('retry') or 0)
         timeout = int(step.get('timeout') or 600)
 
@@ -477,6 +624,8 @@ def run_blueprint_workflow(context, executor):
                 if step_type in BLUEPRINT_PRECOMPILED_STEPS:
                     context.log(f'workflow.step.precompiled: {step_id}:{step_type}')
                 elif step_type in BLUEPRINT_DECLARATIVE_STEPS:
+                    if runtime['applied']:
+                        raise ExecutionFailed('Declarative VM step cannot run after terraform_apply')
                     runtime['prepared'].append(step_id + ':' + step_type)
                     context.log(
                         f'workflow.step.prepared: {step_id}:{step_type}; '
@@ -486,8 +635,14 @@ def run_blueprint_workflow(context, executor):
                     runtime['workspace'] = executor.execute('terraform.plan', context)
                 elif step_type == 'terraform_apply':
                     apply_and_sync()
-                elif step_type in {'wait_for_vm', 'wait_for_agent', 'wait_for_ip'}:
-                    runtime['addresses'] = wait_for_vm(context, require_workspace(), timeout=timeout)
+                elif step_type == 'terraform_destroy':
+                    raise ExecutionFailed('terraform_destroy is rollback-only')
+                elif step_type == 'wait_for_vm':
+                    wait_for_vm(context, require_workspace(), timeout=timeout)
+                elif step_type == 'wait_for_agent':
+                    wait_for_agent(context, require_workspace(), timeout=timeout)
+                elif step_type == 'wait_for_ip':
+                    runtime['addresses'] = wait_for_ip(context, require_workspace(), timeout=timeout)
                 elif step_type == 'wait_for_ssh':
                     address = wait_for_ssh(context, require_workspace(), timeout)
                     runtime['addresses'] = [address]
@@ -495,7 +650,7 @@ def run_blueprint_workflow(context, executor):
                     if not context.ansible:
                         raise ExecutionFailed('Workflow requests Ansible but deployment has no Ansible configuration')
                     if runtime['addresses'] is None:
-                        runtime['addresses'] = wait_for_vm(context, require_workspace(), timeout=timeout)
+                        runtime['addresses'] = wait_for_ip(context, require_workspace(), timeout=timeout)
                     context.ansible.inventory = Inventory(hosts=runtime['addresses'])
                     AnsibleExecutor().execute('ansible.execute', context)
                     runtime['ansible_ran'] = True
@@ -539,11 +694,18 @@ def run_blueprint_workflow(context, executor):
                 raise
             except Exception as exc:
                 if attempt >= attempts:
-                    if isinstance(exc, ExecutionFailed):
-                        raise
-                    raise ExecutionFailed(
+                    terminal = exc if isinstance(exc, ExecutionFailed) else ExecutionFailed(
                         f'Workflow step {step_id} ({step_type}) failed'
-                    ) from None
+                    )
+                    rollback_id = step.get('rollback')
+                    if rollback_id:
+                        try:
+                            execute_rollback(rollback_id, step_id)
+                        except Exception as rollback_exc:
+                            raise ExecutionFailed(
+                                f'{terminal}; rollback {rollback_id} failed: {str(rollback_exc)[:200]}'
+                            ) from None
+                    raise terminal
                 context.log(
                     f'workflow.step.retry: {step_id}:{step_type} '
                     f'attempt={attempt}/{attempts} error={str(exc)[:500]}'
@@ -564,7 +726,7 @@ def run_blueprint_workflow(context, executor):
     if context.ansible and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
         if runtime['addresses'] is None:
-            runtime['addresses'] = wait_for_vm(context, require_workspace())
+            runtime['addresses'] = wait_for_ip(context, require_workspace())
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
 
@@ -689,6 +851,7 @@ def execute(job_id):
             and current.source != 'Recovery'
             and current.deployment_id
             and blueprint.get('recovery_policy') == 'destroy_on_failure'
+            and not context.rollback_destroyed
         ):
             deployment = db.get(Deployment, current.deployment_id)
             if deployment is not None and deployment.active_job_id is None:

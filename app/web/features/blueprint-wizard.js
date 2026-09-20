@@ -238,10 +238,16 @@
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         if (!provider || provider.type !== 'proxmox' || !state.node) return;
         try {
-          const [storageResult, networkResult] = await Promise.all([
+          const [storageResult, networkResult, qemuReadiness] = await Promise.all([
             api('/providers/' + provider.id + '/storages?node=' + encodeURIComponent(state.node)),
             api('/providers/' + provider.id + '/networks?node=' + encodeURIComponent(state.node)),
+            api('/providers/' + provider.id + '/qemu-agent-readiness').catch(error => ({
+              ok: false,
+              reason: error.message || 'readiness_check_failed',
+            })),
           ]);
+          state.qemuAgentSshReady = qemuReadiness.ok === true;
+          state.qemuAgentSshReason = qemuReadiness.reason || '';
           const allStorages = (storageResult.items || []).filter(value => !value.disable);
           const storageContent = value => Array.isArray(value.content)
             ? value.content.join(',')
@@ -257,10 +263,8 @@
               || state.snippetStorages[0];
             state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || '');
           }
-          if (!state.snippetStorages.length) {
-            state.cloudInitSnippetStorage = '';
-            state.waitAgent = false;
-          }
+          if (!state.snippetStorages.length) state.cloudInitSnippetStorage = '';
+          if (!state.snippetStorages.length || !state.qemuAgentSshReady) state.waitAgent = false;
           state.networks = (networkResult.items || []).filter(value => value.iface);
           if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
             state.storage = String(state.storages[0]?.storage || state.storages[0]?.id || '');
@@ -965,7 +969,13 @@
         return parts.core.workflow({
           hostname: state.hostnameEnabled,
           ipam: state.ipMode === 'ipam',
-          tags: Boolean(String(state.tags || '').trim()),
+          tags: Boolean(
+            String(state.tags || '').trim()
+            || state.apmid
+            || state.environment
+            || state.selectApmidOnExecute
+            || state.selectEnvironmentOnExecute
+          ),
           waitAgent: state.waitAgent,
           ansible: state.ansibleEnabled,
         });
@@ -1015,9 +1025,11 @@
           render();
         });
         const snippetAvailable = state.providerType !== 'proxmox' || Boolean(state.cloudInitSnippetStorage);
+        const sshReady = state.providerType !== 'proxmox' || state.qemuAgentSshReady !== false;
+        const agentAvailable = snippetAvailable && sshReady;
         const wait = checkboxField('Czekaj na QEMU Agent po Terraform apply — zainstaluj qemu-guest-agent przez cloud-init', 'wait_agent', state.waitAgent);
         const waitControl = wait.querySelector('input');
-        waitControl.disabled = !snippetAvailable;
+        waitControl.disabled = !agentAvailable;
         waitControl.addEventListener('change', event => {
           state.waitAgent = event.currentTarget.checked;
           if (!state.advancedWorkflow) state.workflow = currentAutoWorkflow();
@@ -1030,9 +1042,11 @@
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki, zależności, retry, timeout, rollback i conditions.'
               : 'Wizard dobiera kroki do hostname, IPAM, tagów i Ansible.' })),
-          !snippetAvailable ? node('div', { class: 'callout warning' },
+          !agentAvailable ? node('div', { class: 'callout warning' },
             node('strong', { text: 'QEMU Guest Agent niedostępny' }),
-            node('p', { text: 'Na wybranym node nie wykryto storage obsługującego snippets. Włącz content „Snippets” na storage w Proxmox albo wybierz inny node.' })) : null,
+            node('p', { text: !snippetAvailable
+              ? 'Na wybranym node nie wykryto storage obsługującego snippets. Włącz content „Snippets” na storage w Proxmox albo wybierz inny node.'
+              : 'Preflight SSH do Proxmox nie jest gotowy (' + (state.qemuAgentSshReason || 'ssh_not_ready') + '). Sprawdź SSH, firewall oraz PROXMOX_VE_SSH_*.' })) : null,
           wait,
           toggle,
           workflowVisual(state.advancedWorkflow ? state.workflow : auto));

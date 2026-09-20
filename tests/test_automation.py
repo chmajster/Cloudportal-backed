@@ -218,7 +218,7 @@ def test_blueprint_quick_toggle(client, headers):
     assert enabled.json()['is_active'] is True
 
 
-def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, headers):
+def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, headers, monkeypatch):
     from app.credentials.ssh import generate_ed25519_key_pair
 
     provider_credential, provider, deployment_payload = resources(client, headers)
@@ -253,6 +253,11 @@ def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, head
         ],
     })
     assert created.status_code == 201, created.text
+
+    monkeypatch.setattr(
+        'app.api.automation.provider_for',
+        lambda credential: type('Provider', (), {'ssh_preflight': lambda self: {'ok': True}})(),
+    )
 
     execution = client.post(
         f"/api/v1/blueprints/{created.json()['id']}/execute",
@@ -688,3 +693,117 @@ def test_blueprint_qemu_agent_requires_explicit_snippet_storage(client, headers)
     })
     assert response.status_code == 422
     assert 'cloud_init_snippet_storage' in response.text
+
+
+def test_blueprint_rejects_declarative_step_after_apply(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'bad-order',
+        'name': 'Bad order',
+        'deployment': {
+            'name': 'bad-order',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'tags', 'type': 'set_tags', 'depends_on': ['apply']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'before terraform_apply' in response.text
+
+
+def test_blueprint_rejects_release_ip_during_provisioning(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'unsafe-release-ip',
+        'name': 'Unsafe release IP',
+        'deployment': {
+            'name': 'unsafe-release-ip',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'release', 'type': 'release_ip', 'depends_on': ['apply']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'release_ip is not allowed' in response.text
+
+
+def test_blueprint_allows_destroy_only_as_rollback_target(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    invalid = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'destroy-normal-flow',
+        'name': 'Destroy normal flow',
+        'deployment': {
+            'name': 'destroy-normal-flow',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'destroy', 'type': 'terraform_destroy', 'depends_on': ['apply']},
+        ],
+    })
+    assert invalid.status_code == 422
+    assert 'rollback target' in invalid.text
+
+    valid = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'destroy-rollback',
+        'name': 'Destroy rollback',
+        'deployment': {
+            'name': 'destroy-rollback',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'rollback_destroy', 'type': 'terraform_destroy'},
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'rollback': 'rollback_destroy'},
+        ],
+    })
+    assert valid.status_code == 201, valid.text
+
+
+def test_blueprint_execution_rejects_qemu_agent_when_ssh_preflight_fails(client, headers, monkeypatch):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'ssh-preflight-failure',
+        'name': 'SSH preflight failure',
+        'deployment': {
+            'name': 'ssh-preflight-failure',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'install_qemu_guest_agent': True,
+                'cloud_init_snippet_storage': 'local',
+            },
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'agent', 'type': 'wait_for_agent', 'depends_on': ['apply']},
+        ],
+    })
+    assert created.status_code == 201, created.text
+
+    monkeypatch.setattr(
+        'app.api.automation.provider_for',
+        lambda credential: type('Provider', (), {
+            'ssh_preflight': lambda self: {'ok': False, 'reason': 'ssh_unreachable'}
+        })(),
+    )
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 409
+    assert 'ssh_unreachable' in execution.text

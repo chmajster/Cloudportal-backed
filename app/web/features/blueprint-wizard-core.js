@@ -16,10 +16,10 @@
     site: 'Site',
   };
   const WORKFLOW_TYPES = [
-    'generate_hostname', 'allocate_ip', 'release_ip', 'create_vm', 'clone_vm',
+    'generate_hostname', 'allocate_ip', 'create_vm', 'clone_vm',
     'configure_vm', 'cloud_init', 'start_vm', 'wait_for_vm', 'wait_for_agent',
     'wait_for_ip', 'wait_for_ssh', 'set_hostname', 'run_ansible_playbook',
-    'terraform_plan', 'terraform_apply', 'create_snapshot', 'set_tags',
+    'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot', 'set_tags',
     'health_check', 'condition', 'approval', 'delay', 'notification',
   ];
 
@@ -73,7 +73,10 @@
     add('cloud_init', 'cloud_init');
     if (options.tags) add('tags', 'set_tags');
     add('apply', 'terraform_apply');
-    if (options.waitAgent || options.ansible) add('agent', 'wait_for_agent');
+    if (options.waitAgent || options.ansible) {
+      add('agent', 'wait_for_agent');
+      add('guest_ip', 'wait_for_ip');
+    }
     if (options.ansible) add('ansible', 'run_ansible_playbook');
     return steps;
   }
@@ -82,7 +85,6 @@
     return ({
       generate_hostname: 'Hostname',
       allocate_ip: 'IPAM',
-      release_ip: 'Zwolnij IP',
       create_vm: 'Utwórz VM',
       clone_vm: 'Clone VM',
       configure_vm: 'Konfiguracja VM',
@@ -96,6 +98,7 @@
       run_ansible_playbook: 'Ansible',
       terraform_plan: 'Terraform Plan',
       terraform_apply: 'Terraform Apply',
+      terraform_destroy: 'Terraform Destroy (rollback)',
       create_snapshot: 'Snapshot',
       set_tags: 'Tagi',
       health_check: 'Health check',
@@ -154,6 +157,8 @@
       storages: [],
       snippetStorages: [],
       cloudInitSnippetStorage: 'local',
+      qemuAgentSshReady: true,
+      qemuAgentSshReason: '',
       networks: [],
       selectedTemplateVmid: '',
       selectedTemplateNode: '',

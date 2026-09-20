@@ -4,13 +4,15 @@ from types import SimpleNamespace
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 from sqlalchemy import select
 from app.config import settings
 from app.database import session
 from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
-from app.executors.terraform import TerraformExecutor, workspace_lock
+from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, workspace_lock
 from app.jobs.worker import execute
 from app.jobs.queue import reconcile_cancelled_jobs
 from app.terraform.state import persist_state
@@ -614,3 +616,40 @@ def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
         worker.terminate()
         output, _ = worker.communicate(timeout=15)
     assert 'TimeoutError' not in output and 'Error connecting' not in output
+
+
+def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
+    credential = SimpleNamespace(endpoint='https://pve.example.com:8006')
+
+    class Provider:
+        def __init__(self, credential):
+            self.credential = credential
+
+        def ssh_preflight(self, env):
+            return {'ok': False, 'reason': 'ssh_unreachable', 'host': 'pve.example.com', 'port': 22}
+
+    monkeypatch.setattr('app.providers.proxmox.ProxmoxProvider', Provider)
+
+    with pytest.raises(ExecutionFailed, match='SSH preflight failed'):
+        proxmox_ssh_preflight(credential, {'PROXMOX_VE_SSH_PORT': '22'})
+
+
+def test_provider_qemu_agent_readiness_endpoint(client, headers, monkeypatch):
+    _, provider, _ = resources(client, headers)
+
+    class Adapter:
+        def ssh_preflight(self):
+            return {'ok': False, 'reason': 'ssh_auth_missing', 'host': 'pve.example.com', 'port': 22}
+
+    monkeypatch.setattr('app.api.infrastructure.provider_for', lambda credential: Adapter())
+    response = client.get(
+        f"/api/v1/providers/{provider['id']}/qemu-agent-readiness",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        'ok': False,
+        'reason': 'ssh_auth_missing',
+        'host': 'pve.example.com',
+        'port': 22,
+    }

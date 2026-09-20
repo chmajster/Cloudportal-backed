@@ -72,6 +72,19 @@ def mark_terraform_initialized(workspace, fingerprint, binary):
     os.replace(temporary, marker)
 
 
+def proxmox_ssh_preflight(credential, env):
+    from app.providers.proxmox import ProxmoxProvider
+    readiness = ProxmoxProvider(credential).ssh_preflight(env)
+    if readiness.get('ok'):
+        return readiness
+    reason = readiness.get('reason') or 'ssh_not_ready'
+    host = readiness.get('host') or 'Proxmox'
+    port = readiness.get('port') or 22
+    raise ExecutionFailed(
+        f'Automatic qemu-guest-agent cloud-init SSH preflight failed ({reason}) for {host}:{port}'
+    )
+
+
 class TerraformExecutor(Executor):
     binary = 'terraform'
 

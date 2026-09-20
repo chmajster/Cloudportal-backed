@@ -12,8 +12,9 @@ from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemS
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.database import get_db
-from app.models import (Blueprint, BlueprintManagerRole, Deployment, HostnameReservation, HostnameScheme,
+from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
+from app.providers.registry import provider_for
 from app.security.core import audit, require
 from app.vm_classification import vm_classification_settings
 
@@ -274,6 +275,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         required_workflow_permissions.add('snapshots.create')
     if 'release_ip' in workflow_types:
         required_workflow_permissions.add('ipam.release')
+    if 'terraform_destroy' in workflow_types:
+        required_workflow_permissions.add('deployments.destroy')
     missing_workflow_permissions = required_workflow_permissions - request.state.permissions
     if missing_workflow_permissions:
         raise HTTPException(
@@ -290,6 +293,15 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         provider = find(db, Provider, parsed.provider_id)
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
+        if provider.type == 'proxmox' and parsed.variables.get('install_qemu_guest_agent'):
+            readiness = provider_for(find(db, Credential, parsed.credentials_id)).ssh_preflight()
+            if not readiness.get('ok'):
+                reason = readiness.get('reason') or 'ssh_not_ready'
+                raise HTTPException(
+                    409,
+                    'QEMU Guest Agent provisioning requires Proxmox SSH readiness; '
+                    f'preflight failed: {reason}',
+                )
         credential_ids = {parsed.credentials_id} | ({parsed.ansible.credentials_id} if parsed.ansible else set())
         if guest_credential_id:
             credential_ids.add(guest_credential_id)

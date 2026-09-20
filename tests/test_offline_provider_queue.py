@@ -137,3 +137,29 @@ def test_dispatcher_skips_provider_wait_until_retry_time(client, headers):
         job.payload = dict(payload)
         db.commit()
         assert provider_retry_ready(job) is True
+
+
+def test_provider_offline_retry_limit_becomes_terminal_failure(client, headers, monkeypatch):
+    deployment = _deployment(client, headers)
+    cfg = settings()
+    cfg.provider_offline_queue_enabled = True
+    cfg.provider_retry_base_seconds = 5
+    cfg.provider_retry_max_seconds = 5
+    monkeypatch.setattr(cfg, 'provider_retry_max_attempts', 1)
+
+    class Provider:
+        def execution_availability(self):
+            return {'ok': False, 'retryable': True, 'reason': 'still-offline'}
+
+    monkeypatch.setattr('app.jobs.worker.provider_for', lambda credential: Provider())
+
+    job_id = deployment['job']['id']
+    execute(job_id)
+    first = client.get('/api/v1/jobs/' + job_id, headers=headers).json()
+    assert first['status'] == 'queued'
+    assert first['provider_retry_attempts'] == 1
+
+    execute(job_id)
+    terminal = client.get('/api/v1/jobs/' + job_id, headers=headers).json()
+    assert terminal['status'] == 'failed'
+    assert 'retry attempts' in terminal['error']

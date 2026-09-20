@@ -26,10 +26,16 @@
     };
   }
 
-  function syncWaitAgentControl(control, snippets) {
+  function syncWaitAgentControl(control, snippets, readiness = { ok: true }) {
     if (!control) return;
-    if (!snippets.length) control.checked = false;
-    control.disabled = !snippets.length;
+    const available = snippets.length > 0 && readiness?.ok !== false;
+    if (!available) control.checked = false;
+    control.disabled = !available;
+    control.title = !snippets.length
+      ? 'Brak storage z obsługą snippets'
+      : readiness?.ok === false
+        ? 'Preflight SSH Proxmox nieudany: ' + (readiness.reason || 'ssh_not_ready')
+        : '';
   }
 
   function requiredExecutionPermissions(item = {}) {
@@ -46,6 +52,7 @@
     if (stepTypes.has('run_ansible_playbook')) required.add('ansible.execute');
     if (stepTypes.has('create_snapshot')) required.add('snapshots.create');
     if (stepTypes.has('release_ip')) required.add('ipam.release');
+    if (stepTypes.has('terraform_destroy')) required.add('deployments.destroy');
     return [...required].sort();
   }
 
