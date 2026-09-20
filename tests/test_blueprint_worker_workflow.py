@@ -436,13 +436,16 @@ def test_terraform_destroy_rollback_uses_global_execution_timeout(monkeypatch):
     assert worker.workflow_step_timeout('wait_for_ip', 30) == 30
 
 
-def test_plan_step_is_reused_by_apply_step(monkeypatch):
+def test_plan_step_is_reused_by_apply_step(monkeypatch, tmp_path):
     steps = [
         {'id': 'plan', 'type': 'terraform_plan', 'depends_on': [], 'retry': 0, 'timeout': 30},
         {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['plan'], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
     calls = []
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    digest = worker.hashlib.sha256(b'approved-plan').hexdigest()
 
     class Executor:
         def execute(self, operation, ctx):
@@ -451,8 +454,13 @@ def test_plan_step_is_reused_by_apply_step(monkeypatch):
                 bool(getattr(ctx, 'keep_terraform_plan', False)),
                 bool(getattr(ctx, 'apply_saved_terraform_plan', False)),
             ))
-            return '/tmp/workspace'
+            if operation == 'terraform.plan':
+                (workspace / 'execution.tfplan').write_bytes(b'approved-plan')
+            return workspace
 
+    monkeypatch.setattr(worker, 'persist_plan', lambda deployment_id, workspace: digest)
+    monkeypatch.setattr(worker, 'restore_plan', lambda deployment_id, workspace, expected_sha256=None: True)
+    monkeypatch.setattr(worker, 'delete_plan', lambda deployment_id: None)
     monkeypatch.setattr(
         worker,
         'register_managed_inventory',
@@ -477,3 +485,22 @@ def test_health_check_requires_running_vm(monkeypatch):
 
     with pytest.raises(ExecutionFailed, match='VM is not running'):
         worker.health_check_vm(context, '/tmp/workspace')
+
+
+def test_wait_for_ansible_transport_uses_credential_transport(monkeypatch):
+    context = FakeContext([])
+    context.ansible_credential = SimpleNamespace(type='ssh')
+    observed = []
+    monkeypatch.setattr(worker, 'wait_for_ip', lambda context, workspace, timeout=600: ['192.0.2.50'])
+    monkeypatch.setattr(
+        worker,
+        'wait_for_tcp_addresses',
+        lambda context, addresses, port, timeout, label: observed.append((list(addresses), port, label)) or addresses[0],
+    )
+
+    assert worker.wait_for_ansible_transport(context, '/tmp/workspace', timeout=30) == ['192.0.2.50']
+    assert observed[-1] == (['192.0.2.50'], 22, 'SSH')
+
+    context.ansible_credential = SimpleNamespace(type='winrm')
+    assert worker.wait_for_ansible_transport(context, '/tmp/workspace', timeout=30) == ['192.0.2.50']
+    assert observed[-1] == (['192.0.2.50'], 5986, 'WinRM HTTPS')

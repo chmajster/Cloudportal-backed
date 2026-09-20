@@ -711,8 +711,8 @@ def test_regular_deployment_ansible_uses_ip_inventory(client, headers, monkeypat
     workspace = terraform_state_workspace(tmp_path, vm_id=701)
     monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: workspace)
     monkeypatch.setattr(
-        'app.jobs.worker.wait_for_ip',
-        lambda context, workspace, timeout=600: ['192.0.2.70'],
+        'app.jobs.worker.wait_for_ansible_transport',
+        lambda context, workspace, timeout=600, addresses=None: ['192.0.2.70'],
     )
     observed = {}
     monkeypatch.setattr(

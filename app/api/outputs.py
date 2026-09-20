@@ -41,6 +41,7 @@ class VMClassificationSettingsOutput(Output):
 
 class BlueprintExecutionSettingsOutput(Output):
     auto_approve_for_executors: bool
+    approval_timeout_hours: int
 
 
 class LDAPSettingsOutput(Output):

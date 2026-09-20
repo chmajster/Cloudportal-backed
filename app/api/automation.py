@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
@@ -131,6 +132,22 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
+    workflow_types = {str(step.type) for step in data.workflow}
+    if blueprint_id is None and 'terraform_apply' not in workflow_types:
+        raise HTTPException(422, 'New Blueprints must contain an explicit terraform_apply step')
+
+    proxmox_only_steps = {
+        'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+        'run_ansible_playbook', 'create_snapshot', 'health_check',
+    }
+    invalid_provider_steps = sorted(workflow_types & proxmox_only_steps) if provider.type != 'proxmox' else []
+    if invalid_provider_steps:
+        raise HTTPException(
+            422,
+            'Workflow steps supported only for Proxmox: ' + ', '.join(invalid_provider_steps),
+        )
+    if data.deployment.ansible and provider.type != 'proxmox':
+        raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
     if (
         data.deployment.template == 'proxmox-vm'
         and data.deployment.variables.get('install_qemu_guest_agent') is True
@@ -342,13 +359,32 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                     message='workflow.approval.auto: blueprints.execute uprawnia do automatycznej akceptacji',
                 ))
             else:
+                has_runtime_approval = any(
+                    str(step.get('type')) == 'approval' for step in (row.workflow or [])
+                )
                 payload['_approval'] = {'status': 'pending'}
-                job.status = 'waiting_approval'
-                deployment.status = 'waiting_approval'
-                db.add(JobLog(
-                    job_id=job.id,
-                    message='workflow.approval.pending: oczekiwanie na zatwierdzenie',
-                ))
+                if has_runtime_approval:
+                    db.add(JobLog(
+                        job_id=job.id,
+                        message='workflow.approval.deferred: approval nastąpi w zadanym kroku DAG',
+                    ))
+                else:
+                    expires_at = now() + timedelta(
+                        hours=approval_settings['approval_timeout_hours']
+                    )
+                    payload['_approval'].update({
+                        'requested_at': now().isoformat(),
+                        'expires_at': expires_at.isoformat(),
+                    })
+                    job.status = 'waiting_approval'
+                    deployment.status = 'waiting_approval'
+                    db.add(JobLog(
+                        job_id=job.id,
+                        message=(
+                            'workflow.approval.pending: oczekiwanie na zatwierdzenie; '
+                            f'expires_at={expires_at.isoformat()}'
+                        ),
+                    ))
             job.payload = payload
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id

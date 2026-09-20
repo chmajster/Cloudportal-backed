@@ -20,7 +20,7 @@ function productCard(item) {
     badge('v' + item.version, 'info'),
     badge(template, ''),
     provider ? badge(provider, '') : null,
-    item.requires_approval ? badge('Wymaga zatwierdzenia', 'warning') : null);
+    item.requires_approval ? badge('Approval wg polityki globalnej', 'warning') : null);
 
   return node('article', { class: 'product-card' },
     node('div', { class: 'product-card-top' },
