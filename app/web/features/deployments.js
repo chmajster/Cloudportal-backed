@@ -157,13 +157,36 @@ function managedResourceCard(item, providerNames) {
       button('Szczegóły', () => showObjectDetails(item.name || 'Zasób', details, 'Zasób zarządzany'))));
 }
 
-function resourceSection(title, description, count, content) {
-  return node('section', { class: 'panel my-resources-section' },
+function resourceSummaryCard(iconName, label, count, subtitle, tone, sectionId) {
+  return node('button', {
+    class: 'my-resources-summary-card my-resources-summary-card-' + tone,
+    type: 'button',
+    onClick: () => document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+  },
+    node('span', { class: 'my-resources-summary-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
+    node('span', { class: 'my-resources-summary-copy' },
+      node('span', { class: 'my-resources-summary-label', text: label }),
+      node('strong', { text: String(count) }),
+      node('small', { text: subtitle })),
+    node('span', { class: 'my-resources-summary-chevron', 'aria-hidden': 'true' }, appIcon('chevron-right')));
+}
+
+function resourceEmptyState(iconName, title, description) {
+  return node('div', { class: 'my-resources-empty' },
+    node('span', { class: 'my-resources-empty-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
+    node('strong', { text: title }),
+    node('span', { class: 'muted', text: description }));
+}
+
+function resourceSection(id, iconName, title, description, count, content) {
+  return node('section', { class: 'panel my-resources-section', id },
     node('div', { class: 'my-resources-section-head' },
-      node('div', {},
-        node('h2', { text: title }),
-        node('p', { class: 'muted', text: description })),
-      badge(String(count), count ? 'info' : '')),
+      node('div', { class: 'my-resources-section-title' },
+        node('span', { class: 'my-resources-section-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
+        node('div', {},
+          node('h2', { text: title }),
+          node('p', { class: 'muted', text: description }))),
+      node('span', { class: 'my-resources-section-count', text: String(count) })),
     content);
 }
 
@@ -185,11 +208,11 @@ async function myResourcesView() {
 
   const vmGrid = vms.length
     ? node('div', { class: 'my-resource-grid' }, ...vms.map(item => managedVmCard(item, providerNames, deploymentById)))
-    : node('div', { class: 'my-resources-empty' }, node('strong', { text: 'Brak maszyn VM' }), node('span', { class: 'muted', text: 'Nie ma VM dostępnych dla bieżących uprawnień.' }));
+    : resourceEmptyState('monitor', 'Brak maszyn VM', 'Nie ma VM dostępnych dla bieżących uprawnień.');
 
   const resourceGrid = resources.length
     ? node('div', { class: 'my-resource-grid' }, ...resources.map(item => managedResourceCard(item, providerNames)))
-    : node('div', { class: 'my-resources-empty' }, node('strong', { text: 'Brak innych zasobów' }), node('span', { class: 'muted', text: 'Nie ma innych zarządzanych zasobów dostępnych dla bieżących uprawnień.' }));
+    : resourceEmptyState('box', 'Brak innych zasobów', 'Nie ma innych zarządzanych zasobów dostępnych dla bieżących uprawnień.');
 
   const deploymentContent = deployments.length
     ? table([
@@ -207,18 +230,22 @@ async function myResourcesView() {
         actions.push(...deploymentActions(item, 'my-resources'));
         return actions;
       })
-    : node('div', { class: 'my-resources-empty' }, node('strong', { text: 'Brak wdrożeń' }), node('span', { class: 'muted', text: 'Nie ma wdrożeń dostępnych dla bieżących uprawnień.' }));
+    : resourceEmptyState('rocket', 'Brak wdrożeń', 'Nie ma wdrożeń dostępnych dla bieżących uprawnień.');
 
   dom.content.replaceChildren(
-    productResourceTabs('resources'),
-    heading('Zasoby i wdrożenia dostępne dla zalogowanego użytkownika. Wejście w VM otwiera panel sterowania zgodny z jego uprawnieniami.'),
+    node('div', { class: 'my-resources-page-head' },
+      productResourceTabs('resources'),
+      node('p', {
+        class: 'my-resources-intro',
+        text: 'Zasoby i wdrożenia dostępne dla zalogowanego użytkownika. Wejście w VM otwiera panel sterowania zgodny z jego uprawnieniami.',
+      })),
     node('div', { class: 'my-resources-summary' },
-      node('article', {}, node('span', { text: 'VM' }), node('strong', { text: String(vms.length) })),
-      node('article', {}, node('span', { text: 'Inne zasoby' }), node('strong', { text: String(resources.length) })),
-      node('article', {}, node('span', { text: 'Wdrożenia' }), node('strong', { text: String(deployments.length) }))),
-    resourceSection('Maszyny wirtualne', 'Kliknij „Zarządzaj VM”, aby przejść do sterowania, konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
-    resourceSection('Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
-    resourceSection('Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent)
+      resourceSummaryCard('server', 'VM', vms.length, 'Maszyny wirtualne', 'vm', 'my-resources-vms'),
+      resourceSummaryCard('database', 'Inne zasoby', resources.length, 'Zasoby dodatkowe', 'resources', 'my-resources-other'),
+      resourceSummaryCard('rocket', 'Wdrożenia', deployments.length, 'Aktywne wdrożenia', 'deployments', 'my-resources-deployments')),
+    resourceSection('my-resources-vms', 'monitor', 'Maszyny wirtualne', 'Kliknij „Zarządzaj VM”, aby przejść do sterowania, konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
+    resourceSection('my-resources-other', 'box', 'Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
+    resourceSection('my-resources-deployments', 'rocket', 'Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent)
   );
 }
 
