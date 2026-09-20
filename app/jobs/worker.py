@@ -280,6 +280,10 @@ def defer_for_provider(job_id, reason='unreachable'):
         payload = dict(current.payload or {})
         wait = dict(payload.get('_provider_wait') or {})
         attempt = int(wait.get('attempts') or 0) + 1
+        if attempt > settings().provider_retry_max_attempts:
+            raise ExecutionFailed(
+                f'Provider remained unavailable after {settings().provider_retry_max_attempts} retry attempts'
+            )
         delay = _provider_retry_delay(attempt)
         next_attempt = now() + timedelta(seconds=delay)
         payload['_provider_wait'] = {
@@ -439,6 +443,16 @@ def wait_for_ssh(context, workspace, timeout):
 
 def release_blueprint_ip(context):
     with session() as db:
+        active_vm = db.scalar(select(ManagedVM.id).where(
+            ManagedVM.deployment_id == context.deployment.id,
+            ManagedVM.lifecycle_status == 'active',
+        ).limit(1))
+        active_resource = db.scalar(select(ManagedResource.id).where(
+            ManagedResource.deployment_id == context.deployment.id,
+            ManagedResource.lifecycle_status == 'active',
+        ).limit(1))
+        if active_vm or active_resource:
+            raise ExecutionFailed('Refusing to release IP while deployment still has an active VM/resource')
         allocation = db.scalar(select(IPAllocation).where(
             IPAllocation.resource_id == context.deployment.id,
             IPAllocation.status != 'released',
@@ -451,6 +465,20 @@ def release_blueprint_ip(context):
         db.commit()
 
 
+def wait_for_proxmox_task(context, provider, node, upid, timeout=600):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        context.check()
+        status = provider.task_status(node, upid) or {}
+        if str(status.get('status') or '').lower() == 'stopped':
+            exit_status = str(status.get('exitstatus') or '')
+            if exit_status == 'OK':
+                return status
+            raise ExecutionFailed(f'Proxmox task failed: {exit_status or "unknown exit status"}')
+        time.sleep(2)
+    raise ExecutionFailed('Timed out waiting for Proxmox task completion')
+
+
 def create_blueprint_snapshot(context, workspace, step):
     if context.deployment.provider != 'proxmox':
         raise ExecutionFailed('create_snapshot is supported only for Proxmox deployments')
@@ -459,14 +487,18 @@ def create_blueprint_snapshot(context, workspace, step):
     if not node:
         raise ExecutionFailed('Proxmox node missing from deployment variables')
     snapname = ('bp-' + context.job.id[:8] + '-' + str(step.get('id') or 'snapshot'))[:40]
-    result = provider_for(context.credential).create_snapshot(
+    provider = provider_for(context.credential)
+    upid = provider.create_snapshot(
         node,
         vm_id,
         snapname,
         'Cloudportal Blueprint workflow snapshot',
         False,
     )
-    context.log(f'workflow.snapshot.created: {snapname} task={result}')
+    if not isinstance(upid, str) or not upid:
+        raise ExecutionFailed('Proxmox did not return a snapshot task ID')
+    wait_for_proxmox_task(context, provider, node, upid, timeout=int(step.get('timeout') or 600))
+    context.log(f'workflow.snapshot.created: {snapname} task={upid}')
 
 
 def run_blueprint_workflow(context, executor):
