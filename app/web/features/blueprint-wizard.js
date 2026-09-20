@@ -177,6 +177,10 @@
       data.managerRoles = roles.filter(role =>
         !dedicatedElsewhere.has(Number(role.id))
         && [...managerRequired].every(permission => (role.permissions || []).includes(permission)));
+      const defaultManagerRoleNames = new Set(['Administrator', 'Infrastructure Administrator']);
+      state.managerRoleIds = data.managerRoles
+        .filter(role => defaultManagerRoleNames.has(role.name))
+        .map(role => Number(role.id));
 
       let bodyRoot = null;
       let navRoot = null;
