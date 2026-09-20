@@ -320,14 +320,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Konfiguruj Environment'" in script
     assert "function apmidView()" in script
     assert "function apmidTool(config)" in script
+    assert "function apmidInputForm(" in script
     assert "button('Otwórz listę APMID'" in script
-    assert "button('Dodaj wiersz'" in script
-    assert "button('Zapisz listę APMID'" in script
+    assert "button('Dodaj APMID'" in script
+    assert "button('Edytuj'" in script
+    assert "button('Usuń'" in script
     assert "id: 'apmid'" in script
     assert "navigationParent: 'tools'" in script
     assert '/settings/vm-classification' in script
     assert 'settings-environment-grid' in stylesheet
-    assert '.apmid-sheet' in stylesheet
+    assert '.apmid-list' in stylesheet
+    assert '.apmid-inline-form' in stylesheet
     assert "environment: 'environment'" in script
     assert "apmid: 'apmid'" in script
     assert "apmid + '.' + environment" in script
