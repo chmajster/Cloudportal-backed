@@ -46,6 +46,44 @@ def call(path: str, method: str = 'GET', payload: dict | None = None):
         raise HTTPException(exc.status, exc.detail) from None
 
 
+def run_update_request(payload: dict) -> dict:
+    def request_once():
+        try:
+            return updater_request('/run', 'POST', payload)
+        except UpdaterError as exc:
+            if exc.status == 409 and 'already in progress' in exc.detail.lower():
+                return {'accepted': False, 'already_running': True}
+            raise HTTPException(exc.status, exc.detail) from None
+
+    result = request_once()
+    if not result.get('already_running'):
+        return result
+
+    status = result.get('status')
+    if not isinstance(status, dict):
+        try:
+            status = updater_request('/status')
+        except UpdaterError:
+            status = {}
+
+    operation_active = status.get('operation_active')
+    clearly_idle = operation_active is False or (
+        operation_active is None and status.get('status') not in {'running', 'checking'}
+    )
+    if not clearly_idle:
+        return {'accepted': False, 'already_running': True, 'status': status}
+
+    # Compatibility recovery for an older/stale sidecar that reports a
+    # conflict while no live update operation exists. Retry exactly once.
+    retry = request_once()
+    if retry.get('already_running'):
+        retry_status = retry.get('status')
+        if not isinstance(retry_status, dict):
+            retry_status = status
+        return {'accepted': False, 'already_running': True, 'status': retry_status}
+    return retry
+
+
 @router.get('/status')
 def update_status(actor=Depends(require('updates.read'))):
     return call('/status')
@@ -82,12 +120,7 @@ def update_run(
 ):
     if data.ref is not None and 'updates.update' not in request.state.permissions:
         raise HTTPException(403, 'updates.update required to override update ref')
-    try:
-        result = call('/run', 'POST', data.model_dump(exclude_none=True))
-    except HTTPException as exc:
-        if exc.status_code == 409 and 'already in progress' in str(exc.detail).lower():
-            return {'accepted': False, 'already_running': True}
-        raise
+    result = run_update_request(data.model_dump(exclude_none=True))
     audit(db, request, 'update.started', 'system_updates', data.ref)
     return result
 
