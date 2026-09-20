@@ -19,6 +19,7 @@ const UPDATE_PHASES = [
   ['complete', 'Gotowe'],
 ];
 let updatePollTimer = null;
+let updateStartPending = false;
 
 function normalizedUpdateStatus(status) {
   if (!status || typeof status !== 'object') return status;
@@ -28,7 +29,19 @@ function normalizedUpdateStatus(status) {
       status: 'success',
       progress: 100,
       update_available: false,
+      operation_active: false,
       message: status.message || 'Aktualizacja zakończona pomyślnie.',
+    };
+  }
+  if (status.operation_active && !['running', 'failed', 'success'].includes(status.status)) {
+    return {
+      ...status,
+      status: 'running',
+      phase: ['checking', 'available', 'up_to_date', 'local_ahead', 'idle'].includes(status.phase)
+        ? 'preflight'
+        : status.phase,
+      message: 'Aktualizacja jest już uruchomiona.',
+      finished_at: null,
     };
   }
   return status;
@@ -314,13 +327,14 @@ function technicalLog(status) {
 }
 
 function statusActions(status, container, settings) {
-  const busy = updateBusy(status.status);
+  const busy = updateBusy(status.status) || Boolean(status.operation_active) || updateStartPending;
   const group = node('div', { class: 'update-hero-actions' });
   const checkButton = node('button', {
     class: 'button ghost',
     type: 'button',
     disabled: busy,
     onClick: async () => {
+      if (updateStartPending) return;
       checkButton.disabled = true;
       try {
         await api('/updates/check', { method: 'POST', body: {}, idempotent: true });
@@ -328,7 +342,7 @@ function statusActions(status, container, settings) {
       } catch (error) {
         toast(error.message, 'error');
       } finally {
-        checkButton.disabled = false;
+        if (!updateStartPending) checkButton.disabled = false;
       }
     },
   }, status.status === 'checking' ? 'Sprawdzanie…' : 'Sprawdź aktualizacje');
@@ -339,22 +353,39 @@ function statusActions(status, container, settings) {
     const installLabel = status.status === 'update_available'
       ? 'Zainstaluj nowszy commit'
       : noNewerCommit ? 'Brak nowszego commita' : 'Aktualizuj teraz';
-    group.append(node('button', {
+    const installButton = node('button', {
       class: 'button primary',
       type: 'button',
       disabled: busy || noNewerCommit,
       onClick: () => {
+        if (updateStartPending || updateBusy(status.status) || status.operation_active) return;
         confirmAction(
           'Aktualizacja Cloudportal',
           'Zostanie utworzony backup PostgreSQL, pobrana nowa wersja i zrestartowane usługi aplikacji. Serwis aktualizacji i ten podgląd pozostaną aktywne.',
           async () => {
-            await api('/updates/run', { method: 'POST', body: {}, idempotent: true });
-            toast('Aktualizacja uruchomiona.');
-            await renderLiveStatus(container, settings);
+            if (updateStartPending) return;
+            updateStartPending = true;
+            checkButton.disabled = true;
+            installButton.disabled = true;
+            installButton.textContent = 'Uruchamianie…';
+            try {
+              const result = await api('/updates/run', { method: 'POST', body: {}, idempotent: true });
+              if (!result.already_running) toast('Aktualizacja uruchomiona.');
+              await renderLiveStatus(container, settings);
+            } catch (error) {
+              if (String(error.message || '').toLowerCase().includes('already in progress')) {
+                await renderLiveStatus(container, settings);
+              } else {
+                toast(error.message, 'error');
+              }
+            } finally {
+              updateStartPending = false;
+            }
           }
         );
       },
-    }, busy ? 'Aktualizacja trwa…' : installLabel));
+    }, busy ? 'Aktualizacja trwa…' : installLabel);
+    group.append(installButton);
   }
   return group;
 }

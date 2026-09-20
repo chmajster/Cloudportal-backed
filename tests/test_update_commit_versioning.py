@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -112,3 +113,77 @@ def test_unknown_local_commit_accepts_channel_head_as_version():
 
     assert result['relation'] == 'unknown_current'
     assert result['update_available'] is True
+
+
+def prepare_updater_state(updater, tmp_path, monkeypatch, commit='1' * 40):
+    config = tmp_path / 'etc'
+    data = tmp_path / 'data'
+    current = tmp_path / 'app' / 'current'
+    config.mkdir()
+    data.mkdir()
+    current.mkdir(parents=True)
+    settings_file = config / 'updater.json'
+    settings_file.write_text(json.dumps({
+        'enabled': False,
+        'interval_hours': 24,
+        'ref': 'main',
+        'github_token_file': '',
+        'github_config': '',
+    }))
+    (current / '.cloudportal-release.json').write_text(json.dumps({
+        'commit_sha': commit,
+        'ref': 'main',
+    }))
+    monkeypatch.setattr(updater, 'SETTINGS_FILE', settings_file)
+    monkeypatch.setattr(updater, 'STATE_DIR', data / 'update')
+    monkeypatch.setattr(updater, 'STATE_FILE', data / 'update' / 'state.json')
+    monkeypatch.setattr(updater, 'CURRENT_LINK', current)
+    updater.atomic_json(updater.STATE_FILE, updater.default_state())
+
+
+def test_update_context_check_does_not_revert_public_state_to_update_available(tmp_path, monkeypatch):
+    updater = load_updater()
+    prepare_updater_state(updater, tmp_path, monkeypatch)
+    target = {'sha': '2' * 40, 'committed_at': '2026-09-20T01:00:00Z'}
+
+    monkeypatch.setattr(updater, 'remote_commit', lambda ref, settings: target)
+    monkeypatch.setattr(updater, 'commit_order', lambda current, remote, settings: {
+        'relation': 'target_newer',
+        'update_available': True,
+        'ahead_by': 4,
+        'behind_by': 0,
+        'current_commit_at': '2026-09-19T01:00:00Z',
+    })
+
+    result = updater.check_remote('main', update_context=True)
+    state = updater.load_state()
+
+    assert result['update_available'] is True
+    assert state['status'] == 'running'
+    assert state['phase'] == 'preflight'
+    assert state['progress'] == 8
+    assert state['finished_at'] is None
+    assert state['message'] == 'Nowszy commit potwierdzony. Przygotowanie do instalacji.'
+
+
+def test_runtime_state_marks_live_update_thread_as_running(tmp_path, monkeypatch):
+    updater = load_updater()
+    prepare_updater_state(updater, tmp_path, monkeypatch)
+    updater.save_state(
+        status='update_available',
+        phase='available',
+        progress=8,
+        message='Dostępny jest nowszy commit.',
+    )
+
+    class AliveThread:
+        def is_alive(self):
+            return True
+
+    updater.update_thread = AliveThread()
+    state = updater.runtime_state()
+
+    assert state['operation_active'] is True
+    assert state['status'] == 'running'
+    assert state['phase'] == 'preflight'
+    assert state['finished_at'] is None
