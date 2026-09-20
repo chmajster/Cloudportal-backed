@@ -326,6 +326,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert ".settings-grid" in stylesheet
     assert ".settings-choice" in stylesheet
     assert ".settings-ldap-panel" in stylesheet
+    assert ".settings-ldap-hero" in stylesheet
+    assert ".settings-ldap-overview" in stylesheet
+    assert ".settings-ldap-section" in stylesheet
+    assert ".settings-ldap-detail-grid" in stylesheet
+    assert ".settings-ldap-jit" in stylesheet
+    assert ".settings-ldap-filter-grid" in stylesheet
+    assert ".settings-ldap-filter-card" in stylesheet
+    assert 'Przykładowe filtry użytkownika' in script
+    assert 'Testuj połączenie' in script
     assert 'Konfiguracja LDAP' in script
     assert '/settings/ldap/test' in script
     assert 'JIT provisioning i RBAC' in script
