@@ -463,6 +463,8 @@ def run_blueprint_workflow(context, executor):
         step_type = str(step.get('type'))
         retry = int(step.get('retry') or 0)
         timeout = int(step.get('timeout') or 600)
+        if step_type in {'terraform_plan', 'terraform_apply'}:
+            timeout = max(timeout, settings().execution_timeout)
 
         if not blueprint_conditions_match(step, context):
             context.log(f'workflow.step.skipped: {step_id}:{step_type}: condition=false')
