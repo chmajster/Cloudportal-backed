@@ -152,6 +152,8 @@
       templates: [],
       nodes: [],
       storages: [],
+      snippetStorages: [],
+      cloudInitSnippetStorage: 'local',
       networks: [],
       selectedTemplateVmid: '',
       selectedTemplateNode: '',
@@ -255,6 +257,7 @@
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
         install_qemu_guest_agent: Boolean(state.waitAgent),
+        cloud_init_snippet_storage: state.cloudInitSnippetStorage || 'local',
         tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
