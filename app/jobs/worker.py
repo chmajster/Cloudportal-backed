@@ -22,6 +22,7 @@ from app.models import Audit, Credential, Deployment, HostnameReservation, IPAll
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
+from app.terraform.state import delete_plan, persist_plan, restore_plan
 
 
 class ApprovalPending(Exception):
@@ -727,10 +728,16 @@ def run_blueprint_workflow(context, executor):
         if not runtime['plan_ready']:
             return
         workspace = runtime['workspace']
-        plan_path = workspace / 'execution.tfplan' if workspace else None
-        if not plan_path or not plan_path.exists():
-            raise ExecutionFailed('Approved Terraform plan is unavailable; generate and approve a new plan')
+        if workspace is None:
+            raise ExecutionFailed('Approved Terraform plan workspace is unavailable')
         expected = runtime.get('plan_sha256')
+        try:
+            restored = restore_plan(context.deployment.id, workspace, expected_sha256=expected)
+        except RuntimeError as exc:
+            raise ExecutionFailed(str(exc)) from None
+        if not restored:
+            raise ExecutionFailed('Approved Terraform plan is unavailable; generate and approve a new plan')
+        plan_path = workspace / 'execution.tfplan'
         actual = hashlib.sha256(plan_path.read_bytes()).hexdigest()
         if not expected or actual != expected:
             raise ExecutionFailed('Approved Terraform plan checksum mismatch; generate and approve a new plan')
@@ -746,6 +753,8 @@ def run_blueprint_workflow(context, executor):
         finally:
             context.apply_saved_terraform_plan = False
         runtime['plan_ready'] = False
+        runtime['plan_sha256'] = None
+        delete_plan(context.deployment.id)
         runtime['workspace'] = workspace
         runtime['applied'] = True
         context.stage('inventory.synchronizing')
@@ -889,10 +898,13 @@ def run_blueprint_workflow(context, executor):
                     finally:
                         context.keep_terraform_plan = False
                     runtime['plan_ready'] = True
-                    plan_path = runtime['workspace'] / 'execution.tfplan'
-                    if not plan_path.exists():
-                        raise ExecutionFailed('Terraform plan was not persisted for approval/apply')
-                    runtime['plan_sha256'] = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+                    try:
+                        runtime['plan_sha256'] = persist_plan(
+                            context.deployment.id,
+                            runtime['workspace'],
+                        )
+                    except RuntimeError as exc:
+                        raise ExecutionFailed(str(exc)) from None
                 elif step_type == 'terraform_apply':
                     apply_and_sync()
                 elif step_type == 'terraform_destroy':
