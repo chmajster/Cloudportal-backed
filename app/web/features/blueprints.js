@@ -124,10 +124,7 @@ function blueprintWorkflow(options) {
   add('cloud_init', 'cloud_init');
   if (options.tags) add('tags', 'set_tags');
   add('apply', 'terraform_apply');
-  if (options.waitAgent || options.ansible) {
-    add('agent', 'wait_for_agent');
-    add('guest_ip', 'wait_for_ip');
-  }
+  if (options.waitAgent || options.ansible) { add('agent', 'wait_for_agent'); add('guest_ip', 'wait_for_ip'); }
   if (options.ansible) add('ansible', 'run_ansible_playbook');
   return steps;
 }
