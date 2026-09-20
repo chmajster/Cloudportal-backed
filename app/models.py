@@ -295,6 +295,14 @@ class TerraformState(Base):
 
 
 
+class TerraformPlan(Base):
+    __tablename__ = "terraform_plans"
+    deployment_id: Mapped[str] = mapped_column(ForeignKey("deployments.id", ondelete="CASCADE"), primary_key=True)
+    encrypted_plan: Mapped[bytes] = mapped_column(LargeBinary)
+    plan_sha256: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
 class ManagedResource(Timestamp, Base):
     __tablename__ = "managed_resources"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
