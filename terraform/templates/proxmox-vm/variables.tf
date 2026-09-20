@@ -19,6 +19,14 @@ variable "ssh_public_key" {
   type    = string
   default = null
 }
+variable "install_qemu_guest_agent" {
+  type    = bool
+  default = false
+}
+variable "cloud_init_snippet_storage" {
+  type    = string
+  default = "local"
+}
 variable "ipv4_address" {
   type    = string
   default = null

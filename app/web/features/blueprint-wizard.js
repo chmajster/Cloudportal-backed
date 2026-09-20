@@ -202,6 +202,7 @@
           state.nodes = [];
           state.templates = [];
           state.storages = [];
+          state.snippetStorages = [];
           state.networks = [];
           state.providerConnected = Boolean(provider.credentials_id);
           return;
@@ -241,11 +242,21 @@
             api('/providers/' + provider.id + '/storages?node=' + encodeURIComponent(state.node)),
             api('/providers/' + provider.id + '/networks?node=' + encodeURIComponent(state.node)),
           ]);
-          state.storages = (storageResult.items || []).filter(value => {
-            if (value.disable) return false;
-            const content = Array.isArray(value.content) ? value.content.join(',') : String(value.content || '');
+          const allStorages = (storageResult.items || []).filter(value => !value.disable);
+          const storageContent = value => Array.isArray(value.content)
+            ? value.content.join(',')
+            : String(value.content || '');
+          state.storages = allStorages.filter(value => {
+            const content = storageContent(value);
             return !content || content.includes('images');
           });
+          state.snippetStorages = allStorages.filter(value => storageContent(value).includes('snippets'));
+          if (!state.snippetStorages.some(value =>
+            String(value.storage || value.id) === String(state.cloudInitSnippetStorage))) {
+            const preferredSnippet = state.snippetStorages.find(value => String(value.storage || value.id) === 'local')
+              || state.snippetStorages[0];
+            state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || 'local');
+          }
           state.networks = (networkResult.items || []).filter(value => value.iface);
           if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
             state.storage = String(state.storages[0]?.storage || state.storages[0]?.id || '');
@@ -280,6 +291,7 @@
           tags: 'tags',
           ssh_username: 'sshUsername',
           ssh_public_key: 'sshPublicKey',
+          guest_credential_id: 'guestCredentialId',
           hostname_enabled: 'hostnameEnabled',
           manual_vm_name: 'manualVmName',
           ipv4_address: 'ipv4Address',
@@ -333,6 +345,7 @@
             state.tags = root.querySelector('[name="tags"]')?.value.trim() || '';
             state.sshUsername = root.querySelector('[name="ssh_username"]')?.value.trim() || 'clouduser';
             state.sshPublicKey = root.querySelector('[name="ssh_public_key"]')?.value.trim() || '';
+            state.guestCredentialId = root.querySelector('[name="guest_credential_id"]')?.value || state.guestCredentialId;
           } else {
             root.querySelectorAll('[data-generic-variable]').forEach(input => {
               const template = data.templates.find(value => value.id === state.terraformTemplateId);
@@ -738,6 +751,27 @@
               })
         );
 
+        const guestCredentials = (data.credentials || []).filter(value => value.type === 'ssh');
+        const guestCredentialField = selectField(
+          'Credential dostępu do VM',
+          'guest_credential_id',
+          [
+            { value: '', label: 'Nie ustawiaj credentiala przez cloud-init' },
+            ...guestCredentials.map(value => ({
+              value: value.id,
+              label: value.name + (value.username ? ' · ' + value.username : ''),
+            })),
+          ],
+          state.guestCredentialId,
+          {
+            wide: true,
+            help: 'Po utworzeniu VM cloud-init ustawi użytkownika oraz publiczny klucz SSH wynikający z wybranego credentiala. Klucz prywatny nie trafia do Terraform ani do VM.',
+          }
+        );
+        guestCredentialField.querySelector('select').addEventListener('change', event => {
+          state.guestCredentialId = event.currentTarget.value;
+        });
+
         const runtimeEnvironment = checkboxField(
           'Wybieraj Environment podczas tworzenia VM',
           'select_environment_on_execute',
@@ -794,6 +828,12 @@
         const runtimeParts = [];
         if (state.selectApmidOnExecute) runtimeParts.push('APMID');
         if (state.selectEnvironmentOnExecute) runtimeParts.push('Environment');
+        const qemuAgentInfo = node('div', { class: 'blueprint-wizard-info' },
+          node('strong', { text: 'QEMU Guest Agent' }),
+          node('span', { text: state.waitAgent
+            ? 'Terraform utworzy vendor-data cloud-init i zainstaluje qemu-guest-agent. Snippet storage: ' + (state.cloudInitSnippetStorage || 'local') + '.'
+            : 'Automatyczna instalacja qemu-guest-agent jest wyłączona.' }));
+
         const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'Klasyfikacja VM' }),
           node('span', { text: state.apmid && state.environment
@@ -808,7 +848,9 @@
             presetButton('large', 'Duża', 4, 8192, 80),
             presetButton('custom', 'Własna', state.cpu, state.memory, state.disk)),
           fields,
+          guestCredentialField,
           runtimeClassification,
+          qemuAgentInfo,
           classificationPreview,
           advanced);
       }
@@ -962,7 +1004,7 @@
           if (state.advancedWorkflow) state.workflow = auto.map(value => ({ ...value, depends_on: [...value.depends_on] }));
           render();
         });
-        const wait = checkboxField('Czekaj na QEMU Agent po Terraform apply', 'wait_agent', state.waitAgent);
+        const wait = checkboxField('Czekaj na QEMU Agent po Terraform apply — zainstaluj qemu-guest-agent przez cloud-init', 'wait_agent', state.waitAgent);
         wait.querySelector('input').addEventListener('change', event => {
           state.waitAgent = event.currentTarget.checked;
           if (!state.advancedWorkflow) state.workflow = currentAutoWorkflow();
@@ -1068,6 +1110,10 @@
             ['Environment przy tworzeniu VM', state.selectEnvironmentOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
             ['APMID', state.apmid || '—'],
             ['APMID przy tworzeniu VM', state.selectApmidOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
+            ['Credential VM', state.guestCredentialId
+              ? (data.credentials.find(value => String(value.id) === String(state.guestCredentialId))?.name || ('#' + state.guestCredentialId))
+              : 'Brak'],
+            ['QEMU Guest Agent', state.waitAgent ? 'Instalacja przez cloud-init + oczekiwanie' : 'Bez automatycznej instalacji'],
             ['Klasyfikacja', state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—'],
           ] : [
             ['Szablon IaC', state.terraformTemplateId],

@@ -256,6 +256,21 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       })),
       deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' }
     );
+    const guestCredentialField = selectField(
+      'Credential ustawiany na VM', 'guest_credential_id',
+      [
+        { value: '', label: 'Bez credentiala z Cloudportal' },
+        ...credentials.filter(value => value.type === 'ssh').map(value => ({
+          value: value.id,
+          label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
+        })),
+      ],
+      deployment.guest_credential_id || '',
+      {
+        wide: true,
+        help: 'Cloud-init ustawi użytkownika i publiczny klucz SSH wynikający z credentiala. Klucz prywatny pozostaje zaszyfrowany w Cloudportal.',
+      }
+    );
     const executorField = selectField(
       'Silnik IaC', 'executor',
       [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }],
@@ -288,12 +303,18 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       schemeField, newScheme, existingSchemeEditor, hostnameDefaults,
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '4. Cloud-init' }), node('span', { text: 'Konfiguracja sieci, DNS i konta trafia do template Proxmox.' })),
       ipMode, ipamField, staticIp, staticGateway,
+      guestCredentialField,
       field('Użytkownik SSH', 'ssh_username', { value: variables.ssh_username || 'clouduser', required: true }),
-      field('Klucz publiczny SSH (opcjonalnie)', 'ssh_public_key', { tag: 'textarea', value: variables.ssh_public_key || '', wide: true }),
+      field('Klucz publiczny SSH (opcjonalnie)', 'ssh_public_key', {
+        tag: 'textarea',
+        value: variables.ssh_public_key || '',
+        wide: true,
+        help: 'Jeżeli wybierzesz credential VM, backend nadpisze te pola użytkownikiem i publicznym kluczem z credentiala.',
+      }),
       field('Serwery DNS', 'dns_servers', { value: (variables.dns_servers || []).join(', '), placeholder: '1.1.1.1, 8.8.8.8' }),
       field('Domena wyszukiwania DNS', 'dns_domain', { value: variables.dns_domain || '', placeholder: 'lab.example.com' }),
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '5. Workflow' }), node('span', { text: 'Bez ponownego wybierania obrazu, hostname, tagów ani cloud-init.' })),
-      checkboxField('Czekaj na QEMU Agent po Terraform apply', 'wait_agent', true),
+      checkboxField('Czekaj na QEMU Agent po Terraform apply — zainstaluj qemu-guest-agent przez cloud-init', 'wait_agent', true),
       playbookField, ansibleCredentialField,
       node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp, role i recovery' })),
@@ -322,6 +343,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const playbookSelect = playbookField.querySelector('select');
     const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
     let templateRows = [];
+    let cloudInitSnippetStorage = variables.cloud_init_snippet_storage || 'local';
     let hydratedHostnameSchemeId = null;
     const updateHostnameFields = () => {
       const selected = schemeSelect.value;
@@ -453,7 +475,13 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         api('/providers/' + providerId + '/storages?node=' + encodeURIComponent(targetNode)),
         api('/providers/' + providerId + '/networks?node=' + encodeURIComponent(targetNode)),
       ]);
-      const storages = storageResult.items.filter(value => !value.disable && String(value.content || '').includes('images'));
+      const availableStorages = storageResult.items.filter(value => !value.disable);
+      const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
+      const snippetStorages = availableStorages.filter(value => String(value.content || '').includes('snippets'));
+      const preferredSnippet = snippetStorages.find(value => String(value.storage) === String(cloudInitSnippetStorage))
+        || snippetStorages.find(value => value.storage === 'local')
+        || snippetStorages[0];
+      if (preferredSnippet) cloudInitSnippetStorage = preferredSnippet.storage;
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
@@ -590,6 +618,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           vlan_id: data.get('vlan_id') ? Number(data.get('vlan_id')) : null,
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
+          install_qemu_guest_agent: data.has('wait_agent'),
+          cloud_init_snippet_storage: cloudInitSnippetStorage || 'local',
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,
@@ -657,6 +687,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_scheme_id: Number(schemeId),
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
+            guest_credential_id: data.get('guest_credential_id') ? Number(data.get('guest_credential_id')) : null,
             apmid: deployment.apmid || null,
             environment: deployment.environment || null,
             select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
@@ -1229,6 +1260,7 @@ async function blueprintForm(item = null) {
           hostname_values: Object.fromEntries(
             Object.entries(deployment.hostname_values || {}).filter(([name]) => !['location', 'role'].includes(name))
           ),
+          guest_credential_id: deployment.guest_credential_id || null,
           apmid: deployment.apmid || null,
           environment: deployment.environment || null,
           select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),

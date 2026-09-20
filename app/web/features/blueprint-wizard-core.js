@@ -152,6 +152,8 @@
       templates: [],
       nodes: [],
       storages: [],
+      snippetStorages: [],
+      cloudInitSnippetStorage: 'local',
       networks: [],
       selectedTemplateVmid: '',
       selectedTemplateNode: '',
@@ -170,6 +172,7 @@
       tags: '',
       sshUsername: 'clouduser',
       sshPublicKey: '',
+      guestCredentialId: '',
       genericVariables: {},
       hostnameEnabled: true,
       hostnameSchemeId: '',
@@ -253,6 +256,8 @@
         storage: state.storage,
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
+        install_qemu_guest_agent: Boolean(state.waitAgent),
+        cloud_init_snippet_storage: state.cloudInitSnippetStorage || 'local',
         tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
@@ -281,6 +286,7 @@
     };
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
+    if (state.guestCredentialId) deployment.guest_credential_id = Number(state.guestCredentialId);
     if (state.apmid) deployment.apmid = String(state.apmid).trim().toUpperCase();
     if (state.environment) deployment.environment = String(state.environment).trim().toLowerCase();
     deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute);

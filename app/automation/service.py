@@ -7,8 +7,10 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from app.api.schemas import AnsibleInput
 from app.catalog import validate_template_variables
+from app.credentials.ssh import public_key_from_private_key
 from app.ipam.service import allocate_address
-from app.models import Blueprint, HostnameReservation, HostnameScheme, now
+from app.models import Blueprint, Credential, HostnameReservation, HostnameScheme, now
+from app.security.core import decrypt_secret
 from app.vm_classification import vm_classification_settings
 
 
@@ -144,6 +146,32 @@ def render_template(value: Any, variables: dict[str, Any]):
     return INLINE_TEMPLATE.sub(replace, value)
 
 
+def guest_credential_cloud_init(db, credential_id):
+    if not credential_id:
+        return None
+    credential = db.get(Credential, int(credential_id))
+    if credential is None:
+        raise HTTPException(404, 'Guest SSH credential not found')
+    if credential.type != 'ssh':
+        raise HTTPException(422, 'Guest credential must be an SSH credential')
+    if credential.expires_at is not None and credential.expires_at <= now():
+        raise HTTPException(409, 'Guest SSH credential is expired')
+    if not credential.username:
+        raise HTTPException(422, 'Guest SSH credential must define a username')
+    secret = decrypt_secret(credential)
+    private_key = secret.get('private_key')
+    if not private_key:
+        raise HTTPException(
+            422,
+            'Guest SSH credential must use a private key; password-only credentials cannot be injected by cloud-init',
+        )
+    return {
+        'id': credential.id,
+        'username': credential.username,
+        'public_key': public_key_from_private_key(private_key),
+    }
+
+
 def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
@@ -155,11 +183,17 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     select_environment_on_execute = bool(deployment.pop('select_environment_on_execute', False))
     fixed_apmid = deployment.pop('apmid', None)
     fixed_environment = deployment.pop('environment', None)
+    guest_credential_id = deployment.pop('guest_credential_id', None)
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
 
     deployment_variables = deployment.setdefault('variables', {})
+    guest_credential = guest_credential_cloud_init(db, guest_credential_id)
+    if guest_credential:
+        deployment_variables['ssh_username'] = guest_credential['username']
+        deployment_variables['ssh_public_key'] = guest_credential['public_key']
+
     tags = [str(tag).strip().lower() for tag in (deployment_variables.get('tags') or []) if str(tag).strip()]
 
     tagged_apmid = None
@@ -270,4 +304,4 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     if rendered.get('ansible'):
         rendered['ansible'] = AnsibleInput.model_validate(rendered['ansible'])
     rendered['blueprint_variables'] = variables
-    return rendered, reservation, ip_allocation
+    return rendered, reservation, ip_allocation, (guest_credential['id'] if guest_credential else None)

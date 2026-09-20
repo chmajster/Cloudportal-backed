@@ -52,6 +52,35 @@ class TerraformExecutor(Executor):
             else:
                 env['PROXMOX_VE_USERNAME'] = credential.username
                 env['PROXMOX_VE_PASSWORD'] = secret['password']
+
+            if deployment.variables.get('install_qemu_guest_agent'):
+                ssh_names = (
+                    'PROXMOX_VE_SSH_USERNAME',
+                    'PROXMOX_VE_SSH_PASSWORD',
+                    'PROXMOX_VE_SSH_PRIVATE_KEY',
+                    'PROXMOX_VE_SSH_AGENT',
+                    'PROXMOX_VE_SSH_AUTH_SOCK',
+                )
+                for name in ssh_names:
+                    value = os.environ.get(name)
+                    if value:
+                        env[name] = value
+
+                if secret.get('password') and not env.get('PROXMOX_VE_SSH_PASSWORD'):
+                    env['PROXMOX_VE_SSH_USERNAME'] = credential.username.split('@', 1)[0]
+                    env['PROXMOX_VE_SSH_PASSWORD'] = secret['password']
+
+                has_ssh_auth = bool(
+                    env.get('PROXMOX_VE_SSH_PASSWORD')
+                    or env.get('PROXMOX_VE_SSH_PRIVATE_KEY')
+                    or env.get('PROXMOX_VE_SSH_AGENT', '').lower() == 'true'
+                )
+                if not has_ssh_auth:
+                    raise ExecutionFailed(
+                        'Automatic qemu-guest-agent cloud-init requires SSH access to the Proxmox node '
+                        'for snippet upload. Use a password-based Proxmox credential or configure '
+                        'PROXMOX_VE_SSH_* for the worker.'
+                    )
         elif provider_type == 'aws':
             env['AWS_ACCESS_KEY_ID'] = secret['access_key_id']
             env['AWS_SECRET_ACCESS_KEY'] = secret['secret_access_key']
@@ -80,6 +109,11 @@ class TerraformExecutor(Executor):
             env['VSPHERE_ALLOW_UNVERIFIED_SSL'] = 'false' if credential.verify_ssl else 'true'
         else:
             raise ExecutionFailed('Unsupported Terraform provider')
+        sensitive_values = list(secret.values())
+        sensitive_values.extend(
+            value for name, value in env.items()
+            if name in {'PROXMOX_VE_SSH_PASSWORD', 'PROXMOX_VE_SSH_PRIVATE_KEY'} and value
+        )
         with distributed_deployment_lock(deployment.id):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
@@ -94,7 +128,7 @@ class TerraformExecutor(Executor):
                 variables_path.write_text(json.dumps(deployment.variables))
                 os.chmod(variables_path, 0o600)
                 context.stage('terraform.init')
-                run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, secret.values())
+                run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, sensitive_values)
                 try:
                     if operation == 'terraform.import':
                         import_values = (context.job.payload or {}).get('import_values') or {}
@@ -105,22 +139,22 @@ class TerraformExecutor(Executor):
                         context.stage('terraform.import')
                         run_process(
                             [self.binary, 'import', '-input=false', '-no-color', '-lock-timeout=30s', resource_address, import_id],
-                            workspace, env, context, secret.values(),
+                            workspace, env, context, sensitive_values,
                         )
                         context.stage('terraform.plan')
                         run_process(
                             [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan'],
-                            workspace, env, context, secret.values(),
+                            workspace, env, context, sensitive_values,
                         )
                     else:
                         context.stage('terraform.plan')
                         plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
                         if operation == 'terraform.destroy':
                             plan.append('-destroy')
-                        run_process(plan, workspace, env, context, secret.values())
+                        run_process(plan, workspace, env, context, sensitive_values)
                         if operation != 'terraform.plan':
                             context.stage(operation)
-                            run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
+                            run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, sensitive_values)
                 finally:
                     (workspace / 'execution.tfplan').unlink(missing_ok=True)
                     if (workspace / 'terraform.tfstate').exists():

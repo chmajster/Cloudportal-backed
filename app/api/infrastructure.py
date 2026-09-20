@@ -16,7 +16,7 @@ from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
-from app.models import Credential, Deployment, Job, JobLog, Provider, now
+from app.models import Blueprint, Credential, Deployment, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
 from app.security.core import audit, require
@@ -67,8 +67,16 @@ def credential_in_use(db, id, *, pending_only=False):
         deployments = deployments.where(Deployment.active_job_id.is_not(None))
     else:
         deployments = deployments.where(Deployment.status != 'destroyed')
-    return bool(db.scalar(deployments.limit(1)) or db.scalar(select(Job.id).where(
-        Job.status.in_(['queued', 'running', 'cancelling']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)))
+    if db.scalar(deployments.limit(1)) or db.scalar(select(Job.id).where(
+        Job.status.in_(['queued', 'running', 'cancelling']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)):
+        return True
+    if pending_only:
+        return False
+    blueprint_ref = select(Blueprint.id).where(or_(
+        Blueprint.deployment['guest_credential_id'].as_integer() == id,
+        Blueprint.deployment['ansible']['credentials_id'].as_integer() == id,
+    ))
+    return bool(db.scalar(blueprint_ref.limit(1)))
 
 
 @router.get('/credentials', response_model=Items[CredentialOutput])
