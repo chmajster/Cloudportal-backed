@@ -1239,14 +1239,37 @@ if [[ "$os_family" == rhel ]] && systemctl is-active --quiet firewalld; then
 fi
 install_progress 96 healthcheck 'Sprawdzanie stanu nowej wersji.'
 ready=0
-for ((attempt=0;attempt<60;attempt++)); do
-  if curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:8765/api/v1/health > "$tmp/health.json"; then ready=1; break; fi
+api_health_error="$tmp/api-health.err"
+: > "$api_health_error"
+for ((attempt=1;attempt<=60;attempt++)); do
+  if curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:8765/api/v1/health       > "$tmp/health.json" 2> "$api_health_error"; then
+    ready=1
+    break
+  fi
+
+  # Nie spamuj oczekiwanymi "connection refused" podczas startu uvicorn.
+  if ! systemctl is-active --quiet cloudportal-api.service; then
+    ui_warn "API nie jest aktywne po restarcie (próba $attempt/60)."
+    break
+  fi
+
+  if ((attempt == 1)); then
+    ui_info 'API startuje — oczekuję na port 127.0.0.1:8765...'
+  elif ((attempt % 10 == 0)); then
+    ui_info "Nadal czekam na API: próba $attempt/60."
+  fi
   sleep 2
 done
 ((ready == 1)) || {
   ui_fail 'Lokalny healthcheck API nie przeszedł. Token bootstrap nie został wygenerowany.'
-  ui_info 'Sprawdź: systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1'
-  ui_info 'Sprawdź: journalctl -u cloudportal-api -u cloudportal-worker@1 -n 100 --no-pager'
+  if [[ -s "$api_health_error" ]]; then
+    ui_info "Ostatni błąd curl: $(tail -n 1 "$api_health_error")"
+  fi
+  ui_info 'Stan cloudportal-api:'
+  systemctl --no-pager --full status cloudportal-api.service || true
+  ui_info 'Ostatnie logi cloudportal-api:'
+  journalctl --no-pager -u cloudportal-api.service -n 80 || true
+  ui_info 'Sprawdź również: systemctl status cloudportal-dispatcher cloudportal-worker@1'
   exit 1
 }
 tls_health_curl_args=(-fsS --noproxy '*' --connect-timeout 5 --max-time 15)
