@@ -84,6 +84,7 @@
         safeApi('/settings/vm-classification', {
           environments: { test: true, dev: true, nonprod: true, prod: true },
           apmids: [],
+          hostname_defaults: { location: 'wro', role: 'server' },
         }),
       ]);
 
@@ -114,6 +115,8 @@
         .filter(name => data.vmClassification?.environments?.[name] !== false);
       state.environment = enabledEnvironments[0] || '';
       state.apmid = String(data.vmClassification?.apmids?.[0] || '');
+      state.hostnameValues.location = String(data.vmClassification?.hostname_defaults?.location || 'wro');
+      state.hostnameValues.role = String(data.vmClassification?.hostname_defaults?.role || 'server');
       if (options.hostnameSchemeId) {
         state.hostnameSchemeId = String(options.hostnameSchemeId);
         state.hostnameEnabled = true;
