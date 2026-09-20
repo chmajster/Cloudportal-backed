@@ -632,3 +632,24 @@ def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
 
     with pytest.raises(ExecutionFailed, match='SSH preflight failed'):
         proxmox_ssh_preflight(credential, {'PROXMOX_VE_SSH_PORT': '22'})
+
+
+def test_provider_qemu_agent_readiness_endpoint(client, headers, monkeypatch):
+    _, provider, _ = resources(client, headers)
+
+    class Adapter:
+        def ssh_preflight(self):
+            return {'ok': False, 'reason': 'ssh_auth_missing', 'host': 'pve.example.com', 'port': 22}
+
+    monkeypatch.setattr('app.api.infrastructure.provider_for', lambda credential: Adapter())
+    response = client.get(
+        f"/api/v1/providers/{provider['id']}/qemu-agent-readiness",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        'ok': False,
+        'reason': 'ssh_auth_missing',
+        'host': 'pve.example.com',
+        'port': 22,
+    }
