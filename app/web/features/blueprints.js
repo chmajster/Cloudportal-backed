@@ -1094,6 +1094,10 @@ async function blueprintForm(item = null) {
     (item?.manager_role_ids || []).forEach(id => {
       if (!roleChoices.some(choice => Number(choice.value) === Number(id))) roleChoices.push({ value: id, label: `Rola #${id}` });
     });
+    const defaultManagerRoleNames = new Set(['Administrator', 'Infrastructure Administrator']);
+    const defaultManagerRoleIds = item
+      ? (item.manager_role_ids || [])
+      : roleChoices.filter(choice => defaultManagerRoleNames.has(choice.label)).map(choice => Number(choice.value));
     const userChoices = userResult.items.map(user => ({ value: user.id, label: user.username + (user.email ? ' · ' + user.email : '') }));
     (item?.allowed_user_ids || []).forEach(id => {
       if (!userChoices.some(choice => Number(choice.value) === Number(id))) userChoices.push({ value: id, label: `Użytkownik #${id}` });
@@ -1152,7 +1156,7 @@ async function blueprintForm(item = null) {
             help: 'Brak zaznaczeń oznacza brak dodatkowego ograniczenia roli przy uruchamianiu.',
             empty: 'Brak ról dostępnych do wyboru.',
           }),
-          multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, item?.manager_role_ids || [], {
+          multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, defaultManagerRoleIds, {
             help: 'Wymagane dodatkowo do edycji i usuwania. Jedna rola może być przypisana jako zarządzająca tylko do jednego szablonu.',
             empty: 'Brak ról dostępnych do wyboru.',
           }),

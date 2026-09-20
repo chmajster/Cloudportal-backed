@@ -266,6 +266,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'data-dual-list-name': name" in script
     assert "dualListGroup('Dozwolone role'" in script
     assert "dualListGroup('Role zarządzające Blueprintem'" in script
+    assert "new Set(['Administrator', 'Infrastructure Administrator'])" in script
+    assert "state.managerRoleIds = data.managerRoles" in script
+    assert "const defaultManagerRoleIds = item" in script
     assert "dualListGroup('Dozwoleni użytkownicy'" in script
     assert "'Dodaj zaznaczone'" in script
     assert "'Dodaj wszystkie'" in script
