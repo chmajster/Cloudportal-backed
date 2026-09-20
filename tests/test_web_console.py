@@ -348,7 +348,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "add('cloud_init', 'cloud_init')" not in script
     assert "add('apply', 'terraform_apply')" in script
     assert "add('guest_ip', 'wait_for_ip')" in script
-    assert "Legacy marker:" in script
+    assert "Legacy / niedostępne dla" in script
     assert "Tryb zaawansowany" in script
     assert "Conditions (JSON)" in script
     assert "Opcjonalne ustawienia dostępu" in script
