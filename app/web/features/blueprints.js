@@ -460,8 +460,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const [storageResult, networkResult, qemuReadiness] = await Promise.all([
         api('/providers/' + providerId + '/storages?node=' + encodeURIComponent(targetNode)),
         api('/providers/' + providerId + '/networks?node=' + encodeURIComponent(targetNode)),
-        api('/providers/' + providerId + '/qemu-agent-readiness')
-          .catch(error => ({ ok: false, reason: error.message || 'readiness_check_failed' })),
+        api('/providers/' + providerId + '/qemu-agent-readiness').catch(error => ({ ok: false, reason: error.message || 'readiness_check_failed' })),
       ]);
       const availableStorages = storageResult.items.filter(value => !value.disable);
       const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
