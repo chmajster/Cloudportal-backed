@@ -699,7 +699,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     toast(error.message, 'error');
   }
 }
-
 async function blueprintForm(item = null) {
   try {
     const [providerResult, credentialResult, templateResult, schemeResult, poolResult, roleResult, userResult, playbookResult, blueprintResult] = await Promise.all([
@@ -722,13 +721,11 @@ async function blueprintForm(item = null) {
     const playbooks = playbookResult.items.filter(value =>
       value.enabled !== false || value.id === item?.deployment?.ansible?.playbook);
     if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
-
     const variableList = node('div', { class: 'editor-list wide' });
     const workflowList = node('div', { class: 'editor-list wide workflow-editor-list' });
     const workflowGraph = node('div', { class: 'workflow-dag wide', 'aria-live': 'polite' });
     let variableCounter = 0;
     let workflowCounter = 0;
-
     const workflowRowData = row => {
       const typeSelect = row.querySelector('[name="workflow_type"]');
       return {
@@ -739,7 +736,6 @@ async function blueprintForm(item = null) {
         depends: splitValues(row.querySelector('[name="workflow_depends"]')?.value || ''),
       };
     };
-
     const workflowDepths = steps => {
       const byId = new Map(steps.filter(step => step.id).map(step => [step.id, step]));
       const memo = new Map();
@@ -1155,6 +1151,10 @@ async function blueprintForm(item = null) {
           credentialField,
           selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
           deploymentHostnameSchemeField,
+          selectField('Credential ustawiany na VM', 'deployment_guest_credential_id',
+            [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...credentials.filter(value => value.type === 'ssh')
+              .map(value => ({ value: value.id, label: value.name + (value.username ? ' · ' + value.username : '') }))],
+            deployment.guest_credential_id || '', { wide: true }),
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
           ansibleSection)),
@@ -1243,7 +1243,8 @@ async function blueprintForm(item = null) {
           hostname_values: Object.fromEntries(
             Object.entries(deployment.hostname_values || {}).filter(([name]) => !['location', 'role'].includes(name))
           ),
-          guest_credential_id: deployment.guest_credential_id || null,
+          guest_credential_id: form.elements.deployment_guest_credential_id?.value
+            ? Number(form.elements.deployment_guest_credential_id.value) : null,
           apmid: deployment.apmid || null,
           environment: deployment.environment || null,
           select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
