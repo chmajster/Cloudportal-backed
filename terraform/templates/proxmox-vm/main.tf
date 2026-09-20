@@ -9,6 +9,27 @@ terraform {
 }
 # Credentials are provided in the worker environment, never in generated HCL/tfvars.
 provider "proxmox" {}
+
+resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init" {
+  count        = var.install_qemu_guest_agent ? 1 : 0
+  content_type = "snippets"
+  datastore_id = var.cloud_init_snippet_storage
+  node_name    = var.node
+
+  source_raw {
+    data = <<-EOF
+    #cloud-config
+    package_update: true
+    packages:
+      - qemu-guest-agent
+    runcmd:
+      - [ systemctl, enable, --now, qemu-guest-agent ]
+    EOF
+
+    file_name = "cloudportal-${var.name}-qemu-guest-agent.yaml"
+  }
+}
+
 resource "proxmox_virtual_environment_vm" "vm" {
   name      = var.name
   node_name = var.node
@@ -33,7 +54,8 @@ resource "proxmox_virtual_environment_vm" "vm" {
   }
   agent { enabled = true }
   initialization {
-    datastore_id = var.storage
+    datastore_id        = var.storage
+    vendor_data_file_id = var.install_qemu_guest_agent ? proxmox_virtual_environment_file.qemu_guest_agent_cloud_init[0].id : null
     dynamic "dns" {
       for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
       content {
