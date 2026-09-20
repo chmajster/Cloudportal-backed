@@ -1256,7 +1256,9 @@ async function blueprintForm(item = null) {
           template: template.id,
           executor: form.elements.deployment_executor.value,
           variables: deploymentVariables,
-          hostname_values: deployment.hostname_values || {},
+          hostname_values: Object.fromEntries(
+            Object.entries(deployment.hostname_values || {}).filter(([name]) => !['location', 'role'].includes(name))
+          ),
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
