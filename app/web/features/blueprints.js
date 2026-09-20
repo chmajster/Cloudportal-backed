@@ -331,7 +331,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const playbookSelect = playbookField.querySelector('select');
     const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
     let templateRows = [];
-    let cloudInitSnippetStorage = variables.cloud_init_snippet_storage || 'local';
+    let cloudInitSnippetStorage = variables.cloud_init_snippet_storage || '';
     let hydratedHostnameSchemeId = null;
     const updateHostnameFields = () => {
       const selected = schemeSelect.value;
@@ -468,7 +468,12 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const snippetStorages = availableStorages.filter(value => String(value.content || '').includes('snippets'));
       const preferredSnippet = snippetStorages.find(value => String(value.storage) === String(cloudInitSnippetStorage))
         || snippetStorages.find(value => value.storage === 'local') || snippetStorages[0];
-      if (preferredSnippet) cloudInitSnippetStorage = preferredSnippet.storage;
+      cloudInitSnippetStorage = preferredSnippet?.storage || '';
+      const waitAgentControl = fields.querySelector('[name="wait_agent"]');
+      if (waitAgentControl) {
+        if (!snippetStorages.length) waitAgentControl.checked = false;
+        waitAgentControl.disabled = !snippetStorages.length;
+      }
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
@@ -536,6 +541,10 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       onSubmit: async (data, form) => {
         const provider = providers.find(value => String(value.id) === String(data.get('provider_id')));
         if (!provider) throw new Error('Wybierz platformę Proxmox.');
+
+        if (data.has('wait_agent') && !cloudInitSnippetStorage) {
+          throw new Error('QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.');
+        }
         let schemeId = data.get('hostname_scheme_id');
         let selectedPattern = '';
         if (schemeId === '__new__') {
@@ -606,7 +615,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
           install_qemu_guest_agent: data.has('wait_agent'),
-          cloud_init_snippet_storage: cloudInitSnippetStorage || 'local',
+          cloud_init_snippet_storage: data.has('wait_agent') ? cloudInitSnippetStorage : null,
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,
