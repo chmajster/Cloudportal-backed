@@ -472,7 +472,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
-    assert "'set_tags'" in script
+    assert "'set_tags'" not in script
     assert 'function multiCheckboxField(' in script
     assert 'function toDateTimeLocal(' in script
     assert 'table-search-empty' in script
