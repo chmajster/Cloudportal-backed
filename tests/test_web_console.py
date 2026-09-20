@@ -52,6 +52,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/credentials.js',
         'features/providers.js',
         'features/catalog.js',
+        'features/blueprint-provisioning-guards.js',
         'features/blueprint-runtime-apmid.js',
         'features/blueprint-wizard-core.js',
         'features/blueprint-wizard-hostname.js',
