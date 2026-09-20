@@ -95,6 +95,8 @@ def validate_authorization(db, job):
             needed.add('snapshots.create')
         if 'release_ip' in workflow_types:
             needed.add('ipam.release')
+        if 'terraform_destroy' in workflow_types:
+            needed.add('deployments.destroy')
     if job.operation == 'terraform.destroy':
         needed.add('deployments.destroy')
     if job.operation == 'terraform.import':
