@@ -683,3 +683,49 @@ def test_proxmox_ssh_preflight_distinguishes_auth_failure(client, headers, monke
     assert result['reason'] == 'ssh_auth_failed'
     assert result['host'] == 'pve.example.com'
     assert result['port'] == 22
+
+
+def test_regular_deployment_ansible_uses_ip_inventory(client, headers, monkeypatch, tmp_path):
+    from app.executors.ansible import AnsibleExecutor
+
+    _, _, payload = resources(client, headers)
+    ssh = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Post provision SSH',
+        'type': 'ssh',
+        'username': 'clouduser',
+        'secrets': {'password': 'ssh-password'},
+    })
+    assert ssh.status_code == 201, ssh.text
+    payload['ansible'] = {
+        'playbook': 'bootstrap-linux',
+        'credentials_id': ssh.json()['id'],
+        'variables': {'hostname': 'vm01'},
+    }
+    created = client.post(
+        '/api/v1/deployments',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json=payload,
+    )
+    assert created.status_code == 202, created.text
+
+    workspace = terraform_state_workspace(tmp_path, vm_id=701)
+    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: workspace)
+    monkeypatch.setattr(
+        'app.jobs.worker.wait_for_ip',
+        lambda context, workspace, timeout=600: ['192.0.2.70'],
+    )
+    observed = {}
+    monkeypatch.setattr(
+        AnsibleExecutor,
+        'execute',
+        lambda self, operation, context: observed.update(
+            operation=operation,
+            hosts=list(context.ansible.inventory.hosts),
+        ),
+    )
+
+    execute(created.json()['job']['id'])
+
+    result = client.get('/api/v1/jobs/' + created.json()['job']['id'], headers=headers).json()
+    assert result['status'] == 'successful'
+    assert observed == {'operation': 'ansible.execute', 'hosts': ['192.0.2.70']}

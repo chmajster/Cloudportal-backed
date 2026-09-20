@@ -139,7 +139,7 @@ class JobOutput(Output):
     id: str
     deployment_id: str | None
     operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'terraform.import', 'ansible.execute']
-    status: Literal['queued', 'running', 'cancelling', 'successful', 'failed', 'cancelled']
+    status: Literal['waiting_approval', 'queued', 'running', 'cancelling', 'successful', 'failed', 'cancelled']
     created_by: int
     request_id: str
     source: str

@@ -911,9 +911,10 @@ async function blueprintForm(item = null) {
       cpu: { type: 'integer', label: 'CPU', required: true, default: 2, min: 1, max: 8 },
     };
     Object.entries(defaultVariables).forEach(([key, definition]) => addVariable(key, definition));
-    const defaultWorkflow = item?.workflow || [
-      { id: 'apply', type: 'terraform_apply', depends_on: [], retry: 0, timeout: 3600, conditions: {}, rollback: null },
-    ];
+    const defaultWorkflow = item?.workflow || (() => {
+      const apply = { id: 'apply', type: 'terraform_apply', depends_on: [], retry: 0, timeout: 3600, conditions: {}, rollback: null };
+      const provider = templates.find(template => template.id === (item?.deployment?.template || 'proxmox-vm'))?.provider;      return provider === 'proxmox' ? [apply, { id: 'vm_running', type: 'wait_for_vm', depends_on: ['apply'], retry: 0, timeout: 600, conditions: {}, rollback: null }] : [apply];
+    })();
     defaultWorkflow.forEach(addWorkflowStep);
 
     const deployment = item?.deployment || {};

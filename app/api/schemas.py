@@ -771,8 +771,28 @@ class BlueprintInput(Input):
             if step.type in declarative and any(by_id[parent].type == 'terraform_apply' for parent in ancestors(step.id)):
                 raise ValueError('Declarative VM steps must run before terraform_apply')
 
-        if not any(step.type in {'create_vm', 'clone_vm', 'terraform_apply'} for step in self.workflow):
-            raise ValueError('Workflow must provision a VM')
+        if any(step.type == 'approval' for step in self.workflow) and not self.requires_approval:
+            raise ValueError('Workflow approval step requires requires_approval=true')
+
+        apply_steps = [step for step in self.workflow if step.type == 'terraform_apply']
+        if len(apply_steps) != 1:
+            raise ValueError('Workflow must contain exactly one terraform_apply step')
+        apply_id = apply_steps[0].id
+
+        plan_steps = [step for step in self.workflow if step.type == 'terraform_plan']
+        if len(plan_steps) > 1:
+            raise ValueError('Workflow can contain at most one terraform_plan step')
+        if plan_steps and plan_steps[0].id not in ancestors(apply_id):
+            raise ValueError('terraform_plan must be an ancestor of terraform_apply')
+
+        vm_runtime_types = {
+            'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+            'run_ansible_playbook', 'create_snapshot', 'health_check',
+        }
+        for step in self.workflow:
+            if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
+                raise ValueError(f'{step.type} must depend on terraform_apply')
+
         return self
 
 

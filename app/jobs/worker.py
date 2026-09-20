@@ -286,6 +286,7 @@ def configured_deployment_ip(context):
 def wait_for_ip(context, workspace, timeout=600):
     configured = configured_deployment_ip(context)
     if configured:
+        wait_for_vm(context, workspace, timeout=timeout)
         context.stage('workflow.wait_for_ip')
         context.log(f'workflow.wait_for_ip.configured: {configured}')
         update_inventory_primary_ip(context, configured)
@@ -540,6 +541,34 @@ def wait_for_proxmox_task(context, provider, node, upid, timeout=600):
     raise ExecutionFailed('Timed out waiting for Proxmox task completion')
 
 
+def health_check_vm(context, workspace):
+    if context.deployment.provider != 'proxmox':
+        availability = provider_for(context.credential).execution_availability()
+        if not availability.get('ok'):
+            raise ExecutionFailed(
+                'Blueprint health_check failed: '
+                + str(availability.get('reason') or 'provider unavailable')
+            )
+        return True
+
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
+    status = provider.vm_status(node, vm_id) or {}
+    if str(status.get('status') or '').lower() != 'running':
+        raise ExecutionFailed(
+            'Blueprint health_check failed: VM is not running '
+            f"(status={status.get('status') or 'unknown'})"
+        )
+    if (context.deployment.variables or {}).get('install_qemu_guest_agent'):
+        try:
+            if not provider.guest_agent_ready(node, vm_id):
+                raise ExecutionFailed('Blueprint health_check failed: QEMU Guest Agent is not ready')
+        except HTTPException as exc:
+            raise ExecutionFailed(
+                'Blueprint health_check failed: QEMU Guest Agent check failed'
+            ) from exc
+    return True
+
+
 def create_blueprint_snapshot(context, workspace, step):
     if context.deployment.provider != 'proxmox':
         raise ExecutionFailed('create_snapshot is supported only for Proxmox deployments')
@@ -580,6 +609,7 @@ def run_blueprint_workflow(context, executor):
         'ansible_ran': False,
         'prepared': [],
         'step_states': {},
+        'plan_ready': False,
     }
 
     by_id = {str(step.get('id')): step for step in steps}
@@ -650,7 +680,12 @@ def run_blueprint_workflow(context, executor):
         context.stage('workflow.terraform_apply')
         if reason != 'explicit':
             context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
-        workspace = executor.execute('terraform.apply', context)
+        context.apply_saved_terraform_plan = bool(runtime['plan_ready'])
+        try:
+            workspace = executor.execute('terraform.apply', context)
+        finally:
+            context.apply_saved_terraform_plan = False
+        runtime['plan_ready'] = False
         runtime['workspace'] = workspace
         runtime['applied'] = True
         context.stage('inventory.synchronizing')
@@ -726,7 +761,12 @@ def run_blueprint_workflow(context, executor):
                         'desired state is owned by terraform_apply'
                     )
                 elif step_type == 'terraform_plan':
-                    runtime['workspace'] = executor.execute('terraform.plan', context)
+                    context.keep_terraform_plan = True
+                    try:
+                        runtime['workspace'] = executor.execute('terraform.plan', context)
+                    finally:
+                        context.keep_terraform_plan = False
+                    runtime['plan_ready'] = True
                 elif step_type == 'terraform_apply':
                     apply_and_sync()
                 elif step_type == 'terraform_destroy':
@@ -759,12 +799,7 @@ def run_blueprint_workflow(context, executor):
                 elif step_type == 'release_ip':
                     release_blueprint_ip(context)
                 elif step_type == 'health_check':
-                    availability = provider_for(context.credential).execution_availability()
-                    if not availability.get('ok'):
-                        raise ExecutionFailed(
-                            'Blueprint health_check failed: '
-                            + str(availability.get('reason') or 'provider unavailable')
-                        )
+                    health_check_vm(context, workspace_for(step_type))
                 elif step_type == 'condition':
                     context.log(f'workflow.condition.passed: {step_id}')
                 elif step_type == 'approval':
@@ -772,7 +807,13 @@ def run_blueprint_workflow(context, executor):
                         raise ExecutionFailed(
                             'Workflow approval step requires Blueprint requires_approval=true'
                         )
-                    context.log(f'workflow.approval.satisfied: {step_id}')
+                    approval = (context.job.payload or {}).get('_approval') or {}
+                    if approval.get('status') != 'approved':
+                        raise ExecutionFailed('Blueprint execution has not been approved')
+                    context.log(
+                        f"workflow.approval.satisfied: {step_id} "
+                        f"approved_by={approval.get('approved_by')}"
+                    )
                 elif step_type == 'delay':
                     seconds = float((step.get('conditions') or {}).get('seconds', 1))
                     if seconds < 0 or seconds > timeout:
@@ -906,7 +947,7 @@ def execute(job_id):
                     else:
                         context.log(f"inventory.resource.registered: {inventory['external_id']}")
                     if context.ansible:
-                        context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
+                        context.ansible.inventory = Inventory(hosts=wait_for_ip(context, workspace))
                         AnsibleExecutor().execute('ansible.execute', context)
         else:
             AnsibleExecutor().execute(job.operation, context)
@@ -926,7 +967,10 @@ def execute(job_id):
         if current.deployment_id:
             deployment = db.get(Deployment, current.deployment_id)
             deployment.active_job_id = None
-            deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
+            if context.rollback_destroyed:
+                deployment.status = 'destroyed'
+            else:
+                deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
             if current.operation == 'terraform.plan' and status == 'successful':
                 deployment.status = current.payload.get('previous_status', 'failed')
             if current.operation == 'terraform.import' and status == 'successful':

@@ -45,7 +45,6 @@
       'terraform.execute',
       'deployments.create',
     ]);
-    if (item.requires_approval) required.add('blueprints.approve');
     if (item.recovery_policy === 'destroy_on_failure') required.add('deployments.destroy');
     if (item.deployment?.ansible) required.add('ansible.execute');
     const stepTypes = new Set((item.workflow || []).map(step => String(step?.type || '')));

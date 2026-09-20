@@ -221,16 +221,29 @@ class TerraformExecutor(Executor):
                             workspace, env, context, sensitive_values,
                         )
                     else:
-                        context.stage('terraform.plan')
-                        plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
-                        if operation == 'terraform.destroy':
-                            plan.append('-destroy')
-                        run_process(plan, workspace, env, context, sensitive_values)
+                        saved_plan = (
+                            operation == 'terraform.apply'
+                            and bool(getattr(context, 'apply_saved_terraform_plan', False))
+                            and (workspace / 'execution.tfplan').exists()
+                        )
+                        if saved_plan:
+                            context.stage('terraform.plan.reuse')
+                        else:
+                            context.stage('terraform.plan')
+                            plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
+                            if operation == 'terraform.destroy':
+                                plan.append('-destroy')
+                            run_process(plan, workspace, env, context, sensitive_values)
                         if operation != 'terraform.plan':
                             context.stage(operation)
                             run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, sensitive_values)
                 finally:
-                    (workspace / 'execution.tfplan').unlink(missing_ok=True)
+                    keep_plan = (
+                        operation == 'terraform.plan'
+                        and bool(getattr(context, 'keep_terraform_plan', False))
+                    )
+                    if not keep_plan:
+                        (workspace / 'execution.tfplan').unlink(missing_ok=True)
                     if (workspace / 'terraform.tfstate').exists():
                         context.stage('terraform.state.persist')
                         persist_state(deployment.id, workspace)
