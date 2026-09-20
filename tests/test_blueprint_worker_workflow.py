@@ -23,6 +23,7 @@ class FakeContext:
         self.ansible = None
         self.ansible_credential = None
         self.step_deadline = None
+        self.rollback_destroyed = False
         self.logs = []
         self.stages = []
 
@@ -98,8 +99,8 @@ def test_blueprint_workflow_materializes_declarative_steps_at_apply(monkeypatch)
 
     assert workspace == '/tmp/workspace'
     assert executor.operations == ['terraform.apply']
-    assert any('workflow.step.prepared:clone:clone_vm' in value for value in context.stages)
-    assert any('workflow.step.prepared:cloud:cloud_init' in value for value in context.stages)
+    assert any('workflow.step.completed:clone:clone_vm' in value for value in context.stages)
+    assert any('workflow.step.completed:cloud:cloud_init' in value for value in context.stages)
     assert any('workflow.step.materialized: clone:clone_vm' in value for value in context.logs)
     assert any('workflow.step.materialized: cloud:cloud_init' in value for value in context.logs)
 
@@ -321,3 +322,148 @@ def test_vm_agent_and_ip_waits_have_distinct_semantics(monkeypatch, tmp_path):
     assert worker.wait_for_ip(context, workspace, timeout=5) == ['192.0.2.109']
     assert observed_ip == ['192.0.2.109']
     assert [item[0] for item in calls] == ['vm_status', 'agent', 'addresses']
+
+
+def test_legacy_implicit_apply_runs_before_first_runtime_vm_step(monkeypatch):
+    steps = [
+        {'id': 'clone', 'type': 'clone_vm', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'vm', 'type': 'wait_for_vm', 'depends_on': ['clone'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    executor = FakeExecutor()
+    order = []
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {'external_id': '110', 'vm_id': 110, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker,
+        'wait_for_vm',
+        lambda context, workspace, timeout=600: order.append(('wait', workspace)) or True,
+    )
+    original_execute = executor.execute
+    executor.execute = lambda operation, context: order.append(('execute', operation)) or original_execute(operation, context)
+
+    worker.run_blueprint_workflow(context, executor)
+
+    assert order[0] == ('execute', 'terraform.apply')
+    assert order[1] == ('wait', '/tmp/workspace')
+
+
+def test_skipped_dependency_blocks_downstream_step(monkeypatch):
+    steps = [
+        {
+            'id': 'gate',
+            'type': 'condition',
+            'depends_on': [],
+            'conditions': {'environment': 'prod'},
+            'retry': 0,
+            'timeout': 30,
+        },
+        {
+            'id': 'apply',
+            'type': 'terraform_apply',
+            'depends_on': ['gate'],
+            'retry': 0,
+            'timeout': 30,
+        },
+    ]
+    context = FakeContext(steps)
+    executor = FakeExecutor()
+
+    with pytest.raises(ExecutionFailed, match='terraform_apply was skipped or blocked'):
+        worker.run_blueprint_workflow(context, executor)
+
+    assert executor.operations == []
+    assert any('workflow.step.skipped: gate:condition' in value for value in context.logs)
+    assert any('workflow.step.blocked: apply:terraform_apply' in value for value in context.logs)
+
+
+def test_wait_for_ip_uses_configured_static_address_without_guest_agent(monkeypatch, tmp_path):
+    workspace = tmp_path / 'workspace-static'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":111}}}'
+    )
+    context = FakeContext([], variables={
+        'node': 'pve01',
+        'ipv4_address': '192.0.2.111/24',
+        'tags': [],
+    })
+    observed = []
+    monkeypatch.setattr(worker, 'update_inventory_primary_ip', lambda context, address: observed.append(address))
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: (_ for _ in ()).throw(AssertionError('provider must not be used')),
+    )
+
+    assert worker.wait_for_ip(context, workspace, timeout=5) == ['192.0.2.111']
+    assert observed == ['192.0.2.111']
+
+
+def test_runtime_wait_logs_safe_provider_error(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    workspace = tmp_path / 'workspace-error'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":112}}}'
+    )
+    context = FakeContext([])
+    times = iter([0, 0, 10, 10])
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: next(times, 10))
+    monkeypatch.setattr(worker.time, 'sleep', lambda _seconds: None)
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(
+            vm_status=lambda node, vm_id: (_ for _ in ()).throw(HTTPException(502, 'Proxmox API unavailable'))
+        ),
+    )
+
+    with pytest.raises(ExecutionFailed, match='last provider error: Proxmox API unavailable'):
+        worker.wait_for_vm(context, workspace, timeout=1)
+
+    assert any('workflow.wait_for_vm.retry: Proxmox API unavailable' in value for value in context.logs)
+
+
+def test_terraform_destroy_rollback_uses_global_execution_timeout(monkeypatch):
+    steps = [
+        {'id': 'rollback_destroy', 'type': 'terraform_destroy', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'rollback': 'rollback_destroy', 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.rollback_destroyed = False
+    executor = FakeExecutor()
+    deadlines = []
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {'external_id': '113', 'vm_id': 113, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(
+            execution_availability=lambda: {'ok': False, 'reason': 'health failed'}
+        ),
+    )
+    monkeypatch.setattr(worker, 'mark_destroyed_after_rollback', lambda: None, raising=False)
+
+    original_execute = executor.execute
+    def execute(operation, ctx):
+        if operation == 'terraform.destroy':
+            deadlines.append(ctx.step_deadline)
+        return original_execute(operation, ctx)
+    executor.execute = execute
+
+    with pytest.raises(ExecutionFailed, match='health_check failed'):
+        worker.run_blueprint_workflow(context, executor)
+
+    assert 'terraform.destroy' in executor.operations
+    assert deadlines
