@@ -36,44 +36,6 @@ function readBlueprintTemplateVariables(root, template) {
   }
   return result;
 }
-const HOSTNAME_TOKEN_LABELS = {
-  location: 'Lokalizacja',
-  environment: 'Środowisko',
-  env: 'Środowisko (skrót)',
-  application: 'Aplikacja',
-  service: 'Usługa',
-  role: 'Rola serwera',
-  os: 'System operacyjny',
-  cluster: 'Klaster',
-  site: 'Site',
-};
-function hostnameTokens(pattern = '') {
-  return [...new Set([...String(pattern).matchAll(/{([a-z]+)}/g)].map(match => match[1]))]
-    .filter(token => !['number', 'random', 'year'].includes(token));
-}
-function hostnameValueFields(pattern, values = {}, required = true) {
-  const wrapper = node('div', { class: 'form-grid hostname-values wide' });
-  const tokens = hostnameTokens(pattern);
-  tokens.forEach(token => {
-    const item = field(HOSTNAME_TOKEN_LABELS[token] || token, `hostname_${token}`, {
-      value: values[token] || '',
-      required,
-    });
-    item.dataset.hostnameToken = token;
-    wrapper.append(item);
-  });
-  if (!tokens.length) wrapper.append(node('p', { class: 'muted wide', text: 'Ten wzorzec nie wymaga dodatkowych wartości.' }));
-  return wrapper;
-}
-function readHostnameValues(form) {
-  const result = {};
-  form.querySelectorAll('[data-hostname-token]').forEach(wrapper => {
-    const token = wrapper.dataset.hostnameToken;
-    const input = wrapper.querySelector('input,select,textarea');
-    if (input?.value) result[token] = input.value.trim();
-  });
-  return result;
-}
 function canManageBlueprintByRole(item) {
   const required = new Set((item?.manager_role_ids || []).map(Number));
   if (!required.size) return true;
@@ -696,6 +658,9 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
             apmid: deployment.apmid || null,
+            environment: deployment.environment || null,
+            select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
+            select_environment_on_execute: Boolean(deployment.select_environment_on_execute),
             template: 'proxmox-vm',
             executor: data.get('executor'),
             variables: vmVariables,
@@ -1265,6 +1230,9 @@ async function blueprintForm(item = null) {
             Object.entries(deployment.hostname_values || {}).filter(([name]) => !['location', 'role'].includes(name))
           ),
           apmid: deployment.apmid || null,
+          environment: deployment.environment || null,
+          select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
+          select_environment_on_execute: Boolean(deployment.select_environment_on_execute),
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
@@ -1353,7 +1321,7 @@ async function executeBlueprint(item) {
     }
     if (scheme) {
       const defaults = item.deployment?.hostname_values || {};
-      const missingTokens = hostnameTokens(scheme.pattern)
+      const missingTokens = window.BlueprintRuntimeApmid.hostnameTokens(scheme.pattern)
         .filter(token => !['location', 'role'].includes(token))
         .filter(token => !defaults[token]);
       if (missingTokens.length) {
@@ -1361,7 +1329,7 @@ async function executeBlueprint(item) {
         fields.append(formSection(
           'Nazwa hosta',
           `Wzorzec: ${scheme.pattern}. Pozostałe składniki są zapisane w Blueprintcie.`,
-          hostnameValueFields(missingPattern),
+          window.BlueprintRuntimeApmid.hostnameValueFields(missingPattern),
         ));
       } else {
         fields.append(node('div', { class: 'field-help wide', text: `Nazwa hosta zostanie wygenerowana automatycznie według wzorca ${scheme.pattern}.` }));
@@ -1385,10 +1353,11 @@ async function executeBlueprint(item) {
         }
         const payload = {
           variables,
-          hostname_values: readHostnameValues(form),
+          hostname_values: window.BlueprintRuntimeApmid.readHostnameValues(form),
         };
-        const runtimeApmid = window.BlueprintRuntimeApmid.read(form, apmidContext);
-        if (runtimeApmid) payload.apmid = runtimeApmid;
+        const runtimeClassification = window.BlueprintRuntimeApmid.read(form, apmidContext);
+        if (runtimeClassification.apmid) payload.apmid = runtimeClassification.apmid;
+        if (runtimeClassification.environment) payload.environment = runtimeClassification.environment;
 
         const result = await api(`/blueprints/${item.id}/execute`, {
           method: 'POST',
