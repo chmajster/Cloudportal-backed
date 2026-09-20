@@ -82,7 +82,12 @@ def update_run(
 ):
     if data.ref is not None and 'updates.update' not in request.state.permissions:
         raise HTTPException(403, 'updates.update required to override update ref')
-    result = call('/run', 'POST', data.model_dump(exclude_none=True))
+    try:
+        result = call('/run', 'POST', data.model_dump(exclude_none=True))
+    except HTTPException as exc:
+        if exc.status_code == 409 and 'already in progress' in str(exc.detail).lower():
+            return {'accepted': False, 'already_running': True}
+        raise
     audit(db, request, 'update.started', 'system_updates', data.ref)
     return result
 
