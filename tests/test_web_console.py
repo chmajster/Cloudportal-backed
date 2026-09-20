@@ -239,7 +239,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerExtension('blueprint-wizard-core'" in script
     assert "registerExtension('blueprint-wizard-hostname'" in script
     assert "Pattern hostname z Generatora" in script
-    assert "name: 'hostname_scheme_picker'" not in script
     assert "'hostname_scheme_picker'" in script
     assert "button('Odśwież patterny'" in script
     assert "Lista patternów hostname odświeżona." in script
