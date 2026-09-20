@@ -443,6 +443,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Uruchamia bez pytania o approval" in script
     assert "Włącz auto-approval" in script
     assert "Wyłącz auto-approval" in script
+    assert "Timeout ręcznego approval" in script
+    assert "Zmień timeout" in script
+    assert "Approval wg polityki globalnej" in script
+    assert "workflowChoicesForProvider" in script
+    assert "Legacy / niedostępne dla" in script
     assert '.environment-manager-panel' in stylesheet
     assert '.environment-manager-grid' in stylesheet
     assert '.environment-manager-card' in stylesheet
