@@ -132,6 +132,22 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
+    workflow_types = {str(step.type) for step in data.workflow}
+    if blueprint_id is None and 'terraform_apply' not in workflow_types:
+        raise HTTPException(422, 'New Blueprints must contain an explicit terraform_apply step')
+
+    proxmox_only_steps = {
+        'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+        'run_ansible_playbook', 'create_snapshot', 'health_check',
+    }
+    invalid_provider_steps = sorted(workflow_types & proxmox_only_steps) if provider.type != 'proxmox' else []
+    if invalid_provider_steps:
+        raise HTTPException(
+            422,
+            'Workflow steps supported only for Proxmox: ' + ', '.join(invalid_provider_steps),
+        )
+    if data.deployment.ansible and provider.type != 'proxmox':
+        raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
     if (
         data.deployment.template == 'proxmox-vm'
         and data.deployment.variables.get('install_qemu_guest_agent') is True
