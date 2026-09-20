@@ -499,3 +499,113 @@
     width: 100%;
   }
 }
+
+
+.environment-manager-panel {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.environment-manager-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.environment-manager-head h2 {
+  margin: 4px 0 6px;
+  font-size: 1.15rem;
+}
+
+.environment-manager-head p {
+  margin: 0;
+  max-width: 760px;
+  line-height: 1.5;
+}
+
+.environment-manager-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.environment-manager-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.environment-manager-card:has(input:checked) {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.environment-manager-card input {
+  flex: 0 0 auto;
+}
+
+.environment-manager-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.environment-manager-copy strong {
+  font-size: .8rem;
+}
+
+.environment-manager-copy small {
+  font-size: .68rem;
+}
+
+.environment-manager-state {
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 750;
+}
+
+.environment-manager-card:has(input:checked) .environment-manager-state {
+  color: var(--accent-strong);
+}
+
+.environment-manager-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 720px) {
+  .environment-manager-panel {
+    padding: 17px;
+  }
+
+  .environment-manager-head {
+    flex-direction: column;
+  }
+
+  .environment-manager-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .environment-manager-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .environment-manager-state {
+    grid-column: 2;
+  }
+
+  .environment-manager-actions .button {
+    width: 100%;
+  }
+}
