@@ -14,6 +14,7 @@ class FakeContext:
         )
         self.deployment = SimpleNamespace(
             id='deployment-1',
+            name='vm01',
             provider=provider,
             executor=executor,
             variables=variables or {'node': 'pve01', 'tags': ['env-dev', 'apmid-leo']},
