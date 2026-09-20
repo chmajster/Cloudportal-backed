@@ -318,3 +318,126 @@
   width: 21px;
   height: 21px;
 }
+
+
+.apmid-sheet-panel {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.apmid-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.apmid-sheet-head h2 {
+  margin: 4px 0 6px;
+  font-size: 1.15rem;
+}
+
+.apmid-sheet-head p {
+  margin: 0;
+  max-width: 760px;
+  line-height: 1.5;
+}
+
+.apmid-sheet-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.apmid-sheet {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 520px;
+}
+
+.apmid-sheet th,
+.apmid-sheet td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.apmid-sheet thead th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.apmid-sheet tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.apmid-sheet tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.apmid-sheet th:first-child,
+.apmid-sheet-index {
+  width: 54px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.apmid-sheet th:last-child,
+.apmid-sheet-actions {
+  width: 110px;
+  text-align: right;
+}
+
+.apmid-sheet input[data-apmid-value] {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.apmid-sheet input[data-apmid-value]:hover,
+.apmid-sheet input[data-apmid-value]:focus {
+  border-color: var(--accent-border);
+  background: var(--surface);
+}
+
+.apmid-sheet input[data-apmid-value]:disabled {
+  opacity: 1;
+  color: var(--text);
+  cursor: default;
+}
+
+.apmid-sheet-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .apmid-sheet-panel {
+    padding: 17px;
+  }
+
+  .apmid-sheet-head {
+    flex-direction: column;
+  }
+
+  .apmid-sheet-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .apmid-sheet-footer .button {
+    width: 100%;
+  }
+}
