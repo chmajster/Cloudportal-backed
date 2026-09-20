@@ -66,21 +66,27 @@ def test_blueprint_approval_permission_is_enforced(client, headers):
     ]
     _, operator = new_user(client, headers, username='approval-operator', permissions=permissions)
 
-    denied = client.post(
+    requested = client.post(
         f"/api/v1/blueprints/{blueprint['id']}/execute",
         headers=idem(operator),
         json={},
     )
-    assert denied.status_code == 403
-    assert 'blueprints.approve' in denied.text
+    assert requested.status_code == 202, requested.text
+    assert requested.json()['job']['status'] == 'waiting_approval'
+    assert requested.json()['status'] == 'waiting_approval'
 
     approved = client.post(
-        f"/api/v1/blueprints/{blueprint['id']}/execute",
-        headers=idem(headers),
-        json={},
+        f"/api/v1/jobs/{requested.json()['job']['id']}/approve",
+        headers=headers,
     )
-    assert approved.status_code == 202, approved.text
-    assert approved.json()['job']['status'] == 'queued'
+    assert approved.status_code == 200, approved.text
+    assert approved.json()['status'] == 'queued'
+    current = client.get(
+        f"/api/v1/deployments/{requested.json()['id']}",
+        headers=headers,
+    )
+    assert current.status_code == 200
+    assert current.json()['status'] == 'queued'
 
 
 def test_failed_blueprint_apply_queues_explicit_recovery_destroy(client, headers, monkeypatch, tmp_path):
