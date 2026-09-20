@@ -155,8 +155,8 @@ def test_wait_for_agent_runs_without_ansible(monkeypatch):
     )
     monkeypatch.setattr(
         worker,
-        'wait_for_vm',
-        lambda context, workspace, timeout=600: observed.append((workspace, timeout)) or ['192.0.2.10'],
+        'wait_for_agent',
+        lambda context, workspace, timeout=600: observed.append((workspace, timeout)) or True,
     )
 
     worker.run_blueprint_workflow(context, executor)
@@ -219,3 +219,72 @@ def test_blueprint_workflow_does_not_mark_completed_when_post_apply_step_fails(m
         worker.run_blueprint_workflow(context, executor)
 
     assert context.blueprint_workflow_completed is False
+
+
+def test_declarative_step_after_apply_fails_at_runtime(monkeypatch):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'tags', 'type': 'set_tags', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    executor = FakeExecutor()
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {'external_id': '106', 'vm_id': 106, 'node': 'pve01'},
+    )
+
+    with pytest.raises(ExecutionFailed, match='cannot run after terraform_apply'):
+        worker.run_blueprint_workflow(context, executor)
+
+
+def test_notification_rollback_runs_when_step_fails(monkeypatch):
+    steps = [
+        {'id': 'rollback_notice', 'type': 'notification', 'depends_on': [], 'conditions': {'message': 'rollback ran'}, 'retry': 0, 'timeout': 30},
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'rollback': 'rollback_notice', 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    executor = FakeExecutor()
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {'external_id': '107', 'vm_id': 107, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(
+            execution_availability=lambda: {'ok': False, 'reason': 'health failed'}
+        ),
+    )
+
+    with pytest.raises(ExecutionFailed, match='health_check failed'):
+        worker.run_blueprint_workflow(context, executor)
+
+    assert any('workflow.rollback.start:health:rollback_notice:notification' in value for value in context.stages)
+    assert any('workflow.rollback.completed:health:rollback_notice:notification' in value for value in context.stages)
+    assert 'workflow.rollback.notification: rollback ran' in context.logs
+
+
+def test_snapshot_waits_for_proxmox_task(monkeypatch):
+    context = FakeContext([])
+    statuses = iter([
+        {'status': 'running'},
+        {'status': 'stopped', 'exitstatus': 'OK'},
+    ])
+    provider = SimpleNamespace(
+        create_snapshot=lambda *args: 'UPID:test',
+        task_status=lambda node, upid: next(statuses),
+    )
+    monkeypatch.setattr(worker, 'vm_id_from_state', lambda workspace: 108)
+    monkeypatch.setattr(worker, 'provider_for', lambda credential: provider)
+    monkeypatch.setattr(worker.time, 'sleep', lambda _seconds: None)
+
+    worker.create_blueprint_snapshot(
+        context,
+        '/tmp/workspace',
+        {'id': 'snapshot', 'type': 'create_snapshot', 'timeout': 30},
+    )
+
+    assert any('workflow.snapshot.created: bp-job-1234-snapshot task=UPID:test' in value for value in context.logs)
