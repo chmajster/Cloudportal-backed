@@ -343,6 +343,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const playbookSelect = playbookField.querySelector('select');
     const ansibleCredentialSelect = ansibleCredentialField.querySelector('select');
     let templateRows = [];
+    let cloudInitSnippetStorage = variables.cloud_init_snippet_storage || 'local';
     let hydratedHostnameSchemeId = null;
     const updateHostnameFields = () => {
       const selected = schemeSelect.value;
@@ -474,7 +475,13 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         api('/providers/' + providerId + '/storages?node=' + encodeURIComponent(targetNode)),
         api('/providers/' + providerId + '/networks?node=' + encodeURIComponent(targetNode)),
       ]);
-      const storages = storageResult.items.filter(value => !value.disable && String(value.content || '').includes('images'));
+      const availableStorages = storageResult.items.filter(value => !value.disable);
+      const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
+      const snippetStorages = availableStorages.filter(value => String(value.content || '').includes('snippets'));
+      const preferredSnippet = snippetStorages.find(value => String(value.storage) === String(cloudInitSnippetStorage))
+        || snippetStorages.find(value => value.storage === 'local')
+        || snippetStorages[0];
+      if (preferredSnippet) cloudInitSnippetStorage = preferredSnippet.storage;
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
@@ -612,6 +619,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
           install_qemu_guest_agent: data.has('wait_agent'),
+          cloud_init_snippet_storage: cloudInitSnippetStorage || 'local',
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,
