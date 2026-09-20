@@ -32,12 +32,58 @@
     control.disabled = !snippets.length;
   }
 
+  function requiredExecutionPermissions(item = {}) {
+    const required = new Set([
+      'blueprints.execute',
+      'jobs.execute',
+      'terraform.execute',
+      'deployments.create',
+    ]);
+    if (item.requires_approval) required.add('blueprints.approve');
+    if (item.recovery_policy === 'destroy_on_failure') required.add('deployments.destroy');
+    if (item.deployment?.ansible) required.add('ansible.execute');
+    const stepTypes = new Set((item.workflow || []).map(step => String(step?.type || '')));
+    if (stepTypes.has('run_ansible_playbook')) required.add('ansible.execute');
+    if (stepTypes.has('create_snapshot')) required.add('snapshots.create');
+    if (stepTypes.has('release_ip')) required.add('ipam.release');
+    return [...required].sort();
+  }
+
+  function missingExecutionPermissions(item = {}) {
+    return requiredExecutionPermissions(item).filter(permission => !allowed(permission));
+  }
+
+  function workflowNeedsTags(manualTags = [], deployment = {}) {
+    return Boolean(
+      manualTags.length
+      || deployment.apmid
+      || deployment.environment
+      || deployment.select_apmid_on_execute
+      || deployment.select_environment_on_execute
+    );
+  }
+
+  function executionControl(item, onExecute) {
+    const missing = missingExecutionPermissions(item);
+    if (!item.is_active || !item.visibility?.backend) return null;
+    if (!missing.length) return button('Uruchom', onExecute, 'primary');
+    return node('span', {
+      class: 'badge warning',
+      title: 'Brak uprawnień: ' + missing.join(', '),
+      text: 'Brak uprawnień do uruchomienia',
+    });
+  }
+
   registerExtension('blueprint-provisioning-guards', () => {
     window.BlueprintProvisioningGuards = {
       keyBasedSshCredentials,
       guestCredentialChoices,
       selectSnippetStorage,
       syncWaitAgentControl,
+      requiredExecutionPermissions,
+      missingExecutionPermissions,
+      workflowNeedsTags,
+      executionControl,
     };
   });
 })();

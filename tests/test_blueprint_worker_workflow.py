@@ -165,3 +165,57 @@ def test_wait_for_agent_runs_without_ansible(monkeypatch):
     assert executor.operations == ['terraform.apply']
     assert observed == [('/tmp/workspace', 30)]
     assert any('workflow.step.completed:agent:wait_for_agent' in value for value in context.stages)
+
+
+def test_blueprint_workflow_sets_completion_marker_only_after_all_steps(monkeypatch):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.blueprint_workflow_completed = False
+    executor = FakeExecutor()
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {'external_id': '104', 'vm_id': 104, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(execution_availability=lambda: {'ok': True}),
+    )
+
+    worker.run_blueprint_workflow(context, executor)
+
+    assert context.blueprint_workflow_completed is True
+    assert context.stages[-1] == 'workflow.completed'
+
+
+def test_blueprint_workflow_does_not_mark_completed_when_post_apply_step_fails(monkeypatch):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.blueprint_workflow_completed = False
+    executor = FakeExecutor()
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {'external_id': '105', 'vm_id': 105, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(
+            execution_availability=lambda: {'ok': False, 'reason': 'provider check failed'}
+        ),
+    )
+
+    with pytest.raises(ExecutionFailed, match='health_check failed'):
+        worker.run_blueprint_workflow(context, executor)
+
+    assert context.blueprint_workflow_completed is False

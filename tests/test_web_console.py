@@ -314,6 +314,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "guest_credential_id" in script
     assert "Credential dostępu do VM" in script
     assert "supports_cloud_init_ssh_key === true" in script
+    assert "requiredExecutionPermissions" in script
+    assert "'jobs.execute'" in script
+    assert "'terraform.execute'" in script
+    assert "'deployments.create'" in script
+    assert "'deployments.destroy'" in script
+    assert "'snapshots.create'" in script
+    assert "'ipam.release'" in script
+    assert "Brak uprawnień do uruchomienia" in script
+    assert script.count("workflowNeedsTags(") >= 2
     assert "Brak credentiali SSH zawierających klucz prywatny" in script
     assert "QEMU Guest Agent niedostępny" in script
     assert "storage obsługującego snippets" in script

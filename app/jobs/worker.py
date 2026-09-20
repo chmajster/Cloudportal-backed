@@ -25,6 +25,7 @@ class Context:
         self.started = time.monotonic()
         self.last_check = 0
         self.step_deadline = None
+        self.blueprint_workflow_completed = False
         self.deployment = self.credential = self.ansible = self.ansible_credential = None
 
     def check(self):
@@ -567,6 +568,8 @@ def run_blueprint_workflow(context, executor):
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
 
+    context.blueprint_workflow_completed = True
+    context.stage('workflow.completed')
     return runtime['workspace']
 
 
@@ -620,6 +623,8 @@ def execute(job_id):
             blueprint = (job.payload or {}).get('blueprint') or {}
             if job.operation == 'terraform.apply' and blueprint.get('steps'):
                 run_blueprint_workflow(context, executor)
+                if not context.blueprint_workflow_completed:
+                    raise ExecutionFailed('Blueprint workflow did not complete')
             else:
                 workspace = executor.execute(job.operation, context)
                 if job.operation == 'terraform.import':
