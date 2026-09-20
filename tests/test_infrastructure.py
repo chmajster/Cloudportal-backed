@@ -226,7 +226,7 @@ def test_running_cancel_is_visible_and_orphan_is_finalized(client, headers):
     with session() as db:
         job = db.get(Job, d['job']['id'])
         job.status = 'running'
-        job.heartbeat_at = now() - timedelta(seconds=30)
+        job.heartbeat_at = now() - timedelta(seconds=120)
         dep = db.get(Deployment, d['id'])
         dep.status = 'running'
         db.commit()
