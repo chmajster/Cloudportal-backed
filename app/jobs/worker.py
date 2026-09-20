@@ -11,6 +11,7 @@ from app.database import session
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
+from app.inventory_sync import state_outputs, sync_deployment_inventory
 from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, Token, now
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
@@ -105,16 +106,15 @@ def ensure_runtime_credential(credential):
 def terraform_outputs(workspace):
     try:
         state = json.loads((workspace / 'terraform.tfstate').read_text())
-        outputs = state.get('outputs', {})
     except (OSError, ValueError, TypeError):
         raise ExecutionFailed('Terraform state could not be read for inventory synchronization') from None
-    if not isinstance(outputs, dict):
-        raise ExecutionFailed('Terraform state outputs are invalid')
-    return outputs
+    try:
+        return state_outputs(state)
+    except RuntimeError as exc:
+        raise ExecutionFailed(str(exc)) from None
 
 
 def vm_id_from_state(workspace):
-    # State is internal, never sent to PHP or returned by API.
     vm_id = terraform_outputs(workspace).get('vm_id', {}).get('value')
     if not vm_id:
         raise ExecutionFailed('VM ID missing from Terraform state')
@@ -123,102 +123,20 @@ def vm_id_from_state(workspace):
 
 def register_managed_inventory(context, workspace):
     outputs = terraform_outputs(workspace)
-    external_id = outputs.get('resource_id', {}).get('value')
-    vm_id = outputs.get('vm_id', {}).get('value')
-    if external_id is None:
-        external_id = vm_id
-    if external_id is None:
-        raise ExecutionFailed('Managed resource identity is missing from Terraform state')
-
-    primary_ip = outputs.get('primary_ip', {}).get('value')
     with session() as db:
         deployment = db.get(Deployment, context.deployment.id)
         if deployment is None:
             raise ExecutionFailed('Deployment disappeared before inventory synchronization')
-
-        metadata = {}
-        normalized_vm_id = None
-        node = str((deployment.variables or {}).get('node') or '')
-        if deployment.provider == 'proxmox':
-            if vm_id is None:
-                raise ExecutionFailed('Proxmox VM ID missing from Terraform state')
-            if not node:
-                raise ExecutionFailed('Proxmox node missing from deployment variables')
-            normalized_vm_id = int(vm_id)
-            metadata = {'node': node, 'vm_id': normalized_vm_id}
-
-        resource = db.scalar(select(ManagedResource).where(
-            ManagedResource.deployment_id == deployment.id
-        ))
-        if resource is None:
-            resource = ManagedResource(
-                deployment_id=deployment.id,
-                provider_id=deployment.provider_id,
-                provider=deployment.provider,
-                resource_type='vm',
-                external_id=str(external_id),
-                name=deployment.name,
-                primary_ip=str(primary_ip) if primary_ip else None,
-                lifecycle_status='active',
-                metadata_json=metadata,
-                created_by=deployment.created_by,
-            )
-            db.add(resource)
-        else:
-            resource.provider_id = deployment.provider_id
-            resource.provider = deployment.provider
-            resource.resource_type = 'vm'
-            resource.external_id = str(external_id)
-            resource.name = deployment.name
-            resource.primary_ip = str(primary_ip) if primary_ip else None
-            resource.lifecycle_status = 'active'
-            resource.metadata_json = metadata
-            resource.destroyed_at = None
-
-        if deployment.provider == 'proxmox':
-            by_identity = db.scalar(select(ManagedVM).where(
-                ManagedVM.provider_id == deployment.provider_id,
-                ManagedVM.vm_id == normalized_vm_id,
-            ))
-            by_deployment = db.scalar(select(ManagedVM).where(
-                ManagedVM.deployment_id == deployment.id
-            ))
-
-            if by_identity and by_identity.deployment_id not in {None, deployment.id}:
-                raise ExecutionFailed('VM identity is already linked to another deployment')
-            if by_identity and by_deployment and by_identity.id != by_deployment.id:
-                raise ExecutionFailed('Deployment inventory points to a different VM identity')
-
-            managed_vm = by_identity or by_deployment
-            if managed_vm is None:
-                managed_vm = ManagedVM(
-                    provider_id=deployment.provider_id,
-                    deployment_id=deployment.id,
-                    node=node,
-                    vm_id=normalized_vm_id,
-                    name=deployment.name,
-                    management_mode='terraform',
-                    lifecycle_status='active',
-                    created_by=deployment.created_by,
-                )
-                db.add(managed_vm)
-            else:
-                managed_vm.provider_id = deployment.provider_id
-                managed_vm.deployment_id = deployment.id
-                managed_vm.node = node
-                managed_vm.vm_id = normalized_vm_id
-                managed_vm.name = deployment.name
-                managed_vm.management_mode = 'terraform'
-                managed_vm.lifecycle_status = 'active'
-                managed_vm.destroyed_at = None
-
+        try:
+            result = sync_deployment_inventory(db, deployment, outputs)
+        except RuntimeError as exc:
+            raise ExecutionFailed(str(exc)) from None
         db.commit()
-
-    return {
-        'external_id': str(external_id),
-        'vm_id': normalized_vm_id,
-        'node': node or None,
-    }
+        return {
+            'external_id': result['external_id'],
+            'vm_id': result['vm_id'],
+            'node': result['node'],
+        }
 
 
 
