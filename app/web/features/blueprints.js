@@ -867,6 +867,21 @@ async function blueprintForm(item = null) {
       ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
       ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
     ];
+    const proxmoxOnlyWorkflowTypes = new Set([
+      'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+      'run_ansible_playbook', 'create_snapshot', 'health_check',
+    ]);
+    let workflowProvider = templates.find(
+      template => template.id === (item?.deployment?.template || 'proxmox-vm')
+    )?.provider || 'proxmox';
+    const workflowChoices = currentType => {
+      const available = workflowProvider === 'proxmox'
+        ? workflowTypes
+        : workflowTypes.filter(([value]) => !proxmoxOnlyWorkflowTypes.has(value));
+      return available.some(([value]) => value === currentType) || !currentType
+        ? available
+        : [[currentType, 'Legacy / niedostępne dla ' + workflowProvider + ': ' + currentType], ...available];
+    };
     const addWorkflowStep = (step = {}) => {
       workflowCounter += 1;
       const advanced = node('details', { class: 'advanced-options wide' },
@@ -893,8 +908,7 @@ async function blueprintForm(item = null) {
         node('div', { class: 'form-grid' },
           field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
           selectField('Akcja', 'workflow_type',
-            (workflowTypes.some(([value]) => value === step.type) || !step.type ? workflowTypes
-              : [[step.type, 'Legacy marker: ' + step.type], ...workflowTypes]).map(([value, label]) => ({ value, label })),
+            workflowChoices(step.type).map(([value, label]) => ({ value, label })),
             step.type || 'terraform_apply', { required: true }),
           field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), wide: true, help: 'Kilka ID oddziel przecinkami.' }),
           advanced));
@@ -1036,6 +1050,7 @@ async function blueprintForm(item = null) {
     const refreshDeploymentTemplate = () => {
       saveDeploymentVariables();
       const template = currentTemplate();
+      workflowProvider = template.provider;
       currentTemplateId = template.id;
       const matches = providers.filter(value => value.type === template.provider).map(value => ({ id: value.id, label: value.name }));
       refill(providerField.querySelector('select'), matches,
