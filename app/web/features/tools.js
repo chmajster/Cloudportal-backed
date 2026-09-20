@@ -358,7 +358,7 @@ function apmidTool(config) {
   const apmids = config?.apmids || [];
   return node('article', { class: 'panel tool-card' },
     node('div', { class: 'tool-card-head' },
-      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('table')),
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('list-check')),
       node('div', { class: 'tool-title' },
         node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
         node('h2', { text: 'APMID' }),
@@ -505,7 +505,7 @@ async function toolsView() {
     } catch (error) {
       cards.push(node('article', { class: 'panel tool-card' },
         node('div', { class: 'tool-card-head' },
-          node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('table')),
+          node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('list-check')),
           node('div', { class: 'tool-title' },
             node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
             node('h2', { text: 'APMID' }),
@@ -566,7 +566,7 @@ registerView({ id: 'tools', label: 'Narzędzia', iconName: 'wrench', order: 155 
 registerView({
   id: 'apmid',
   label: 'APMID',
-  iconName: 'table',
+  iconName: 'list-check',
   navigation: false,
   navigationParent: 'tools',
   permission: 'settings.read',
