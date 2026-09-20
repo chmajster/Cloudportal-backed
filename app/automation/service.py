@@ -9,6 +9,7 @@ from app.api.schemas import AnsibleInput
 from app.catalog import validate_template_variables
 from app.ipam.service import allocate_address
 from app.models import Blueprint, HostnameReservation, HostnameScheme, now
+from app.vm_classification import vm_classification_settings
 
 
 HOSTNAME_FIELDS = 'id scheme_id hostname values status resource_id created_by created_at updated_at released_at'
@@ -142,14 +143,48 @@ def render_template(value: Any, variables: dict[str, Any]):
     return INLINE_TEMPLATE.sub(replace, value)
 
 
-def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
+def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
     ip_allocation = None
     deployment = deepcopy(blueprint.deployment)
+    fixed_apmid = deployment.pop('apmid', None)
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
+
+    deployment_variables = deployment.setdefault('variables', {})
+    tags = list(deployment_variables.get('tags') or [])
+    tagged_apmid = None
+    for tag in tags:
+        match = re.fullmatch(r'apmid-([a-z0-9][a-z0-9_-]{0,62})', str(tag).strip().lower())
+        if match:
+            tagged_apmid = match.group(1).upper()
+            break
+    fixed_apmid = str(fixed_apmid or tagged_apmid or '').strip().upper() or None
+    runtime_apmid = str(apmid or '').strip().upper() or None
+
+    if fixed_apmid and runtime_apmid and runtime_apmid != fixed_apmid:
+        raise HTTPException(422, 'Blueprint already defines APMID and it cannot be overridden at runtime')
+
+    effective_apmid = fixed_apmid or runtime_apmid
+    if runtime_apmid and not fixed_apmid:
+        allowed_apmids = vm_classification_settings(db)['apmids']
+        if runtime_apmid not in allowed_apmids:
+            raise HTTPException(422, 'Selected APMID is not configured or is no longer available')
+
+    if effective_apmid:
+        normalized_apmid = effective_apmid.lower()
+        tags.append('apmid-' + normalized_apmid)
+        environment = None
+        for tag in tags:
+            match = re.fullmatch(r'env-(test|dev|nonprod|prod)', str(tag).strip().lower())
+            if match:
+                environment = match.group(1)
+                break
+        if environment:
+            tags.append(normalized_apmid + '.' + environment)
+        deployment_variables['tags'] = sorted(set(str(tag).strip().lower() for tag in tags if str(tag).strip()))
     if scheme_id:
         defaults = render_template(default_hostname_values, variables)
         merged_hostname_values = {**defaults, **hostname_values}
