@@ -64,7 +64,7 @@ def run_update_request(payload: dict) -> dict:
         try:
             status = updater_request('/status')
         except UpdaterError:
-            status = {}
+            return {'accepted': False, 'already_running': True}
 
     operation_active = status.get('operation_active')
     clearly_idle = operation_active is False or (
