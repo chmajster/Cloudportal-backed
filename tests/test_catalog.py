@@ -5,9 +5,9 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert {'proxmox-vm', 'aws-ec2', 'azure-linux-vm', 'openstack-vm', 'vmware-vsphere-vm'} <= set(items)
     assert items['aws-ec2']['provider'] == 'aws'
     assert 'security_group_ids' in items['aws-ec2']['variables_schema']['properties']
-    assert items['proxmox-vm']['version'] == 2
+    assert items['proxmox-vm']['version'] == 3
     proxmox_properties = items['proxmox-vm']['variables_schema']['properties']
-    assert {'tags', 'dns_servers', 'dns_domain'} <= set(proxmox_properties)
+    assert {'tags', 'dns_servers', 'dns_domain', 'install_qemu_guest_agent', 'cloud_init_snippet_storage'} <= set(proxmox_properties)
 
     source = client.get('/api/v1/templates/proxmox-vm/source', headers=headers)
     assert source.status_code == 200, source.text
@@ -17,6 +17,13 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert {'main.tf', 'variables.tf'} <= {item['name'] for item in source_data['files']}
     assert all(item['name'].endswith('.tf') for item in source_data['files'])
     assert all(isinstance(item['content'], str) for item in source_data['files'])
+    terraform_source = '\n'.join(item['content'] for item in source_data['files'])
+    assert 'proxmox_virtual_environment_file' in terraform_source
+    assert 'qemu_guest_agent_cloud_init' in terraform_source
+    assert 'vendor_data_file_id' in terraform_source
+    assert 'qemu-guest-agent' in terraform_source
+    assert 'install_qemu_guest_agent' in terraform_source
+    assert 'cloud_init_snippet_storage' in terraform_source
 
     playbooks = client.get('/api/v1/ansible/playbooks', headers=headers)
     assert playbooks.status_code == 200
