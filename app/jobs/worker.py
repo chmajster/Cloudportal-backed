@@ -510,6 +510,36 @@ def wait_for_ssh(context, workspace, timeout):
     raise ExecutionFailed('Timed out waiting for SSH' + (f': {last_error}' if last_error else ''))
 
 
+def wait_for_tcp_addresses(context, addresses, port, timeout, label):
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while time.monotonic() < deadline:
+        context.check()
+        for address in addresses:
+            try:
+                with socket.create_connection((address, port), timeout=2):
+                    return address
+            except OSError as exc:
+                last_error = exc
+        time.sleep(2)
+    raise ExecutionFailed(
+        f'Timed out waiting for {label}'
+        + (f': {last_error}' if last_error else '')
+    )
+
+
+def wait_for_ansible_transport(context, workspace, timeout=600, addresses=None):
+    addresses = list(addresses or wait_for_ip(context, workspace, timeout=timeout))
+    credential_type = getattr(context.ansible_credential, 'type', None)
+    if credential_type == 'ssh':
+        address = wait_for_tcp_addresses(context, addresses, 22, timeout, 'SSH')
+        return [address]
+    if credential_type == 'winrm':
+        address = wait_for_tcp_addresses(context, addresses, 5986, timeout, 'WinRM HTTPS')
+        return [address]
+    raise ExecutionFailed('Unsupported Ansible transport credential')
+
+
 def release_blueprint_ip(context):
     with session() as db:
         active_vm = db.scalar(select(ManagedVM.id).where(
@@ -883,10 +913,12 @@ def run_blueprint_workflow(context, executor):
                         raise ExecutionFailed(
                             'Workflow requests Ansible but deployment has no Ansible configuration'
                         )
-                    if runtime['addresses'] is None:
-                        runtime['addresses'] = wait_for_ip(
-                            context, workspace_for(step_type), timeout=timeout
-                        )
+                    runtime['addresses'] = wait_for_ansible_transport(
+                        context,
+                        workspace_for(step_type),
+                        timeout=timeout,
+                        addresses=runtime['addresses'],
+                    )
                     context.ansible.inventory = Inventory(hosts=runtime['addresses'])
                     AnsibleExecutor().execute('ansible.execute', context)
                     runtime['ansible_ran'] = True
@@ -969,10 +1001,11 @@ def run_blueprint_workflow(context, executor):
 
     if context.ansible and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
-        if runtime['addresses'] is None:
-            runtime['addresses'] = wait_for_ip(
-                context, workspace_for('ansible compatibility')
-            )
+        runtime['addresses'] = wait_for_ansible_transport(
+            context,
+            workspace_for('ansible compatibility'),
+            addresses=runtime['addresses'],
+        )
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
 
@@ -1046,7 +1079,8 @@ def execute(job_id):
                     else:
                         context.log(f"inventory.resource.registered: {inventory['external_id']}")
                     if context.ansible:
-                        context.ansible.inventory = Inventory(hosts=wait_for_ip(context, workspace))
+                        addresses = wait_for_ansible_transport(context, workspace)
+                        context.ansible.inventory = Inventory(hosts=addresses)
                         AnsibleExecutor().execute('ansible.execute', context)
         else:
             AnsibleExecutor().execute(job.operation, context)
