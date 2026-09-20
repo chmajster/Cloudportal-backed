@@ -444,7 +444,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "apmid + '.' + environment" in script
     assert "'apmid-' + apmid" in script
     assert "'env-' + environment" in script
-    assert 'auth_source=ldap' in script
+    assert 'JIT provisioning i RBAC' in script
+    assert 'Hasło pozostaje wyłącznie w LDAP' in script
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
