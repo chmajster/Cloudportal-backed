@@ -509,6 +509,12 @@ class ProxmoxProvider(InfrastructureProvider):
             ]
         raise HTTPException(422, 'Unknown resource')
 
+    def guest_agent_ready(self, node, vm_id):
+        data = self._get(
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/ping'
+        )
+        return data is not None
+
     def guest_addresses(self, node, vm_id):
         data = self._get(
             f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/network-get-interfaces'
