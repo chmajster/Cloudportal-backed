@@ -23,6 +23,7 @@ def sync_deployment_inventory(db, deployment, outputs):
     node = str((deployment.variables or {}).get('node') or '')
     normalized_vm_id = None
     metadata = {}
+    managed_vm = None
 
     if deployment.provider == 'proxmox':
         if vm_id is None:
@@ -31,6 +32,20 @@ def sync_deployment_inventory(db, deployment, outputs):
             raise RuntimeError('Proxmox node missing from deployment variables')
         normalized_vm_id = int(vm_id)
         metadata = {'node': node, 'vm_id': normalized_vm_id}
+
+        by_identity = db.scalar(select(ManagedVM).where(
+            ManagedVM.provider_id == deployment.provider_id,
+            ManagedVM.vm_id == normalized_vm_id,
+        ))
+        by_deployment = db.scalar(select(ManagedVM).where(
+            ManagedVM.deployment_id == deployment.id
+        ))
+
+        if by_identity and by_identity.deployment_id not in {None, deployment.id}:
+            raise RuntimeError('VM identity is already linked to another deployment')
+        if by_identity and by_deployment and by_identity.id != by_deployment.id:
+            raise RuntimeError('Deployment inventory points to a different VM identity')
+        managed_vm = by_identity or by_deployment
 
     resource = db.scalar(select(ManagedResource).where(
         ManagedResource.deployment_id == deployment.id
@@ -60,22 +75,7 @@ def sync_deployment_inventory(db, deployment, outputs):
         resource.metadata_json = metadata
         resource.destroyed_at = None
 
-    managed_vm = None
     if deployment.provider == 'proxmox':
-        by_identity = db.scalar(select(ManagedVM).where(
-            ManagedVM.provider_id == deployment.provider_id,
-            ManagedVM.vm_id == normalized_vm_id,
-        ))
-        by_deployment = db.scalar(select(ManagedVM).where(
-            ManagedVM.deployment_id == deployment.id
-        ))
-
-        if by_identity and by_identity.deployment_id not in {None, deployment.id}:
-            raise RuntimeError('VM identity is already linked to another deployment')
-        if by_identity and by_deployment and by_identity.id != by_deployment.id:
-            raise RuntimeError('Deployment inventory points to a different VM identity')
-
-        managed_vm = by_identity or by_deployment
         if managed_vm is None:
             managed_vm = ManagedVM(
                 provider_id=deployment.provider_id,
