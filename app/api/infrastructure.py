@@ -68,7 +68,7 @@ def credential_in_use(db, id, *, pending_only=False):
     else:
         deployments = deployments.where(Deployment.status != 'destroyed')
     return bool(db.scalar(deployments.limit(1)) or db.scalar(select(Job.id).where(
-        Job.status.in_(['queued', 'running']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)))
+        Job.status.in_(['queued', 'running', 'cancelling']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)))
 
 
 @router.get('/credentials', response_model=Items[CredentialOutput])
@@ -521,14 +521,28 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
     j = db.scalar(select(Job).where(Job.id == id).with_for_update())
     if j is None:
         raise HTTPException(404, 'Job not found')
-    if j.status not in {'queued', 'running'}:
+    if j.status in {'successful', 'failed', 'cancelled'}:
         raise HTTPException(409, 'Job already finished')
+    if j.cancel_requested and j.status == 'cancelling':
+        return job_public(j)
+
     j.cancel_requested = True
+    db.add(JobLog(job_id=j.id, message='job.cancel_requested: żądanie anulowania przyjęte'))
+
     if j.status == 'queued':
         j.status = 'cancelled'
+        j.error = 'Cancellation requested before execution'
         if j.deployment_id:
             d = find(db, Deployment, j.deployment_id)
-            d.active_job_id = None
+            if d.active_job_id == j.id:
+                d.active_job_id = None
             d.status = 'cancelled'
+    else:
+        j.status = 'cancelling'
+        if j.deployment_id:
+            d = find(db, Deployment, j.deployment_id)
+            if d.active_job_id == j.id:
+                d.status = 'cancelling'
+
     audit(db, request, 'job.cancel', 'jobs', id)
     return job_public(j)

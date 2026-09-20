@@ -53,7 +53,7 @@ function deploymentStatusIndicator(status) {
   const normalized = String(status || '').toLowerCase();
   const kind = normalized === 'failed' || normalized === 'error'
     ? 'danger'
-    : ['running', 'pending', 'planning', 'applying', 'destroying'].includes(normalized)
+    : ['running', 'cancelling', 'pending', 'planning', 'applying', 'destroying'].includes(normalized)
       ? 'warning'
       : ['ready', 'success', 'completed', 'active', 'applied'].includes(normalized)
         ? 'ok'
