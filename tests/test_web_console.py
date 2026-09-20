@@ -333,6 +333,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.apmid-inline-form' in stylesheet
     assert "environment: 'environment'" in script
     assert "apmid: 'apmid'" in script
+    assert 'function blueprintFixedApmid(item)' in script
+    assert "'/vm-classification/options'" in script
+    assert "'runtime_apmid'" in script
+    assert 'Ten Blueprint nie ma przypisanego APMID' in script
+    assert "deployment.apmid = String(state.apmid).trim().toUpperCase()" in script
     assert "apmid + '.' + environment" in script
     assert "'apmid-' + apmid" in script
     assert "'env-' + environment" in script
