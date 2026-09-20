@@ -5,6 +5,7 @@ from app.models import Setting
 SETTING_KEY = 'vm_classification'
 ENVIRONMENTS = ('test', 'dev', 'nonprod', 'prod')
 DEFAULT_ENVIRONMENTS = {name: True for name in ENVIRONMENTS}
+DEFAULT_HOSTNAME_DEFAULTS = {'location': 'wro', 'role': 'server'}
 
 
 def vm_classification_settings(db):
@@ -21,13 +22,22 @@ def vm_classification_settings(db):
         text = str(value).strip().upper()
         if text and text not in apmids:
             apmids.append(text)
-    return {'environments': environments, 'apmids': apmids}
+    hostname_defaults = dict(DEFAULT_HOSTNAME_DEFAULTS)
+    stored_defaults = raw.get('hostname_defaults')
+    if isinstance(stored_defaults, dict):
+        for name in ('location', 'role'):
+            text = str(stored_defaults.get(name) or '').strip().lower()
+            if text:
+                hostname_defaults[name] = text
+    return {'environments': environments, 'apmids': apmids, 'hostname_defaults': hostname_defaults}
 
 
 def save_vm_classification_settings(db, data):
+    current = vm_classification_settings(db)
     value = {
         'environments': {name: bool(data.environments[name]) for name in ENVIRONMENTS},
         'apmids': list(data.apmids),
+        'hostname_defaults': dict(data.hostname_defaults or current['hostname_defaults']),
     }
     row = db.get(Setting, SETTING_KEY)
     if row is None:
