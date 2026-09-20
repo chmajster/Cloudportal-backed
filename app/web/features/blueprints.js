@@ -252,11 +252,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       credentials.filter(value => ['ssh', 'winrm'].includes(value.type)).map(value => ({
         value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')',
       })), deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' });
-    const guestCredentialChoices = credentials
-      .filter(value => value.type === 'ssh' && value.supports_cloud_init_ssh_key === true)
-      .map(value => ({
-        value: value.id, label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
-      }));
+    const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(credentials);
     const guestCredentialField = selectField('Credential ustawiany na VM', 'guest_credential_id',
       [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...guestCredentialChoices],
       deployment.guest_credential_id || '', { wide: true,
@@ -467,15 +463,9 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       ]);
       const availableStorages = storageResult.items.filter(value => !value.disable);
       const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
-      const snippetStorages = availableStorages.filter(value => String(value.content || '').includes('snippets'));
-      const preferredSnippet = snippetStorages.find(value => String(value.storage) === String(cloudInitSnippetStorage))
-        || snippetStorages.find(value => value.storage === 'local') || snippetStorages[0];
-      cloudInitSnippetStorage = preferredSnippet?.storage || '';
-      const waitAgentControl = fields.querySelector('[name="wait_agent"]');
-      if (waitAgentControl) {
-        if (!snippetStorages.length) waitAgentControl.checked = false;
-        waitAgentControl.disabled = !snippetStorages.length;
-      }
+      const snippetState = window.BlueprintProvisioningGuards.selectSnippetStorage(availableStorages, cloudInitSnippetStorage);
+      cloudInitSnippetStorage = snippetState.storage;
+      window.BlueprintProvisioningGuards.syncWaitAgentControl(fields.querySelector('[name="wait_agent"]'), snippetState.snippets);
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
