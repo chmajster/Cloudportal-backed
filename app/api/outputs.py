@@ -36,6 +36,7 @@ class UserOutput(Output):
 class VMClassificationSettingsOutput(Output):
     environments: dict[str, bool]
     apmids: list[str]
+    hostname_defaults: dict[str, str]
 
 
 class LDAPSettingsOutput(Output):
