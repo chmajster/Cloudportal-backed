@@ -593,7 +593,6 @@ function restoreVmFromBackup(item, backup) {
 
 async function showVmConsole(item) {
   try {
-    closeModal();
     const result = await api(`${vmBase(item)}/console`, { method: 'POST' });
     if (result.mode !== 'novnc' || !result.rfb_module?.startsWith('/api/v1/') || !result.ws_path?.startsWith('/api/v1/')) {
       throw new Error('Backend nie zwrócił poprawnej sesji noVNC.');
@@ -630,7 +629,7 @@ async function showVmConsole(item) {
     });
   } catch (error) {
     state.consoleRfb = null;
-    if (dom.modal.open) closeModal();
+    if (typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open) closeModal();
     toast(error.message, 'error');
   }
 }
