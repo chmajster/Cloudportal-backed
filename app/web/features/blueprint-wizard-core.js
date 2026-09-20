@@ -208,6 +208,23 @@
     return new Set(template?.variables_schema?.required || []);
   }
 
+  function hostnameDefaultsForSelectedScheme(state, data) {
+    if (!state.hostnameEnabled || !state.hostnameSchemeId) return {};
+    const scheme = (data.schemes || []).find(value =>
+      String(value.id) === String(state.hostnameSchemeId));
+    if (!scheme) return {};
+
+    const allowed = new Set(hostnameTokens(scheme.pattern));
+    for (const token of ['number', 'random', 'year', 'location', 'role']) {
+      allowed.delete(token);
+    }
+
+    return Object.fromEntries(
+      Object.entries(state.hostnameValues || {})
+        .filter(([name, value]) => allowed.has(name) && String(value ?? '').trim() !== '')
+    );
+  }
+
   function buildDeployment(state, data) {
     const provider = data.providers.find(value => String(value.id) === String(state.providerId));
     const template = data.templates.find(value => value.id === state.terraformTemplateId)
@@ -258,9 +275,7 @@
       template: template.id,
       variables,
       executor: state.executor,
-      hostname_values: Object.fromEntries(
-        Object.entries(state.hostnameValues).filter(([name]) => !['location', 'role'].includes(name))
-      ),
+      hostname_values: hostnameDefaultsForSelectedScheme(state, data),
     };
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
@@ -331,6 +346,7 @@
     coerceSchemaValue,
     defaultGenericVariables,
     requiredTemplateVariables,
+    hostnameDefaultsForSelectedScheme,
     stateDefaults,
     buildDeployment,
     buildPayload,
