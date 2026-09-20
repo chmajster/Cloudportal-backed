@@ -52,6 +52,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/credentials.js',
         'features/providers.js',
         'features/catalog.js',
+        'features/blueprint-runtime-apmid.js',
         'features/blueprint-wizard-core.js',
         'features/blueprint-wizard-hostname.js',
         'features/blueprint-wizard-network.js',
@@ -340,6 +341,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.hostname-defaults-form' in stylesheet
     assert "environment: 'environment'" in script
     assert "apmid: 'apmid'" in script
+    assert 'function fixedApmid(item)' in script
+    assert "registerExtension('blueprint-runtime-apmid'" in script
+    assert "'/vm-classification/options'" in script
+    assert "'runtime_apmid'" in script
+    assert 'Ten Blueprint nie ma przypisanego APMID' in script
+    assert "deployment.apmid = String(state.apmid).trim().toUpperCase()" in script
     assert "apmid + '.' + environment" in script
     assert "'apmid-' + apmid" in script
     assert "'env-' + environment" in script
