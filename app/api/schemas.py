@@ -657,7 +657,7 @@ class BlueprintStep(Input):
     id: Slug
     type: Literal['generate_hostname', 'allocate_ip', 'release_ip', 'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
                   'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
-                  'run_ansible_playbook', 'terraform_plan', 'terraform_apply', 'create_snapshot',
+                  'run_ansible_playbook', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot',
                   'set_tags', 'health_check', 'condition', 'approval', 'delay', 'notification']
     depends_on: Annotated[list[Slug], Field(max_length=50)] = Field(default_factory=list)
     conditions: dict[str, Any] = Field(default_factory=dict)
@@ -724,6 +724,42 @@ class BlueprintInput(Input):
             visited.add(node)
         for node in graph:
             visit(node)
+
+        by_id = {step.id: step for step in self.workflow}
+        rollback_targets = {step.rollback for step in self.workflow if step.rollback}
+        if any(target not in known for target in rollback_targets):
+            raise ValueError('Workflow rollback references a missing step')
+        if any(step.rollback == step.id for step in self.workflow if step.rollback):
+            raise ValueError('Workflow step cannot rollback to itself')
+        safe_rollback_types = {'terraform_destroy', 'notification', 'delay'}
+        for target in rollback_targets:
+            rollback_step = by_id[target]
+            if rollback_step.type not in safe_rollback_types:
+                raise ValueError('Rollback step must use terraform_destroy, notification or delay')
+            if rollback_step.depends_on:
+                raise ValueError('Rollback-only step cannot depend on normal workflow steps')
+            if any(target in step.depends_on for step in self.workflow):
+                raise ValueError('Rollback-only step cannot be a dependency of the normal workflow')
+        if any(step.type == 'terraform_destroy' and step.id not in rollback_targets for step in self.workflow):
+            raise ValueError('terraform_destroy is allowed only as a rollback target')
+        if any(step.type == 'release_ip' for step in self.workflow):
+            raise ValueError('release_ip is not allowed during VM provisioning; IP is released by destroy/recovery')
+
+        declarative = {'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags'}
+        def ancestors(step_id):
+            result = set()
+            pending = list(graph[step_id])
+            while pending:
+                parent = pending.pop()
+                if parent in result:
+                    continue
+                result.add(parent)
+                pending.extend(graph[parent])
+            return result
+        for step in self.workflow:
+            if step.type in declarative and any(by_id[parent].type == 'terraform_apply' for parent in ancestors(step.id)):
+                raise ValueError('Declarative VM steps must run before terraform_apply')
+
         if not any(step.type in {'create_vm', 'clone_vm', 'terraform_apply'} for step in self.workflow):
             raise ValueError('Workflow must provision a VM')
         return self
