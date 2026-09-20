@@ -102,71 +102,56 @@ def ensure_runtime_credential(credential):
     return credential
 
 
-def vm_id_from_state(workspace):
-    # State is internal, never sent to PHP or returned by API.
+def terraform_outputs(workspace):
     try:
         state = json.loads((workspace / 'terraform.tfstate').read_text())
-        vm_id = state.get('outputs', {}).get('vm_id', {}).get('value')
+        outputs = state.get('outputs', {})
     except (OSError, ValueError, TypeError):
-        raise ExecutionFailed('Terraform state could not be read') from None
+        raise ExecutionFailed('Terraform state could not be read for inventory synchronization') from None
+    if not isinstance(outputs, dict):
+        raise ExecutionFailed('Terraform state outputs are invalid')
+    return outputs
+
+
+def vm_id_from_state(workspace):
+    # State is internal, never sent to PHP or returned by API.
+    vm_id = terraform_outputs(workspace).get('vm_id', {}).get('value')
     if not vm_id:
         raise ExecutionFailed('VM ID missing from Terraform state')
     return int(vm_id)
 
 
-def register_managed_vm(context, workspace):
-    vm_id = vm_id_from_state(workspace)
-    with session() as db:
-        deployment = db.get(Deployment, context.deployment.id)
-        existing = db.scalar(select(ManagedVM).where(
-            ManagedVM.provider_id == deployment.provider_id,
-            ManagedVM.vm_id == vm_id,
-        ))
-        if existing and existing.deployment_id not in {None, deployment.id}:
-            raise ExecutionFailed('VM identity is already linked to another deployment')
-        if existing is None:
-            existing = ManagedVM(
-                provider_id=deployment.provider_id,
-                deployment_id=deployment.id,
-                node=deployment.variables['node'],
-                vm_id=vm_id,
-                name=deployment.name,
-                management_mode='terraform',
-                lifecycle_status='active',
-                created_by=deployment.created_by,
-            )
-            db.add(existing)
-        else:
-            existing.deployment_id = deployment.id
-            existing.node = deployment.variables['node']
-            existing.name = deployment.name
-            existing.management_mode = 'terraform'
-            existing.lifecycle_status = 'active'
-            existing.destroyed_at = None
-        db.commit()
-    return vm_id
-
-
-
-def register_managed_resource(context, workspace):
-    try:
-        state = json.loads((workspace / 'terraform.tfstate').read_text())
-    except (OSError, ValueError, TypeError):
-        raise ExecutionFailed('Terraform state could not be read for resource inventory') from None
-    outputs = state.get('outputs', {})
+def register_managed_inventory(context, workspace):
+    outputs = terraform_outputs(workspace)
     external_id = outputs.get('resource_id', {}).get('value')
+    vm_id = outputs.get('vm_id', {}).get('value')
     if external_id is None:
-        external_id = outputs.get('vm_id', {}).get('value')
+        external_id = vm_id
     if external_id is None:
         raise ExecutionFailed('Managed resource identity is missing from Terraform state')
+
     primary_ip = outputs.get('primary_ip', {}).get('value')
     with session() as db:
         deployment = db.get(Deployment, context.deployment.id)
-        row = db.scalar(select(ManagedResource).where(
+        if deployment is None:
+            raise ExecutionFailed('Deployment disappeared before inventory synchronization')
+
+        metadata = {}
+        normalized_vm_id = None
+        node = str((deployment.variables or {}).get('node') or '')
+        if deployment.provider == 'proxmox':
+            if vm_id is None:
+                raise ExecutionFailed('Proxmox VM ID missing from Terraform state')
+            if not node:
+                raise ExecutionFailed('Proxmox node missing from deployment variables')
+            normalized_vm_id = int(vm_id)
+            metadata = {'node': node, 'vm_id': normalized_vm_id}
+
+        resource = db.scalar(select(ManagedResource).where(
             ManagedResource.deployment_id == deployment.id
         ))
-        if row is None:
-            row = ManagedResource(
+        if resource is None:
+            resource = ManagedResource(
                 deployment_id=deployment.id,
                 provider_id=deployment.provider_id,
                 provider=deployment.provider,
@@ -175,17 +160,66 @@ def register_managed_resource(context, workspace):
                 name=deployment.name,
                 primary_ip=str(primary_ip) if primary_ip else None,
                 lifecycle_status='active',
-                metadata_json={},
+                metadata_json=metadata,
                 created_by=deployment.created_by,
             )
-            db.add(row)
+            db.add(resource)
         else:
-            row.external_id = str(external_id)
-            row.name = deployment.name
-            row.primary_ip = str(primary_ip) if primary_ip else None
-            row.lifecycle_status = 'active'
-            row.destroyed_at = None
+            resource.provider_id = deployment.provider_id
+            resource.provider = deployment.provider
+            resource.resource_type = 'vm'
+            resource.external_id = str(external_id)
+            resource.name = deployment.name
+            resource.primary_ip = str(primary_ip) if primary_ip else None
+            resource.lifecycle_status = 'active'
+            resource.metadata_json = metadata
+            resource.destroyed_at = None
+
+        if deployment.provider == 'proxmox':
+            by_identity = db.scalar(select(ManagedVM).where(
+                ManagedVM.provider_id == deployment.provider_id,
+                ManagedVM.vm_id == normalized_vm_id,
+            ))
+            by_deployment = db.scalar(select(ManagedVM).where(
+                ManagedVM.deployment_id == deployment.id
+            ))
+
+            if by_identity and by_identity.deployment_id not in {None, deployment.id}:
+                raise ExecutionFailed('VM identity is already linked to another deployment')
+            if by_identity and by_deployment and by_identity.id != by_deployment.id:
+                raise ExecutionFailed('Deployment inventory points to a different VM identity')
+
+            managed_vm = by_identity or by_deployment
+            if managed_vm is None:
+                managed_vm = ManagedVM(
+                    provider_id=deployment.provider_id,
+                    deployment_id=deployment.id,
+                    node=node,
+                    vm_id=normalized_vm_id,
+                    name=deployment.name,
+                    management_mode='terraform',
+                    lifecycle_status='active',
+                    created_by=deployment.created_by,
+                )
+                db.add(managed_vm)
+            else:
+                managed_vm.provider_id = deployment.provider_id
+                managed_vm.deployment_id = deployment.id
+                managed_vm.node = node
+                managed_vm.vm_id = normalized_vm_id
+                managed_vm.name = deployment.name
+                managed_vm.management_mode = 'terraform'
+                managed_vm.lifecycle_status = 'active'
+                managed_vm.destroyed_at = None
+
         db.commit()
+
+    return {
+        'external_id': str(external_id),
+        'vm_id': normalized_vm_id,
+        'node': node or None,
+    }
+
 
 
 def register_adopted_resource(context):
@@ -367,9 +401,14 @@ def execute(job_id):
             if job.operation == 'terraform.import':
                 register_adopted_resource(context)
             if job.operation == 'terraform.apply':
-                register_managed_resource(context, workspace)
-                if context.deployment.provider == 'proxmox':
-                    register_managed_vm(context, workspace)
+                context.stage('inventory.synchronizing')
+                inventory = register_managed_inventory(context, workspace)
+                if inventory['vm_id'] is not None:
+                    context.log(
+                        f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}"
+                    )
+                else:
+                    context.log(f"inventory.resource.registered: {inventory['external_id']}")
                 if context.ansible:
                     context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
                     AnsibleExecutor().execute('ansible.execute', context)
