@@ -123,6 +123,44 @@ function read(form, context) {
   };
 }
 
+function hostnameTokens(pattern = '') {
+  const core = window.BlueprintWizardParts?.core;
+  if (core?.hostnameTokens) return core.hostnameTokens(pattern);
+  return [...new Set([...String(pattern).matchAll(/{([a-z]+)}/g)].map(match => match[1]))]
+    .filter(token => !['number', 'random', 'year'].includes(token));
+}
+
+function hostnameValueFields(pattern, values = {}, required = true) {
+  const labels = window.BlueprintWizardParts?.core?.HOSTNAME_LABELS || {};
+  const wrapper = node('div', { class: 'form-grid hostname-values wide' });
+  const tokens = hostnameTokens(pattern);
+  tokens.forEach(token => {
+    const item = field(labels[token] || token, 'hostname_' + token, {
+      value: values[token] || '',
+      required,
+    });
+    item.dataset.hostnameToken = token;
+    wrapper.append(item);
+  });
+  if (!tokens.length) {
+    wrapper.append(node('p', {
+      class: 'muted wide',
+      text: 'Ten wzorzec nie wymaga dodatkowych wartości.',
+    }));
+  }
+  return wrapper;
+}
+
+function readHostnameValues(form) {
+  const result = {};
+  form.querySelectorAll('[data-hostname-token]').forEach(wrapper => {
+    const token = wrapper.dataset.hostnameToken;
+    const input = wrapper.querySelector('input,select,textarea');
+    if (input?.value) result[token] = input.value.trim();
+  });
+  return result;
+}
+
 registerExtension('blueprint-runtime-apmid', () => {
   window.BlueprintRuntimeApmid = {
     fixedApmid,
@@ -131,6 +169,9 @@ registerExtension('blueprint-runtime-apmid', () => {
     allowsRuntimeEnvironment,
     prepare,
     read,
+    hostnameTokens,
+    hostnameValueFields,
+    readHostnameValues,
   };
 });
 })();
