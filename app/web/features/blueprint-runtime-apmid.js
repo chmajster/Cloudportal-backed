@@ -35,7 +35,7 @@ async function prepare(item, fields) {
       selectField('APMID', 'runtime_apmid', [
         { value: '', label: 'Wybierz APMID' },
         ...apmids.map(value => ({ value, label: value })),
-      ], '', {
+      ], apmids.includes('LEO') ? 'LEO' : '', {
         required: true,
         wide: true,
         help: 'Wybrany APMID zostanie zapisany jako tag Proxmox. Jeśli Blueprint ma tag środowiska, zostanie również dodany tag APMID.ENV.',
