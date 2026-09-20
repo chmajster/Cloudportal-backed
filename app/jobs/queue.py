@@ -10,6 +10,7 @@ from rq.serializers import JSONSerializer
 from sqlalchemy import select
 from app.config import settings
 from app.database import session
+from app.inventory_sync import repair_inventory_from_states
 from app.models import Deployment, Job, JobLog, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
 from app.security.core import redis_client
@@ -37,6 +38,54 @@ def provider_retry_ready(job):
         return True
 
 
+CANCELLATION_GRACE_SECONDS = 10
+JOB_HEARTBEAT_STALE_SECONDS = 120
+
+
+def reconcile_cancelled_jobs(db):
+    threshold = now() - timedelta(seconds=CANCELLATION_GRACE_SECONDS)
+    rows = db.scalars(
+        select(Job).where(
+            Job.cancel_requested.is_(True),
+            Job.status.in_(['running', 'cancelling']),
+        ).with_for_update(skip_locked=True).limit(200)
+    ).all()
+    for job in rows:
+        if job.status == 'running':
+            job.status = 'cancelling'
+        deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
+        if deployment is not None and deployment.active_job_id == job.id:
+            deployment.status = 'cancelling'
+
+        last_seen = job.heartbeat_at or job.updated_at or job.created_at
+        if last_seen is not None and last_seen > threshold:
+            continue
+
+        job.status = 'cancelled'
+        job.error = 'Cancellation requested; worker no longer owns an active execution'
+        if deployment is not None and deployment.active_job_id == job.id:
+            deployment.active_job_id = None
+            deployment.status = 'cancelled'
+        db.add(JobLog(job_id=job.id, message='job.cancelled: anulowanie zakończone przez dispatcher'))
+        queue_job_webhooks(db, job)
+
+
+def reconcile_persisted_inventory(db):
+    result = repair_inventory_from_states(db, limit=200)
+    for item in result['repaired']:
+        deployment = db.get(Deployment, item['deployment_id'])
+        if deployment is None or not deployment.active_job_id:
+            continue
+        job = db.get(Job, deployment.active_job_id)
+        if job is None:
+            continue
+        if item['vm_id'] is not None:
+            message = f"inventory.vm.recovered: {item['node']} / VMID {item['vm_id']}"
+        else:
+            message = f"inventory.resource.recovered: {item['external_id']}"
+        db.add(JobLog(job_id=job.id, message=message))
+
+
 def reconcile_deployment_job_statuses(db):
     deployments = db.scalars(
         select(Deployment).where(Deployment.active_job_id.is_not(None)).with_for_update(skip_locked=True).limit(200)
@@ -46,6 +95,9 @@ def reconcile_deployment_job_statuses(db):
         if job is None:
             deployment.active_job_id = None
             deployment.status = 'failed'
+            continue
+        if job.status == 'cancelling' or job.cancel_requested:
+            deployment.status = 'cancelling'
             continue
         if job.status == 'running':
             if deployment.status not in {'waiting_provider', 'recovery_queued'}:
@@ -92,13 +144,19 @@ def dispatch_once():
             q.enqueue('app.jobs.worker.execute', job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)
             job.dispatched_at = now()
+        reconcile_cancelled_jobs(db)
         reconcile_deployment_job_statuses(db)
-        # Fail uncertain interrupted executions instead of blindly applying again.
-        stale = db.scalars(select(Job).where(Job.status == 'running', Job.heartbeat_at < now() - timedelta(seconds=settings().execution_timeout + 180))
-                           .with_for_update(skip_locked=True)).all()
+        reconcile_persisted_inventory(db)
+        # A worker updates heartbeat at least every few seconds while Terraform/Ansible is alive.
+        # Do not leave a dead worker's deployment in "running" for the full execution timeout.
+        stale = db.scalars(select(Job).where(
+            Job.status == 'running',
+            Job.cancel_requested.is_(False),
+            Job.heartbeat_at < now() - timedelta(seconds=JOB_HEARTBEAT_STALE_SECONDS),
+        ).with_for_update(skip_locked=True)).all()
         for job in stale:
             job.status = 'failed'
-            job.error = 'Worker interrupted. Inspect Terraform state before explicitly retrying.'
+            job.error = 'Worker heartbeat lost. Inventory was reconciled from persisted Terraform state; inspect state before retrying.'
             if job.deployment_id:
                 d = db.get(Deployment, job.deployment_id)
                 d.active_job_id, d.status = None, 'failed'
