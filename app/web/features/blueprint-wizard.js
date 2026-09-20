@@ -1003,7 +1003,17 @@
             }, 'danger')),
           node('div', { class: 'form-grid' },
             field('ID', 'workflow_id', { value: step.id, required: true }),
-            selectField('Typ', 'workflow_type', parts.core.WORKFLOW_TYPES.map(value => ({ value, label: parts.core.workflowLabel(value) })), step.type, { required: true }),
+            selectField('Typ', 'workflow_type',
+              (parts.core.WORKFLOW_TYPES.includes(step.type)
+                ? parts.core.WORKFLOW_TYPES
+                : [step.type, ...parts.core.WORKFLOW_TYPES])
+                .map(value => ({
+                  value,
+                  label: parts.core.WORKFLOW_TYPES.includes(value)
+                    ? parts.core.workflowLabel(value)
+                    : 'Legacy marker: ' + parts.core.workflowLabel(value),
+                })),
+              step.type, { required: true }),
             field('Zależy od (ID, po przecinku)', 'workflow_depends', { value: (step.depends_on || []).join(', ') }),
             field('Retry', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
             field('Timeout (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
@@ -1040,8 +1050,8 @@
           node('div', { class: 'blueprint-wizard-info' },
             node('strong', { text: state.advancedWorkflow ? 'Workflow edytowany ręcznie' : 'Workflow budowany automatycznie' }),
             node('span', { text: state.advancedWorkflow
-              ? 'Możesz zmieniać kroki, zależności, retry, timeout, rollback i conditions.'
-              : 'Wizard dobiera kroki do hostname, IPAM, tagów i Ansible.' })),
+              ? 'Możesz zmieniać kroki runtime, zależności, retry, timeout, rollback i conditions.'
+              : 'Hostname, IPAM, cloud-init i tagi są przygotowywane przed runtime; workflow pokazuje tylko faktycznie wykonywane operacje.' })),
           !agentAvailable ? node('div', { class: 'callout warning' },
             node('strong', { text: 'QEMU Guest Agent niedostępny' }),
             node('p', { text: !snippetAvailable

@@ -344,9 +344,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "cloud_init_snippet_storage" in script
     assert "snippetStorages" in script
     assert "ansibleVariables.hostname = '{{ hostname }}'" in script
-    assert "add('clone', 'clone_vm')" in script
-    assert "add('cloud_init', 'cloud_init')" in script
+    assert "add('clone', 'clone_vm')" not in script
+    assert "add('cloud_init', 'cloud_init')" not in script
     assert "add('apply', 'terraform_apply')" in script
+    assert "add('guest_ip', 'wait_for_ip')" in script
+    assert "Legacy marker:" in script
     assert "Tryb zaawansowany" in script
     assert "Conditions (JSON)" in script
     assert "Opcjonalne ustawienia dostępu" in script
@@ -470,7 +472,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "executor: data.get('executor')" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
-    assert "'set_tags'" in script
+    assert "'set_tags'" not in script
     assert 'function multiCheckboxField(' in script
     assert 'function toDateTimeLocal(' in script
     assert 'table-search-empty' in script

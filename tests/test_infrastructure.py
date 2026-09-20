@@ -653,3 +653,33 @@ def test_provider_qemu_agent_readiness_endpoint(client, headers, monkeypatch):
         'host': 'pve.example.com',
         'port': 22,
     }
+
+
+def test_proxmox_ssh_preflight_distinguishes_auth_failure(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+    import paramiko
+
+    credential, _, _ = resources(client, headers)
+    with session() as db:
+        row = db.get(Credential, credential['id'])
+        provider = ProxmoxProvider(row)
+
+    class Client:
+        def set_missing_host_key_policy(self, policy):
+            return None
+
+        def connect(self, **kwargs):
+            raise paramiko.AuthenticationException('denied')
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr('app.providers.proxmox.paramiko.SSHClient', Client)
+    result = provider.ssh_preflight({
+        'PROXMOX_VE_SSH_USERNAME': 'root',
+        'PROXMOX_VE_SSH_PASSWORD': 'wrong-password',
+    })
+    assert result['ok'] is False
+    assert result['reason'] == 'ssh_auth_failed'
+    assert result['host'] == 'pve.example.com'
+    assert result['port'] == 22

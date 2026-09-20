@@ -1,11 +1,12 @@
 import ipaddress
+import io
 import os
-import socket
 import re
 from time import monotonic
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
+import paramiko
 from fastapi import HTTPException
 
 from app.providers.base import InfrastructureProvider
@@ -383,29 +384,89 @@ class ProxmoxProvider(InfrastructureProvider):
         except (TypeError, ValueError):
             return {'ok': False, 'reason': 'invalid_ssh_port'}
 
-        has_auth = bool(
-            self.secret.get('password')
-            or ssh_env.get('PROXMOX_VE_SSH_PASSWORD')
-            or ssh_env.get('PROXMOX_VE_SSH_PRIVATE_KEY')
-            or str(ssh_env.get('PROXMOX_VE_SSH_AGENT') or '').lower() == 'true'
+        username = (
+            ssh_env.get('PROXMOX_VE_SSH_USERNAME')
+            or self.username.split('@', 1)[0]
         )
-        if not has_auth:
+        password = ssh_env.get('PROXMOX_VE_SSH_PASSWORD') or self.secret.get('password')
+        private_key = ssh_env.get('PROXMOX_VE_SSH_PRIVATE_KEY')
+        allow_agent = (
+            str(ssh_env.get('PROXMOX_VE_SSH_AGENT') or '').lower() == 'true'
+            or bool(ssh_env.get('PROXMOX_VE_SSH_AUTH_SOCK'))
+        )
+
+        pkey = None
+        if private_key:
+            loaders = (
+                paramiko.Ed25519Key,
+                paramiko.ECDSAKey,
+                paramiko.RSAKey,
+            )
+            for loader in loaders:
+                try:
+                    if 'BEGIN ' in private_key:
+                        pkey = loader.from_private_key(io.StringIO(private_key), password=password)
+                    else:
+                        pkey = loader.from_private_key_file(private_key, password=password)
+                    break
+                except (paramiko.SSHException, OSError, ValueError):
+                    continue
+            if pkey is None:
+                return {
+                    'ok': False,
+                    'reason': 'ssh_private_key_invalid',
+                    'host': host,
+                    'port': port,
+                }
+
+        if not password and pkey is None and not allow_agent:
             return {
                 'ok': False,
                 'reason': 'ssh_auth_missing',
                 'host': host,
                 'port': port,
             }
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            with socket.create_connection((host, port), timeout=5):
-                return {'ok': True, 'reason': None, 'host': host, 'port': port}
-        except OSError:
+            client.connect(
+                hostname=host,
+                port=port,
+                username=username,
+                password=password,
+                pkey=pkey,
+                allow_agent=allow_agent,
+                look_for_keys=False,
+                timeout=5,
+                auth_timeout=5,
+                banner_timeout=5,
+            )
+            transport = client.get_transport()
+            if transport is None or not transport.is_authenticated():
+                return {
+                    'ok': False,
+                    'reason': 'ssh_auth_failed',
+                    'host': host,
+                    'port': port,
+                }
+            return {'ok': True, 'reason': None, 'host': host, 'port': port}
+        except paramiko.AuthenticationException:
+            return {
+                'ok': False,
+                'reason': 'ssh_auth_failed',
+                'host': host,
+                'port': port,
+            }
+        except (paramiko.SSHException, OSError):
             return {
                 'ok': False,
                 'reason': 'ssh_unreachable',
                 'host': host,
                 'port': port,
             }
+        finally:
+            client.close()
 
     def execution_availability(self):
         """Check whether Proxmox is temporarily reachable before starting Terraform.

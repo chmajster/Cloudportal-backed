@@ -102,11 +102,6 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
 
     workflow_types = [step['type'] for step in result['workflow']]
     assert workflow_types == [
-        'generate_hostname',
-        'allocate_ip',
-        'clone_vm',
-        'cloud_init',
-        'set_tags',
         'terraform_apply',
         'wait_for_agent',
         'wait_for_ip',
@@ -123,14 +118,11 @@ console.log(JSON.stringify({
 """)
     assert result['slug'] == 'serwer-www-produkcja'
     assert [step['type'] for step in result['workflow']] == [
-        'generate_hostname',
-        'clone_vm',
-        'cloud_init',
         'terraform_apply',
         'wait_for_agent',
         'wait_for_ip',
     ]
-    assert result['workflow'][1]['depends_on'] == ['hostname']
+    assert result['workflow'][1]['depends_on'] == ['apply']
 
 
 def test_wizard_drops_hostname_defaults_not_used_by_selected_pattern():
@@ -276,3 +268,20 @@ try {{
     assert payload['ok'] is False
     assert 'storage' in payload['message'].lower()
     assert 'snippets' in payload['message'].lower()
+
+
+def test_wizard_ansible_does_not_force_guest_agent():
+    result = run_core("""
+console.log(JSON.stringify(core.workflow({
+  hostname: true,
+  ipam: true,
+  tags: true,
+  waitAgent: false,
+  ansible: true,
+})));
+""")
+    assert [step['type'] for step in result] == [
+        'terraform_apply',
+        'wait_for_ip',
+        'run_ansible_playbook',
+    ]
