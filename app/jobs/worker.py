@@ -1,14 +1,17 @@
 import uuid
 import json
+import hashlib
 import os
 import socket
 import time
 import ipaddress
 from datetime import timedelta
 from types import SimpleNamespace
+from pathlib import Path
 from sqlalchemy import select, update
 from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
+from app.blueprint_settings import blueprint_execution_settings
 from app.config import settings
 from app.database import session
 from app.executors.ansible import AnsibleExecutor
@@ -19,6 +22,10 @@ from app.models import Audit, Credential, Deployment, HostnameReservation, IPAll
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
+
+
+class ApprovalPending(Exception):
+    pass
 
 
 class Context:
@@ -601,15 +608,25 @@ def run_blueprint_workflow(context, executor):
     if unsupported:
         raise ExecutionFailed('Unsupported Blueprint workflow steps: ' + ', '.join(unsupported))
 
+    saved_runtime = dict((context.job.payload or {}).get('_workflow_runtime') or {})
+    completed_steps = {
+        str(value) for value in (saved_runtime.get('completed_steps') or [])
+    }
+    saved_plan_ready = bool(saved_runtime.get('plan_ready'))
+    saved_workspace = (
+        settings().data_dir / 'workspaces' / context.deployment.workspace
+        if saved_plan_ready else None
+    )
     runtime = {
-        'workspace': None,
+        'workspace': saved_workspace,
         'inventory_synced': False,
         'addresses': None,
         'applied': False,
         'ansible_ran': False,
         'prepared': [],
-        'step_states': {},
-        'plan_ready': False,
+        'step_states': {step_id: 'completed' for step_id in completed_steps},
+        'plan_ready': saved_plan_ready,
+        'plan_sha256': saved_runtime.get('plan_sha256'),
     }
 
     by_id = {str(step.get('id')): step for step in steps}
@@ -676,10 +693,23 @@ def run_blueprint_workflow(context, executor):
         finally:
             context.step_deadline = previous_deadline
 
+    def verify_saved_plan():
+        if not runtime['plan_ready']:
+            return
+        workspace = runtime['workspace']
+        plan_path = workspace / 'execution.tfplan' if workspace else None
+        if not plan_path or not plan_path.exists():
+            raise ExecutionFailed('Approved Terraform plan is unavailable; generate and approve a new plan')
+        expected = runtime.get('plan_sha256')
+        actual = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+        if not expected or actual != expected:
+            raise ExecutionFailed('Approved Terraform plan checksum mismatch; generate and approve a new plan')
+
     def apply_and_sync(reason='explicit'):
         context.stage('workflow.terraform_apply')
         if reason != 'explicit':
             context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
+        verify_saved_plan()
         context.apply_saved_terraform_plan = bool(runtime['plan_ready'])
         try:
             workspace = executor.execute('terraform.apply', context)
@@ -711,9 +741,71 @@ def run_blueprint_workflow(context, executor):
             return apply_and_sync(step_type)
         raise ExecutionFailed(f'Workflow step {step_type} requires terraform_apply')
 
+    def pause_for_approval(step_id):
+        workspace = runtime.get('workspace')
+        plan_sha256 = None
+        if runtime['plan_ready']:
+            plan_path = workspace / 'execution.tfplan' if workspace else None
+            if not plan_path or not plan_path.exists():
+                raise ExecutionFailed('Terraform plan disappeared before approval')
+            plan_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+
+        with session() as db:
+            current = db.scalar(select(Job).where(Job.id == context.job.id).with_for_update())
+            if current is None:
+                raise ExecutionFailed('Job disappeared before approval pause')
+            config = blueprint_execution_settings(db)
+            expires_at = now() + timedelta(hours=config['approval_timeout_hours'])
+            payload = dict(current.payload or {})
+            payload['_approval'] = {
+                'status': 'pending',
+                'step_id': step_id,
+                'requested_at': now().isoformat(),
+                'expires_at': expires_at.isoformat(),
+            }
+            payload['_workflow_runtime'] = {
+                'completed_steps': sorted(
+                    key for key, value in runtime['step_states'].items()
+                    if value == 'completed'
+                ),
+                'plan_ready': bool(runtime['plan_ready']),
+                'plan_sha256': plan_sha256,
+                'approval_step': step_id,
+            }
+            current.payload = payload
+            current.status = 'waiting_approval'
+            current.error = None
+            current.heartbeat_at = None
+            if current.deployment_id:
+                deployment = db.get(Deployment, current.deployment_id)
+                if deployment is not None:
+                    deployment.status = 'waiting_approval'
+                    deployment.active_job_id = current.id
+            db.add(JobLog(
+                job_id=current.id,
+                message=f'workflow.approval.pending: step={step_id}; expires_at={expires_at.isoformat()}',
+            ))
+            db.add(Audit(
+                user_id=current.created_by,
+                token_id=current.token_id,
+                ip=current.ip,
+                source=current.source,
+                action='workflow.approval.pending',
+                resource='jobs',
+                resource_id=current.id,
+                result='waiting_approval',
+                request_id=current.request_id,
+            ))
+            db.commit()
+        raise ApprovalPending(step_id)
+
     for step in steps:
         step_id = str(step.get('id'))
         step_type = str(step.get('type'))
+
+        if runtime['step_states'].get(step_id) == 'completed':
+            context.log(f'workflow.step.resumed: {step_id}:{step_type}: already completed')
+            continue
 
         if step_id in rollback_targets:
             runtime['step_states'][step_id] = 'rollback_only'
@@ -767,6 +859,10 @@ def run_blueprint_workflow(context, executor):
                     finally:
                         context.keep_terraform_plan = False
                     runtime['plan_ready'] = True
+                    plan_path = runtime['workspace'] / 'execution.tfplan'
+                    if not plan_path.exists():
+                        raise ExecutionFailed('Terraform plan was not persisted for approval/apply')
+                    runtime['plan_sha256'] = hashlib.sha256(plan_path.read_bytes()).hexdigest()
                 elif step_type == 'terraform_apply':
                     apply_and_sync()
                 elif step_type == 'terraform_destroy':
@@ -809,7 +905,10 @@ def run_blueprint_workflow(context, executor):
                         )
                     approval = (context.job.payload or {}).get('_approval') or {}
                     if approval.get('status') != 'approved':
-                        raise ExecutionFailed('Blueprint execution has not been approved')
+                        pause_for_approval(step_id)
+                    approved_step = approval.get('step_id')
+                    if approved_step and approved_step != step_id:
+                        raise ExecutionFailed('Blueprint approval belongs to a different workflow step')
                     context.log(
                         f"workflow.approval.satisfied: {step_id} "
                         f"approved_by={approval.get('approved_by')}"
@@ -952,6 +1051,8 @@ def execute(job_id):
         else:
             AnsibleExecutor().execute(job.operation, context)
         context.check()
+    except ApprovalPending:
+        return
     except Cancelled:
         status, error = 'cancelled', 'Cancellation requested; inspect deployment state before retrying'
     except ExecutionFailed as exc:
