@@ -620,15 +620,15 @@ def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
 
 def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
     credential = SimpleNamespace(endpoint='https://pve.example.com:8006')
-    observed = []
 
-    def connect(address, timeout):
-        observed.append((address, timeout))
-        raise OSError('connection refused')
+    class Provider:
+        def __init__(self, credential):
+            self.credential = credential
 
-    monkeypatch.setattr('app.executors.terraform.socket.create_connection', connect)
+        def ssh_preflight(self, env):
+            return {'ok': False, 'reason': 'ssh_unreachable', 'host': 'pve.example.com', 'port': 22}
 
-    with pytest.raises(ExecutionFailed, match='requires reachable SSH'):
+    monkeypatch.setattr('app.providers.proxmox.ProxmoxProvider', Provider)
+
+    with pytest.raises(ExecutionFailed, match='SSH preflight failed'):
         proxmox_ssh_preflight(credential, {'PROXMOX_VE_SSH_PORT': '22'})
-
-    assert observed == [(('pve.example.com', 22), 5)]
