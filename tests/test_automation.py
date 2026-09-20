@@ -627,8 +627,8 @@ def test_blueprint_reuses_saved_hostname_tags_and_cloud_init(client, headers):
     )
     assert execution.status_code == 202, execution.text
     result = execution.json()
-    assert result['name'] == 'prod-web-001'
-    assert result['variables']['name'] == 'prod-web-001'
+    assert result['name'] == 'prod-server-001'
+    assert result['variables']['name'] == 'prod-server-001'
     assert result['name'] != 'manual-deployment-name'
     assert result['variables']['name'] != 'manual-vm-name'
     assert result['variables']['tags'] == ['linux', 'production', 'web']
