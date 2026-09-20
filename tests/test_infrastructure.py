@@ -76,6 +76,66 @@ def test_token_idempotency_does_not_store_plaintext(client,headers):
         assert first.json()['token'] not in str(db.scalars(select(Idempotency)).first().response)
 
 
+def test_deployment_status_is_running_while_terraform_job_executes(client, headers, monkeypatch, tmp_path):
+    d = deployment(client, headers)
+    workspace = terraform_state_workspace(tmp_path, vm_id=303)
+    observed = {}
+
+    def execute_and_observe(*args):
+        with session() as db:
+            job = db.get(Job, d['job']['id'])
+            dep = db.get(Deployment, d['id'])
+            observed['job_status'] = job.status
+            observed['deployment_status'] = dep.status
+            observed['active_job_id'] = dep.active_job_id
+        return workspace
+
+    monkeypatch.setattr(TerraformExecutor, 'execute', execute_and_observe)
+    execute(d['job']['id'])
+
+    assert observed == {
+        'job_status': 'running',
+        'deployment_status': 'running',
+        'active_job_id': d['job']['id'],
+    }
+    current = client.get('/api/v1/deployments/' + d['id'], headers=headers).json()
+    assert current['status'] == 'successful'
+    assert current['active_job_id'] is None
+
+
+def test_dispatcher_reconciles_deployment_status_from_job(client, headers, monkeypatch):
+    from app.jobs.queue import reconcile_deployment_job_statuses
+
+    d = deployment(client, headers)
+    with session() as db:
+        job = db.get(Job, d['job']['id'])
+        dep = db.get(Deployment, d['id'])
+        job.status = 'running'
+        dep.status = 'queued'
+        db.commit()
+
+    with session() as db:
+        reconcile_deployment_job_statuses(db)
+        db.commit()
+
+    current = client.get('/api/v1/deployments/' + d['id'], headers=headers).json()
+    assert current['status'] == 'running'
+    assert current['active_job_id'] == d['job']['id']
+
+    with session() as db:
+        job = db.get(Job, d['job']['id'])
+        job.status = 'successful'
+        db.commit()
+
+    with session() as db:
+        reconcile_deployment_job_statuses(db)
+        db.commit()
+
+    current = client.get('/api/v1/deployments/' + d['id'], headers=headers).json()
+    assert current['status'] == 'successful'
+    assert current['active_job_id'] is None
+
+
 def test_terraform_failure_and_retry(client,headers,monkeypatch):
     d=deployment(client,headers)
     def fail(*args):raise ExecutionFailed('terraform exited with code 1')
