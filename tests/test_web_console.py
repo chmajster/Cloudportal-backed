@@ -483,6 +483,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'table-page-size' in script
     assert "density === 'compact'" in script
     assert 'function showDeploymentDetails(' in script
+    assert "Zatwierdź i uruchom" in script
+    assert "/approve" in script
+    assert "waiting_approval" in script
     assert 'function assignHostname(' in script
     assert 'function assignIpAllocation(' in script
     assert 'function showProxmoxTask(' in script
