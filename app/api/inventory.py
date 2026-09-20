@@ -11,6 +11,7 @@ from app.api.schemas import Input, Slug
 from app.catalog import template_import_target, template_public, validate_template_variables
 from app.catalog_control import require_catalog_item_enabled
 from app.database import get_db
+from app.inventory_sync import repair_inventory_from_states
 from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider
 from app.providers.registry import provider_for
 from app.security.core import audit, require
@@ -94,6 +95,28 @@ def adoption_suggestion(row, live):
     if tag_match:
         suggestion['vlan_id'] = int(tag_match.group(1))
     return suggestion
+
+
+@router.post('/reconcile')
+def reconcile_inventory(
+    request: Request,
+    actor=Depends(require('inventory.update')),
+    db=Depends(get_db, scope='function'),
+):
+    result = repair_inventory_from_states(db, limit=500)
+    for item in result['repaired']:
+        audit(
+            db,
+            request,
+            'inventory.recovered',
+            'managed_vms' if item['vm_id'] is not None else 'managed_resources',
+            item['deployment_id'],
+        )
+    return {
+        'repaired': result['repaired'],
+        'repaired_count': len(result['repaired']),
+        'skipped_count': len(result['skipped']),
+    }
 
 
 @router.get('/vms')
