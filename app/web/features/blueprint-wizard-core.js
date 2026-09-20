@@ -165,6 +165,8 @@
       preset: 'standard',
       environment: '',
       apmid: 'LEO',
+      selectEnvironmentOnExecute: false,
+      selectApmidOnExecute: false,
       tags: '',
       sshUsername: 'clouduser',
       sshPublicKey: '',
@@ -280,6 +282,9 @@
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
     if (state.apmid) deployment.apmid = String(state.apmid).trim().toUpperCase();
+    if (state.environment) deployment.environment = String(state.environment).trim().toLowerCase();
+    deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute);
+    deployment.select_environment_on_execute = Boolean(state.selectEnvironmentOnExecute);
 
     if (state.ansibleEnabled && state.playbookId) {
       const selectedPlaybook = data.playbooks.find(value => value.id === state.playbookId);

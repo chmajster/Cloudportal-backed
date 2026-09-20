@@ -233,10 +233,13 @@ def test_blueprint_runtime_apmid_is_required_by_ui_and_applied_by_backend(client
             'name': 'runtime-apmid',
             'provider_id': provider['id'],
             'credentials_id': credential['id'],
+            'apmid': 'LEO',
+            'environment': 'dev',
+            'select_apmid_on_execute': True,
             'variables': {
                 **deployment_payload['variables'],
                 'name': 'runtime-apmid',
-                'tags': ['env-dev'],
+                'tags': ['apmid-leo', 'env-dev', 'leo.dev'],
             },
         },
         'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
@@ -262,6 +265,123 @@ def test_blueprint_runtime_apmid_is_required_by_ui_and_applied_by_backend(client
     )
     assert invalid.status_code == 422
     assert 'not configured' in invalid.text
+
+
+def test_blueprint_runtime_environment_updates_tags_and_hostname(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    saved = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
+        'apmids': ['IAASTEAM'],
+    })
+    assert saved.status_code == 200, saved.text
+
+    scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
+        'name': 'Runtime environment',
+        'pattern': '{location}-{environment}-{number}',
+        'padding': 3,
+    })
+    assert scheme.status_code == 201, scheme.text
+
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'runtime-environment',
+        'name': 'Runtime Environment',
+        'deployment': {
+            'name': '{{ hostname }}',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'hostname_scheme_id': scheme.json()['id'],
+            'hostname_values': {'environment': 'dev'},
+            'apmid': 'LEO',
+            'environment': 'dev',
+            'select_environment_on_execute': True,
+            'variables': {
+                **deployment_payload['variables'],
+                'name': '{{ hostname }}',
+                'tags': ['apmid-leo', 'env-dev', 'leo.dev'],
+            },
+        },
+        'workflow': [
+            {'id': 'hostname', 'type': 'generate_hostname'},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['hostname']},
+        ],
+    })
+    assert created.status_code == 201, created.text
+
+    missing = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert missing.status_code == 422
+    assert 'Environment must be selected' in missing.text
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={'environment': 'prod'},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['name'] == 'wro-prod-001'
+    assert execution.json()['variables']['tags'] == [
+        'apmid-leo',
+        'env-prod',
+        'leo.prod',
+    ]
+
+    disabled = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': False},
+        'apmids': ['IAASTEAM'],
+    })
+    assert disabled.status_code == 200, disabled.text
+    invalid = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={'environment': 'prod'},
+    )
+    assert invalid.status_code == 422
+    assert 'disabled or unavailable' in invalid.text
+
+
+def test_blueprint_runtime_apmid_and_environment_can_be_selected_together(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    saved = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
+        'apmids': ['IAASTEAM', 'CRM'],
+    })
+    assert saved.status_code == 200, saved.text
+
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'runtime-classification',
+        'name': 'Runtime Classification',
+        'deployment': {
+            'name': 'runtime-classification',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'apmid': 'LEO',
+            'environment': 'test',
+            'select_apmid_on_execute': True,
+            'select_environment_on_execute': True,
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'runtime-classification',
+                'tags': ['apmid-leo', 'env-test', 'leo.test'],
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={'apmid': 'CRM', 'environment': 'nonprod'},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['variables']['tags'] == [
+        'apmid-crm',
+        'crm.nonprod',
+        'env-nonprod',
+    ]
 
 
 def test_blueprint_fixed_apmid_cannot_be_overridden_at_runtime(client, headers):
@@ -302,7 +422,7 @@ def test_blueprint_fixed_apmid_cannot_be_overridden_at_runtime(client, headers):
         json={'apmid': 'IAASTEAM'},
     )
     assert override.status_code == 422
-    assert 'cannot be overridden' in override.text
+    assert 'does not allow changing APMID' in override.text
 
 
 def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, headers):

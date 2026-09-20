@@ -144,52 +144,103 @@ def render_template(value: Any, variables: dict[str, Any]):
     return INLINE_TEMPLATE.sub(replace, value)
 
 
-def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None):
+def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
     ip_allocation = None
     deployment = deepcopy(blueprint.deployment)
+
+    has_apmid_selection_flag = 'select_apmid_on_execute' in deployment
+    select_apmid_on_execute = bool(deployment.pop('select_apmid_on_execute', False))
+    select_environment_on_execute = bool(deployment.pop('select_environment_on_execute', False))
     fixed_apmid = deployment.pop('apmid', None)
+    fixed_environment = deployment.pop('environment', None)
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
 
     deployment_variables = deployment.setdefault('variables', {})
-    tags = list(deployment_variables.get('tags') or [])
+    tags = [str(tag).strip().lower() for tag in (deployment_variables.get('tags') or []) if str(tag).strip()]
+
     tagged_apmid = None
+    tagged_environment = None
     for tag in tags:
-        match = re.fullmatch(r'apmid-([a-z0-9][a-z0-9_-]{0,62})', str(tag).strip().lower())
-        if match:
-            tagged_apmid = match.group(1).upper()
-            break
+        apmid_match = re.fullmatch(r'apmid-([a-z0-9][a-z0-9_-]{0,62})', tag)
+        if apmid_match and tagged_apmid is None:
+            tagged_apmid = apmid_match.group(1).upper()
+        env_match = re.fullmatch(r'env-(test|dev|nonprod|prod)', tag)
+        if env_match and tagged_environment is None:
+            tagged_environment = env_match.group(1)
+
     fixed_apmid = str(fixed_apmid or tagged_apmid or '').strip().upper() or None
+    fixed_environment = str(fixed_environment or tagged_environment or '').strip().lower() or None
     runtime_apmid = str(apmid or '').strip().upper() or None
+    runtime_environment = str(environment or '').strip().lower() or None
 
-    if fixed_apmid and runtime_apmid and runtime_apmid != fixed_apmid:
-        raise HTTPException(422, 'Blueprint already defines APMID and it cannot be overridden at runtime')
+    # Preserve legacy behavior for old Blueprints created before the explicit
+    # runtime APMID switch existed: if they had no fixed APMID, keep asking for one.
+    if not has_apmid_selection_flag and not fixed_apmid:
+        select_apmid_on_execute = True
 
-    effective_apmid = fixed_apmid or runtime_apmid
-    if runtime_apmid and not fixed_apmid:
-        allowed_apmids = vm_classification_settings(db)['apmids']
-        if runtime_apmid not in allowed_apmids:
+    classification = vm_classification_settings(db)
+    if select_apmid_on_execute:
+        if not runtime_apmid:
+            raise HTTPException(422, 'APMID must be selected when this Blueprint is executed')
+        if runtime_apmid not in classification['apmids']:
             raise HTTPException(422, 'Selected APMID is not configured or is no longer available')
+    elif runtime_apmid:
+        if not fixed_apmid or runtime_apmid != fixed_apmid:
+            raise HTTPException(422, 'Blueprint does not allow changing APMID at runtime')
 
+    enabled_environments = {
+        name for name, enabled in classification['environments'].items() if enabled
+    }
+    if select_environment_on_execute:
+        if not runtime_environment:
+            raise HTTPException(422, 'Environment must be selected when this Blueprint is executed')
+        if runtime_environment not in enabled_environments:
+            raise HTTPException(422, 'Selected Environment is disabled or unavailable')
+    elif runtime_environment:
+        if not fixed_environment or runtime_environment != fixed_environment:
+            raise HTTPException(422, 'Blueprint does not allow changing Environment at runtime')
+
+    effective_apmid = runtime_apmid if select_apmid_on_execute else (fixed_apmid or runtime_apmid)
+    effective_environment = (
+        runtime_environment if select_environment_on_execute
+        else (fixed_environment or runtime_environment)
+    )
+
+    # Classification tags are regenerated from the effective values so a
+    # runtime selection never leaves stale Blueprint defaults on the VM.
+    def classification_tag(tag):
+        return (
+            re.fullmatch(r'apmid-[a-z0-9][a-z0-9_-]{0,62}', tag)
+            or re.fullmatch(r'env-(test|dev|nonprod|prod)', tag)
+            or re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}\.(test|dev|nonprod|prod)', tag)
+        )
+
+    tags = [tag for tag in tags if not classification_tag(tag)]
     if effective_apmid:
-        normalized_apmid = effective_apmid.lower()
-        tags.append('apmid-' + normalized_apmid)
-        environment = None
-        for tag in tags:
-            match = re.fullmatch(r'env-(test|dev|nonprod|prod)', str(tag).strip().lower())
-            if match:
-                environment = match.group(1)
-                break
-        if environment:
-            tags.append(normalized_apmid + '.' + environment)
-        deployment_variables['tags'] = sorted(set(str(tag).strip().lower() for tag in tags if str(tag).strip()))
+        tags.append('apmid-' + effective_apmid.lower())
+    if effective_environment:
+        tags.append('env-' + effective_environment)
+    if effective_apmid and effective_environment:
+        tags.append(effective_apmid.lower() + '.' + effective_environment)
+    deployment_variables['tags'] = sorted(set(tags))
+
     if scheme_id:
         defaults = render_template(default_hostname_values, variables)
         defaults = {key: value for key, value in defaults.items() if key not in {'location', 'role'}}
         merged_hostname_values = {**defaults, **hostname_values}
+
+        scheme = db.get(HostnameScheme, scheme_id)
+        if scheme and effective_environment:
+            pattern_tokens = set(re.findall(r'{([a-z]+)}', scheme.pattern))
+            if 'env' in pattern_tokens:
+                merged_hostname_values['env'] = effective_environment
+            if 'environment' in pattern_tokens:
+                merged_hostname_values['environment'] = effective_environment
+
         hostname, reservation = generate_hostname(db, scheme_id, merged_hostname_values, actor_id, reserve=True)
         variables['hostname'] = hostname
         # A Blueprint with a hostname scheme uses the generated hostname as the
@@ -199,6 +250,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         deployment_variables = deployment.setdefault('variables', {})
         if 'name' in deployment_variables:
             deployment_variables['name'] = '{{ hostname }}'
+
     if ipam_pool_id:
         ip_allocation = allocate_address(
             db, ipam_pool_id, actor_id, hostname=variables.get('hostname')
@@ -210,8 +262,11 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         deployment.setdefault('variables', {})
         deployment['variables'].setdefault('ipv4_address', '{{ ip_address_cidr }}')
         deployment['variables'].setdefault('ipv4_gateway', '{{ ip_gateway }}')
+
     rendered = render_template(deployment, variables)
-    rendered['variables'] = validate_template_variables(rendered.get('template', 'proxmox-vm'), rendered['variables']).model_dump(mode='json')
+    rendered['variables'] = validate_template_variables(
+        rendered.get('template', 'proxmox-vm'), rendered['variables']
+    ).model_dump(mode='json')
     if rendered.get('ansible'):
         rendered['ansible'] = AnsibleInput.model_validate(rendered['ansible'])
     rendered['blueprint_variables'] = variables
