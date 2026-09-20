@@ -71,7 +71,10 @@ async function hostnamesView() {
   if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => generateHostname(schemes.items)));
   if (allowed('blueprints.read')) actions.push(button('Przejdź do Blueprintów', () => navigate('blueprints')));
   dom.content.replaceChildren(
-    heading('Generator hostname tworzy centralne patterny nazw VM. Pattern można przypisać do Blueprintu, a podczas jego uruchomienia Cloudportal zarezerwuje kolejny unikalny hostname i użyje go jako nazwy VM.', actions),
+    heading('Generator hostname tworzy centralne patterny nazw VM. Pattern można przypisać do Blueprintu, a podczas jego uruchomienia Cloudportal zarezerwuje kolejny unikalny hostname i użyje go jako nazwy VM.', [
+      button('← Narzędzia', () => navigate('tools')),
+      ...actions,
+    ]),
     node('section', { class: 'panel hostname-generator-info' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Jak działa generator' }), badge('Blueprint ready', 'ok')),
       node('div', { class: 'checks' },
@@ -263,5 +266,13 @@ function generateHostname(schemes) {
   });
 }
 
-registerView({ id: 'hostnames', label: 'Generator hostname', iconName: 'network', permission: 'hostnames.read', order: 80 }, hostnamesView);
+registerView({
+  id: 'hostnames',
+  label: 'Generator hostname',
+  iconName: 'network',
+  navigation: false,
+  navigationParent: 'tools',
+  permission: 'hostnames.read',
+  order: 156,
+}, hostnamesView);
 })();
