@@ -38,6 +38,17 @@
         : '';
   }
 
+  function workflowChoicesForProvider(workflowTypes, provider, currentType = '') {
+    const proxmoxOnly = new Set(['wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+      'run_ansible_playbook', 'create_snapshot', 'health_check']);
+    const available = provider === 'proxmox'
+      ? workflowTypes
+      : workflowTypes.filter(([value]) => !proxmoxOnly.has(value));
+    return available.some(([value]) => value === currentType) || !currentType
+      ? available
+      : [[currentType, 'Legacy / niedostępne dla ' + provider + ': ' + currentType], ...available];
+  }
+
   function requiredExecutionPermissions(item = {}) {
     const required = new Set([
       'blueprints.execute',
@@ -86,6 +97,7 @@
       guestCredentialChoices,
       selectSnippetStorage,
       syncWaitAgentControl,
+      workflowChoicesForProvider,
       requiredExecutionPermissions,
       missingExecutionPermissions,
       workflowNeedsTags,
