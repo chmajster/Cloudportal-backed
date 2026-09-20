@@ -275,6 +275,8 @@
           vlan_id: 'vlanId',
           environment: 'environment',
           apmid: 'apmid',
+          select_environment_on_execute: 'selectEnvironmentOnExecute',
+          select_apmid_on_execute: 'selectApmidOnExecute',
           tags: 'tags',
           ssh_username: 'sshUsername',
           ssh_public_key: 'sshPublicKey',
@@ -322,6 +324,8 @@
             state.vlanId = root.querySelector('[name="vlan_id"]')?.value || '';
             state.environment = root.querySelector('[name="environment"]')?.value || state.environment;
             state.apmid = root.querySelector('[name="apmid"]')?.value.trim().toUpperCase() || state.apmid;
+            state.selectEnvironmentOnExecute = root.querySelector('[name="select_environment_on_execute"]')?.checked ?? state.selectEnvironmentOnExecute;
+            state.selectApmidOnExecute = root.querySelector('[name="select_apmid_on_execute"]')?.checked ?? state.selectApmidOnExecute;
             if (state.environment) {
               state.hostnameValues.env = state.environment;
               state.hostnameValues.environment = state.environment;
@@ -733,6 +737,31 @@
                 help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
               })
         );
+
+        const runtimeEnvironment = checkboxField(
+          'Wybieraj Environment podczas tworzenia VM',
+          'select_environment_on_execute',
+          state.selectEnvironmentOnExecute
+        );
+        const runtimeApmid = checkboxField(
+          'Wybieraj APMID podczas tworzenia VM',
+          'select_apmid_on_execute',
+          state.selectApmidOnExecute
+        );
+        const runtimeClassification = node('div', { class: 'blueprint-wizard-inline-panel wide' },
+          node('div', { class: 'blueprint-wizard-section-heading wide' },
+            node('strong', { text: 'Parametry wybierane przy użyciu Blueprintu' }),
+            node('span', { class: 'muted', text: 'Włącz pola, które użytkownik ma wybrać dopiero podczas tworzenia VM z gotowego Blueprintu.' })),
+          runtimeEnvironment,
+          runtimeApmid
+        );
+        [runtimeEnvironment, runtimeApmid].forEach(wrapper => {
+          wrapper.querySelector('input').addEventListener('change', event => {
+            saveStateFromInput(event.currentTarget);
+            render();
+          });
+        });
+
         fields.querySelectorAll('input,select').forEach(control => {
           control.addEventListener('input', () => {
             saveStateFromInput(control);
@@ -762,10 +791,14 @@
             })));
         advanced.querySelectorAll('input,textarea').forEach(control => control.addEventListener('input', () => saveStateFromInput(control)));
 
+        const runtimeParts = [];
+        if (state.selectApmidOnExecute) runtimeParts.push('APMID');
+        if (state.selectEnvironmentOnExecute) runtimeParts.push('Environment');
         const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'Klasyfikacja VM' }),
           node('span', { text: state.apmid && state.environment
             ? state.apmid + '.' + state.environment.toUpperCase()
+              + (runtimeParts.length ? ' · przy tworzeniu VM wybierane: ' + runtimeParts.join(' i ') : ' · wartości stałe z Blueprintu')
             : 'Wybierz APMID i Environment. Tagi Proxmox zostaną dodane automatycznie.' }));
 
         return node('div', { class: 'blueprint-wizard-step-stack' },
@@ -775,6 +808,7 @@
             presetButton('large', 'Duża', 4, 8192, 80),
             presetButton('custom', 'Własna', state.cpu, state.memory, state.disk)),
           fields,
+          runtimeClassification,
           classificationPreview,
           advanced);
       }
@@ -1031,7 +1065,9 @@
             ['Storage', state.storage],
             ['Network', state.network],
             ['Environment', state.environment ? state.environment.toUpperCase() : '—'],
+            ['Environment przy tworzeniu VM', state.selectEnvironmentOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
             ['APMID', state.apmid || '—'],
+            ['APMID przy tworzeniu VM', state.selectApmidOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
             ['Klasyfikacja', state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—'],
           ] : [
             ['Szablon IaC', state.terraformTemplateId],
