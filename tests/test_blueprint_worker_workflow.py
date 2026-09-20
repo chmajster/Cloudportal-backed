@@ -436,3 +436,46 @@ def test_terraform_destroy_rollback_uses_global_execution_timeout(monkeypatch):
     assert worker.workflow_step_timeout('terraform_apply', 30) == 3600
     assert worker.workflow_step_timeout('terraform_plan', 30) == 3600
     assert worker.workflow_step_timeout('wait_for_ip', 30) == 30
+
+
+def test_plan_step_is_reused_by_apply_step(monkeypatch):
+    steps = [
+        {'id': 'plan', 'type': 'terraform_plan', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['plan'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    calls = []
+
+    class Executor:
+        def execute(self, operation, ctx):
+            calls.append((
+                operation,
+                bool(getattr(ctx, 'keep_terraform_plan', False)),
+                bool(getattr(ctx, 'apply_saved_terraform_plan', False)),
+            ))
+            return '/tmp/workspace'
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda context, workspace: {'external_id': '120', 'vm_id': 120, 'node': 'pve01'},
+    )
+
+    worker.run_blueprint_workflow(context, Executor())
+
+    assert calls == [
+        ('terraform.plan', True, False),
+        ('terraform.apply', False, True),
+    ]
+
+
+def test_health_check_requires_running_vm(monkeypatch):
+    context = FakeContext([])
+    provider = SimpleNamespace(
+        vm_status=lambda node, vm_id: {'status': 'stopped'},
+    )
+    monkeypatch.setattr(worker, 'provider_for', lambda credential: provider)
+    monkeypatch.setattr(worker, 'vm_id_from_state', lambda workspace: 121)
+
+    with pytest.raises(ExecutionFailed, match='VM is not running'):
+        worker.health_check_vm(context, '/tmp/workspace')
