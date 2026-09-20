@@ -66,6 +66,10 @@ const data = {
     transport: 'ssh',
     required_variables: ['hostname'],
   }],
+  schemes: [{
+    id: 11,
+    pattern: '{location}-{env}-{role}-{number}',
+  }],
 };
 console.log(JSON.stringify(core.buildPayload(state, data)));
 """)
@@ -114,3 +118,76 @@ console.log(JSON.stringify({
         'wait_for_agent',
     ]
     assert result['workflow'][1]['depends_on'] == ['hostname']
+
+
+def test_wizard_hostname_defaults_follow_selected_pattern_only():
+    result = run_core("""
+const state = core.stateDefaults();
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.hostnameEnabled = true;
+state.hostnameSchemeId = '22';
+state.hostnameValues = {
+  location: 'wro',
+  role: 'server',
+  env: 'test',
+  environment: 'test',
+  application: 'portal',
+};
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [{ id: 22, pattern: 'srl{number}' }],
+};
+
+console.log(JSON.stringify(core.buildDeployment(state, data)));
+""")
+    assert result['hostname_scheme_id'] == 22
+    assert result['hostname_values'] == {}
+
+
+def test_wizard_hostname_defaults_keep_only_tokens_used_by_pattern():
+    result = run_core("""
+const state = core.stateDefaults();
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.hostnameEnabled = true;
+state.hostnameSchemeId = '23';
+state.hostnameValues = {
+  location: 'wro',
+  role: 'server',
+  env: 'dev',
+  environment: 'prod',
+  application: 'portal',
+};
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [{ id: 23, pattern: '{location}-{environment}-{role}-{number}' }],
+};
+
+console.log(JSON.stringify(core.buildDeployment(state, data)));
+""")
+    assert result['hostname_values'] == {'environment': 'prod'}
