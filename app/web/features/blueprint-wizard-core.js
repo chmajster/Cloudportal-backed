@@ -16,11 +16,10 @@
     site: 'Site',
   };
   const WORKFLOW_TYPES = [
-    'generate_hostname', 'allocate_ip', 'create_vm', 'clone_vm',
-    'configure_vm', 'cloud_init', 'start_vm', 'wait_for_vm', 'wait_for_agent',
-    'wait_for_ip', 'wait_for_ssh', 'set_hostname', 'run_ansible_playbook',
-    'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot', 'set_tags',
+    'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
+    'wait_for_ip', 'wait_for_ssh', 'run_ansible_playbook', 'create_snapshot',
     'health_check', 'condition', 'approval', 'delay', 'notification',
+    'terraform_destroy',
   ];
 
   function slugify(value) {
@@ -64,20 +63,13 @@
     const steps = [];
     let previous = [];
     const add = (id, type) => {
-      const timeout = ['terraform_plan', 'terraform_apply'].includes(type) ? 3600 : 600;
+      const timeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
       steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout, rollback: null });
       previous = [id];
     };
-    if (options.hostname) add('hostname', 'generate_hostname');
-    if (options.ipam) add('ipam', 'allocate_ip');
-    add('clone', 'clone_vm');
-    add('cloud_init', 'cloud_init');
-    if (options.tags) add('tags', 'set_tags');
     add('apply', 'terraform_apply');
-    if (options.waitAgent || options.ansible) {
-      add('agent', 'wait_for_agent');
-      add('guest_ip', 'wait_for_ip');
-    }
+    if (options.waitAgent) add('agent', 'wait_for_agent');
+    if (options.waitAgent || options.ansible) add('guest_ip', 'wait_for_ip');
     if (options.ansible) add('ansible', 'run_ansible_playbook');
     return steps;
   }
