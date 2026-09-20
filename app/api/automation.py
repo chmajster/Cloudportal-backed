@@ -6,7 +6,7 @@ from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
 from app.catalog_control import require_catalog_item_enabled
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
-                             HostnameReservationOutput, HostnameSchemeOutput, Items)
+                             HostnameReservationOutput, HostnameSchemeOutput, Items, VMClassificationSettingsOutput)
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
                              HostnameGenerateInput, HostnameSchemeInput)
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
 from app.security.core import audit, require
+from app.vm_classification import vm_classification_settings
 
 
 router = APIRouter(tags=['automation'])
@@ -27,6 +28,11 @@ def scheme_public(row):
 
 def portal_source(value):
     return {'CloudPortal': 'cloudportal', 'Cloudportal-backed': 'backend', 'API': 'api'}.get(value, 'api')
+
+
+@router.get('/vm-classification/options', response_model=VMClassificationSettingsOutput)
+def vm_classification_options(actor=Depends(require('blueprints.execute')), db=Depends(get_db, scope='function')):
+    return vm_classification_settings(db)
 
 
 @router.get('/hostname-schemes', response_model=Items[HostnameSchemeOutput])
@@ -250,7 +256,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
         raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
     def create():
-        rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id)
+        rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id, data.apmid)
         blueprint_variables = rendered.pop('blueprint_variables')
         parsed = DeploymentInput.model_validate(rendered)
         require_catalog_item_enabled(db, 'templates', parsed.template)

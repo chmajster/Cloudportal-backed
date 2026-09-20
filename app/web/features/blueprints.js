@@ -168,7 +168,7 @@ function blueprintWorkflow(options) {
 }
 async function proxmoxBlueprintForm(item = null, options = {}) {
   try {
-    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult, blueprintResult] = await Promise.all([
+    const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult, blueprintResult, vmClassification] = await Promise.all([
       api('/providers?limit=200'),
       api('/hostname-schemes?limit=200'),
       api('/ipam/pools?limit=200'),
@@ -176,6 +176,9 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       api('/credentials?limit=200'),
       allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
       allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
+      allowed('settings.read')
+        ? api('/settings/vm-classification')
+        : Promise.resolve({ hostname_defaults: { location: 'wro', role: 'server' } }),
     ]);
     const providers = providerResult.items.filter(value => value.type === 'proxmox');
     if (!providers.length) throw new Error('Najpierw dodaj platformę Proxmox.');
@@ -184,6 +187,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const playbooks = playbookResult.items.filter(value =>
       value.enabled !== false || value.id === item?.deployment?.ansible?.playbook);
     const credentials = credentialResult.items;
+    const globalHostnameDefaults = vmClassification.hostname_defaults || { location: 'wro', role: 'server' };
     const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
     const dedicatedElsewhere = new Set(
       blueprintResult.items
@@ -385,7 +389,14 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       if (!tokens.length) {
         hostnameDefaults.append(node('div', { class: 'field-help wide', text: 'Pattern używa wyłącznie automatycznych tokenów {number}/{random}/{year}.' }));
       } else {
-        tokens.forEach(token => hostnameDefaults.append(field(
+        const globalTokens = tokens.filter(token => ['location', 'role'].includes(token));
+        if (globalTokens.length) {
+          hostnameDefaults.append(node('div', { class: 'blueprint-wizard-info wide' },
+            node('strong', { text: 'Location i Role są ustawiane globalnie.' }),
+            node('span', { text: globalTokens.map(token =>
+              '{' + token + '}=' + (globalHostnameDefaults[token] || '—')).join(' · ') + '. Zmienisz je w Narzędzia → Location i Role.' })));
+        }
+        tokens.filter(token => !['location', 'role'].includes(token)).forEach(token => hostnameDefaults.append(field(
           'Domyślne {' + token + '}', 'hostname_token_' + token,
           { required: true, value: defaults[token] || '', placeholder: token === 'env' ? 'prod' : token, help: 'Możesz wpisać stałą wartość albo {{ nazwa_zmiennej }}.' }
         )));
@@ -393,8 +404,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const sampleValue = token => ({
         env: 'prod',
         environment: 'prod',
-        location: 'wro',
-        role: 'web',
+        location: globalHostnameDefaults.location || 'wro',
+        role: globalHostnameDefaults.role || 'server',
         application: 'app',
         service: 'svc',
         os: 'linux',
@@ -684,6 +695,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_scheme_id: Number(schemeId),
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
+            apmid: deployment.apmid || null,
             template: 'proxmox-vm',
             executor: data.get('executor'),
             variables: vmVariables,
@@ -1245,7 +1257,10 @@ async function blueprintForm(item = null) {
           template: template.id,
           executor: form.elements.deployment_executor.value,
           variables: deploymentVariables,
-          hostname_values: deployment.hostname_values || {},
+          hostname_values: Object.fromEntries(
+            Object.entries(deployment.hostname_values || {}).filter(([name]) => !['location', 'role'].includes(name))
+          ),
+          apmid: deployment.apmid || null,
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
@@ -1309,6 +1324,8 @@ async function blueprintForm(item = null) {
 async function executeBlueprint(item) {
   try {
     const fields = node('div', { class: 'form-grid' });
+    const apmidContext = await window.BlueprintRuntimeApmid.prepare(item, fields);
+
     for (const [name, definition] of Object.entries(item.variables_schema || {})) {
       if (definition.type === 'select') {
         fields.append(selectField(definition.label || name, name, (definition.options || []).map(value => ({ value, label: value })), definition.default, { required: definition.required }));
@@ -1332,7 +1349,9 @@ async function executeBlueprint(item) {
     }
     if (scheme) {
       const defaults = item.deployment?.hostname_values || {};
-      const missingTokens = hostnameTokens(scheme.pattern).filter(token => !defaults[token]);
+      const missingTokens = hostnameTokens(scheme.pattern)
+        .filter(token => !['location', 'role'].includes(token))
+        .filter(token => !defaults[token]);
       if (missingTokens.length) {
         const missingPattern = missingTokens.map(token => `{${token}}`).join('-');
         fields.append(formSection(
@@ -1360,10 +1379,17 @@ async function executeBlueprint(item) {
           if (definition.type === 'boolean') variables[name] = control.checked;
           else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
         }
+        const payload = {
+          variables,
+          hostname_values: readHostnameValues(form),
+        };
+        const runtimeApmid = window.BlueprintRuntimeApmid.read(form, apmidContext);
+        if (runtimeApmid) payload.apmid = runtimeApmid;
+
         const result = await api(`/blueprints/${item.id}/execute`, {
           method: 'POST',
           idempotent: true,
-          body: { variables, hostname_values: readHostnameValues(form) },
+          body: payload,
         });
         toast(`Utworzono „${result.name}”. Konfiguracja została zapisana w lokalnej bazie i dodana do kolejki. Jeśli Proxmox jest offline, VM utworzy się automatycznie po odzyskaniu połączenia.`);
         navigate('jobs');

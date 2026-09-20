@@ -38,12 +38,12 @@ def test_hostname_manager_reserves_unique_names(client, headers):
         'name': 'Linux production', 'pattern': '{location}-{env}-{role}-{number}', 'padding': 3,
     })
     assert scheme.status_code == 201, scheme.text
-    body = {'scheme_id': scheme.json()['id'], 'values': {'location': 'wro', 'env': 'prod', 'role': 'web'}}
+    body = {'scheme_id': scheme.json()['id'], 'values': {'env': 'prod'}}
     first = client.post('/api/v1/hostnames/generate', headers=headers, json=body)
     second = client.post('/api/v1/hostnames/generate', headers=headers, json=body)
     assert first.status_code == second.status_code == 200
-    assert first.json()['hostname'] == 'wro-prod-web-001'
-    assert second.json()['hostname'] == 'wro-prod-web-002'
+    assert first.json()['hostname'] == 'wro-prod-server-001'
+    assert second.json()['hostname'] == 'wro-prod-server-002'
     released = client.post('/api/v1/hostnames/' + first.json()['reservation']['id'] + '/release', headers=headers)
     assert released.status_code == 200 and released.json()['status'] == 'released'
 
@@ -218,10 +218,97 @@ def test_blueprint_quick_toggle(client, headers):
     assert enabled.json()['is_active'] is True
 
 
+def test_blueprint_runtime_apmid_is_required_by_ui_and_applied_by_backend(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    saved = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
+        'apmids': ['IAASTEAM', 'CRM'],
+    })
+    assert saved.status_code == 200, saved.text
+
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'runtime-apmid',
+        'name': 'Runtime APMID',
+        'deployment': {
+            'name': 'runtime-apmid',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'runtime-apmid',
+                'tags': ['env-dev'],
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={'apmid': 'IAASTEAM'},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['variables']['tags'] == [
+        'apmid-iaasteam',
+        'env-dev',
+        'iaasteam.dev',
+    ]
+
+    invalid = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={'apmid': 'NOT_CONFIGURED'},
+    )
+    assert invalid.status_code == 422
+    assert 'not configured' in invalid.text
+
+
+def test_blueprint_fixed_apmid_cannot_be_overridden_at_runtime(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'fixed-apmid',
+        'name': 'Fixed APMID',
+        'deployment': {
+            'name': 'fixed-apmid',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'apmid': 'CRM',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'fixed-apmid',
+                'tags': ['env-prod'],
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['variables']['tags'] == [
+        'apmid-crm',
+        'crm.prod',
+        'env-prod',
+    ]
+
+    override = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={'apmid': 'IAASTEAM'},
+    )
+    assert override.status_code == 422
+    assert 'cannot be overridden' in override.text
+
+
 def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
-        'name': 'Application hosts', 'pattern': '{env}-{role}-{number}', 'padding': 3,
+        'name': 'Application hosts', 'pattern': '{location}-{env}-{role}-{number}', 'padding': 3,
     }).json()
     payload = {
         'slug': 'ubuntu-web', 'name': 'Ubuntu Web Server', 'description': 'Standard self-service server',
@@ -249,10 +336,10 @@ def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, head
     assert [row['slug'] for row in available.json()['items']] == ['ubuntu-web']
     execution = client.post('/api/v1/blueprints/%s/execute' % created.json()['id'], headers={
         **key(signed_portal_headers)}, json={
-        'variables': {'cpu': 4, 'memory': 8192}, 'hostname_values': {'env': 'prod', 'role': 'web'},
+        'variables': {'cpu': 4, 'memory': 8192}, 'hostname_values': {'env': 'prod'},
     })
     assert execution.status_code == 202, execution.text
-    assert execution.json()['name'] == 'prod-web-001'
+    assert execution.json()['name'] == 'wro-prod-server-001'
     assert execution.json()['variables']['cpu'] == 4
     assert execution.json()['workflow']['blueprint']['version'] == 1
     assert execution.json()['job']['source'] == 'CloudPortal'

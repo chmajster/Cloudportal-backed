@@ -464,3 +464,38 @@
     justify-content: flex-end;
   }
 }
+
+
+.hostname-defaults-form {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.hostname-defaults-head h2 {
+  margin: 4px 0 6px;
+  font-size: 1.15rem;
+}
+
+.hostname-defaults-head p {
+  margin: 0;
+  max-width: 760px;
+  line-height: 1.5;
+}
+
+.hostname-defaults-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 720px) {
+  .hostname-defaults-form {
+    padding: 17px;
+  }
+
+  .hostname-defaults-actions .button {
+    width: 100%;
+  }
+}

@@ -74,7 +74,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['provider_id'] == 7
     assert deployment['credentials_id'] == 5
     assert deployment['hostname_scheme_id'] == 11
-    assert deployment['hostname_values'] == {'location': 'wro', 'env': 'prod', 'role': 'web'}
+    assert deployment['hostname_values'] == {'env': 'prod'}
     assert deployment['ipam_pool_id'] == 13
     assert deployment['name'] == '{{ hostname }}'
     assert deployment['variables']['name'] == '{{ hostname }}'
