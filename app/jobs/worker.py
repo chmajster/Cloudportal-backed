@@ -198,21 +198,73 @@ def register_adopted_resource(context):
             resource.destroyed_at = None
         db.commit()
 
+def _workflow_vm_identity(context, workspace):
+    node = str((context.deployment.variables or {}).get('node') or '')
+    if not node:
+        raise ExecutionFailed('Proxmox node missing from deployment variables')
+    return node, vm_id_from_state(workspace), provider_for(context.credential)
+
+
 def wait_for_vm(context, workspace, timeout=600):
-    vm_id = vm_id_from_state(workspace)
-    provider = provider_for(context.credential)
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
     context.stage('workflow.wait_for_vm')
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         context.check()
         try:
-            addresses = provider.guest_addresses(context.deployment.variables['node'], int(vm_id))
-            if addresses:
-                return addresses[:1]
+            status = provider.vm_status(node, vm_id)
+            if str((status or {}).get('status') or '').lower() == 'running':
+                return True
         except Exception:
-            pass  # Guest agent is expected to be unavailable during boot.
+            pass
         time.sleep(2)
-    raise ExecutionFailed('Timed out waiting for VM guest-agent address')
+    raise ExecutionFailed('Timed out waiting for VM running state')
+
+
+def wait_for_agent(context, workspace, timeout=600):
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
+    context.stage('workflow.wait_for_agent')
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        context.check()
+        try:
+            if provider.guest_agent_ready(node, vm_id):
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    raise ExecutionFailed('Timed out waiting for QEMU Guest Agent')
+
+
+def update_inventory_primary_ip(context, address):
+    if not address:
+        return
+    with session() as db:
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == context.deployment.id
+        ).with_for_update())
+        if resource is not None:
+            resource.primary_ip = str(address)
+            db.commit()
+
+
+def wait_for_ip(context, workspace, timeout=600):
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
+    context.stage('workflow.wait_for_ip')
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        context.check()
+        try:
+            addresses = provider.guest_addresses(node, vm_id)
+            ipv4 = [address for address in addresses if ':' not in address]
+            selected = (ipv4 or addresses)[:1]
+            if selected:
+                update_inventory_primary_ip(context, selected[0])
+                return selected
+        except Exception:
+            pass
+        time.sleep(2)
+    raise ExecutionFailed('Timed out waiting for VM IP address')
 
 
 def _provider_retry_delay(attempt):
@@ -370,7 +422,7 @@ def blueprint_conditions_match(step, context):
 
 
 def wait_for_ssh(context, workspace, timeout):
-    addresses = wait_for_vm(context, workspace, timeout=timeout)
+    addresses = wait_for_ip(context, workspace, timeout=timeout)
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
