@@ -187,33 +187,51 @@ function updatePipeline(status) {
   const currentIndex = UPDATE_PHASES.findIndex(item => item[0] === status.phase);
   const complete = status.status === 'success';
   const failed = status.status === 'failed';
+  const running = status.status === 'running' && currentIndex >= 0;
   const visibleStep = complete
     ? UPDATE_PHASES.length
     : currentIndex >= 0 ? currentIndex + 1 : 0;
+
   const pipelineCaption = complete
-    ? 'Wszystkie etapy zakończone'
-    : failed
-      ? 'Proces zatrzymany na etapie: ' + phaseLabel(status.phase)
-      : currentIndex >= 0
-        ? 'Etap ' + (currentIndex + 1) + ' z ' + UPDATE_PHASES.length
-        : 'Oczekiwanie na rozpoczęcie procesu';
+    ? 'Wszystkie ' + UPDATE_PHASES.length + ' etapów zakończone'
+    : failed && currentIndex >= 0
+      ? 'Zatrzymano na etapie: ' + phaseLabel(status.phase)
+      : failed
+        ? 'Błąd przed rozpoczęciem instalacji'
+        : running
+          ? 'Wykonywany etap: ' + phaseLabel(status.phase)
+          : status.status === 'update_available'
+            ? 'Aktualizacja gotowa — etapy rozpoczną się po uruchomieniu instalacji'
+            : status.status === 'checking'
+              ? 'Sprawdzanie dostępności aktualizacji'
+              : status.status === 'running'
+                ? 'Uruchamianie instalatora — pierwszy etap jeszcze się nie rozpoczął'
+                : 'Proces instalacji nie został uruchomiony';
 
   return node('div', { class: 'update-pipeline-shell' },
     node('div', { class: 'update-pipeline-meta' },
-      node('span', { class: 'update-pipeline-caption', text: pipelineCaption }),
+      node('div', { class: 'update-pipeline-caption-wrap' },
+        node('span', { class: 'update-pipeline-caption', text: pipelineCaption }),
+        node('small', { class: 'muted', text: visibleStep
+          ? 'Postęp etapów instalacji'
+          : 'Etapy pozostają w kolejce do czasu rozpoczęcia aktualizacji' })),
       node('span', { class: 'update-pipeline-count mono', text: visibleStep + '/' + UPDATE_PHASES.length })
     ),
     node('div', { class: 'update-pipeline', role: 'list', 'aria-label': 'Etapy aktualizacji' },
       ...UPDATE_PHASES.map((item, index) => {
         const label = item[1];
-        let stateClass = '';
+        let stateClass = 'pending';
         let marker = String(index + 1);
+        let stateText = 'Oczekuje';
+
         if (complete || index < currentIndex) {
           stateClass = 'complete';
           marker = '✓';
+          stateText = 'Gotowe';
         } else if (index === currentIndex) {
           stateClass = failed ? 'failed' : 'active';
-          marker = failed ? '!' : '•';
+          marker = failed ? '!' : String(index + 1);
+          stateText = failed ? 'Błąd' : 'W toku';
         }
 
         const attrs = {
@@ -224,7 +242,9 @@ function updatePipeline(status) {
 
         return node('div', attrs,
           node('div', { class: 'update-pipeline-marker', 'aria-hidden': 'true', text: marker }),
-          node('span', { class: 'update-pipeline-label', text: label })
+          node('div', { class: 'update-pipeline-step-copy' },
+            node('span', { class: 'update-pipeline-label', text: label }),
+            node('small', { class: 'update-pipeline-step-state', text: stateText }))
         );
       })
     )
@@ -341,14 +361,27 @@ function statusActions(status, container, settings) {
 
 function statusPanel(status, settings, container) {
   status = normalizedUpdateStatus(status);
-  const progress = Math.max(0, Math.min(100, Number(status.progress || 0)));
-  const fill = node('div', { class: 'update-progress-fill' + (updateBusy(status.status) ? ' is-running' : '') });
+  const rawProgress = Math.max(0, Math.min(100, Number(status.progress || 0)));
+  const installPhaseKnown = UPDATE_PHASES.some(item => item[0] === status.phase);
+  const installProgressVisible = status.status === 'success'
+    || status.status === 'failed' && installPhaseKnown
+    || status.status === 'running' && installPhaseKnown;
+  const progress = installProgressVisible ? rawProgress : 0;
+  const fill = node('div', { class: 'update-progress-fill' + (status.status === 'running' && installPhaseKnown ? ' is-running' : '') });
   fill.style.width = progress + '%';
   const progressStateText = status.status === 'success'
     ? 'Zakończono'
     : status.status === 'failed'
       ? 'Przerwano'
-      : updateBusy(status.status) ? 'W toku' : 'Stan bieżący';
+      : status.status === 'running' && installPhaseKnown
+        ? 'W toku'
+        : status.status === 'update_available'
+          ? 'Gotowa do instalacji'
+          : status.status === 'checking'
+            ? 'Sprawdzanie'
+            : status.status === 'running'
+              ? 'Uruchamianie'
+              : 'Nie rozpoczęto';
   const tone = updateTone(status.status);
   const symbol = status.status === 'failed'
     ? '!'
@@ -388,15 +421,17 @@ function statusPanel(status, settings, container) {
           node('span', { class: 'update-card-label', text: 'Postęp operacji' }),
           node('h2', { text: phaseLabel(status.phase) })),
         node('div', { class: 'update-progress-metric' },
-          node('span', { class: 'update-progress-metric-label', text: progressStateText }),
-          node('div', { class: 'update-progress-number' },
-            node('strong', { text: String(progress) }),
-            node('span', { text: '%' })))
+          node('span', { class: 'update-progress-metric-label', text: installProgressVisible ? 'Postęp' : 'Stan procesu' }),
+          installProgressVisible
+            ? node('div', { class: 'update-progress-number' },
+                node('strong', { text: String(progress) }),
+                node('span', { text: '%' }))
+            : node('span', { class: 'update-progress-status', text: progressStateText }))
       ),
       node('div', {
-        class: 'update-progress-track',
+        class: 'update-progress-track' + (installProgressVisible ? '' : ' is-idle'),
         role: 'progressbar',
-        'aria-label': 'Postęp aktualizacji',
+        'aria-label': installProgressVisible ? 'Postęp aktualizacji' : 'Postęp instalacji — proces nieuruchomiony',
         'aria-valuemin': '0',
         'aria-valuemax': '100',
         'aria-valuenow': String(progress),

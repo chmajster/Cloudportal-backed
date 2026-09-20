@@ -544,6 +544,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.update-hero' in stylesheet
     assert '.update-version-grid' in stylesheet
     assert '.update-pipeline' in stylesheet
+    assert '.update-pipeline-step-copy' in stylesheet
+    assert '.update-progress-status' in stylesheet
+    assert "Aktualizacja gotowa — etapy rozpoczną się po uruchomieniu instalacji" in script
+    assert "Etapy pozostają w kolejce do czasu rozpoczęcia aktualizacji" in script
     assert '.update-master-toggle' in stylesheet
     assert '.update-safety-grid' in stylesheet
 
