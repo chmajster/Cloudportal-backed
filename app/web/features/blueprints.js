@@ -893,10 +893,8 @@ async function blueprintForm(item = null) {
         node('div', { class: 'form-grid' },
           field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
           selectField('Akcja', 'workflow_type',
-            (workflowTypes.some(([value]) => value === step.type) || !step.type
-              ? workflowTypes
-              : [[step.type, 'Legacy marker: ' + step.type], ...workflowTypes])
-              .map(([value, label]) => ({ value, label })),
+            (workflowTypes.some(([value]) => value === step.type) || !step.type ? workflowTypes
+              : [[step.type, 'Legacy marker: ' + step.type], ...workflowTypes]).map(([value, label]) => ({ value, label })),
             step.type || 'terraform_apply', { required: true }),
           field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), wide: true, help: 'Kilka ID oddziel przecinkami.' }),
           advanced));
