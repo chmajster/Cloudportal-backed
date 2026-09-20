@@ -221,7 +221,7 @@ def test_blueprint_quick_toggle(client, headers):
 def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     scheme = client.post('/api/v1/hostname-schemes', headers=headers, json={
-        'name': 'Application hosts', 'pattern': '{env}-{role}-{number}', 'padding': 3,
+        'name': 'Application hosts', 'pattern': '{location}-{env}-{role}-{number}', 'padding': 3,
     }).json()
     payload = {
         'slug': 'ubuntu-web', 'name': 'Ubuntu Web Server', 'description': 'Standard self-service server',
@@ -249,10 +249,10 @@ def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, head
     assert [row['slug'] for row in available.json()['items']] == ['ubuntu-web']
     execution = client.post('/api/v1/blueprints/%s/execute' % created.json()['id'], headers={
         **key(signed_portal_headers)}, json={
-        'variables': {'cpu': 4, 'memory': 8192}, 'hostname_values': {'env': 'prod', 'role': 'web'},
+        'variables': {'cpu': 4, 'memory': 8192}, 'hostname_values': {'env': 'prod'},
     })
     assert execution.status_code == 202, execution.text
-    assert execution.json()['name'] == 'prod-web-001'
+    assert execution.json()['name'] == 'wro-prod-server-001'
     assert execution.json()['variables']['cpu'] == 4
     assert execution.json()['workflow']['blueprint']['version'] == 1
     assert execution.json()['job']['source'] == 'CloudPortal'
