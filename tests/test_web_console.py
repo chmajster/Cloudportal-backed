@@ -310,6 +310,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "hostname_scheme_id" in script
     assert "hostname_values" in script
     assert "ipam_pool_id" in script
+    assert "guest_credential_id" in script
+    assert "Credential dostępu do VM" in script
+    assert "Credential ustawiany na VM" in script
+    assert "zainstaluj qemu-guest-agent przez cloud-init" in script
+    assert "install_qemu_guest_agent" in script
+    assert "cloud_init_snippet_storage" in script
+    assert "snippetStorages" in script
     assert "ansibleVariables.hostname = '{{ hostname }}'" in script
     assert "add('clone', 'clone_vm')" in script
     assert "add('cloud_init', 'cloud_init')" in script

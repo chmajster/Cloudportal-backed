@@ -218,6 +218,88 @@ def test_blueprint_quick_toggle(client, headers):
     assert enabled.json()['is_active'] is True
 
 
+def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, headers):
+    from app.credentials.ssh import generate_ed25519_key_pair
+
+    provider_credential, provider, deployment_payload = resources(client, headers)
+    private_key, public_key = generate_ed25519_key_pair()
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'VM bootstrap SSH',
+        'type': 'ssh',
+        'endpoint': 'ssh://vm.example.com:22',
+        'username': 'vmadmin',
+        'secrets': {'private_key': private_key},
+    })
+    assert guest.status_code == 201, guest.text
+
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'guest-credential',
+        'name': 'Guest credential',
+        'deployment': {
+            'name': 'guest-credential',
+            'provider_id': provider['id'],
+            'credentials_id': provider_credential['id'],
+            'guest_credential_id': guest.json()['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'guest-credential',
+                'install_qemu_guest_agent': True,
+                'cloud_init_snippet_storage': 'local',
+            },
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'agent', 'type': 'wait_for_agent', 'depends_on': ['apply']},
+        ],
+    })
+    assert created.status_code == 201, created.text
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['variables']['ssh_username'] == 'vmadmin'
+    assert execution.json()['variables']['ssh_public_key'] == ' '.join(public_key.split()[:2])
+    assert execution.json()['variables']['install_qemu_guest_agent'] is True
+    assert execution.json()['variables']['cloud_init_snippet_storage'] == 'local'
+    assert execution.json()['workflow']['blueprint']['guest_credential_id'] == guest.json()['id']
+
+    protected = client.delete(f"/api/v1/credentials/{guest.json()['id']}", headers=headers)
+    assert protected.status_code == 409
+
+
+def test_blueprint_guest_credential_rejects_password_only_ssh(client, headers):
+    provider_credential, provider, deployment_payload = resources(client, headers)
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Password-only VM SSH',
+        'type': 'ssh',
+        'endpoint': 'ssh://vm.example.com:22',
+        'username': 'vmadmin',
+        'secrets': {'password': 'temporary-password-1234'},
+    })
+    assert guest.status_code == 201, guest.text
+
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'password-only-guest',
+        'name': 'Password-only guest',
+        'deployment': {
+            'name': 'password-only-guest',
+            'provider_id': provider['id'],
+            'credentials_id': provider_credential['id'],
+            'guest_credential_id': guest.json()['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'password-only-guest',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 422
+    assert 'private key' in created.text.lower()
+
+
 def test_blueprint_runtime_apmid_is_required_by_ui_and_applied_by_backend(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     saved = client.put('/api/v1/settings/vm-classification', headers=headers, json={
