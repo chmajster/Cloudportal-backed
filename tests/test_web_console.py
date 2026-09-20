@@ -291,6 +291,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Jedna rola może zarządzać tylko jednym szablonem.' in script
     assert 'canManageBlueprintByRole' in script
     assert 'Generator hostname' in script
+    assert "id: 'hostnames'" in script
+    assert "navigationParent: 'tools'" in script
+    assert "label: 'Generator hostname'" in script
     assert 'function hostnameGeneratorTool(' in script
     assert 'Użyj w Blueprint' in script
     assert 'options.hostnameSchemeId || deployment.hostname_scheme_id' in script
