@@ -444,7 +444,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'let jobLogPollNonce = 0' in script
     assert 'let myResourcesPollTimer = null' in script
     assert "window.setTimeout(poll, 1500)" in script
-    assert "inventory.vm.registered" in script
+    assert "!logOutput.isConnected" in script
+    assert "dom.content.querySelector('.my-resources-page-head')" in script
     assert "VM zsynchronizowana z inventory" in script
     assert "Po zakończeniu Terraform backend automatycznie doda VM" in script
     assert "parentView = null" in script
