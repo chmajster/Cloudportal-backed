@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from contextlib import contextmanager
 
@@ -33,16 +34,35 @@ def distributed_deployment_lock(deployment_id: str):
         db.close()
 
 
+def read_stored_state(db, deployment_id: str):
+    row = db.get(TerraformState, deployment_id)
+    if row is None:
+        return None
+    raw = decrypt_blob(row.encrypted_state, f'terraform-state:{deployment_id}')
+    if len(raw) > MAX_STATE_BYTES:
+        raise RuntimeError('Stored Terraform state exceeds the safety limit')
+    if hashlib.sha256(raw).hexdigest() != row.state_sha256:
+        raise RuntimeError('Stored Terraform state integrity check failed')
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        raise RuntimeError('Stored Terraform state is not valid JSON') from None
+    if not isinstance(payload, dict):
+        raise RuntimeError('Stored Terraform state has invalid structure')
+    return payload
+
+
 def restore_state(deployment_id: str, workspace):
     with session() as db:
-        row = db.get(TerraformState, deployment_id)
-        if row is None:
+        state = read_stored_state(db, deployment_id)
+        if state is None:
             return False
-        raw = decrypt_blob(row.encrypted_state, f'terraform-state:{deployment_id}')
-        if len(raw) > MAX_STATE_BYTES:
-            raise RuntimeError('Stored Terraform state exceeds the safety limit')
-        if hashlib.sha256(raw).hexdigest() != row.state_sha256:
+        raw = json.dumps(state, separators=(',', ':'), sort_keys=True).encode()
+        row = db.get(TerraformState, deployment_id)
+        original = decrypt_blob(row.encrypted_state, f'terraform-state:{deployment_id}')
+        if hashlib.sha256(original).hexdigest() != row.state_sha256:
             raise RuntimeError('Stored Terraform state integrity check failed')
+        raw = original
     target = workspace / 'terraform.tfstate'
     temporary = workspace / '.terraform.tfstate.restore'
     temporary.write_bytes(raw)
