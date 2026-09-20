@@ -965,7 +965,13 @@
         return parts.core.workflow({
           hostname: state.hostnameEnabled,
           ipam: state.ipMode === 'ipam',
-          tags: Boolean(String(state.tags || '').trim()),
+          tags: Boolean(
+            String(state.tags || '').trim()
+            || state.apmid
+            || state.environment
+            || state.selectApmidOnExecute
+            || state.selectEnvironmentOnExecute
+          ),
           waitAgent: state.waitAgent,
           ansible: state.ansibleEnabled,
         });
