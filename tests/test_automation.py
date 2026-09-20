@@ -807,3 +807,27 @@ def test_blueprint_execution_rejects_qemu_agent_when_ssh_preflight_fails(client,
     )
     assert execution.status_code == 409
     assert 'ssh_unreachable' in execution.text
+
+
+def test_blueprint_rejects_runtime_controls_on_legacy_markers(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'legacy-marker-condition',
+        'name': 'Legacy marker condition',
+        'deployment': {
+            'name': 'legacy-marker-condition',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {
+                'id': 'clone',
+                'type': 'clone_vm',
+                'conditions': {'environment': 'prod'},
+            },
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'cannot use conditions, retry or rollback' in response.text
