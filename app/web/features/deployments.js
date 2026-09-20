@@ -60,21 +60,35 @@ function productsPanel(blueprints, canUseProducts) {
     body);
 }
 
+function productResourceTabs(active) {
+  return node('div', { class: 'product-resource-tabs', role: 'tablist', 'aria-label': 'Produkty i zasoby' },
+    node('button', {
+      type: 'button',
+      class: 'product-resource-tab' + (active === 'products' ? ' active' : ''),
+      role: 'tab',
+      'aria-selected': String(active === 'products'),
+      onClick: () => navigate('deployments'),
+    }, 'Produkty'),
+    node('button', {
+      type: 'button',
+      class: 'product-resource-tab' + (active === 'resources' ? ' active' : ''),
+      role: 'tab',
+      'aria-selected': String(active === 'resources'),
+      onClick: () => navigate('my-resources'),
+    }, 'Moje zasoby'));
+}
+
 async function deploymentsView() {
   const canUseProducts = allowed('blueprints.read')
     && allowed('blueprints.execute')
     && allowed('deployments.create')
     && allowed('terraform.read');
 
-  const [deploymentResult, providerResult, blueprintResult, templateResult] = await Promise.all([
-    api('/deployments?limit=200'),
-    allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
+  const [blueprintResult, templateResult] = await Promise.all([
     canUseProducts ? api('/blueprints?available=true&limit=200') : Promise.resolve({ items: [] }),
-    canUseProducts && allowed('terraform.read') ? api('/templates') : Promise.resolve({ items: [] }),
+    canUseProducts ? api('/templates') : Promise.resolve({ items: [] }),
   ]);
 
-  const deployments = deploymentResult.items;
-  const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
   const enabledTemplates = new Set(
     (templateResult.items || []).filter(item => item.enabled !== false).map(item => item.id)
   );
@@ -86,30 +100,135 @@ async function deploymentsView() {
   );
 
   dom.content.replaceChildren(
-    heading('Gotowe produkty infrastrukturalne oparte na Blueprintach. Wybierz produkt i utwórz VM bez ręcznego składania wdrożenia.'),
-    productsPanel(products, canUseProducts),
-    node('section', { class: 'panel product-history-panel' },
-      node('div', { class: 'panel-header' },
-        node('div', {},
-          node('span', { class: 'product-catalog-kicker', text: 'Historia' }),
-          node('h2', { text: 'Wdrożone maszyny i operacje' }))),
-      table([
-        { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
-        { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || `#${item.provider_id}` },
-        { label: 'Silnik IaC', value: item => badge(item.executor, 'info') },
-        { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
-        { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
-      ], deployments, item => deploymentActions(item)))
+    productResourceTabs('products'),
+    heading('Wybierz gotowy produkt i utwórz nową maszynę lub usługę. Lista istniejących zasobów znajduje się w zakładce „Moje zasoby”.'),
+    productsPanel(products, canUseProducts)
   );
 }
 
-function deploymentActions(item) {
+function managedVmCard(item, providerNames, deploymentById) {
+  const liveStatus = item.live?.status || item.lifecycle_status || 'unknown';
+  const canOpen = allowed('vms.read') && item.lifecycle_status === 'active' && hasCommand('inventory.openVm');
+  const actions = [];
+  if (canOpen) {
+    actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', item, 'overview', 'my-resources'), 'primary'));
+  }
+  const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
+  if (deployment) actions.push(button('Wdrożenie', () => showDeploymentDetails(deployment), 'ghost'));
+
+  return node('article', {
+    class: 'my-resource-card my-resource-vm-card',
+  },
+    node('div', { class: 'my-resource-card-head' },
+      node('span', { class: 'my-resource-card-icon', 'aria-hidden': 'true' }, appIcon('server')),
+      node('div', { class: 'my-resource-card-title' },
+        node('strong', { text: item.name || ('VM ' + item.vm_id) }),
+        node('small', { class: 'mono muted', text: (item.node || '—') + ' / VMID ' + item.vm_id })),
+      badge(statusLabel(liveStatus), statusKind(liveStatus))),
+    node('div', { class: 'my-resource-card-meta' },
+      node('span', { text: providerNames.get(Number(item.provider_id)) || ('Platforma #' + item.provider_id) }),
+      node('span', { text: statusLabel(item.management_mode) })),
+    actions.length
+      ? node('div', { class: 'my-resource-card-actions' }, ...actions)
+      : node('small', { class: 'muted', text: 'Brak uprawnień do sterowania tą VM.' }));
+}
+
+function managedResourceCard(item, providerNames) {
+  const details = {
+    Typ: item.resource_type,
+    Platforma: providerNames.get(Number(item.provider_id)) || item.provider,
+    'External ID': item.external_id,
+    IP: item.primary_ip || '—',
+    Status: statusLabel(item.lifecycle_status),
+    Wdrożenie: item.deployment_id,
+    ...(item.metadata_json || {}),
+  };
+  return node('article', { class: 'my-resource-card' },
+    node('div', { class: 'my-resource-card-head' },
+      node('span', { class: 'my-resource-card-icon', 'aria-hidden': 'true' }, appIcon('box')),
+      node('div', { class: 'my-resource-card-title' },
+        node('strong', { text: item.name || item.resource_type || 'Zasób' }),
+        node('small', { class: 'muted', text: item.resource_type || 'resource' })),
+      badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status))),
+    node('div', { class: 'my-resource-card-meta' },
+      node('span', { text: providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider || '—' }),
+      item.primary_ip ? node('span', { class: 'mono', text: item.primary_ip }) : null),
+    node('div', { class: 'my-resource-card-actions' },
+      button('Szczegóły', () => showObjectDetails(item.name || 'Zasób', details, 'Zasób zarządzany'))));
+}
+
+function resourceSection(title, description, count, content) {
+  return node('section', { class: 'panel my-resources-section' },
+    node('div', { class: 'my-resources-section-head' },
+      node('div', {},
+        node('h2', { text: title }),
+        node('p', { class: 'muted', text: description })),
+      badge(String(count), count ? 'info' : '')),
+    content);
+}
+
+async function myResourcesView() {
+  const canReadInventory = allowed('inventory.read');
+  const [deploymentResult, vmResult, resourceResult, providerResult] = await Promise.all([
+    allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
+    canReadInventory ? api('/inventory/vms?limit=200') : Promise.resolve({ items: [] }),
+    canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
+    allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+
+  const deployments = deploymentResult.items || [];
+  const vms = vmResult.items || [];
+  const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm');
+  const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
+  const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
+  const deploymentById = new Map(deployments.map(item => [item.id, item]));
+
+  const vmGrid = vms.length
+    ? node('div', { class: 'my-resource-grid' }, ...vms.map(item => managedVmCard(item, providerNames, deploymentById)))
+    : node('div', { class: 'my-resources-empty' }, node('strong', { text: 'Brak maszyn VM' }), node('span', { class: 'muted', text: 'Nie ma VM dostępnych dla bieżących uprawnień.' }));
+
+  const resourceGrid = resources.length
+    ? node('div', { class: 'my-resource-grid' }, ...resources.map(item => managedResourceCard(item, providerNames)))
+    : node('div', { class: 'my-resources-empty' }, node('strong', { text: 'Brak innych zasobów' }), node('span', { class: 'muted', text: 'Nie ma innych zarządzanych zasobów dostępnych dla bieżących uprawnień.' }));
+
+  const deploymentContent = deployments.length
+    ? table([
+        { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
+        { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || ('#' + item.provider_id) },
+        { label: 'Typ', value: item => vmByDeployment.has(item.id) ? badge('VM', 'info') : badge(item.template || 'Zasób', '') },
+        { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
+        { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+      ], deployments, item => {
+        const actions = [];
+        const vm = vmByDeployment.get(item.id);
+        if (vm && allowed('vms.read') && hasCommand('inventory.openVm')) {
+          actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', vm, 'overview', 'my-resources'), 'primary'));
+        }
+        actions.push(...deploymentActions(item, 'my-resources'));
+        return actions;
+      })
+    : node('div', { class: 'my-resources-empty' }, node('strong', { text: 'Brak wdrożeń' }), node('span', { class: 'muted', text: 'Nie ma wdrożeń dostępnych dla bieżących uprawnień.' }));
+
+  dom.content.replaceChildren(
+    productResourceTabs('resources'),
+    heading('Zasoby i wdrożenia dostępne dla zalogowanego użytkownika. Wejście w VM otwiera panel sterowania zgodny z jego uprawnieniami.'),
+    node('div', { class: 'my-resources-summary' },
+      node('article', {}, node('span', { text: 'VM' }), node('strong', { text: String(vms.length) })),
+      node('article', {}, node('span', { text: 'Inne zasoby' }), node('strong', { text: String(resources.length) })),
+      node('article', {}, node('span', { text: 'Wdrożenia' }), node('strong', { text: String(deployments.length) }))),
+    resourceSection('Maszyny wirtualne', 'Kliknij „Zarządzaj VM”, aby przejść do sterowania, konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
+    resourceSection('Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
+    resourceSection('Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent)
+  );
+}
+
+function deploymentActions(item, returnTo = 'my-resources') {
   const actions = [button('Szczegóły', () => showDeploymentDetails(item))];
   if (allowed('jobs.execute') && allowed('terraform.execute') && !item.active_job_id && item.status !== 'destroyed') {
     actions.push(button('Plan', () => createTerraformJob(item, 'terraform.plan')));
     actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
   }
-  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate('deployments'); }), 'danger'));
+  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate(returnTo); }), 'danger'));
   return actions;
 }
 
@@ -956,6 +1075,7 @@ async function showJobLogs(job) {
 registerCommand('deployments.create', createDeployment);
 registerCommand('deployments.open', showDeploymentDetails);
 registerCommand('ansible.run', runStandaloneAnsible);
-registerView({ id: 'deployments', label: 'Produkty', icon: 'P', permission: 'deployments.read', order: 110 }, deploymentsView);
+registerView({ id: 'deployments', label: 'Produkty', iconName: 'box', permission: 'deployments.read', order: 110 }, deploymentsView);
+registerView({ id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: 'deployments.read', order: 111 }, myResourcesView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
 })();

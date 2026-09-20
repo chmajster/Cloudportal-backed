@@ -98,7 +98,7 @@ async function dashboardView() {
   const metricCards = node('section', { class: 'dashboard-metrics', 'aria-label': 'Metryki środowiska' },
     dashboardMetric('users', 'Użytkownicy', allowed('users.read') ? (counts.users ?? '—') : '—', allowed('users.read') ? 'konta widoczne dla Ciebie' : 'brak uprawnienia', allowed('users.read') ? 'users' : null),
     dashboardMetric('server', 'Platformy', allowed('providers.read') ? (counts.providers ?? '—') : '—', allowed('providers.read') ? 'skonfigurowane połączenia' : 'brak uprawnienia', allowed('providers.read') ? 'providers' : null),
-    dashboardMetric('rocket', 'Wdrożenia', allowed('deployments.read') ? (counts.deployments ?? '—') : '—', allowed('deployments.read') ? 'wszystkie wdrożenia' : 'brak uprawnienia', allowed('deployments.read') ? 'deployments' : null),
+    dashboardMetric('rocket', 'Wdrożenia', allowed('deployments.read') ? (counts.deployments ?? '—') : '—', allowed('deployments.read') ? 'zasoby dostępne dla Ciebie' : 'brak uprawnienia', allowed('deployments.read') ? 'my-resources' : null),
     dashboardMetric('list-check', 'Zadania', allowed('jobs.read') ? (counts.jobs ?? '—') : '—', allowed('jobs.read') ? 'ostatnie 200 rekordów' : 'brak uprawnienia', allowed('jobs.read') ? 'jobs' : null));
 
   const recentDeployments = deployments
@@ -115,7 +115,7 @@ async function dashboardView() {
         class: 'dashboard-deployment-row',
         type: 'button',
         onClick: async () => {
-          await navigate('deployments');
+          await navigate('my-resources');
           if (hasCommand('deployments.open')) await runCommand('deployments.open', item);
         },
         title: 'Otwórz szczegóły wdrożenia',
@@ -149,7 +149,7 @@ async function dashboardView() {
   const deploymentPanel = node('section', { class: 'panel dashboard-panel' },
     node('div', { class: 'dashboard-panel-header' },
       node('div', {}, node('span', { class: 'dashboard-panel-kicker', text: 'Aktywność' }), node('h2', { text: 'Ostatnie wdrożenia' })),
-      allowed('deployments.read') ? button('Wszystkie', () => navigate('deployments')) : null),
+      allowed('deployments.read') ? button('Wszystkie', () => navigate('my-resources')) : null),
     node('div', { class: 'dashboard-deployment-head' },
       node('span', { text: 'Nazwa' }), node('span', { text: 'Platforma' }), node('span', { text: 'Status' })),
     recentBody);
