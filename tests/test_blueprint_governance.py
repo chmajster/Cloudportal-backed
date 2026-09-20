@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.database import session
 from app.executors.base import ExecutionFailed
 from app.executors.terraform import TerraformExecutor
+from app.jobs import worker
 from app.jobs.worker import execute
 from app.jobs.queue import expire_waiting_approvals
 from app.models import Deployment, Job, TerraformPlan
@@ -276,7 +277,7 @@ def test_plan_approval_pauses_and_resumes_exact_plan(client, headers, monkeypatc
     assert launched.status_code == 202, launched.text
     assert launched.json()['job']['status'] == 'queued'
 
-    monkeypatch.setattr('app.jobs.worker.settings().data_dir', tmp_path)
+    monkeypatch.setattr(worker.settings(), 'data_dir', tmp_path)
     operations = []
     approved_plan = b'approved-binary-plan'
 
