@@ -133,10 +133,20 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('deployments.open'" in script
     assert "api('/blueprints?available=true&limit=200')" in script
     assert "label: 'Produkty'" in script
+    assert "label: 'Moje zasoby'" in script
+    assert "id: 'my-resources'" in script
+    assert "function productResourceTabs(" in script
+    assert "function myResourcesView()" in script
     assert "button('Utwórz VM'" in script
+    assert "button('Zarządzaj VM'" in script
+    assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
+    assert "runCommand('inventory.openVm', vm, 'overview', 'my-resources')" in script
+    assert "Wdrożenia i operacje" in script
     assert 'Brak gotowych Blueprintów.' in script
     assert '.product-grid' in stylesheet
     assert '.product-card' in stylesheet
+    assert '.product-resource-tabs' in stylesheet
+    assert '.my-resource-grid' in stylesheet
     assert 'function navigationGroup(' in core
     assert 'function navigationGroupRank(' in core
     assert "group === 'Operacje' ? 1" in core
@@ -387,6 +397,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function assignIpAllocation(' in script
     assert 'function showProxmoxTask(' in script
     assert 'function showVmDetailsPage(' in script
+    assert "parentView = null" in script
+    assert "returnView === 'my-resources' ? 'Moje zasoby' : 'Zasoby'" in script
+    assert "'start', 'Uruchom'" in script
+    assert "'shutdown', 'Wyłącz'" in script
+    assert "'reboot', 'Restart'" in script
+    assert "'reset', 'Twardy reset'" in script
+    assert "button('Konsola'" in script
+    assert "button('Snapshot'" in script
+    assert "button('Backup'" in script
     assert 'function vmDetailActions(' in script
     assert 'function vmSnapshotsContent(' in script
     assert 'function vmBackupsContent(' in script
