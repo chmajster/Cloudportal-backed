@@ -56,3 +56,13 @@ def test_help_is_plain_text_without_ansi_sequences():
     assert '--status' in result.stdout
     assert '--uninstall' in result.stdout
     assert '--non-interactive' in result.stdout
+
+
+
+def test_api_healthcheck_is_quiet_during_expected_startup_and_dumps_diagnostics_on_failure():
+    assert '2> "$api_health_error"' in INSTALLER
+    assert "systemctl is-active --quiet cloudportal-api.service" in INSTALLER
+    assert "API startuje — oczekuję na port 127.0.0.1:8765" in INSTALLER
+    assert "Ostatni błąd curl:" in INSTALLER
+    assert "systemctl --no-pager --full status cloudportal-api.service" in INSTALLER
+    assert "journalctl --no-pager -u cloudportal-api.service -n 80" in INSTALLER
