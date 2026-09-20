@@ -13,7 +13,7 @@ from app.automation.service import (available_to, blueprint_public, can_manage_b
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
-                        IPPool, Provider, Role, User, now)
+                        IPPool, JobLog, Provider, Role, User, now)
 from app.providers.registry import provider_for
 from app.security.core import audit, require
 from app.vm_classification import vm_classification_settings
