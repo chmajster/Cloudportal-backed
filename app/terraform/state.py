@@ -58,11 +58,6 @@ def restore_state(deployment_id: str, workspace):
         if state is None:
             return False
         raw = json.dumps(state, separators=(',', ':'), sort_keys=True).encode()
-        row = db.get(TerraformState, deployment_id)
-        original = decrypt_blob(row.encrypted_state, f'terraform-state:{deployment_id}')
-        if hashlib.sha256(original).hexdigest() != row.state_sha256:
-            raise RuntimeError('Stored Terraform state integrity check failed')
-        raw = original
     target = workspace / 'terraform.tfstate'
     temporary = workspace / '.terraform.tfstate.restore'
     temporary.write_bytes(raw)
