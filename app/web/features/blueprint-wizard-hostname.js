@@ -9,6 +9,47 @@
     const schemes = data.schemes.filter(value => value.is_active);
     const selected = String(state.hostnameSchemeId || '');
 
+    const schemePicker = selectField(
+      'Pattern hostname z Generatora',
+      'hostname_scheme_picker',
+      [
+        { value: '', label: schemes.length ? 'Wybierz pattern hostname' : 'Brak aktywnych patternów hostname' },
+        ...schemes.map(scheme => ({
+          value: scheme.id,
+          label: (scheme.name || ('Pattern #' + scheme.id)) + ' — ' + scheme.pattern,
+        })),
+      ],
+      selected,
+      {
+        required: state.hostnameEnabled && schemes.length > 0,
+        wide: true,
+        help: 'Lista zawiera aktywne patterny zapisane w Narzędzia → Generator hostname.',
+      }
+    );
+    schemePicker.querySelector('select').addEventListener('change', event => {
+      state.hostnameSchemeId = String(event.currentTarget.value || '');
+      state.hostnameValues = { ...state.hostnameValues };
+      state.creatingScheme = false;
+      rerender();
+    });
+
+    const refreshSchemes = async () => {
+      try {
+        const result = await api('/hostname-schemes?limit=200');
+        data.schemes = result.items || [];
+        const activeSchemes = data.schemes.filter(value => value.is_active);
+        const stillAvailable = activeSchemes.some(value =>
+          String(value.id) === String(state.hostnameSchemeId || ''));
+        if (!stillAvailable) {
+          state.hostnameSchemeId = String(activeSchemes[0]?.id || '');
+        }
+        toast('Lista patternów hostname odświeżona.');
+        rerender();
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    };
+
     const grid = node('div', { class: 'blueprint-wizard-card-grid' });
     if (!schemes.length) {
       grid.append(node('div', { class: 'blueprint-wizard-empty' },
@@ -137,15 +178,19 @@
         checkboxField('', 'hostname_enabled', state.hostnameEnabled)),
       state.hostnameEnabled
         ? node('div', { class: 'blueprint-wizard-step-stack' },
+            node('div', { class: 'blueprint-wizard-step-stack' },
+              schemePicker,
+              node('div', { class: 'blueprint-wizard-inline-actions' },
+                button('Odśwież patterny', refreshSchemes, 'ghost'),
+                button('Otwórz Generator hostname', () => {
+                  window.open(location.pathname + '#hostnames', '_blank', 'noopener');
+                }, 'ghost'))),
             grid,
-            selectedScheme ? tokenFields : node('div', { class: 'blueprint-wizard-info', text: 'Wybierz pattern hostname.' }),
+            selectedScheme ? tokenFields : node('div', { class: 'blueprint-wizard-info', text: 'Wybierz pattern hostname z listy powyżej.' }),
             node('div', { class: 'blueprint-wizard-inline-actions' },
               allowed('hostnames.create')
                 ? button('Utwórz nowy pattern', () => { state.creatingScheme = true; rerender(); }, 'ghost')
-                : null,
-              button('Otwórz Generator hostname', () => {
-                window.open(location.pathname + '#hostnames', '_blank', 'noopener');
-              }, 'ghost')),
+                : null),
             allowed('hostnames.create') ? createPanel : null)
         : field('Stała nazwa VM', 'manual_vm_name', {
             value: state.manualVmName,
