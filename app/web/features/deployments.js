@@ -106,19 +106,15 @@ async function deploymentsView() {
   );
 }
 
-function managedVmCard(item, providerNames) {
+function managedVmCard(item, providerNames, deploymentById) {
   const liveStatus = item.live?.status || item.lifecycle_status || 'unknown';
   const canOpen = allowed('vms.read') && item.lifecycle_status === 'active' && hasCommand('inventory.openVm');
   const actions = [];
   if (canOpen) {
     actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', item, 'overview', 'my-resources'), 'primary'));
   }
-  if (item.deployment_id) {
-    actions.push(button('Wdrożenie', () => {
-      const row = state.myResourcesDeployments?.find(value => value.id === item.deployment_id);
-      if (row) showDeploymentDetails(row);
-    }, 'ghost'));
-  }
+  const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
+  if (deployment) actions.push(button('Wdrożenie', () => showDeploymentDetails(deployment), 'ghost'));
 
   return node('article', {
     class: 'my-resource-card my-resource-vm-card',
@@ -185,10 +181,10 @@ async function myResourcesView() {
   const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm');
   const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
   const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
-  state.myResourcesDeployments = deployments;
+  const deploymentById = new Map(deployments.map(item => [item.id, item]));
 
   const vmGrid = vms.length
-    ? node('div', { class: 'my-resource-grid' }, ...vms.map(item => managedVmCard(item, providerNames)))
+    ? node('div', { class: 'my-resource-grid' }, ...vms.map(item => managedVmCard(item, providerNames, deploymentById)))
     : node('div', { class: 'my-resources-empty' }, node('strong', { text: 'Brak maszyn VM' }), node('span', { class: 'muted', text: 'Nie ma VM dostępnych dla bieżących uprawnień.' }));
 
   const resourceGrid = resources.length
