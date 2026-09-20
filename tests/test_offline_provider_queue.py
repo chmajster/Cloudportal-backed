@@ -145,7 +145,7 @@ def test_provider_offline_retry_limit_becomes_terminal_failure(client, headers, 
     cfg.provider_offline_queue_enabled = True
     cfg.provider_retry_base_seconds = 5
     cfg.provider_retry_max_seconds = 5
-    cfg.provider_retry_max_attempts = 1
+    monkeypatch.setattr(cfg, 'provider_retry_max_attempts', 1)
 
     class Provider:
         def execution_availability(self):
