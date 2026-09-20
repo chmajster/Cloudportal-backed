@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 import shutil
-import socket
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -74,22 +73,16 @@ def mark_terraform_initialized(workspace, fingerprint, binary):
 
 
 def proxmox_ssh_preflight(credential, env):
-    endpoint = urlsplit(credential.endpoint)
-    host = endpoint.hostname
-    if not host:
-        raise ExecutionFailed('Proxmox endpoint is invalid for SSH preflight')
-    try:
-        port = int(env.get('PROXMOX_VE_SSH_PORT') or 22)
-    except ValueError:
-        raise ExecutionFailed('PROXMOX_VE_SSH_PORT must be an integer') from None
-    try:
-        with socket.create_connection((host, port), timeout=5):
-            return
-    except OSError as exc:
-        raise ExecutionFailed(
-            f'Automatic qemu-guest-agent cloud-init requires reachable SSH on {host}:{port}; '
-            'check routing, firewall and SSH service before provisioning'
-        ) from exc
+    from app.providers.proxmox import ProxmoxProvider
+    readiness = ProxmoxProvider(credential).ssh_preflight(env)
+    if readiness.get('ok'):
+        return readiness
+    reason = readiness.get('reason') or 'ssh_not_ready'
+    host = readiness.get('host') or 'Proxmox'
+    port = readiness.get('port') or 22
+    raise ExecutionFailed(
+        f'Automatic qemu-guest-agent cloud-init SSH preflight failed ({reason}) for {host}:{port}'
+    )
 
 
 class TerraformExecutor(Executor):
