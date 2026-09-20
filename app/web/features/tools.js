@@ -466,6 +466,8 @@ function apmidTool(config) {
   );
 }
 
+const IMMUTABLE_APMIDS = new Set(['LEO']);
+
 function normalizeApmid(value) {
   return String(value || '').trim().toUpperCase();
 }
@@ -475,15 +477,19 @@ function validateApmid(value) {
 }
 
 async function saveApmids(config, apmids, message) {
-  const normalized = apmids.map(normalizeApmid).filter(Boolean);
-  normalized.forEach(value => {
+  const requested = apmids.map(normalizeApmid).filter(Boolean);
+  requested.forEach(value => {
     if (!validateApmid(value)) {
       throw new Error('APMID może zawierać litery, cyfry, _ oraz -, maksymalnie 63 znaki.');
     }
   });
-  if (new Set(normalized).size !== normalized.length) {
+  if (new Set(requested).size !== requested.length) {
     throw new Error('Lista APMID zawiera duplikaty.');
   }
+  const normalized = [
+    'LEO',
+    ...requested.filter(value => !IMMUTABLE_APMIDS.has(value)),
+  ];
 
   await api('/settings/vm-classification', {
     method: 'PUT',
@@ -563,9 +569,12 @@ async function apmidView() {
     }
 
     apmids.forEach((value, index) => {
+      const locked = IMMUTABLE_APMIDS.has(value);
       const valueBox = node('div', { class: 'apmid-list-value' },
         node('strong', { class: 'mono', text: value }),
-        node('small', { class: 'muted', text: 'Dostępny w kreatorze VM' }));
+        node('small', { class: 'muted', text: locked
+          ? 'Domyślny APMID systemowy — nie można edytować ani usunąć'
+          : 'Dostępny w kreatorze VM' }));
       const actions = node('div', { class: 'apmid-list-actions' });
 
       const row = node('div', { class: 'apmid-list-row' },
@@ -573,7 +582,7 @@ async function apmidView() {
         valueBox,
         actions);
 
-      if (canEdit) {
+      if (canEdit && !locked) {
         actions.append(
           button('Edytuj', () => {
             valueBox.replaceChildren(apmidInputForm(value, 'Zapisz', async nextValue => {
@@ -595,6 +604,8 @@ async function apmidView() {
         );
       }
 
+      if (locked) actions.append(badge('Domyślny · zablokowany', 'info'));
+
       list.append(row);
     });
   };
@@ -606,7 +617,7 @@ async function apmidView() {
       node('div', {},
         node('span', { class: 'tools-eyebrow', text: 'Lista APMID' }),
         node('h2', { text: 'APMID' }),
-        node('p', { class: 'muted', text: 'Dodawaj APMID pojedynczo. Istniejące pozycje możesz edytować lub usuwać.' })),
+        node('p', { class: 'muted', text: 'LEO jest domyślnym APMID systemowym i jest zablokowany. Pozostałe APMID możesz dodawać, edytować i usuwać.' })),
       canEdit ? button('Dodaj APMID', showAddForm, 'primary') : badge('Tylko odczyt', 'info')),
     addArea,
     list
