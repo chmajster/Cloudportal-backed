@@ -400,6 +400,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "const THEME_KEY = 'cloudportal.console.theme';" in script
     assert 'function setTheme(' in script
     assert 'function setMobileMenu(' in script
+    assert 'function setDesktopSidebarCollapsed(' in script
+    assert 'function toggleSidebar(' in script
+    assert "SIDEBAR_COLLAPSED_KEY = 'cloudportal.console.sidebar.collapsed'" in script
+    assert '.app-layout.sidebar-collapsed' in stylesheet
     assert "dom.refreshView.addEventListener('click'" in script
     assert 'function copyText(' in script
     assert 'function setLoginMessage(' in script
