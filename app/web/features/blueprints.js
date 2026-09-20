@@ -867,21 +867,8 @@ async function blueprintForm(item = null) {
       ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
       ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
     ];
-    const proxmoxOnlyWorkflowTypes = new Set([
-      'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-      'run_ansible_playbook', 'create_snapshot', 'health_check',
-    ]);
-    let workflowProvider = templates.find(
-      template => template.id === (item?.deployment?.template || 'proxmox-vm')
-    )?.provider || 'proxmox';
-    const workflowChoices = currentType => {
-      const available = workflowProvider === 'proxmox'
-        ? workflowTypes
-        : workflowTypes.filter(([value]) => !proxmoxOnlyWorkflowTypes.has(value));
-      return available.some(([value]) => value === currentType) || !currentType
-        ? available
-        : [[currentType, 'Legacy / niedostępne dla ' + workflowProvider + ': ' + currentType], ...available];
-    };
+    let workflowProvider = templates.find(template => template.id === (item?.deployment?.template || 'proxmox-vm'))?.provider || 'proxmox';
+    const workflowChoices = currentType => window.BlueprintProvisioningGuards.workflowChoicesForProvider(workflowTypes, workflowProvider, currentType);
     const addWorkflowStep = (step = {}) => {
       workflowCounter += 1;
       const advanced = node('details', { class: 'advanced-options wide' },
