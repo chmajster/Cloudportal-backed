@@ -37,6 +37,43 @@ def provider_retry_ready(job):
         return True
 
 
+def reconcile_deployment_job_statuses(db):
+    deployments = db.scalars(
+        select(Deployment).where(Deployment.active_job_id.is_not(None)).with_for_update(skip_locked=True).limit(200)
+    ).all()
+    for deployment in deployments:
+        job = db.get(Job, deployment.active_job_id)
+        if job is None:
+            deployment.active_job_id = None
+            deployment.status = 'failed'
+            db.add(JobLog(job_id=deployment.id, message='deployment.reconcile: active job record missing'))
+            continue
+        if job.status == 'running':
+            if deployment.status not in {'waiting_provider', 'recovery_queued'}:
+                deployment.status = 'running'
+            continue
+        if job.status == 'queued':
+            if deployment.status not in {'waiting_provider', 'recovery_queued'}:
+                deployment.status = 'queued'
+            continue
+        if job.status not in {'successful', 'failed', 'cancelled'}:
+            continue
+
+        deployment.active_job_id = None
+        if job.status != 'successful':
+            deployment.status = job.status
+        elif job.operation == 'terraform.destroy':
+            deployment.status = 'destroyed'
+            if deployment.destroyed_at is None:
+                deployment.destroyed_at = now()
+        elif job.operation == 'terraform.import':
+            deployment.status = 'imported'
+        elif job.operation == 'terraform.plan':
+            deployment.status = (job.payload or {}).get('previous_status', deployment.status or 'failed')
+        else:
+            deployment.status = 'successful'
+
+
 def dispatch_once():
     materialize_scheduled_jobs()
     q = queue()
@@ -56,6 +93,7 @@ def dispatch_once():
             q.enqueue('app.jobs.worker.execute', job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)
             job.dispatched_at = now()
+        reconcile_deployment_job_statuses(db)
         # Fail uncertain interrupted executions instead of blindly applying again.
         stale = db.scalars(select(Job).where(Job.status == 'running', Job.heartbeat_at < now() - timedelta(seconds=settings().execution_timeout + 180))
                            .with_for_update(skip_locked=True)).all()
