@@ -913,6 +913,8 @@ async function blueprintForm(item = null) {
     Object.entries(defaultVariables).forEach(([key, definition]) => addVariable(key, definition));
     const defaultWorkflow = item?.workflow || [
       { id: 'apply', type: 'terraform_apply', depends_on: [], retry: 0, timeout: 3600, conditions: {}, rollback: null },
+      { id: 'vm_running', type: 'wait_for_vm', depends_on: ['apply'], retry: 0, timeout: 600, conditions: {}, rollback: null },
+      { id: 'guest_ip', type: 'wait_for_ip', depends_on: ['vm_running'], retry: 0, timeout: 600, conditions: {}, rollback: null },
     ];
     defaultWorkflow.forEach(addWorkflowStep);
 
