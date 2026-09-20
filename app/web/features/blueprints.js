@@ -249,28 +249,17 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       [{ value: '', label: 'Bez Ansible' }, ...playbooks.map(value => ({ value: value.id, label: value.name + ' [' + value.transport + ']' }))],
       deployment.ansible?.playbook || ''
     );
-    const ansibleCredentialField = selectField(
-      'Dane dostępowe Ansible', 'ansible_credentials_id',
+    const ansibleCredentialField = selectField('Dane dostępowe Ansible', 'ansible_credentials_id',
       credentials.filter(value => ['ssh', 'winrm'].includes(value.type)).map(value => ({
         value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')',
-      })),
-      deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' }
-    );
-    const guestCredentialField = selectField(
-      'Credential ustawiany na VM', 'guest_credential_id',
-      [
-        { value: '', label: 'Bez credentiala z Cloudportal' },
-        ...credentials.filter(value => value.type === 'ssh').map(value => ({
-          value: value.id,
-          label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
-        })),
-      ],
-      deployment.guest_credential_id || '',
-      {
-        wide: true,
-        help: 'Cloud-init ustawi użytkownika i publiczny klucz SSH wynikający z credentiala. Klucz prywatny pozostaje zaszyfrowany w Cloudportal.',
-      }
-    );
+      })), deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' });
+    const guestCredentialChoices = credentials.filter(value => value.type === 'ssh').map(value => ({
+      value: value.id, label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
+    }));
+    const guestCredentialField = selectField('Credential ustawiany na VM', 'guest_credential_id',
+      [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...guestCredentialChoices],
+      deployment.guest_credential_id || '', { wide: true,
+        help: 'Cloud-init ustawi użytkownika i publiczny klucz SSH wynikający z credentiala. Klucz prywatny pozostaje zaszyfrowany w Cloudportal.' });
     const executorField = selectField(
       'Silnik IaC', 'executor',
       [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }],
@@ -479,8 +468,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
       const snippetStorages = availableStorages.filter(value => String(value.content || '').includes('snippets'));
       const preferredSnippet = snippetStorages.find(value => String(value.storage) === String(cloudInitSnippetStorage))
-        || snippetStorages.find(value => value.storage === 'local')
-        || snippetStorages[0];
+        || snippetStorages.find(value => value.storage === 'local') || snippetStorages[0];
       if (preferredSnippet) cloudInitSnippetStorage = preferredSnippet.storage;
       setSelectChoices(
         storageSelect,
