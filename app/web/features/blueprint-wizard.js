@@ -994,6 +994,11 @@
       }
 
       function workflowEditorRow(step, index) {
+        const proxmoxOnly = new Set(['wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+          'run_ansible_playbook', 'create_snapshot', 'health_check']);
+        const availableTypes = state.providerType === 'proxmox'
+          ? parts.core.WORKFLOW_TYPES
+          : parts.core.WORKFLOW_TYPES.filter(value => !proxmoxOnly.has(value));
         const row = node('div', { class: 'editor-card blueprint-wizard-workflow-editor-row', 'data-workflow-editor-row': String(index) },
           node('div', { class: 'editor-card-header' },
             node('strong', { text: 'Krok ' + (index + 1) }),
@@ -1004,14 +1009,12 @@
           node('div', { class: 'form-grid' },
             field('ID', 'workflow_id', { value: step.id, required: true }),
             selectField('Typ', 'workflow_type',
-              (parts.core.WORKFLOW_TYPES.includes(step.type)
-                ? parts.core.WORKFLOW_TYPES
-                : [step.type, ...parts.core.WORKFLOW_TYPES])
+              (availableTypes.includes(step.type) ? availableTypes : [step.type, ...availableTypes])
                 .map(value => ({
                   value,
-                  label: parts.core.WORKFLOW_TYPES.includes(value)
+                  label: availableTypes.includes(value)
                     ? parts.core.workflowLabel(value)
-                    : 'Legacy marker: ' + parts.core.workflowLabel(value),
+                    : 'Legacy / niedostępne dla ' + state.providerType + ': ' + parts.core.workflowLabel(value),
                 })),
               step.type, { required: true }),
             field('Zależy od (ID, po przecinku)', 'workflow_depends', { value: (step.depends_on || []).join(', ') }),
@@ -1070,7 +1073,7 @@
               const index = state.workflow.length + 1;
               state.workflow.push({
                 id: 'step_' + index,
-                type: 'health_check',
+                type: state.providerType === 'proxmox' ? 'health_check' : 'condition',
                 depends_on: state.workflow.length ? [state.workflow.at(-1).id] : [],
                 retry: 0,
                 timeout: 600,
