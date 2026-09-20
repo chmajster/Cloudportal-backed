@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with: {terraform_version: '1.13.5'}
-      - run: terraform fmt -check -recursive terraform
+      - run: terraform fmt -diff -check -recursive terraform
       - run: bash scripts/validate-terraform-templates.sh
   container:
     runs-on: ubuntu-latest
