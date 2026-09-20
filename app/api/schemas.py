@@ -745,6 +745,17 @@ class BlueprintInput(Input):
         if any(step.type == 'release_ip' for step in self.workflow):
             raise ValueError('release_ip is not allowed during VM provisioning; IP is released by destroy/recovery')
 
+        legacy_markers = {
+            'generate_hostname', 'allocate_ip',
+            'create_vm', 'clone_vm', 'configure_vm', 'cloud_init',
+            'start_vm', 'set_hostname', 'set_tags',
+        }
+        for step in self.workflow:
+            if step.type in legacy_markers and (step.conditions or step.retry or step.rollback):
+                raise ValueError(
+                    'Compile-time/declarative workflow markers cannot use conditions, retry or rollback'
+                )
+
         declarative = {'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags'}
         def ancestors(step_id):
             result = set()
