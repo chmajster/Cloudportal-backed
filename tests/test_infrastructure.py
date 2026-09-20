@@ -297,6 +297,49 @@ def test_reapply_can_reconcile_changed_proxmox_vm_identity(client, headers, monk
     assert linked[0]['vm_id'] == 502
 
 
+def test_terraform_reuses_init_and_shared_provider_cache(client, headers, monkeypatch):
+    d = deployment(client, headers)
+    with session() as db:
+        dep = db.get(Deployment, d['id'])
+        credential = db.get(Credential, dep.credentials_id)
+        job = db.get(Job, d['job']['id'])
+
+    commands = []
+    envs = []
+    logs = []
+
+    def fake_process(argv, cwd, env, context, secrets=()):
+        commands.append(list(argv))
+        envs.append(dict(env))
+        if len(argv) > 1 and argv[1] == 'init':
+            (cwd / '.terraform' / 'providers').mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr('app.executors.terraform.run_process', fake_process)
+    context = SimpleNamespace(
+        deployment=dep,
+        credential=credential,
+        job=job,
+        stage=lambda value: None,
+        check=lambda: None,
+        log=lambda value: logs.append(value),
+    )
+
+    executor = TerraformExecutor()
+    executor.execute('terraform.plan', context)
+    executor.execute('terraform.plan', context)
+
+    verbs = [argv[1] for argv in commands if len(argv) > 1]
+    assert verbs == ['init', 'plan', 'plan']
+    assert any('terraform.init.cached' in line for line in logs)
+    assert envs
+    cache_dirs = {env['TF_PLUGIN_CACHE_DIR'] for env in envs}
+    assert len(cache_dirs) == 1
+    cache_dir = Path(next(iter(cache_dirs)))
+    assert cache_dir.name == 'terraform-plugin-cache'
+    assert cache_dir.exists()
+    assert (settings().data_dir / 'workspaces' / dep.workspace / '.cloudportal-terraform-init.json').exists()
+
+
 def test_workspace_lock_excludes_second_executor(tmp_path):
     import pytest
     with workspace_lock(tmp_path/'workspace'):
