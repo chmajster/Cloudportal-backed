@@ -153,6 +153,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Brak gotowych Blueprintów.' in script
     assert '.product-grid' in stylesheet
     assert '.product-card' in stylesheet
+    assert '.job-log-status' in stylesheet
+    assert '.job-live-log' in stylesheet
     assert '.product-resource-tabs' in stylesheet
     assert '.my-resources-page-head' in stylesheet
     assert '.my-resources-body' in stylesheet
@@ -441,6 +443,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function assignIpAllocation(' in script
     assert 'function showProxmoxTask(' in script
     assert 'function showVmDetailsPage(' in script
+    assert 'let jobLogPollNonce = 0' in script
+    assert 'let myResourcesPollTimer = null' in script
+    assert "window.setTimeout(poll, 1500)" in script
+    assert "!logOutput.isConnected" in script
+    assert "dom.content.querySelector('.my-resources-page-head')" in script
+    assert "VM zsynchronizowana z inventory" in script
+    assert "Po zakończeniu Terraform backend automatycznie doda VM" in script
     assert "parentView = null" in script
     assert "returnView === 'my-resources' ? 'Moje zasoby' : 'Zasoby'" in script
     assert "'start', 'Uruchom'" in script
