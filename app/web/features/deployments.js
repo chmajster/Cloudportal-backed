@@ -232,6 +232,15 @@ async function myResourcesView() {
       })
     : resourceEmptyState('rocket', 'Brak wdrożeń', 'Nie ma wdrożeń dostępnych dla bieżących uprawnień.');
 
+  const body = node('div', { class: 'my-resources-body' },
+    node('div', { class: 'my-resources-summary' },
+      resourceSummaryCard('server', 'VM', vms.length, 'Maszyny wirtualne', 'vm', 'my-resources-vms'),
+      resourceSummaryCard('database', 'Inne zasoby', resources.length, 'Zasoby dodatkowe', 'resources', 'my-resources-other'),
+      resourceSummaryCard('rocket', 'Wdrożenia', deployments.length, 'Aktywne wdrożenia', 'deployments', 'my-resources-deployments')),
+    resourceSection('my-resources-vms', 'monitor', 'Maszyny wirtualne', 'Kliknij „Zarządzaj VM”, aby przejść do sterowania, konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
+    resourceSection('my-resources-other', 'box', 'Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
+    resourceSection('my-resources-deployments', 'rocket', 'Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent));
+
   dom.content.replaceChildren(
     node('div', { class: 'my-resources-page-head' },
       productResourceTabs('resources'),
@@ -239,13 +248,7 @@ async function myResourcesView() {
         class: 'my-resources-intro',
         text: 'Zasoby i wdrożenia dostępne dla zalogowanego użytkownika. Wejście w VM otwiera panel sterowania zgodny z jego uprawnieniami.',
       })),
-    node('div', { class: 'my-resources-summary' },
-      resourceSummaryCard('server', 'VM', vms.length, 'Maszyny wirtualne', 'vm', 'my-resources-vms'),
-      resourceSummaryCard('database', 'Inne zasoby', resources.length, 'Zasoby dodatkowe', 'resources', 'my-resources-other'),
-      resourceSummaryCard('rocket', 'Wdrożenia', deployments.length, 'Aktywne wdrożenia', 'deployments', 'my-resources-deployments')),
-    resourceSection('my-resources-vms', 'monitor', 'Maszyny wirtualne', 'Kliknij „Zarządzaj VM”, aby przejść do sterowania, konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
-    resourceSection('my-resources-other', 'box', 'Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
-    resourceSection('my-resources-deployments', 'rocket', 'Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent)
+    body
   );
 }
 
