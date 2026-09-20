@@ -151,10 +151,10 @@ class TerraformExecutor(Executor):
                         plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
                         if operation == 'terraform.destroy':
                             plan.append('-destroy')
-                        run_process(plan, workspace, env, context, secret.values())
+                        run_process(plan, workspace, env, context, sensitive_values)
                         if operation != 'terraform.plan':
                             context.stage(operation)
-                            run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, secret.values())
+                            run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, sensitive_values)
                 finally:
                     (workspace / 'execution.tfplan').unlink(missing_ok=True)
                     if (workspace / 'terraform.tfstate').exists():
