@@ -684,6 +684,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_scheme_id: Number(schemeId),
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
+            apmid: deployment.apmid || null,
             template: 'proxmox-vm',
             executor: data.get('executor'),
             variables: vmVariables,
@@ -1246,6 +1247,7 @@ async function blueprintForm(item = null) {
           executor: form.elements.deployment_executor.value,
           variables: deploymentVariables,
           hostname_values: deployment.hostname_values || {},
+          apmid: deployment.apmid || null,
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
