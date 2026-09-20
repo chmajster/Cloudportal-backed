@@ -807,7 +807,13 @@ def run_blueprint_workflow(context, executor):
                         raise ExecutionFailed(
                             'Workflow approval step requires Blueprint requires_approval=true'
                         )
-                    context.log(f'workflow.approval.satisfied: {step_id}')
+                    approval = (context.job.payload or {}).get('_approval') or {}
+                    if approval.get('status') != 'approved':
+                        raise ExecutionFailed('Blueprint execution has not been approved')
+                    context.log(
+                        f"workflow.approval.satisfied: {step_id} "
+                        f"approved_by={approval.get('approved_by')}"
+                    )
                 elif step_type == 'delay':
                     seconds = float((step.get('conditions') or {}).get('seconds', 1))
                     if seconds < 0 or seconds > timeout:
