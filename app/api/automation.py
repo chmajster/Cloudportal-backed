@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
-from app.catalog import template_definition
+from app.catalog import template_definition, validate_template_variables
 from app.catalog_control import require_catalog_item_enabled
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items, VMClassificationSettingsOutput)
@@ -129,6 +129,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
+    validate_template_variables(data.deployment.template, data.deployment.variables)
     if data.deployment.hostname_scheme_id:
         scheme = find(db, HostnameScheme, data.deployment.hostname_scheme_id)
         if not scheme.is_active:
