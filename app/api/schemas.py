@@ -771,6 +771,9 @@ class BlueprintInput(Input):
             if step.type in declarative and any(by_id[parent].type == 'terraform_apply' for parent in ancestors(step.id)):
                 raise ValueError('Declarative VM steps must run before terraform_apply')
 
+        if any(step.type == 'approval' for step in self.workflow) and not self.requires_approval:
+            raise ValueError('Workflow approval step requires requires_approval=true')
+
         apply_steps = [step for step in self.workflow if step.type == 'terraform_apply']
         if len(apply_steps) != 1:
             raise ValueError('Workflow must contain exactly one terraform_apply step')
