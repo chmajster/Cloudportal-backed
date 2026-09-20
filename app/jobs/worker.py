@@ -974,6 +974,8 @@ def run_blueprint_workflow(context, executor):
                 runtime['step_states'][step_id] = 'completed'
                 context.stage(f'workflow.step.completed:{step_id}:{step_type}')
                 break
+            except ApprovalPending:
+                raise
             except Cancelled:
                 raise
             except Exception as exc:
