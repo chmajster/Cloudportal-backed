@@ -115,16 +115,14 @@ function blueprintWorkflow(options) {
   const steps = [];
   let previous = [];
   const add = (id, type) => {
-    steps.push({ id, type, depends_on: [...previous] });
+    const timeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
+    steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout, rollback: null });
     previous = [id];
   };
-  if (options.hostname) add('hostname', 'generate_hostname');
-  if (options.ipam) add('ip', 'allocate_ip');
-  add('clone', 'clone_vm');
-  add('cloud_init', 'cloud_init');
-  if (options.tags) add('tags', 'set_tags');
   add('apply', 'terraform_apply');
-  if (options.waitAgent || options.ansible) { add('agent', 'wait_for_agent'); add('guest_ip', 'wait_for_ip'); }  if (options.ansible) add('ansible', 'run_ansible_playbook');
+  if (options.waitAgent) add('agent', 'wait_for_agent');
+  if (options.waitAgent || options.ansible) add('guest_ip', 'wait_for_ip');
+  if (options.ansible) add('ansible', 'run_ansible_playbook');
   return steps;
 }
 async function proxmoxBlueprintForm(item = null, options = {}) {
@@ -861,13 +859,13 @@ async function blueprintForm(item = null) {
     };
 
     const workflowTypes = [
-      ['generate_hostname', 'Wygeneruj hostname'], ['allocate_ip', 'Przydziel IP'],
-      ['create_vm', 'Utwórz VM'], ['clone_vm', 'Sklonuj VM'], ['configure_vm', 'Skonfiguruj VM'],
-      ['cloud_init', 'Cloud-init'], ['start_vm', 'Uruchom VM'], ['wait_for_vm', 'Czekaj na VM'],
-      ['wait_for_agent', 'Czekaj na guest agent'], ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
-      ['set_hostname', 'Ustaw hostname'], ['run_ansible_playbook', 'Uruchom Ansible'], ['terraform_plan', 'Terraform plan'],
-      ['terraform_apply', 'Terraform apply'], ['create_snapshot', 'Utwórz snapshot'], ['set_tags', 'Ustaw tagi'], ['health_check', 'Health check'],
-      ['condition', 'Warunek'], ['approval', 'Akceptacja'], ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
+      ['terraform_plan', 'Terraform plan'], ['terraform_apply', 'Terraform apply'],
+      ['wait_for_vm', 'Czekaj na VM'], ['wait_for_agent', 'Czekaj na guest agent'],
+      ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
+      ['run_ansible_playbook', 'Uruchom Ansible'], ['create_snapshot', 'Utwórz snapshot'],
+      ['health_check', 'Health check'], ['condition', 'Warunek'], ['approval', 'Akceptacja'],
+      ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
+      ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
     ];
     const addWorkflowStep = (step = {}) => {
       workflowCounter += 1;
@@ -911,9 +909,7 @@ async function blueprintForm(item = null) {
     };
     Object.entries(defaultVariables).forEach(([key, definition]) => addVariable(key, definition));
     const defaultWorkflow = item?.workflow || [
-      { id: 'hostname', type: 'generate_hostname' },
-      { id: 'clone', type: 'clone_vm', depends_on: ['hostname'] },
-      { id: 'apply', type: 'terraform_apply', depends_on: ['clone'] },
+      { id: 'apply', type: 'terraform_apply', depends_on: [], retry: 0, timeout: 3600, conditions: {}, rollback: null },
     ];
     defaultWorkflow.forEach(addWorkflowStep);
 
