@@ -204,7 +204,9 @@ function updatePipeline(status) {
             ? 'Aktualizacja gotowa — etapy rozpoczną się po uruchomieniu instalacji'
             : status.status === 'checking'
               ? 'Sprawdzanie dostępności aktualizacji'
-              : 'Proces instalacji nie został uruchomiony';
+              : status.status === 'running'
+                ? 'Uruchamianie instalatora — pierwszy etap jeszcze się nie rozpoczął'
+                : 'Proces instalacji nie został uruchomiony';
 
   return node('div', { class: 'update-pipeline-shell' },
     node('div', { class: 'update-pipeline-meta' },
@@ -377,7 +379,9 @@ function statusPanel(status, settings, container) {
           ? 'Gotowa do instalacji'
           : status.status === 'checking'
             ? 'Sprawdzanie'
-            : 'Nie rozpoczęto';
+            : status.status === 'running'
+              ? 'Uruchamianie'
+              : 'Nie rozpoczęto';
   const tone = updateTone(status.status);
   const symbol = status.status === 'failed'
     ? '!'
