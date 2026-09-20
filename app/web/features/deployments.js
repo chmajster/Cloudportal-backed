@@ -340,7 +340,7 @@ function showDeploymentDetails(item) {
   const actions = [button('Zamknij', closeModal)];
   if (item.active_job_id && allowed('jobs.read')) actions.unshift(button('Przejdź do zadań', () => { closeModal(); navigate('jobs'); }, 'primary'));
   dom.modalActions.replaceChildren(...actions);
-  if (!dom.modal.open) dom.modal.showModal();
+  if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) dom.modal.showModal();
 }
 
 async function createTerraformJob(item, operation) {
@@ -1179,7 +1179,7 @@ async function showJobLogs(job) {
   const terminal = value => ['successful', 'failed', 'cancelled'].includes(value);
 
   const poll = async () => {
-    if (nonce !== jobLogPollNonce || !dom.modal.open || !logOutput.isConnected) return;
+    if (nonce !== jobLogPollNonce || !(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open) || !logOutput.isConnected) return;
     try {
       const [current, logs] = await Promise.all([
         api(`/jobs/${job.id}`),
