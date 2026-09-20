@@ -63,19 +63,25 @@ def _apply_success(db, adapter, item):
             ManagedVM.provider_id == provider_id,
             ManagedVM.vm_id == identity,
         ))
-        if existing is not None:
-            return
         live = _live_vm(adapter, target_node, identity)
-        db.add(ManagedVM(
-            provider_id=provider_id,
-            deployment_id=None,
-            node=str(live.get('node') or target_node),
-            vm_id=identity,
-            name=str(live.get('name') or item.get('name') or f'vm-{identity}'),
-            management_mode='external',
-            lifecycle_status='active',
-            created_by=int(item['created_by']),
-        ))
+        values = {
+            'deployment_id': None,
+            'node': str(live.get('node') or target_node),
+            'name': str(live.get('name') or item.get('name') or f'vm-{identity}'),
+            'management_mode': 'external',
+            'lifecycle_status': 'active',
+            'created_by': int(item['created_by']),
+            'destroyed_at': None,
+        }
+        if existing is None:
+            db.add(ManagedVM(
+                provider_id=provider_id,
+                vm_id=identity,
+                **values,
+            ))
+        else:
+            for key, value in values.items():
+                setattr(existing, key, value)
         return
 
     if vm_id is None:
