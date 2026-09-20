@@ -75,3 +75,31 @@ def test_winrm_connection_test_honors_verify_ssl(client, headers, monkeypatch):
         response = client.post('/api/v1/credentials/' + str(created.json()['id']) + '/test', headers=headers)
         assert response.status_code == 200, response.text
         assert observed[-1] == expected
+
+
+def test_ssh_credential_reports_cloud_init_key_capability(client, headers):
+    password_only = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'SSH password capability',
+        'type': 'ssh',
+        'endpoint': 'ssh://password.example.com:22',
+        'username': 'clouduser',
+        'secrets': {'password': 'private-password'},
+    })
+    assert password_only.status_code == 201, password_only.text
+    assert password_only.json()['supports_cloud_init_ssh_key'] is False
+
+    key_based = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'SSH key capability',
+        'type': 'ssh',
+        'endpoint': 'ssh://key.example.com:22',
+        'username': 'clouduser',
+        'secrets': {'private_key': 'private-key-data'},
+    })
+    assert key_based.status_code == 201, key_based.text
+    assert key_based.json()['supports_cloud_init_ssh_key'] is True
+
+    listed = client.get('/api/v1/credentials?limit=200', headers=headers)
+    assert listed.status_code == 200, listed.text
+    by_id = {row['id']: row for row in listed.json()['items']}
+    assert by_id[password_only.json()['id']]['supports_cloud_init_ssh_key'] is False
+    assert by_id[key_based.json()['id']]['supports_cloud_init_ssh_key'] is True
