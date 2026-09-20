@@ -176,7 +176,9 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       api('/credentials?limit=200'),
       allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
       allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
-      api('/settings/vm-classification'),
+      allowed('settings.read')
+        ? api('/settings/vm-classification')
+        : Promise.resolve({ hostname_defaults: { location: 'wro', role: 'server' } }),
     ]);
     const providers = providerResult.items.filter(value => value.type === 'proxmox');
     if (!providers.length) throw new Error('Najpierw dodaj platformę Proxmox.');
