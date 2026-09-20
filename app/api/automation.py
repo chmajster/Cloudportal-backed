@@ -5,6 +5,7 @@ from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
 from app.catalog_control import require_catalog_item_enabled
+from app.blueprint_settings import blueprint_execution_settings
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items, VMClassificationSettingsOutput)
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
@@ -327,12 +328,28 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                       {'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                        'blueprint': deployment.workflow['blueprint']})
         if row.requires_approval:
+            approval_settings = blueprint_execution_settings(db)
             payload = dict(job.payload or {})
-            payload['_approval'] = {'status': 'pending'}
+            if approval_settings['auto_approve_for_executors']:
+                payload['_approval'] = {
+                    'status': 'approved',
+                    'approved_by': actor.user_id,
+                    'approved_at': now().isoformat(),
+                    'automatic': True,
+                }
+                db.add(JobLog(
+                    job_id=job.id,
+                    message='workflow.approval.auto: blueprints.execute uprawnia do automatycznej akceptacji',
+                ))
+            else:
+                payload['_approval'] = {'status': 'pending'}
+                job.status = 'waiting_approval'
+                deployment.status = 'waiting_approval'
+                db.add(JobLog(
+                    job_id=job.id,
+                    message='workflow.approval.pending: oczekiwanie na zatwierdzenie',
+                ))
             job.payload = payload
-            job.status = 'waiting_approval'
-            deployment.status = 'waiting_approval'
-            db.add(JobLog(job_id=job.id, message='workflow.approval.pending: oczekiwanie na zatwierdzenie'))
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
         if ip_allocation:
