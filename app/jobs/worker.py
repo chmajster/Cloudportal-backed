@@ -89,6 +89,11 @@ def validate_authorization(db, job):
         blueprint = job.payload.get('blueprint') or {}
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
             needed.add('deployments.destroy')
+        workflow_types = {str(step.get('type')) for step in (blueprint.get('steps') or [])}
+        if 'create_snapshot' in workflow_types:
+            needed.add('snapshots.create')
+        if 'release_ip' in workflow_types:
+            needed.add('ipam.release')
     if job.operation == 'terraform.destroy':
         needed.add('deployments.destroy')
     if job.operation == 'terraform.import':
