@@ -1,6 +1,7 @@
 import uuid
 import json
 import os
+import socket
 import time
 from datetime import timedelta
 from types import SimpleNamespace
@@ -23,11 +24,14 @@ class Context:
         self.job = job
         self.started = time.monotonic()
         self.last_check = 0
+        self.step_deadline = None
         self.deployment = self.credential = self.ansible = self.ansible_credential = None
 
     def check(self):
         if time.monotonic() - self.started > settings().execution_timeout:
             raise ExecutionFailed('Execution timeout')
+        if self.step_deadline is not None and time.monotonic() > self.step_deadline:
+            raise ExecutionFailed('Workflow step timeout')
         if time.monotonic() - self.last_check < 1:
             return
         self.last_check = time.monotonic()
@@ -85,6 +89,11 @@ def validate_authorization(db, job):
         blueprint = job.payload.get('blueprint') or {}
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
             needed.add('deployments.destroy')
+        workflow_types = {str(step.get('type')) for step in (blueprint.get('steps') or [])}
+        if 'create_snapshot' in workflow_types:
+            needed.add('snapshots.create')
+        if 'release_ip' in workflow_types:
+            needed.add('ipam.release')
     if job.operation == 'terraform.destroy':
         needed.add('deployments.destroy')
     if job.operation == 'terraform.import':
@@ -188,11 +197,11 @@ def register_adopted_resource(context):
             resource.destroyed_at = None
         db.commit()
 
-def wait_for_vm(context, workspace):
+def wait_for_vm(context, workspace, timeout=600):
     vm_id = vm_id_from_state(workspace)
     provider = provider_for(context.credential)
     context.stage('workflow.wait_for_vm')
-    deadline = time.monotonic() + 600
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         context.check()
         try:
@@ -268,6 +277,299 @@ def clear_provider_wait(job_id):
         db.commit()
 
 
+
+BLUEPRINT_DECLARATIVE_STEPS = {
+    'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
+    'set_hostname', 'set_tags',
+}
+BLUEPRINT_PRECOMPILED_STEPS = {'generate_hostname', 'allocate_ip'}
+BLUEPRINT_POST_APPLY_STEPS = {
+    'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+    'run_ansible_playbook', 'create_snapshot', 'health_check',
+}
+BLUEPRINT_SUPPORTED_STEPS = (
+    BLUEPRINT_DECLARATIVE_STEPS
+    | BLUEPRINT_PRECOMPILED_STEPS
+    | BLUEPRINT_POST_APPLY_STEPS
+    | {'release_ip', 'terraform_plan', 'terraform_apply', 'condition', 'approval', 'delay', 'notification'}
+)
+
+
+def blueprint_workflow_order(steps):
+    rows = [dict(step or {}) for step in (steps or [])]
+    ids = [row.get('id') for row in rows]
+    if not rows:
+        return []
+    if any(not value for value in ids) or len(ids) != len(set(ids)):
+        raise ExecutionFailed('Blueprint workflow contains missing or duplicate step IDs')
+    by_id = {row['id']: row for row in rows}
+    known = set(by_id)
+    for row in rows:
+        dependencies = list(row.get('depends_on') or [])
+        if row['id'] in dependencies or set(dependencies) - known:
+            raise ExecutionFailed('Blueprint workflow contains an invalid dependency')
+    pending = list(rows)
+    completed = set()
+    ordered = []
+    while pending:
+        ready = [row for row in pending if set(row.get('depends_on') or []) <= completed]
+        if not ready:
+            raise ExecutionFailed('Blueprint workflow contains a dependency cycle')
+        for row in ready:
+            ordered.append(row)
+            completed.add(row['id'])
+            pending.remove(row)
+    return ordered
+
+
+def blueprint_runtime_facts(context):
+    deployment = context.deployment
+    blueprint = (context.job.payload or {}).get('blueprint') or {}
+    variables = deployment.variables or {}
+    blueprint_variables = blueprint.get('variables') or {}
+    tags = set(str(value).lower() for value in (variables.get('tags') or []))
+    return {
+        'provider': deployment.provider,
+        'executor': deployment.executor,
+        'has_ansible': bool(context.ansible),
+        'hostname': deployment.name,
+        'environment': next(
+            (tag.removeprefix('env-') for tag in tags if tag.startswith('env-')),
+            blueprint_variables.get('environment'),
+        ),
+        'apmid': next(
+            (tag.removeprefix('apmid-').upper() for tag in tags if tag.startswith('apmid-')),
+            blueprint_variables.get('apmid'),
+        ),
+    }
+
+
+def blueprint_conditions_match(step, context):
+    conditions = dict(step.get('conditions') or {})
+    if not conditions:
+        return True
+    step_type = step.get('type')
+    ignored = {'seconds', 'message'} if step_type in {'delay', 'notification'} else set()
+    facts = blueprint_runtime_facts(context)
+    for key, expected in conditions.items():
+        if key in ignored:
+            continue
+        if key not in facts:
+            raise ExecutionFailed(f'Unsupported Blueprint workflow condition: {key}')
+        actual = facts[key]
+        if isinstance(expected, list):
+            if actual not in expected:
+                return False
+        elif isinstance(expected, bool):
+            if bool(actual) != expected:
+                return False
+        elif str(actual).lower() != str(expected).lower():
+            return False
+    return True
+
+
+def wait_for_ssh(context, workspace, timeout):
+    addresses = wait_for_vm(context, workspace, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while time.monotonic() < deadline:
+        context.check()
+        for address in addresses:
+            try:
+                with socket.create_connection((address, 22), timeout=2):
+                    return address
+            except OSError as exc:
+                last_error = exc
+        time.sleep(2)
+    raise ExecutionFailed('Timed out waiting for SSH' + (f': {last_error}' if last_error else ''))
+
+
+def release_blueprint_ip(context):
+    with session() as db:
+        allocation = db.scalar(select(IPAllocation).where(
+            IPAllocation.resource_id == context.deployment.id,
+            IPAllocation.status != 'released',
+        ).with_for_update())
+        if allocation is None:
+            context.log('workflow.release_ip: no active allocation')
+            return
+        allocation.status = 'released'
+        allocation.released_at = now()
+        db.commit()
+
+
+def create_blueprint_snapshot(context, workspace, step):
+    if context.deployment.provider != 'proxmox':
+        raise ExecutionFailed('create_snapshot is supported only for Proxmox deployments')
+    vm_id = vm_id_from_state(workspace)
+    node = str((context.deployment.variables or {}).get('node') or '')
+    if not node:
+        raise ExecutionFailed('Proxmox node missing from deployment variables')
+    snapname = ('bp-' + context.job.id[:8] + '-' + str(step.get('id') or 'snapshot'))[:40]
+    result = provider_for(context.credential).create_snapshot(
+        node,
+        vm_id,
+        snapname,
+        'Cloudportal Blueprint workflow snapshot',
+        False,
+    )
+    context.log(f'workflow.snapshot.created: {snapname} task={result}')
+
+
+def run_blueprint_workflow(context, executor):
+    blueprint = (context.job.payload or {}).get('blueprint') or {}
+    steps = blueprint_workflow_order(blueprint.get('steps') or [])
+    if not steps:
+        return None
+
+    unsupported = sorted({str(step.get('type')) for step in steps} - BLUEPRINT_SUPPORTED_STEPS)
+    if unsupported:
+        raise ExecutionFailed('Unsupported Blueprint workflow steps: ' + ', '.join(unsupported))
+
+    runtime = {
+        'workspace': None,
+        'inventory_synced': False,
+        'addresses': None,
+        'applied': False,
+        'ansible_ran': False,
+        'prepared': [],
+    }
+
+    def require_workspace():
+        if runtime['workspace'] is None:
+            raise ExecutionFailed('Workflow step requires terraform_apply to run first')
+        return runtime['workspace']
+
+    def apply_and_sync():
+        context.stage('workflow.terraform_apply')
+        workspace = executor.execute('terraform.apply', context)
+        runtime['workspace'] = workspace
+        runtime['applied'] = True
+        context.stage('inventory.synchronizing')
+        inventory = register_managed_inventory(context, workspace)
+        runtime['inventory_synced'] = True
+        if inventory['vm_id'] is not None:
+            context.log(f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}")
+        else:
+            context.log(f"inventory.resource.registered: {inventory['external_id']}")
+        for prepared in runtime['prepared']:
+            context.log(f"workflow.step.materialized: {prepared}")
+        runtime['prepared'].clear()
+        return workspace
+
+    for step in steps:
+        step_id = str(step.get('id'))
+        step_type = str(step.get('type'))
+        retry = int(step.get('retry') or 0)
+        timeout = int(step.get('timeout') or 600)
+
+        if not blueprint_conditions_match(step, context):
+            context.log(f'workflow.step.skipped: {step_id}:{step_type}: condition=false')
+            continue
+
+        attempts = retry + 1
+        for attempt in range(1, attempts + 1):
+            previous_deadline = context.step_deadline
+            context.step_deadline = time.monotonic() + timeout
+            try:
+                context.stage(f'workflow.step.start:{step_id}:{step_type}')
+                if step_type in BLUEPRINT_PRECOMPILED_STEPS:
+                    context.log(f'workflow.step.precompiled: {step_id}:{step_type}')
+                elif step_type in BLUEPRINT_DECLARATIVE_STEPS:
+                    runtime['prepared'].append(step_id + ':' + step_type)
+                    context.log(
+                        f'workflow.step.prepared: {step_id}:{step_type}; '
+                        'desired state will be materialized by terraform_apply'
+                    )
+                elif step_type == 'terraform_plan':
+                    runtime['workspace'] = executor.execute('terraform.plan', context)
+                elif step_type == 'terraform_apply':
+                    apply_and_sync()
+                elif step_type in {'wait_for_vm', 'wait_for_agent', 'wait_for_ip'}:
+                    runtime['addresses'] = wait_for_vm(context, require_workspace(), timeout=timeout)
+                elif step_type == 'wait_for_ssh':
+                    address = wait_for_ssh(context, require_workspace(), timeout)
+                    runtime['addresses'] = [address]
+                elif step_type == 'run_ansible_playbook':
+                    if not context.ansible:
+                        raise ExecutionFailed('Workflow requests Ansible but deployment has no Ansible configuration')
+                    if runtime['addresses'] is None:
+                        runtime['addresses'] = wait_for_vm(context, require_workspace(), timeout=timeout)
+                    context.ansible.inventory = Inventory(hosts=runtime['addresses'])
+                    AnsibleExecutor().execute('ansible.execute', context)
+                    runtime['ansible_ran'] = True
+                elif step_type == 'create_snapshot':
+                    create_blueprint_snapshot(context, require_workspace(), step)
+                elif step_type == 'release_ip':
+                    release_blueprint_ip(context)
+                elif step_type == 'health_check':
+                    availability = provider_for(context.credential).execution_availability()
+                    if not availability.get('ok'):
+                        raise ExecutionFailed(
+                            'Blueprint health_check failed: '
+                            + str(availability.get('reason') or 'provider unavailable')
+                        )
+                elif step_type == 'condition':
+                    context.log(f'workflow.condition.passed: {step_id}')
+                elif step_type == 'approval':
+                    if not blueprint.get('requires_approval'):
+                        raise ExecutionFailed(
+                            'Workflow approval step requires Blueprint requires_approval=true'
+                        )
+                    context.log(f'workflow.approval.satisfied: {step_id}')
+                elif step_type == 'delay':
+                    seconds = float((step.get('conditions') or {}).get('seconds', 1))
+                    if seconds < 0 or seconds > timeout:
+                        raise ExecutionFailed('Workflow delay seconds must be between 0 and step timeout')
+                    deadline = time.monotonic() + seconds
+                    while time.monotonic() < deadline:
+                        context.check()
+                        time.sleep(min(1, max(0, deadline - time.monotonic())))
+                elif step_type == 'notification':
+                    message = str((step.get('conditions') or {}).get('message') or step_id)
+                    context.log('workflow.notification: ' + message[:1000])
+
+                if step_type in BLUEPRINT_DECLARATIVE_STEPS:
+                    context.stage(f'workflow.step.prepared:{step_id}:{step_type}')
+                else:
+                    context.stage(f'workflow.step.completed:{step_id}:{step_type}')
+                break
+            except Cancelled:
+                raise
+            except Exception as exc:
+                if attempt >= attempts:
+                    if isinstance(exc, ExecutionFailed):
+                        raise
+                    raise ExecutionFailed(
+                        f'Workflow step {step_id} ({step_type}) failed'
+                    ) from None
+                context.log(
+                    f'workflow.step.retry: {step_id}:{step_type} '
+                    f'attempt={attempt}/{attempts} error={str(exc)[:500]}'
+                )
+            finally:
+                context.step_deadline = previous_deadline
+
+    if not runtime['applied'] and (
+        runtime['prepared']
+        or any(step.get('type') in {'create_vm', 'clone_vm'} for step in steps)
+    ):
+        context.log('workflow.compatibility: implicit terraform_apply for declarative VM steps')
+        apply_and_sync()
+
+    if runtime['applied'] and not runtime['inventory_synced']:
+        register_managed_inventory(context, runtime['workspace'])
+
+    if context.ansible and not runtime['ansible_ran']:
+        context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
+        if runtime['addresses'] is None:
+            runtime['addresses'] = wait_for_vm(context, require_workspace())
+        context.ansible.inventory = Inventory(hosts=runtime['addresses'])
+        AnsibleExecutor().execute('ansible.execute', context)
+
+    return runtime['workspace']
+
+
 def execute(job_id):
     os.umask(0o077)
     with session() as db:
@@ -315,21 +617,25 @@ def execute(job_id):
         context.stage('job.running')
         if job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
-            workspace = executor.execute(job.operation, context)
-            if job.operation == 'terraform.import':
-                register_adopted_resource(context)
-            if job.operation == 'terraform.apply':
-                context.stage('inventory.synchronizing')
-                inventory = register_managed_inventory(context, workspace)
-                if inventory['vm_id'] is not None:
-                    context.log(
-                        f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}"
-                    )
-                else:
-                    context.log(f"inventory.resource.registered: {inventory['external_id']}")
-                if context.ansible:
-                    context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
-                    AnsibleExecutor().execute('ansible.execute', context)
+            blueprint = (job.payload or {}).get('blueprint') or {}
+            if job.operation == 'terraform.apply' and blueprint.get('steps'):
+                run_blueprint_workflow(context, executor)
+            else:
+                workspace = executor.execute(job.operation, context)
+                if job.operation == 'terraform.import':
+                    register_adopted_resource(context)
+                if job.operation == 'terraform.apply':
+                    context.stage('inventory.synchronizing')
+                    inventory = register_managed_inventory(context, workspace)
+                    if inventory['vm_id'] is not None:
+                        context.log(
+                            f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}"
+                        )
+                    else:
+                        context.log(f"inventory.resource.registered: {inventory['external_id']}")
+                    if context.ansible:
+                        context.ansible.inventory = Inventory(hosts=wait_for_vm(context, workspace))
+                        AnsibleExecutor().execute('ansible.execute', context)
         else:
             AnsibleExecutor().execute(job.operation, context)
         context.check()

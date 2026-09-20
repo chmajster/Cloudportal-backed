@@ -259,6 +259,18 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         raise HTTPException(403, 'blueprints.approve required by this blueprint')
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
         raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
+    workflow_types = {step.get('type') for step in (row.workflow or [])}
+    required_workflow_permissions = set()
+    if 'create_snapshot' in workflow_types:
+        required_workflow_permissions.add('snapshots.create')
+    if 'release_ip' in workflow_types:
+        required_workflow_permissions.add('ipam.release')
+    missing_workflow_permissions = required_workflow_permissions - request.state.permissions
+    if missing_workflow_permissions:
+        raise HTTPException(
+            403,
+            'Missing Blueprint workflow permissions: ' + ', '.join(sorted(missing_workflow_permissions)),
+        )
     def create():
         rendered, reservation, ip_allocation, guest_credential_id = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
