@@ -17,6 +17,12 @@ def test_installer_emits_machine_readable_update_progress():
     assert 'CLOUDPORTAL_UPDATE_IN_PROGRESS' in INSTALLER
 
 
+def test_updater_driven_install_keeps_sidecar_alive_and_reloads_it_after_success():
+    assert "if ((update_in_progress)); then\n    ui_info 'Serwis updatera pozostaje aktywny na czas aktualizacji.'" in INSTALLER
+    assert 'systemd-run --quiet --collect --unit="$updater_reload_unit" --on-active=8s' in INSTALLER
+    assert '/bin/systemctl restart cloudportal-updater.service' in INSTALLER
+
+
 def test_update_service_is_stdlib_only_and_stable():
     source = (ROOT / 'scripts' / 'update-service.py').read_text()
     assert 'ThreadingHTTPServer' in source
