@@ -326,6 +326,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "function apmidView()" in script
     assert "function apmidTool(config)" in script
     assert "function apmidInputForm(" in script
+    assert "const IMMUTABLE_APMIDS = new Set(['LEO'])" in script
+    assert "Domyślny APMID systemowy — nie można edytować ani usunąć" in script
+    assert "Domyślny · zablokowany" in script
+    assert "apmid: 'LEO'" in script
+    assert "apmids.includes('LEO') ? 'LEO' : ''" in script
     assert "button('Otwórz listę APMID'" in script
     assert "button('Dodaj APMID'" in script
     assert "button('Edytuj'" in script
@@ -399,6 +404,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'UPDATE_PHASES' in script
     assert 'updatePipeline' in script
     assert 'function normalizedUpdateStatus(' in script
+    assert 'let updateStartPending = false' in script
+    assert 'status.operation_active' in script
+    assert "result.already_running" in script
+    assert "includes('already in progress')" in script
     assert "status.phase === 'complete'" in script
     assert "status: 'success'" in script
     assert 'Polityka auto-update' in script
