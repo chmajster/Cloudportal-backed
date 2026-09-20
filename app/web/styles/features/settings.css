@@ -155,22 +155,330 @@
 
 .settings-ldap-panel {
   margin-bottom: 16px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-ldap-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(135deg, var(--surface), var(--panel-end));
+}
+
+.settings-ldap-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-ldap-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 13px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.settings-ldap-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.settings-ldap-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.settings-ldap-title-row h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: -.02em;
+}
+
+.settings-ldap-heading p {
+  margin: 5px 0 0;
+  max-width: 760px;
+  font-size: .76rem;
+  line-height: 1.5;
+}
+
+.settings-ldap-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.settings-ldap-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px 20px 0;
+}
+
+.settings-ldap-section {
+  min-width: 0;
+  display: grid;
+  gap: 13px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.settings-ldap-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-ldap-section-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
+.settings-ldap-section-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.settings-ldap-section-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.settings-ldap-section-head strong {
+  font-size: .8rem;
+}
+
+.settings-ldap-section-head small {
+  color: var(--muted);
+  font-size: .66rem;
+}
+
+.settings-ldap-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-ldap-detail {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.settings-ldap-detail.wide {
+  grid-column: 1 / -1;
+}
+
+.settings-ldap-detail-label {
+  color: var(--muted);
+  font-size: .63rem;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.settings-ldap-detail strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: .73rem;
+  line-height: 1.35;
+}
+
+.settings-ldap-jit {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin: 14px 20px 0;
+  padding: 14px;
+  border: 1px solid var(--info-border);
+  border-radius: 11px;
+  background: var(--info-soft);
+}
+
+.settings-ldap-jit-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--info);
+}
+
+.settings-ldap-jit-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.settings-ldap-jit strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: .8rem;
+}
+
+.settings-ldap-jit p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.55;
+}
+
+.settings-ldap-filters {
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px 20px;
+}
+
+.settings-ldap-filters-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-ldap-filters-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-ldap-filters-head strong {
+  font-size: .8rem;
+}
+
+.settings-ldap-filters-head span {
+  font-size: .68rem;
+}
+
+.settings-ldap-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-ldap-filter-card {
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.settings-ldap-filter-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-ldap-filter-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
+.settings-ldap-filter-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-ldap-filter-head strong {
+  font-size: .72rem;
+}
+
+.settings-ldap-filter-card code {
+  display: block;
+  overflow-x: auto;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: .7rem;
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {
-  .settings-grid {
+  .settings-grid,
+  .settings-ldap-overview {
     grid-template-columns: 1fr;
+  }
+
+  .settings-ldap-hero {
+    align-items: flex-start;
   }
 }
 
 @media (max-width: 560px) {
   .settings-system-grid,
-  .settings-choice-row {
+  .settings-choice-row,
+  .settings-ldap-detail-grid,
+  .settings-ldap-filter-grid {
     grid-template-columns: 1fr;
   }
 
   .settings-card {
     grid-template-columns: 1fr;
+  }
+
+  .settings-ldap-hero {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .settings-ldap-actions {
+    width: 100%;
+  }
+
+  .settings-ldap-actions .button {
+    flex: 1 1 auto;
+  }
+
+  .settings-ldap-overview {
+    padding: 14px 14px 0;
+  }
+
+  .settings-ldap-jit {
+    margin: 12px 14px 0;
+  }
+
+  .settings-ldap-filters {
+    padding: 14px;
+  }
+
+  .settings-ldap-detail.wide {
+    grid-column: auto;
   }
 }
 
