@@ -60,6 +60,19 @@ def test_update_ref_override_requires_update_permission(client, headers, monkeyp
     assert denied_run.status_code == 403
     assert denied_check.status_code == 403
 
+def test_update_start_is_idempotent_when_sidecar_reports_existing_run(client, headers, monkeypatch):
+    import app.api.updates as updates
+    from app.updates.service import UpdaterError
+
+    def already_running(*args, **kwargs):
+        raise UpdaterError(409, 'Update already in progress')
+
+    monkeypatch.setattr(updates, 'updater_request', already_running)
+    response = client.post('/api/v1/updates/run', headers=headers, json={})
+    assert response.status_code == 202
+    assert response.json() == {'accepted': False, 'already_running': True}
+
+
 def test_update_ref_validation(client, headers, monkeypatch):
     import app.api.updates as updates
 

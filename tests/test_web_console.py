@@ -238,6 +238,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "window.BlueprintWizard.open()" in script
     assert "registerExtension('blueprint-wizard-core'" in script
     assert "registerExtension('blueprint-wizard-hostname'" in script
+    assert "Pattern hostname z Generatora" in script
+    assert "'hostname_scheme_picker'" in script
+    assert "button('Odśwież patterny'" in script
+    assert "Lista patternów hostname odświeżona." in script
     assert "registerExtension('blueprint-wizard-network'" in script
     assert "registerExtension('blueprint-wizard'" in script
     assert "'Podstawy', 'Podstawowe informacje'" in script
@@ -248,6 +252,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'Konfiguracja', 'Konfiguracja systemu'" in script
     assert "'Workflow', 'Workflow'" in script
     assert "'Dostęp', 'Dostęp i bezpieczeństwo'" in script
+    assert 'function dualListGroup(' in script
+    assert "'data-dual-list-name': name" in script
+    assert "dualListGroup('Dozwolone role'" in script
+    assert "dualListGroup('Role zarządzające Blueprintem'" in script
+    assert "dualListGroup('Dozwoleni użytkownicy'" in script
+    assert "'Dodaj zaznaczone'" in script
+    assert "'Dodaj wszystkie'" in script
+    assert "'Usuń zaznaczone'" in script
+    assert "'Usuń wszystkie'" in script
     assert "'Podsumowanie', 'Podsumowanie'" in script
     assert "Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji." in script
     assert "state.slug = parts.core.slugify" in script
@@ -400,6 +413,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'UPDATE_PHASES' in script
     assert 'updatePipeline' in script
     assert 'function normalizedUpdateStatus(' in script
+    assert 'let updateStartPending = false' in script
+    assert 'status.operation_active' in script
+    assert "result.already_running" in script
+    assert "includes('already in progress')" in script
     assert "status.phase === 'complete'" in script
     assert "status: 'success'" in script
     assert 'Polityka auto-update' in script
@@ -504,6 +521,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.blueprint-wizard-shell' in stylesheet
     assert '.blueprint-wizard-steps' in stylesheet
     assert '.blueprint-wizard-select-card' in stylesheet
+    assert '.blueprint-wizard-dual-fieldset' in stylesheet
+    assert '.blueprint-wizard-dual-list' in stylesheet
+    assert '.blueprint-wizard-dual-select' in stylesheet
+    assert '.blueprint-wizard-dual-controls' in stylesheet
     assert '.blueprint-wizard-workflow-visual' in stylesheet
     assert '.blueprint-wizard-review' in stylesheet
     assert '@media (prefers-reduced-motion: reduce)' in stylesheet
