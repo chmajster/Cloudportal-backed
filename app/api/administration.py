@@ -6,10 +6,11 @@ from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
                              IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput,
-                             VMClassificationSettingsOutput)
+                             VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput)
 from app.api.schemas import (AssignRoles, LDAPSettingsInput, RoleInput, TokenInput, UserCreate, UserUpdate,
-                             VMClassificationSettingsInput)
+                             VMClassificationSettingsInput, BlueprintExecutionSettingsInput)
 from app.auth.routes import user_public
+from app.blueprint_settings import blueprint_execution_settings, save_blueprint_execution_settings
 from app.auth.ldap import ldap_settings, save_ldap_settings, test_ldap_connection
 from app.vm_classification import save_vm_classification_settings, vm_classification_settings
 from app.database import get_db
@@ -147,6 +148,19 @@ def update_vm_classification_settings(data: VMClassificationSettingsInput, reque
                                       actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
     result = save_vm_classification_settings(db, data)
     audit(db, request, 'settings.vm_classification_updated', 'settings', 'vm_classification')
+    return result
+
+
+@router.get('/settings/blueprints', response_model=BlueprintExecutionSettingsOutput)
+def get_blueprint_execution_settings(actor=Depends(require('settings.read')), db=Depends(get_db, scope='function')):
+    return blueprint_execution_settings(db)
+
+
+@router.put('/settings/blueprints', response_model=BlueprintExecutionSettingsOutput)
+def update_blueprint_execution_settings(data: BlueprintExecutionSettingsInput, request: Request,
+                                        actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    result = save_blueprint_execution_settings(db, data)
+    audit(db, request, 'settings.blueprints_updated', 'settings', 'blueprint_execution')
     return result
 
 

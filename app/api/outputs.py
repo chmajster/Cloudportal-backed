@@ -39,6 +39,10 @@ class VMClassificationSettingsOutput(Output):
     hostname_defaults: dict[str, str]
 
 
+class BlueprintExecutionSettingsOutput(Output):
+    auto_approve_for_executors: bool
+
+
 class LDAPSettingsOutput(Output):
     enabled: bool
     url: str

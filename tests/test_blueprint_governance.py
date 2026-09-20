@@ -53,6 +53,12 @@ def blueprint_payload(credential, provider, **policy):
 
 
 def test_blueprint_approval_permission_is_enforced(client, headers):
+    setting = client.put(
+        '/api/v1/settings/blueprints',
+        headers=headers,
+        json={'auto_approve_for_executors': False},
+    )
+    assert setting.status_code == 200, setting.text
     credential, provider = infrastructure(client, headers)
     created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
         credential, provider, requires_approval=True,
@@ -204,3 +210,38 @@ def test_failed_workflow_rollback_destroy_marks_deployment_destroyed(client, hea
         assert deployment.active_job_id is None
         assert deployment.destroyed_at is not None
     assert operations == ['terraform.apply', 'terraform.destroy']
+
+
+def test_blueprint_auto_approval_for_executor_is_default(client, headers):
+    credential, provider = infrastructure(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
+        credential, provider, requires_approval=True,
+    ))
+    assert created.status_code == 201, created.text
+
+    permissions = [
+        'blueprints.read', 'blueprints.execute',
+        'deployments.create', 'jobs.execute', 'terraform.execute',
+    ]
+    _, operator = new_user(
+        client,
+        headers,
+        username='auto-approval-operator',
+        permissions=permissions,
+    )
+
+    requested = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(operator),
+        json={},
+    )
+    assert requested.status_code == 202, requested.text
+    assert requested.json()['job']['status'] == 'queued'
+    assert requested.json()['status'] == 'queued'
+
+    with session() as db:
+        job = db.get(Job, requested.json()['job']['id'])
+        approval = (job.payload or {}).get('_approval') or {}
+        assert approval['status'] == 'approved'
+        assert approval['approved_by'] == job.created_by
+        assert approval['automatic'] is True

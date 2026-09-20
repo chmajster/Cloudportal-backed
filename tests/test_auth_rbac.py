@@ -272,3 +272,24 @@ def test_password_change_invalidates_outstanding_reset_token(client, headers):
     assert response.status_code == 200, response.text
     assert client.post('/api/v1/auth/reset-password', json={'token': reset, 'password': 'reset-password-5678'}).status_code == 400
     assert client.post('/api/v1/auth/login', json={'username': 'viewer', 'password': 'changed-password-1234'}).status_code == 200
+
+
+def test_blueprint_execution_global_settings(client, headers):
+    defaults = client.get('/api/v1/settings/blueprints', headers=headers)
+    assert defaults.status_code == 200, defaults.text
+    assert defaults.json() == {'auto_approve_for_executors': True}
+
+    disabled = client.put(
+        '/api/v1/settings/blueprints',
+        headers=headers,
+        json={'auto_approve_for_executors': False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json() == {'auto_approve_for_executors': False}
+
+    reloaded = client.get('/api/v1/settings/blueprints', headers=headers)
+    assert reloaded.json() == {'auto_approve_for_executors': False}
+
+    with session() as db:
+        raw = db.get(Setting, 'blueprint_execution').value
+        assert raw == {'auto_approve_for_executors': False}

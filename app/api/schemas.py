@@ -85,6 +85,10 @@ class VMClassificationSettingsInput(Input):
         return result
 
 
+class BlueprintExecutionSettingsInput(Input):
+    auto_approve_for_executors: bool = True
+
+
 class LDAPSettingsInput(Input):
     enabled: bool = False
     url: Annotated[str, Field(min_length=8, max_length=2048)] = 'ldap://localhost:389'
