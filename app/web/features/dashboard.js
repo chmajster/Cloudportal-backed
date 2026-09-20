@@ -131,8 +131,9 @@ async function dashboardView() {
   if (allowed('blueprints.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')) {
     actions.push(dashboardAction('workflow', 'Utwórz Blueprint', 'blueprints', 'blueprints.create'));
   }
-  if (allowed('deployments.create') && allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read')) {
-    actions.push(dashboardAction('rocket', 'Nowe wdrożenie', 'deployments', 'deployments.create'));
+  if (allowed('deployments.read') && allowed('deployments.create')
+      && allowed('blueprints.read') && allowed('blueprints.execute') && allowed('terraform.read')) {
+    actions.push(dashboardAction('box', 'Produkty', 'deployments'));
   }
 
   const deploymentPanel = node('section', { class: 'panel dashboard-panel' },

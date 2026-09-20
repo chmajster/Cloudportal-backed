@@ -130,6 +130,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('blueprints.create'" in script
     assert "registerCommand('deployments.create'" in script
     assert "registerCommand('deployments.open'" in script
+    assert "api('/blueprints?available=true&limit=200')" in script
+    assert "label: 'Produkty'" in script
+    assert "button('Utwórz VM'" in script
+    assert 'Brak gotowych Blueprintów.' in script
+    assert '.product-grid' in stylesheet
+    assert '.product-card' in stylesheet
     assert 'function navigationGroup(' in core
     assert 'function navigationGroupRank(' in core
     assert "group === 'Operacje' ? 1" in core
