@@ -58,6 +58,33 @@ def test_vm_classification_requires_settings_permissions(client, headers):
     }).status_code == 403
 
 
+def test_blueprint_execution_can_read_vm_classification_without_settings_permission(client, headers):
+    from conftest import new_user
+
+    client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
+        'apmids': ['IAASTEAM', 'CRM'],
+    })
+
+    _user, executor = new_user(
+        client,
+        headers,
+        username='blueprint-executor',
+        permissions=['blueprints.execute'],
+    )
+    response = client.get('/api/v1/vm-classification/options', headers=executor)
+    assert response.status_code == 200, response.text
+    assert response.json()['apmids'] == ['IAASTEAM', 'CRM']
+
+    _reader, reader = new_user(
+        client,
+        headers,
+        username='blueprint-reader',
+        permissions=['blueprints.read'],
+    )
+    assert client.get('/api/v1/vm-classification/options', headers=reader).status_code == 403
+
+
 def test_proxmox_vm_tags_accept_apmid_environment_code():
     from app.api.schemas import VMVariables
 
