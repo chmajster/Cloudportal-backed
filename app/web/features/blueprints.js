@@ -124,7 +124,10 @@ function blueprintWorkflow(options) {
   add('cloud_init', 'cloud_init');
   if (options.tags) add('tags', 'set_tags');
   add('apply', 'terraform_apply');
-  if (options.waitAgent || options.ansible) add('agent', 'wait_for_agent');
+  if (options.waitAgent || options.ansible) {
+    add('agent', 'wait_for_agent');
+    add('guest_ip', 'wait_for_ip');
+  }
   if (options.ansible) add('ansible', 'run_ansible_playbook');
   return steps;
 }
@@ -861,7 +864,7 @@ async function blueprintForm(item = null) {
     };
 
     const workflowTypes = [
-      ['generate_hostname', 'Wygeneruj hostname'], ['allocate_ip', 'Przydziel IP'], ['release_ip', 'Zwolnij IP'],
+      ['generate_hostname', 'Wygeneruj hostname'], ['allocate_ip', 'Przydziel IP'],
       ['create_vm', 'Utwórz VM'], ['clone_vm', 'Sklonuj VM'], ['configure_vm', 'Skonfiguruj VM'],
       ['cloud_init', 'Cloud-init'], ['start_vm', 'Uruchom VM'], ['wait_for_vm', 'Czekaj na VM'],
       ['wait_for_agent', 'Czekaj na guest agent'], ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
