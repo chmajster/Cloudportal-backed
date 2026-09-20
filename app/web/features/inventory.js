@@ -146,10 +146,10 @@ async function showProxmoxTask(item, result, title) {
       node('summary', { text: 'Identyfikator zadania' }),
       node('div', { class: 'secret-box mono', text: String(result.task) })));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-  if (!dom.modal.open) dom.modal.showModal();
+  if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) dom.modal.showModal();
 
   const poll = async () => {
-    if (nonce !== state.taskPollNonce || !dom.modal.open) return;
+    if (nonce !== state.taskPollNonce || !(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) return;
     try {
       const task = await api(`/providers/${item.provider_id}/tasks/${encodeURIComponent(item.node)}/${encodeURIComponent(String(result.task))}`);
       const stopped = task.status === 'stopped' || Boolean(task.exitstatus);
@@ -593,7 +593,6 @@ function restoreVmFromBackup(item, backup) {
 
 async function showVmConsole(item) {
   try {
-    closeModal();
     const result = await api(`${vmBase(item)}/console`, { method: 'POST' });
     if (result.mode !== 'novnc' || !result.rfb_module?.startsWith('/api/v1/') || !result.ws_path?.startsWith('/api/v1/')) {
       throw new Error('Backend nie zwrócił poprawnej sesji noVNC.');
@@ -630,7 +629,7 @@ async function showVmConsole(item) {
     });
   } catch (error) {
     state.consoleRfb = null;
-    if (dom.modal.open) closeModal();
+    if (typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open) closeModal();
     toast(error.message, 'error');
   }
 }

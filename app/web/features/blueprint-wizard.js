@@ -1264,8 +1264,8 @@
             node('h3', { text: 'Blueprint został utworzony i jest gotowy do użycia.' }),
             node('p', { class: 'muted', text: created.name + ' · v' + created.version }),
             node('div', { class: 'blueprint-wizard-inline-actions' },
-              button('Zamknij', () => { closeModal(); navigate('blueprints'); }, 'primary'),
-              allowed('blueprints.execute') ? button('Przejdź do Blueprintów', () => { closeModal(); navigate('blueprints'); }) : null));
+              button('Zamknij', () => navigate('blueprints'), 'primary'),
+              allowed('blueprints.execute') ? button('Przejdź do Blueprintów', () => navigate('blueprints')) : null));
           footerRoot.replaceChildren();
           state.submitting = false;
         } catch (error) {

@@ -45,7 +45,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert manifest['shared'] == sorted(manifest['shared'])
     assert manifest['scripts'] == sorted(manifest['scripts'])
     assert manifest['styles'] == sorted(manifest['styles'])
-    assert manifest['shared'] == ['shared/icons.js', 'shared/platforms.js']
+    assert manifest['shared'] == ['shared/icons.js', 'shared/page-surfaces.js', 'shared/platforms.js']
     assert {
         'features/dashboard.js',
         'features/identity.js',
@@ -77,6 +77,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/dashboard.css',
         'styles/features/tools.css',
         'styles/features/settings.css',
+        'styles/features/page-surfaces.css',
         'styles/features/updates.css',
     } <= set(manifest['styles'])
 
@@ -118,6 +119,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function registerView(' in core
     assert 'function registerCommand(' in core
     assert 'function registerExtension(' in core
+    assert "split('/page/')[0]" in core
+    assert 'dismissCloudportalSurfaceForNavigation' in core
+    assert 'closeCloudportalSurface' in core
+    assert 'function modalSurfaceOpen()' in script
+    assert 'dom.modal.showModal = renderSurface' in script
+    assert 'history.pushState(' in script
+    assert 'cloudportalPageSurface' in script
+    assert "window.addEventListener('popstate'" in script
+    assert '.page-surface-navigation' in stylesheet
+    assert '.page-surface .modal-shell' in stylesheet
+    assert '.page-surface .modal-actions' in stylesheet
     assert 'function emitUiEvent(' in core
     assert 'const routes = [];' in core
     assert 'const views = Object.create(null);' in core

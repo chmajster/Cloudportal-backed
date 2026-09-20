@@ -968,6 +968,7 @@ function stopTaskPolling() {
   state.taskPollNonce += 1;
 }
 function closeModal() {
+  if (typeof window.closeCloudportalSurface === 'function' && window.closeCloudportalSurface()) return;
   stopTaskPolling();
   if (state.consoleRfb) {
     try { state.consoleRfb.disconnect(); } catch { /* Session may already be disconnected. */ }
@@ -1099,6 +1100,8 @@ function renderNavigation() {
 }
 
 async function navigate(view) {
+  view = typeof window.surfaceBaseView === 'function' ? window.surfaceBaseView(view) : String(view || '').split('/page/')[0];
+  if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
   const available = routes.filter(item => allowed(item.permission) && (!state.identity.user.must_change_password || item.id === 'account'));
   const route = available.find(item => item.id === view) || available[0];
   state.view = route.id;

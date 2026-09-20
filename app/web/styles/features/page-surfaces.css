@@ -1,0 +1,141 @@
+.page-surface {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.page-surface-navigation {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.page-surface-parent {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-surface .modal-shell {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: 0 auto;
+  overflow: visible;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
+}
+
+.page-surface .modal-shell > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-surface .modal-shell > header > div {
+  min-width: 0;
+}
+
+.page-surface .modal-shell > header h2 {
+  margin: 4px 0 0;
+  font-size: 1.28rem;
+  letter-spacing: -.025em;
+}
+
+.page-surface .modal-shell > header .eyebrow {
+  margin: 0;
+}
+
+.page-surface #modal-close {
+  display: none;
+}
+
+.page-surface .modal-body {
+  max-height: none;
+  overflow: visible;
+  padding: 24px;
+}
+
+.page-surface .modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.page-surface .modal-actions:empty {
+  display: none;
+}
+
+.page-surface .modal-body > form,
+.page-surface .modal-body > .stack {
+  width: 100%;
+}
+
+.page-surface-wide .modal-shell,
+.page-surface-console .modal-shell {
+  max-width: none;
+}
+
+.page-surface-console .modal-body {
+  padding: 16px;
+}
+
+.page-surface-console .novnc-screen,
+.page-surface-console .log-output {
+  min-height: min(68vh, 760px);
+}
+
+@media (min-width: 1180px) {
+  .page-surface:not(.page-surface-wide):not(.page-surface-console) .modal-shell {
+    max-width: 1080px;
+  }
+}
+
+@media (max-width: 760px) {
+  .page-surface {
+    gap: 10px;
+  }
+
+  .page-surface-navigation {
+    min-height: 38px;
+  }
+
+  .page-surface .modal-shell {
+    border-radius: 15px;
+  }
+
+  .page-surface .modal-shell > header {
+    padding: 18px 16px;
+  }
+
+  .page-surface .modal-body {
+    padding: 18px 16px;
+  }
+
+  .page-surface .modal-actions {
+    padding: 13px 16px;
+  }
+
+  .page-surface .modal-actions .button {
+    flex: 1 1 auto;
+  }
+}
