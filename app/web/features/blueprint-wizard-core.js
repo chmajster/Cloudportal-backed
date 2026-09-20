@@ -245,6 +245,9 @@
         tags.push('apmid-' + apmid, 'env-' + environment, apmid + '.' + environment);
       }
       const uniqueTags = [...new Set(tags)];
+      if (state.waitAgent && !state.cloudInitSnippetStorage) {
+        throw new Error('QEMU Guest Agent wymaga storage obsługującego snippets na wybranym node.');
+      }
       variables = {
         name: state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName,
         node: state.node,
