@@ -39,7 +39,6 @@ def provider_retry_ready(job):
 
 
 CANCELLATION_GRACE_SECONDS = 10
-JOB_HEARTBEAT_STALE_SECONDS = 120
 
 
 def reconcile_cancelled_jobs(db):
@@ -147,12 +146,11 @@ def dispatch_once():
         reconcile_cancelled_jobs(db)
         reconcile_deployment_job_statuses(db)
         reconcile_persisted_inventory(db)
-        # A worker updates heartbeat at least every few seconds while Terraform/Ansible is alive.
-        # Do not leave a dead worker's deployment in "running" for the full execution timeout.
+        # Fail uncertain interrupted executions conservatively instead of risking a duplicate apply.
         stale = db.scalars(select(Job).where(
             Job.status == 'running',
             Job.cancel_requested.is_(False),
-            Job.heartbeat_at < now() - timedelta(seconds=JOB_HEARTBEAT_STALE_SECONDS),
+            Job.heartbeat_at < now() - timedelta(seconds=settings().execution_timeout + 180),
         ).with_for_update(skip_locked=True)).all()
         for job in stale:
             job.status = 'failed'
