@@ -265,7 +265,9 @@ async function myResourcesView() {
     item.active_job_id || ['queued', 'running', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
   if (provisioningActive) {
     myResourcesPollTimer = window.setTimeout(() => {
-      if (state.view === 'my-resources') myResourcesView().catch(error => toast(error.message, 'error'));
+      if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
+        myResourcesView().catch(error => toast(error.message, 'error'));
+      }
     }, 2000);
   }
 }
@@ -1138,7 +1140,7 @@ async function showJobLogs(job) {
   const terminal = value => ['successful', 'failed', 'cancelled'].includes(value);
 
   const poll = async () => {
-    if (nonce !== jobLogPollNonce || !dom.modal.open) return;
+    if (nonce !== jobLogPollNonce || !dom.modal.open || !logOutput.isConnected) return;
     try {
       const [current, logs] = await Promise.all([
         api(`/jobs/${job.id}`),
