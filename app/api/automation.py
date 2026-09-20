@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
@@ -342,13 +343,32 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                     message='workflow.approval.auto: blueprints.execute uprawnia do automatycznej akceptacji',
                 ))
             else:
+                has_runtime_approval = any(
+                    str(step.get('type')) == 'approval' for step in (row.workflow or [])
+                )
                 payload['_approval'] = {'status': 'pending'}
-                job.status = 'waiting_approval'
-                deployment.status = 'waiting_approval'
-                db.add(JobLog(
-                    job_id=job.id,
-                    message='workflow.approval.pending: oczekiwanie na zatwierdzenie',
-                ))
+                if has_runtime_approval:
+                    db.add(JobLog(
+                        job_id=job.id,
+                        message='workflow.approval.deferred: approval nastąpi w zadanym kroku DAG',
+                    ))
+                else:
+                    expires_at = now() + timedelta(
+                        hours=approval_settings['approval_timeout_hours']
+                    )
+                    payload['_approval'].update({
+                        'requested_at': now().isoformat(),
+                        'expires_at': expires_at.isoformat(),
+                    })
+                    job.status = 'waiting_approval'
+                    deployment.status = 'waiting_approval'
+                    db.add(JobLog(
+                        job_id=job.id,
+                        message=(
+                            'workflow.approval.pending: oczekiwanie na zatwierdzenie; '
+                            f'expires_at={expires_at.isoformat()}'
+                        ),
+                    ))
             job.payload = payload
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
