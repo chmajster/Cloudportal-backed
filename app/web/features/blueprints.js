@@ -252,9 +252,11 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       credentials.filter(value => ['ssh', 'winrm'].includes(value.type)).map(value => ({
         value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')',
       })), deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' });
-    const guestCredentialChoices = credentials.filter(value => value.type === 'ssh').map(value => ({
-      value: value.id, label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
-    }));
+    const guestCredentialChoices = credentials
+      .filter(value => value.type === 'ssh' && value.supports_cloud_init_ssh_key === true)
+      .map(value => ({
+        value: value.id, label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
+      }));
     const guestCredentialField = selectField('Credential ustawiany na VM', 'guest_credential_id',
       [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...guestCredentialChoices],
       deployment.guest_credential_id || '', { wide: true,
