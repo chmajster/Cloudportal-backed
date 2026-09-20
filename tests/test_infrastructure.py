@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.database import session
 from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
 from app.security.core import decrypt_secret
-from app.executors.base import ExecutionFailed
+from app.executors.base import Cancelled, ExecutionFailed, run_process
 from app.executors.terraform import TerraformExecutor, workspace_lock
 from app.jobs.worker import execute
 from app.jobs.queue import reconcile_cancelled_jobs
@@ -376,6 +376,35 @@ def test_parallel_idempotency_postgresql(client,headers):
         responses=list(pool.map(lambda _:client.post('/api/v1/deployments',headers=auth,json=payload),range(2)))
     assert [r.status_code for r in responses]==[202,202],[r.text for r in responses]
     assert len({r.json()['id'] for r in responses})==1
+
+
+def test_run_process_terminates_child_when_context_is_cancelled(tmp_path):
+    import sys
+    import time
+    import pytest
+
+    class Context:
+        calls = 0
+        lines = []
+
+        def check(self):
+            self.calls += 1
+            if self.calls >= 2:
+                raise Cancelled('Cancellation requested')
+
+        def log(self, line):
+            self.lines.append(line)
+
+    context = Context()
+    started = time.monotonic()
+    with pytest.raises(Cancelled):
+        run_process(
+            [sys.executable, '-c', 'import time; time.sleep(30)'],
+            tmp_path,
+            {'PATH': '/usr/bin:/bin'},
+            context,
+        )
+    assert time.monotonic() - started < 5
 
 
 def test_raw_process_failure_and_redaction(tmp_path):
