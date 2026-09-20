@@ -483,6 +483,36 @@ def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='
     return job_public(find(db, Job, id))
 
 
+@router.post('/jobs/{id}/approve', response_model=JobOutput)
+def approve_job(id: str, request: Request, actor=Depends(require('blueprints.approve')),
+                db=Depends(get_db, scope='function')):
+    job = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    if job.status != 'waiting_approval':
+        raise HTTPException(409, 'Job is not waiting for approval')
+    blueprint = (job.payload or {}).get('blueprint') or {}
+    if not blueprint.get('requires_approval'):
+        raise HTTPException(409, 'Job does not require Blueprint approval')
+
+    payload = dict(job.payload or {})
+    payload['_approval'] = {
+        'status': 'approved',
+        'approved_by': actor.user_id,
+        'approved_at': now().isoformat(),
+    }
+    job.payload = payload
+    job.status = 'queued'
+    if job.deployment_id:
+        deployment = db.get(Deployment, job.deployment_id)
+        if deployment is not None and deployment.active_job_id == job.id:
+            deployment.status = 'queued'
+    db.add(JobLog(job_id=job.id, message=f'workflow.approval.approved: user={actor.user_id}'))
+    audit(db, request, 'blueprint.execution.approved', 'jobs', job.id)
+    db.flush()
+    return job_public(job)
+
+
 @router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)
 def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
     original = db.scalar(select(Job).where(Job.id == id).with_for_update())
@@ -546,7 +576,7 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
     j.cancel_requested = True
     db.add(JobLog(job_id=j.id, message='job.cancel_requested: żądanie anulowania przyjęte'))
 
-    if j.status == 'queued':
+    if j.status in {'queued', 'waiting_approval'}:
         j.status = 'cancelled'
         j.error = 'Cancellation requested before execution'
         if j.deployment_id:
