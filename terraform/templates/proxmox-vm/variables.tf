@@ -25,7 +25,7 @@ variable "install_qemu_guest_agent" {
 }
 variable "cloud_init_snippet_storage" {
   type    = string
-  default = "local"
+  default = null
 }
 variable "ipv4_address" {
   type    = string
