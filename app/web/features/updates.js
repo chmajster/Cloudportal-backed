@@ -303,6 +303,39 @@ function updateEventTimeline(status) {
   ));
 }
 
+function captureTechnicalLogView(container) {
+  const panel = container.querySelector('.update-log-panel');
+  const log = panel?.querySelector('.update-log');
+  if (!panel || !log) return null;
+
+  const distanceFromBottom = Math.max(0, log.scrollHeight - log.scrollTop - log.clientHeight);
+  return {
+    open: panel.open,
+    scrollTop: log.scrollTop,
+    atBottom: distanceFromBottom <= 24,
+  };
+}
+
+function restoreTechnicalLogView(container, previous) {
+  const panel = container.querySelector('.update-log-panel');
+  const log = panel?.querySelector('.update-log');
+  if (!panel || !log) return;
+
+  if (previous) {
+    panel.open = previous.open;
+    if (previous.atBottom) {
+      log.scrollTop = log.scrollHeight;
+    } else {
+      const maxScrollTop = Math.max(0, log.scrollHeight - log.clientHeight);
+      log.scrollTop = Math.min(previous.scrollTop, maxScrollTop);
+    }
+    return;
+  }
+
+  // Pierwsze renderowanie: pokaż najnowsze wpisy zamiast początku logu.
+  log.scrollTop = log.scrollHeight;
+}
+
 function technicalLog(status) {
   const output = (status.output || []).slice(-120).join('\n');
   const expanded = ['running', 'failed'].includes(status.status);
@@ -492,9 +525,11 @@ function statusPanel(status, settings, container) {
 }
 
 async function renderLiveStatus(container, settings) {
+  const logView = captureTechnicalLogView(container);
   try {
     const status = normalizedUpdateStatus(await resilientUpdateStatus());
     container.replaceChildren(statusPanel(status, settings, container));
+    restoreTechnicalLogView(container, logView);
   } catch (error) {
     container.replaceChildren(node('section', { class: 'panel update-unavailable' },
       node('div', { class: 'update-status-orb', 'aria-hidden': 'true' }, node('span', { text: '!' })),
