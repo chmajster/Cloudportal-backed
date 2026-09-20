@@ -136,7 +136,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "label: 'Moje zasoby'" in script
     assert "id: 'my-resources'" in script
     assert "function productResourceTabs(" in script
-    assert "function myResourcesView()" in script
+    assert "function myResourcesView(repairInventory = true)" in script
+    assert "api('/inventory/reconcile', { method: 'POST', body: {} })" in script
+    assert "Odbudowano inventory dla " in script
     assert "function resourceSummaryCard(" in script
     assert "function resourceEmptyState(" in script
     assert "function resourceSection(" in script
@@ -147,6 +149,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "document.getElementById(sectionId)?.scrollIntoView" in script
     assert "button('Utwórz VM'" in script
     assert "button('Zarządzaj VM'" in script
+    assert "button('Anuluj'" in script
+    assert "button('Anuluj zadanie'" in script
+    assert "Anulowanie rozpoczęte." in script
+    assert "item.status === 'cancelling'" in script
     assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
     assert "runCommand('inventory.openVm', vm, 'overview', 'my-resources')" in script
     assert "Wdrożenia i operacje" in script
@@ -169,6 +175,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'aria-current': exact ? 'page' : null" in core
     assert "appIcon('search')" in core
     assert "appIcon('refresh')" in core
+    assert "cancelling: 'Anulowanie…'" in core
+    assert "'cancelling'" in core
     assert len(bootstrap.splitlines()) < 120
     assert 'async function usersView(' not in bootstrap
     assert 'async function blueprintsView(' not in bootstrap
