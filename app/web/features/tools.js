@@ -353,8 +353,200 @@ function ansibleHostEntryView() {
   syncConnection();
 }
 
+
+function apmidTool(config) {
+  const apmids = config?.apmids || [];
+  return node('article', { class: 'panel tool-card' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('list-check')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
+        node('h2', { text: 'APMID' }),
+        node('p', { class: 'muted', text: 'Zarządzaj listą APMID używaną przez kreator VM i automatyczne tagi Proxmox.' })),
+      badge(apmids.length ? String(apmids.length) + ' pozycji' : 'Pusta lista', apmids.length ? 'ok' : 'warning')),
+    node('div', { class: 'tool-meta-grid' },
+      toolMeta('Liczba APMID', String(apmids.length)),
+      toolMeta('Przykład', apmids[0] || '—', true)),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot ' + (apmids.length ? 'ok' : 'warn') }),
+        apmids.length ? 'Lista gotowa do użycia' : 'Dodaj pierwszy APMID'),
+      button('Otwórz listę APMID', () => navigate('apmid'), 'primary'))
+  );
+}
+
+function normalizeApmid(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function validateApmid(value) {
+  return /^[A-Z0-9][A-Z0-9_-]{0,62}$/.test(value);
+}
+
+async function saveApmids(config, apmids, message) {
+  const normalized = apmids.map(normalizeApmid).filter(Boolean);
+  normalized.forEach(value => {
+    if (!validateApmid(value)) {
+      throw new Error('APMID może zawierać litery, cyfry, _ oraz -, maksymalnie 63 znaki.');
+    }
+  });
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error('Lista APMID zawiera duplikaty.');
+  }
+
+  await api('/settings/vm-classification', {
+    method: 'PUT',
+    body: {
+      environments: {
+        test: config.environments?.test !== false,
+        dev: config.environments?.dev !== false,
+        nonprod: config.environments?.nonprod !== false,
+        prod: config.environments?.prod !== false,
+      },
+      apmids: normalized,
+    },
+  });
+  toast(message);
+  await apmidView();
+}
+
+function apmidInputForm(initialValue, submitLabel, onSubmit, onCancel) {
+  const input = node('input', {
+    type: 'text',
+    name: 'apmid',
+    value: initialValue || '',
+    placeholder: 'np. IAASTEAM',
+    maxlength: 63,
+    autocomplete: 'off',
+    spellcheck: 'false',
+    required: true,
+  });
+  const form = node('form', { class: 'apmid-inline-form' },
+    input,
+    node('div', { class: 'apmid-inline-actions' },
+      button('Anuluj', onCancel, 'ghost'),
+      node('button', { class: 'button primary', type: 'submit', text: submitLabel })));
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      const value = normalizeApmid(input.value);
+      if (!validateApmid(value)) {
+        throw new Error('APMID może zawierać litery, cyfry, _ oraz -, maksymalnie 63 znaki.');
+      }
+      await onSubmit(value);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+
+  requestAnimationFrame(() => input.focus());
+  return form;
+}
+
+async function apmidView() {
+  const config = await api('/settings/vm-classification');
+  const canEdit = allowed('settings.update');
+  const apmids = [...(config.apmids || [])];
+  const list = node('div', { class: 'apmid-list' });
+  const addArea = node('div', { class: 'apmid-add-area', hidden: true });
+
+  const showAddForm = () => {
+    addArea.hidden = false;
+    addArea.replaceChildren(apmidInputForm('', 'Dodaj APMID', async value => {
+      if (apmids.includes(value)) throw new Error('APMID „' + value + '” już istnieje.');
+      await saveApmids(config, [...apmids, value], 'APMID dodany.');
+    }, () => {
+      addArea.hidden = true;
+      addArea.replaceChildren();
+    }));
+  };
+
+  const renderList = () => {
+    list.replaceChildren();
+    if (!apmids.length) {
+      list.append(node('div', { class: 'apmid-empty' },
+        node('strong', { text: 'Brak APMID' }),
+        node('span', { class: 'muted', text: 'Dodaj pierwszy APMID, aby był dostępny w kreatorze VM.' })));
+      return;
+    }
+
+    apmids.forEach((value, index) => {
+      const valueBox = node('div', { class: 'apmid-list-value' },
+        node('strong', { class: 'mono', text: value }),
+        node('small', { class: 'muted', text: 'Dostępny w kreatorze VM' }));
+      const actions = node('div', { class: 'apmid-list-actions' });
+
+      const row = node('div', { class: 'apmid-list-row' },
+        node('div', { class: 'apmid-list-index mono', text: String(index + 1) }),
+        valueBox,
+        actions);
+
+      if (canEdit) {
+        actions.append(
+          button('Edytuj', () => {
+            valueBox.replaceChildren(apmidInputForm(value, 'Zapisz', async nextValue => {
+              const duplicate = apmids.some((item, itemIndex) => itemIndex !== index && item === nextValue);
+              if (duplicate) throw new Error('APMID „' + nextValue + '” już istnieje.');
+              const next = [...apmids];
+              next[index] = nextValue;
+              await saveApmids(config, next, 'APMID zaktualizowany.');
+            }, () => renderList()));
+          }, 'ghost'),
+          button('Usuń', () => confirmAction(
+            'Usuń APMID',
+            'Usunąć APMID „' + value + '” z listy?',
+            async () => {
+              await saveApmids(config, apmids.filter((_, itemIndex) => itemIndex !== index), 'APMID usunięty.');
+            },
+            'danger'
+          ), 'ghost')
+        );
+      }
+
+      list.append(row);
+    });
+  };
+
+  renderList();
+
+  const panel = node('section', { class: 'panel apmid-list-panel' },
+    node('div', { class: 'apmid-list-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Lista APMID' }),
+        node('h2', { text: 'APMID' }),
+        node('p', { class: 'muted', text: 'Dodawaj APMID pojedynczo. Istniejące pozycje możesz edytować lub usuwać.' })),
+      canEdit ? button('Dodaj APMID', showAddForm, 'primary') : badge('Tylko odczyt', 'info')),
+    addArea,
+    list
+  );
+
+  dom.content.replaceChildren(
+    heading('Zarządzanie listą APMID.', [button('← Narzędzia', () => navigate('tools'))]),
+    panel
+  );
+}
+
+
 async function toolsView() {
   const cards = [];
+
+  if (allowed('settings.read')) {
+    try {
+      const vmClassification = await api('/settings/vm-classification');
+      cards.push(apmidTool(vmClassification));
+    } catch (error) {
+      cards.push(node('article', { class: 'panel tool-card' },
+        node('div', { class: 'tool-card-head' },
+          node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('list-check')),
+          node('div', { class: 'tool-title' },
+            node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
+            node('h2', { text: 'APMID' }),
+            node('p', { class: 'muted', text: 'Lista identyfikatorów aplikacji używanych przez kreator VM.' })),
+          badge('Niedostępny', 'warning')),
+        node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać listy APMID.' })));
+    }
+  }
 
   if (allowed('hostnames.read')) {
     try {
@@ -404,6 +596,15 @@ async function toolsView() {
 }
 
 registerView({ id: 'tools', label: 'Narzędzia', iconName: 'wrench', order: 155 }, toolsView);
+registerView({
+  id: 'apmid',
+  label: 'APMID',
+  iconName: 'list-check',
+  navigation: false,
+  navigationParent: 'tools',
+  permission: 'settings.read',
+  order: 156,
+}, apmidView);
 registerView({
   id: 'ansible-host-entry',
   label: 'Generator hosta Ansible',
