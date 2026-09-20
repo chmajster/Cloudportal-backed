@@ -1,5 +1,6 @@
 import json
 import uuid
+from types import SimpleNamespace
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
