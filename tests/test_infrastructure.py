@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 from sqlalchemy import select
 from app.config import settings
 from app.database import session
