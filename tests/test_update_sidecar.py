@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import socket
@@ -199,3 +200,78 @@ def test_update_sidecar_recovers_complete_state_as_success(tmp_path):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=3)
+
+
+def load_update_service_module(tmp_path, monkeypatch):
+    config = tmp_path / 'module-etc'
+    data = tmp_path / 'module-data'
+    app_root = tmp_path / 'module-app'
+    config.mkdir()
+    data.mkdir()
+    app_root.mkdir()
+    monkeypatch.setenv('CP_UPDATER_CONFIG_DIR', str(config))
+    monkeypatch.setenv('CP_UPDATER_DATA_DIR', str(data))
+    monkeypatch.setenv('CP_UPDATER_APP_ROOT', str(app_root))
+    spec = importlib.util.spec_from_file_location(
+        'cloudportal_update_service_test',
+        ROOT / 'scripts' / 'update-service.py',
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_runtime_state_unlocks_orphaned_running_state(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    updater.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    updater.atomic_json(updater.STATE_FILE, {
+        **updater.default_state(),
+        'status': 'running',
+        'phase': 'backup',
+        'progress': 10,
+        'message': 'Tworzenie backupu.',
+        'started_at': updater.utcnow(),
+    })
+    updater.update_thread = None
+
+    state = updater.runtime_state()
+
+    assert state['operation_active'] is False
+    assert state['status'] == 'failed'
+    assert state['phase'] == 'interrupted'
+    assert 'nie jest już aktywny' in state['message']
+    assert state['finished_at']
+
+
+def test_run_update_ignores_stale_persisted_running_flag(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    updater.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    updater.atomic_json(updater.STATE_FILE, {
+        **updater.default_state(),
+        'status': 'running',
+        'phase': 'preflight',
+        'progress': 1,
+        'message': 'Stary stan.',
+    })
+    calls = []
+
+    def fake_check(ref, update_context=False):
+        calls.append((ref, update_context))
+        updater.save_state(
+            status='up_to_date',
+            phase='up_to_date',
+            progress=100,
+            message='Aktualny.',
+            update_available=False,
+            finished_at=updater.utcnow(),
+        )
+        return {'update_available': False}
+
+    monkeypatch.setattr(updater, 'check_remote', fake_check)
+    updater.run_update('main', automatic=False)
+
+    assert calls == [('main', True)]
+    state = updater.load_state()
+    assert state['status'] == 'up_to_date'
+    assert state['phase'] == 'up_to_date'

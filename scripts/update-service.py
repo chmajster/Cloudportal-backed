@@ -455,9 +455,9 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
         settings = load_settings()
         ref = validate_ref(ref or settings.get("ref", "main"))
         with lock:
-            current = load_state()
-            if current.get("status") == "running":
-                return
+            # In-memory thread ownership is the source of truth for concurrency.
+            # A persisted "running" state can survive an updater restart and must
+            # never block a new, legitimate update attempt.
             atomic_json(STATE_FILE, {
                 **default_state(),
                 "status": "running",
@@ -528,10 +528,18 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
             update_thread = None
 
 
+def update_operation_active() -> bool:
+    global update_thread
+    with lock:
+        if update_thread is not None and not update_thread.is_alive():
+            update_thread = None
+        return bool(update_thread)
+
+
 def start_update(ref: str | None = None, automatic: bool = False) -> bool:
     global update_thread
     with lock:
-        if update_thread and update_thread.is_alive():
+        if update_operation_active():
             return False
         update_thread = threading.Thread(target=run_update, args=(ref, automatic), daemon=True, name="cloudportal-update")
         update_thread.start()
@@ -540,8 +548,32 @@ def start_update(ref: str | None = None, automatic: bool = False) -> bool:
 
 def runtime_state() -> dict:
     state = load_state()
-    with lock:
-        active = bool(update_thread and update_thread.is_alive())
+    active = update_operation_active()
+
+    # Self-heal an orphaned persisted state. This can happen when the updater
+    # service is restarted or killed while state.json still says "running".
+    # The live thread, not the file, is authoritative.
+    if not active and state.get("status") == "running":
+        if state.get("phase") == "complete" and int(state.get("progress") or 0) >= 100:
+            finished = state.get("finished_at") or utcnow()
+            event(
+                "complete",
+                100,
+                "Aktualizacja zakończona pomyślnie.",
+                status="success",
+                update_available=False,
+                finished_at=finished,
+            )
+        else:
+            event(
+                "interrupted",
+                state.get("progress", 0),
+                "Poprzedni proces aktualizacji nie jest już aktywny. Stan został automatycznie odblokowany.",
+                status="failed",
+                finished_at=utcnow(),
+            )
+        state = load_state()
+
     state["operation_active"] = active
     if active and state.get("status") not in {"running", "failed", "success"}:
         state["status"] = "running"
@@ -567,9 +599,8 @@ def scheduler() -> None:
         settings = load_settings()
         if not settings.get("enabled"):
             continue
-        with lock:
-            if update_thread and update_thread.is_alive():
-                continue
+        if update_operation_active():
+            continue
         state = load_state()
         last = parse_time(state.get("last_check_at"))
         interval = max(1, min(168, int(settings.get("interval_hours", 24)))) * 3600
@@ -657,9 +688,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = self.body()
             if path == "/check":
-                with lock:
-                    active = bool(update_thread and update_thread.is_alive())
-                if active:
+                if update_operation_active():
                     state = runtime_state()
                     state["already_running"] = True
                     self.send_json(HTTPStatus.OK, state)

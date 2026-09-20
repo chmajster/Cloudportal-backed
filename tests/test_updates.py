@@ -73,6 +73,60 @@ def test_update_start_is_idempotent_when_sidecar_reports_existing_run(client, he
     assert response.json() == {'accepted': False, 'already_running': True}
 
 
+def test_update_start_retries_false_in_progress_when_sidecar_is_idle(client, headers, monkeypatch):
+    import app.api.updates as updates
+    from app.updates.service import UpdaterError
+
+    calls = []
+
+    def request(path, method='GET', payload=None):
+        calls.append((path, method))
+        if path == '/run' and sum(1 for item in calls if item[0] == '/run') == 1:
+            raise UpdaterError(409, 'Update already in progress')
+        if path == '/status':
+            return {
+                'status': 'update_available',
+                'phase': 'available',
+                'operation_active': False,
+            }
+        if path == '/run':
+            return {'accepted': True, 'already_running': False}
+        raise AssertionError((path, method, payload))
+
+    monkeypatch.setattr(updates, 'updater_request', request)
+    response = client.post('/api/v1/updates/run', headers=headers, json={})
+    assert response.status_code == 202
+    assert response.json() == {'accepted': True, 'already_running': False}
+    assert calls == [('/run', 'POST'), ('/status', 'GET'), ('/run', 'POST')]
+
+
+def test_update_start_does_not_retry_when_operation_is_really_active(client, headers, monkeypatch):
+    import app.api.updates as updates
+    from app.updates.service import UpdaterError
+
+    calls = []
+
+    def request(path, method='GET', payload=None):
+        calls.append((path, method))
+        if path == '/run':
+            raise UpdaterError(409, 'Update already in progress')
+        if path == '/status':
+            return {
+                'status': 'running',
+                'phase': 'install',
+                'operation_active': True,
+            }
+        raise AssertionError((path, method, payload))
+
+    monkeypatch.setattr(updates, 'updater_request', request)
+    response = client.post('/api/v1/updates/run', headers=headers, json={})
+    assert response.status_code == 202
+    assert response.json()['accepted'] is False
+    assert response.json()['already_running'] is True
+    assert response.json()['status']['operation_active'] is True
+    assert calls == [('/run', 'POST'), ('/status', 'GET')]
+
+
 def test_update_ref_validation(client, headers, monkeypatch):
     import app.api.updates as updates
 
