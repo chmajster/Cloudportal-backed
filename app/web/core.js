@@ -43,26 +43,22 @@ function registerView(route, handler) {
   routes.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   views[route.id] = handler;
 }
-
 function registerCommand(name, handler) {
   if (!name || typeof handler !== 'function') throw new Error('Invalid UI command registration');
   if (commands[name]) throw new Error('Duplicate UI command: ' + name);
   commands[name] = handler;
 }
-
 function hasCommand(name) { return typeof commands[name] === 'function'; }
 function runCommand(name, ...args) {
   if (!hasCommand(name)) throw new Error('UI command is not registered: ' + name);
   return commands[name](...args);
 }
-
 function registerExtension(name, initialize) {
   if (!name || typeof initialize !== 'function') throw new Error('Invalid UI extension registration');
   if (extensions.has(name)) throw new Error('Duplicate UI extension: ' + name);
   extensions.add(name);
   initialize();
 }
-
 function emitUiEvent(name, detail = {}) {
   document.dispatchEvent(new CustomEvent('cloudportal:' + name, { detail }));
 }
@@ -73,7 +69,6 @@ class ApiError extends Error {
     this.data = data;
   }
 }
-
 function node(tag, attributes = {}, ...children) {
   const element = document.createElement(tag);
   for (const [key, value] of Object.entries(attributes)) {
@@ -125,7 +120,6 @@ function friendlyApiText(value) {
     .replace(/^Input should be less than or equal to (.+)$/i, 'Wartość musi być mniejsza lub równa $1.');
   return message;
 }
-
 function errorMessage(data) {
   const detail = data && data.detail;
   if (Array.isArray(detail)) {
@@ -141,7 +135,6 @@ function errorMessage(data) {
   if (detail && typeof detail === 'object') return friendlyApiText(detail.message || JSON.stringify(detail));
   return 'Operacja nie powiodła się.';
 }
-
 function updateThemeControls() {
   const dark = document.documentElement.dataset.theme === 'dark';
   document.querySelectorAll('[data-theme-toggle]').forEach(control => {
@@ -152,7 +145,6 @@ function updateThemeControls() {
     control.setAttribute('aria-pressed', String(dark));
   });
 }
-
 function hydrateShellIcons() {
   const searchIcon = document.querySelector('#global-search-open .global-search-icon');
   if (searchIcon) searchIcon.replaceChildren(appIcon('search'));
@@ -161,18 +153,15 @@ function hydrateShellIcons() {
   const logout = document.querySelector('#logout');
   if (logout && !logout.querySelector('svg')) logout.prepend(appIcon('log-out', { className: 'button-icon' }));
 }
-
 function identityDisplayName(user = {}) {
   const full = [user.first_name, user.last_name].map(value => String(value || '').trim()).filter(Boolean).join(' ');
   return full || user.username || 'Użytkownik';
 }
-
 function identityInitials(user = {}) {
   const parts = [user.first_name, user.last_name].map(value => String(value || '').trim()).filter(Boolean);
   const source = parts.length ? parts : [user.username || 'U'];
   return source.slice(0, 2).map(value => value.charAt(0)).join('').toUpperCase();
 }
-
 function renderSidebarProfile() {
   if (!dom.sidebarProfile || !state.identity?.user) return;
   const user = state.identity.user;
@@ -190,7 +179,6 @@ function renderSidebarProfile() {
     node('span', { class: 'sidebar-profile-chevron', 'aria-hidden': 'true' }, appIcon('chevron-right')));
   dom.sidebarProfile.replaceChildren(profile);
 }
-
 function setTheme(theme, persist = true) {
   const selected = theme === 'dark' ? 'dark' : 'light';
   document.documentElement.dataset.theme = selected;
@@ -199,7 +187,6 @@ function setTheme(theme, persist = true) {
   }
   updateThemeControls();
 }
-
 function loadTheme() {
   let selected = 'light';
   try {
@@ -208,15 +195,12 @@ function loadTheme() {
   } catch { /* Use the light default when storage is unavailable. */ }
   setTheme(selected, false);
 }
-
 function toggleTheme() {
   setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 }
-
 function isDesktopSidebar() {
   return window.matchMedia('(min-width: 761px)').matches;
 }
-
 function updateSidebarToggleState() {
   if (isDesktopSidebar()) {
     const collapsed = dom.appView.classList.contains('sidebar-collapsed');
@@ -233,14 +217,12 @@ function updateSidebarToggleState() {
   dom.menuToggle.setAttribute('aria-label', label);
   dom.menuToggle.setAttribute('title', label);
 }
-
 function setMobileMenu(open) {
   const active = Boolean(open);
   dom.sidebar.classList.toggle('open', active);
   dom.appView.classList.toggle('menu-open', active);
   updateSidebarToggleState();
 }
-
 function setDesktopSidebarCollapsed(collapsed, persist = true) {
   const active = Boolean(collapsed);
   dom.appView.classList.toggle('sidebar-collapsed', active);
@@ -249,13 +231,11 @@ function setDesktopSidebarCollapsed(collapsed, persist = true) {
   }
   updateSidebarToggleState();
 }
-
 function loadSidebarState() {
   let collapsed = false;
   try { collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { /* Use expanded default. */ }
   setDesktopSidebarCollapsed(collapsed, false);
 }
-
 function toggleSidebar() {
   if (isDesktopSidebar()) {
     setMobileMenu(false);
@@ -264,17 +244,14 @@ function toggleSidebar() {
   }
   setMobileMenu(!dom.appView.classList.contains('menu-open'));
 }
-
 function loadSession() {
   try { state.session = JSON.parse(sessionStorage.getItem(SESSION_KEY)); }
   catch { state.session = null; }
 }
-
 function saveSession(session) {
   state.session = session;
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
 }
-
 function clearSession() {
   state.session = null;
   state.identity = null;
@@ -332,11 +309,9 @@ async function apiText(path, canRefresh = true) {
   }
   return response.text();
 }
-
 function allowed(permission) {
   return !permission || Boolean(state.identity?.permissions?.includes(permission));
 }
-
 function toast(message, type = '') {
   const item = node('div', {
     class: `toast ${type}`,
@@ -354,13 +329,11 @@ function toast(message, type = '') {
   dom.toastRegion.append(item);
   window.setTimeout(() => item.remove(), type === 'error' ? 12000 : 5000);
 }
-
 function formatDate(value) {
   if (!value) return '—';
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? String(value) : new Intl.DateTimeFormat('pl-PL', { dateStyle: 'short', timeStyle: 'short' }).format(date);
 }
-
 function toDateTimeLocal(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -368,12 +341,10 @@ function toDateTimeLocal(value) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 16);
 }
-
 function short(value, length = 12) {
   if (!value) return '—';
   return String(value).length > length ? `${String(value).slice(0, length)}…` : String(value);
 }
-
 function badge(text, kind = '') { return node('span', { class: `badge ${kind}`, text }); }
 function statusKind(status) {
   if (['ok', 'active', 'successful', 'configured'].includes(status)) return 'ok';
@@ -381,22 +352,17 @@ function statusKind(status) {
   if (['failed', 'locked', 'revoked', 'inactive'].includes(status)) return 'danger';
   return 'info';
 }
-
 function button(label, onClick, kind = 'ghost', disabled = false) { return node('button', { type: 'button', class: `button small ${kind}`, onClick, disabled }, label); }
-
 function heading(description, actions = []) {
   return node('div', { class: 'page-actions' }, node('p', { text: description }), node('div', { class: 'action-group' }, actions));
 }
-
 function loading() { dom.content.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner', 'aria-label': 'Ładowanie' }))); }
-
 function searchable(value) {
   return String(value ?? '')
     .toLocaleLowerCase('pl-PL')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '');
 }
-
 function tablePreferenceKey(columns) {
   const signature = [state.view, ...columns.map(column => column.label)].join('|');
   let hash = 2166136261;
@@ -406,7 +372,6 @@ function tablePreferenceKey(columns) {
   }
   return `cloudportal.console.table.${(hash >>> 0).toString(16)}`;
 }
-
 function readTablePreferences(key) {
   try {
     const value = JSON.parse(localStorage.getItem(key) || '{}');
@@ -415,11 +380,9 @@ function readTablePreferences(key) {
     return {};
   }
 }
-
 function writeTablePreferences(key, preferences) {
   try { localStorage.setItem(key, JSON.stringify(preferences)); } catch { /* Storage may be unavailable. */ }
 }
-
 function table(columns, rows, actions) {
   if (!rows.length) return node('div', { class: 'table-wrap' }, node('div', { class: 'empty', text: 'Brak danych do wyświetlenia.' }));
 
@@ -626,13 +589,11 @@ function table(columns, rows, actions) {
   apply();
   return wrapper;
 }
-
 function formFieldLabel(labelText, required = false) {
   return node('span', { class: 'field-label' },
     labelText,
     required ? node('span', { class: 'required-mark', 'aria-hidden': 'true', text: ' *' }) : null);
 }
-
 function field(labelText, name, options = {}) {
   const input = node(options.tag || 'input', {
     name, type: options.type || 'text', value: options.value ?? '', required: options.required,
@@ -645,7 +606,6 @@ function field(labelText, name, options = {}) {
   if (options.wide) label.classList.add('wide');
   return label;
 }
-
 function selectField(labelText, name, choices, value, options = {}) {
   const select = node('select', { name, required: options.required });
   if (options.placeholder) select.append(node('option', { value: '', text: options.placeholder }));
@@ -654,11 +614,9 @@ function selectField(labelText, name, choices, value, options = {}) {
   if (options.wide) label.classList.add('wide');
   return label;
 }
-
 function checkboxField(labelText, name, checked = false) {
   return node('label', { class: 'checkbox' }, node('input', { type: 'checkbox', name, checked }), labelText);
 }
-
 function multiCheckboxField(labelText, name, choices, selectedValues = [], options = {}) {
   const selected = new Set((selectedValues || []).map(value => String(value)));
   const grid = node('div', { class: 'choice-grid' });
@@ -671,7 +629,6 @@ function multiCheckboxField(labelText, name, choices, selectedValues = [], optio
   if (options.help) wrapper.append(node('span', { class: 'field-help', text: options.help }));
   return wrapper;
 }
-
 function formSection(title, description, ...children) {
   return node('section', { class: 'form-section wide' },
     node('div', { class: 'form-section-header' },
@@ -704,7 +661,6 @@ function statusLabel(value) {
   const key = String(value || '').toLowerCase();
   return STATUS_LABELS[key] || value || '—';
 }
-
 function operationLabel(value) {
   return OPERATION_LABELS[value] || value || '—';
 }
@@ -771,7 +727,6 @@ function permissionLabel(permission) {
   const readableAction = PERMISSION_ACTION_LABELS[action] || action || permission;
   return rest.length ? `${readableAction} · ${rest.join('.')}` : readableAction;
 }
-
 function permissionPicker(permissions, selectedValues = [], name = 'permission') {
   const selected = new Set((selectedValues || []).map(String));
   const grouped = new Map();
@@ -796,7 +751,6 @@ function permissionPicker(permissions, selectedValues = [], name = 'permission')
   });
   return wrapper;
 }
-
 function permissionSummary(permissions) {
   if (!permissions?.length) return node('p', { class: 'muted', text: 'Brak uprawnień.' });
   const grouped = new Map();
@@ -817,7 +771,6 @@ function permissionSummary(permissions) {
   });
   return wrapper;
 }
-
 function showPermissionSummary(title, permissions) {
   dom.modal.classList.remove('modal-console');
   dom.modal.classList.add('modal-wide');
@@ -827,7 +780,6 @@ function showPermissionSummary(title, permissions) {
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   if (!dom.modal.open) dom.modal.showModal();
 }
-
 function displayValue(value) {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'Tak' : 'Nie';
@@ -835,7 +787,6 @@ function displayValue(value) {
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
-
 function formatBytes(value) {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
@@ -846,7 +797,6 @@ function formatBytes(value) {
   do { amount /= 1024; unit += 1; } while (amount >= 1024 && unit < units.length - 1);
   return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
 }
-
 function formatDuration(value) {
   let seconds = Number(value);
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
@@ -931,15 +881,12 @@ function schemaVariant(spec = {}) {
   if (Array.isArray(spec.anyOf)) return spec.anyOf.find(item => item.type && item.type !== 'null') || spec.anyOf[0] || spec;
   return spec;
 }
-
 function schemaType(spec = {}) {
   return schemaVariant(spec).type || 'string';
 }
-
 function schemaEnum(spec = {}) {
   return spec.enum || schemaVariant(spec).enum || null;
 }
-
 function templateVariableField(name, spec, value, required = false, options = {}) {
   const base = schemaVariant(spec);
   const type = schemaType(spec);
@@ -978,7 +925,6 @@ function templateVariableField(name, spec, value, required = false, options = {}
   wrapper.dataset.templateVariable = name;
   return wrapper;
 }
-
 function renderTemplateVariables(container, template, values = {}) {
   const schema = template?.variables_schema || {};
   const properties = schema.properties || {};
@@ -991,7 +937,6 @@ function renderTemplateVariables(container, template, values = {}) {
     container.append(node('p', { class: 'muted wide', text: 'Ten szablon nie definiuje zmiennych konfiguracyjnych.' }));
   }
 }
-
 function readTemplateVariables(form, template) {
   const result = {};
   const schema = template?.variables_schema || {};
@@ -1017,13 +962,11 @@ function readTemplateVariables(form, template) {
   }
   return result;
 }
-
 function stopTaskPolling() {
   if (state.taskPollTimer) window.clearTimeout(state.taskPollTimer);
   state.taskPollTimer = null;
   state.taskPollNonce += 1;
 }
-
 function closeModal() {
   stopTaskPolling();
   if (state.consoleRfb) {
@@ -1033,7 +976,6 @@ function closeModal() {
   dom.modal.classList.remove('modal-console', 'modal-wide');
   if (dom.modal.open) dom.modal.close();
 }
-
 function openModal({ title, eyebrow = 'Cloudportal', body, submitLabel, onSubmit, danger = false, wide = false }) {
   dom.modalTitle.textContent = title;
   dom.modal.classList.toggle('modal-wide', wide);
@@ -1087,7 +1029,6 @@ async function copyText(value) {
   fallback.remove();
   if (!copied) throw new Error('Przeglądarka zablokowała kopiowanie do schowka.');
 }
-
 function showSecret(title, value, note = 'Ta wartość jest wyświetlana tylko raz. Skopiuj ją teraz.') {
   dom.modal.classList.remove('modal-console', 'modal-wide');
   const copy = button('Kopiuj', async () => {
@@ -1104,17 +1045,14 @@ function showSecret(title, value, note = 'Ta wartość jest wyświetlana tylko r
   dom.modalActions.replaceChildren(button('Zamknij', closeModal), copy);
   if (!dom.modal.open) dom.modal.showModal();
 }
-
 function confirmAction(title, message, action) {
   openModal({ title, eyebrow: 'Potwierdzenie', body: node('p', { text: message }), submitLabel: 'Potwierdź', danger: true, onSubmit: action });
 }
-
 function setLoginMessage(message = '', type = 'error') {
   dom.loginError.textContent = message;
   dom.loginError.hidden = !message;
   dom.loginError.classList.toggle('success', Boolean(message) && type === 'success');
 }
-
 function showLogin(message = '', type = 'error') {
   clearSession();
   setMobileMenu(false);
@@ -1125,7 +1063,6 @@ function showLogin(message = '', type = 'error') {
   dom.loginForm.querySelector('[name="username"]').focus();
   emitUiEvent('app-hidden');
 }
-
 function showApp() {
   dom.loginView.hidden = true;
   dom.appView.hidden = false;
@@ -1139,7 +1076,6 @@ function showApp() {
   navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'dashboard');
   if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
 }
-
 function navigationGroup(route) { const order = Number(route.order ?? 1000); return order <= 0 ? '' : order <= 40 ? 'Dostęp' : order <= 100 ? 'Infrastruktura' : order <= 140 ? 'Operacje' : 'System'; }
 function navigationGroupRank(route) { const group = navigationGroup(route); return group === '' ? 0 : group === 'Operacje' ? 1 : group === 'Dostęp' ? 2 : group === 'Infrastruktura' ? 3 : 4; }
 function renderNavigation() {
@@ -1186,7 +1122,6 @@ async function navigate(view) {
   }
   dom.content.focus();
 }
-
 function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
   const rows = Object.entries(value || {}).map(([key, item]) => ({ key, value: item }));
   dom.modalTitle.textContent = title;
@@ -1198,7 +1133,6 @@ function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   if (!dom.modal.open) dom.modal.showModal();
 }
-
 function showTemplateFields(template) {
   const schema = template.variables_schema || {};
   const required = new Set(schema.required || []);
@@ -1232,13 +1166,10 @@ function showTemplateFields(template) {
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
   if (!dom.modal.open) dom.modal.showModal();
 }
-
 function splitValues(value) {
   return String(value || '').split(/[\n,]+/).map(item => item.trim()).filter(Boolean);
 }
-
 function info(label, value) { return node('div', { class: 'check' }, node('span', { text: label }), node('strong', { text: value })); }
-
 function setApiStatus(ok) {
   dom.apiStatus.replaceChildren(node('span', { class: `status-dot ${ok ? 'ok' : 'bad'}` }), node('span', { text: ok ? 'API działa' : 'API zdegradowane' }));
 }
