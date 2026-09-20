@@ -248,6 +248,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'Konfiguracja', 'Konfiguracja systemu'" in script
     assert "'Workflow', 'Workflow'" in script
     assert "'Dostęp', 'Dostęp i bezpieczeństwo'" in script
+    assert 'function dualListGroup(' in script
+    assert "'data-dual-list-name': name" in script
+    assert "dualListGroup('Dozwolone role'" in script
+    assert "dualListGroup('Role zarządzające Blueprintem'" in script
+    assert "dualListGroup('Dozwoleni użytkownicy'" in script
+    assert "'Dodaj zaznaczone'" in script
+    assert "'Dodaj wszystkie'" in script
+    assert "'Usuń zaznaczone'" in script
+    assert "'Usuń wszystkie'" in script
     assert "'Podsumowanie', 'Podsumowanie'" in script
     assert "Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji." in script
     assert "state.slug = parts.core.slugify" in script
@@ -504,6 +513,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.blueprint-wizard-shell' in stylesheet
     assert '.blueprint-wizard-steps' in stylesheet
     assert '.blueprint-wizard-select-card' in stylesheet
+    assert '.blueprint-wizard-dual-fieldset' in stylesheet
+    assert '.blueprint-wizard-dual-list' in stylesheet
+    assert '.blueprint-wizard-dual-select' in stylesheet
+    assert '.blueprint-wizard-dual-controls' in stylesheet
     assert '.blueprint-wizard-workflow-visual' in stylesheet
     assert '.blueprint-wizard-review' in stylesheet
     assert '@media (prefers-reduced-motion: reduce)' in stylesheet
