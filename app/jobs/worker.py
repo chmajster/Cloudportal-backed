@@ -3,9 +3,11 @@ import json
 import os
 import socket
 import time
+import ipaddress
 from datetime import timedelta
 from types import SimpleNamespace
 from sqlalchemy import select, update
+from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
 from app.config import settings
 from app.database import session
@@ -208,35 +210,55 @@ def _workflow_vm_identity(context, workspace):
     return node, vm_id_from_state(workspace), provider_for(context.credential)
 
 
+def _safe_wait_error(error):
+    if isinstance(error, HTTPException):
+        detail = error.detail
+        if isinstance(detail, str):
+            return detail[:240]
+        return f'HTTP {error.status_code}'
+    return error.__class__.__name__
+
+
+def _log_wait_error(context, stage, error, previous):
+    summary = _safe_wait_error(error)
+    if summary != previous:
+        context.log(f'{stage}.retry: {summary}')
+    return summary
+
+
 def wait_for_vm(context, workspace, timeout=600):
     node, vm_id, provider = _workflow_vm_identity(context, workspace)
     context.stage('workflow.wait_for_vm')
     deadline = time.monotonic() + timeout
+    last_error = None
     while time.monotonic() < deadline:
         context.check()
         try:
             status = provider.vm_status(node, vm_id)
             if str((status or {}).get('status') or '').lower() == 'running':
                 return True
-        except Exception:
-            pass
+        except Exception as error:
+            last_error = _log_wait_error(context, 'workflow.wait_for_vm', error, last_error)
         time.sleep(2)
-    raise ExecutionFailed('Timed out waiting for VM running state')
+    suffix = f'; last provider error: {last_error}' if last_error else ''
+    raise ExecutionFailed('Timed out waiting for VM running state' + suffix)
 
 
 def wait_for_agent(context, workspace, timeout=600):
     node, vm_id, provider = _workflow_vm_identity(context, workspace)
     context.stage('workflow.wait_for_agent')
     deadline = time.monotonic() + timeout
+    last_error = None
     while time.monotonic() < deadline:
         context.check()
         try:
             if provider.guest_agent_ready(node, vm_id):
                 return True
-        except Exception:
-            pass
+        except Exception as error:
+            last_error = _log_wait_error(context, 'workflow.wait_for_agent', error, last_error)
         time.sleep(2)
-    raise ExecutionFailed('Timed out waiting for QEMU Guest Agent')
+    suffix = f'; last provider error: {last_error}' if last_error else ''
+    raise ExecutionFailed('Timed out waiting for QEMU Guest Agent' + suffix)
 
 
 def update_inventory_primary_ip(context, address):
@@ -251,10 +273,28 @@ def update_inventory_primary_ip(context, address):
             db.commit()
 
 
+def configured_deployment_ip(context):
+    raw = str((context.deployment.variables or {}).get('ipv4_address') or '').strip()
+    if not raw or raw.lower() == 'dhcp':
+        return None
+    try:
+        return str(ipaddress.ip_interface(raw).ip)
+    except ValueError:
+        return None
+
+
 def wait_for_ip(context, workspace, timeout=600):
+    configured = configured_deployment_ip(context)
+    if configured:
+        context.stage('workflow.wait_for_ip')
+        context.log(f'workflow.wait_for_ip.configured: {configured}')
+        update_inventory_primary_ip(context, configured)
+        return [configured]
+
     node, vm_id, provider = _workflow_vm_identity(context, workspace)
     context.stage('workflow.wait_for_ip')
     deadline = time.monotonic() + timeout
+    last_error = None
     while time.monotonic() < deadline:
         context.check()
         try:
@@ -264,10 +304,14 @@ def wait_for_ip(context, workspace, timeout=600):
             if selected:
                 update_inventory_primary_ip(context, selected[0])
                 return selected
-        except Exception:
-            pass
+        except Exception as error:
+            last_error = _log_wait_error(context, 'workflow.wait_for_ip', error, last_error)
         time.sleep(2)
-    raise ExecutionFailed('Timed out waiting for VM IP address')
+    suffix = f'; last provider error: {last_error}' if last_error else ''
+    raise ExecutionFailed(
+        'Timed out waiting for VM IP address. DHCP discovery requires a working QEMU Guest Agent'
+        + suffix
+    )
 
 
 def _provider_retry_delay(attempt):
@@ -284,6 +328,13 @@ def defer_for_provider(job_id, reason='unreachable'):
         wait = dict(payload.get('_provider_wait') or {})
         attempt = int(wait.get('attempts') or 0) + 1
         if attempt > settings().provider_retry_max_attempts:
+            payload.pop('_provider_wait', None)
+            current.payload = payload
+            if current.deployment_id:
+                deployment = db.get(Deployment, current.deployment_id)
+                if deployment is not None and deployment.status == 'waiting_provider':
+                    deployment.status = 'running'
+            db.commit()
             raise ExecutionFailed(
                 f'Provider remained unavailable after {settings().provider_retry_max_attempts} retry attempts'
             )
