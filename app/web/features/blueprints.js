@@ -65,16 +65,8 @@ async function blueprintsView() {
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
-      const missingExecutionPermissions = window.BlueprintProvisioningGuards.missingExecutionPermissions(item);
-      if (!missingExecutionPermissions.length && item.is_active && item.visibility.backend) {
-        result.push(button('Uruchom', () => executeBlueprint(item), 'primary'));
-      } else if (item.is_active && item.visibility.backend && missingExecutionPermissions.length) {
-        result.push(node('span', {
-          class: 'badge warning',
-          title: 'Brak uprawnień: ' + missingExecutionPermissions.join(', '),
-          text: 'Brak uprawnień do uruchomienia',
-        }));
-      }
+      const executionControl = window.BlueprintProvisioningGuards.executionControl(item, () => executeBlueprint(item));
+      if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
       if (allowed('blueprints.update') && canManage && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
       if (allowed('blueprints.update') && canManage && canDesignBlueprint) result.push(button('Edytuj', () => blueprintForm(item)));
@@ -446,10 +438,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const options = {
         hostname: Boolean(schemeSelect.value),
         ipam: ipModeSelect.value === 'ipam',
-        tags: window.BlueprintProvisioningGuards.workflowNeedsTags(
-          blueprintTags(fields.querySelector('[name="tags"]')?.value),
-          deployment
-        ),
+        tags: window.BlueprintProvisioningGuards.workflowNeedsTags(blueprintTags(fields.querySelector('[name="tags"]')?.value), deployment),
         waitAgent: Boolean(fields.querySelector('[name="wait_agent"]')?.checked),
         ansible: Boolean(playbookSelect.value),
       };
