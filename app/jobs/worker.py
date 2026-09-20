@@ -348,7 +348,7 @@ BLUEPRINT_SUPPORTED_STEPS = (
     BLUEPRINT_DECLARATIVE_STEPS
     | BLUEPRINT_PRECOMPILED_STEPS
     | BLUEPRINT_POST_APPLY_STEPS
-    | {'release_ip', 'terraform_plan', 'terraform_apply', 'condition', 'approval', 'delay', 'notification'}
+    | {'release_ip', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'condition', 'approval', 'delay', 'notification'}
 )
 
 
@@ -520,10 +520,61 @@ def run_blueprint_workflow(context, executor):
         'prepared': [],
     }
 
+    by_id = {str(step.get('id')): step for step in steps}
+    rollback_targets = {str(step.get('rollback')) for step in steps if step.get('rollback')}
+
+
     def require_workspace():
         if runtime['workspace'] is None:
             raise ExecutionFailed('Workflow step requires terraform_apply to run first')
         return runtime['workspace']
+
+    def mark_destroyed_after_rollback():
+        released_at = now()
+        with session() as db:
+            deployment = db.get(Deployment, context.deployment.id)
+            if deployment is not None:
+                deployment.destroyed_at = released_at
+            db.execute(update(HostnameReservation).where(
+                HostnameReservation.resource_id == context.deployment.id,
+                HostnameReservation.status != 'released',
+            ).values(status='released', released_at=released_at))
+            db.execute(update(IPAllocation).where(
+                IPAllocation.resource_id == context.deployment.id,
+                IPAllocation.status != 'released',
+            ).values(status='released', released_at=released_at))
+            db.execute(update(ManagedVM).where(
+                ManagedVM.deployment_id == context.deployment.id,
+            ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+            db.execute(update(ManagedResource).where(
+                ManagedResource.deployment_id == context.deployment.id,
+            ).values(lifecycle_status='destroyed', destroyed_at=released_at))
+            db.commit()
+
+    def execute_rollback(target_id, failed_step_id):
+        rollback_step = by_id.get(str(target_id))
+        if rollback_step is None:
+            raise ExecutionFailed(f'Rollback target {target_id} does not exist')
+        rollback_type = str(rollback_step.get('type'))
+        context.stage(f'workflow.rollback.start:{failed_step_id}:{target_id}:{rollback_type}')
+        if rollback_type == 'terraform_destroy':
+            executor.execute('terraform.destroy', context)
+            mark_destroyed_after_rollback()
+        elif rollback_type == 'notification':
+            message = str((rollback_step.get('conditions') or {}).get('message') or target_id)
+            context.log('workflow.rollback.notification: ' + message[:1000])
+        elif rollback_type == 'delay':
+            seconds = float((rollback_step.get('conditions') or {}).get('seconds', 1))
+            timeout = int(rollback_step.get('timeout') or 600)
+            if seconds < 0 or seconds > timeout:
+                raise ExecutionFailed('Rollback delay seconds must be between 0 and rollback timeout')
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                context.check()
+                time.sleep(min(1, max(0, deadline - time.monotonic())))
+        else:
+            raise ExecutionFailed(f'Unsupported rollback step type: {rollback_type}')
+        context.stage(f'workflow.rollback.completed:{failed_step_id}:{target_id}:{rollback_type}')
 
     def apply_and_sync():
         context.stage('workflow.terraform_apply')
@@ -545,6 +596,9 @@ def run_blueprint_workflow(context, executor):
     for step in steps:
         step_id = str(step.get('id'))
         step_type = str(step.get('type'))
+        if step_id in rollback_targets:
+            context.log(f'workflow.step.rollback_only: {step_id}:{step_type}')
+            continue
         retry = int(step.get('retry') or 0)
         timeout = int(step.get('timeout') or 600)
 
@@ -561,6 +615,8 @@ def run_blueprint_workflow(context, executor):
                 if step_type in BLUEPRINT_PRECOMPILED_STEPS:
                     context.log(f'workflow.step.precompiled: {step_id}:{step_type}')
                 elif step_type in BLUEPRINT_DECLARATIVE_STEPS:
+                    if runtime['applied']:
+                        raise ExecutionFailed('Declarative VM step cannot run after terraform_apply')
                     runtime['prepared'].append(step_id + ':' + step_type)
                     context.log(
                         f'workflow.step.prepared: {step_id}:{step_type}; '
@@ -570,8 +626,14 @@ def run_blueprint_workflow(context, executor):
                     runtime['workspace'] = executor.execute('terraform.plan', context)
                 elif step_type == 'terraform_apply':
                     apply_and_sync()
-                elif step_type in {'wait_for_vm', 'wait_for_agent', 'wait_for_ip'}:
-                    runtime['addresses'] = wait_for_vm(context, require_workspace(), timeout=timeout)
+                elif step_type == 'terraform_destroy':
+                    raise ExecutionFailed('terraform_destroy is rollback-only')
+                elif step_type == 'wait_for_vm':
+                    wait_for_vm(context, require_workspace(), timeout=timeout)
+                elif step_type == 'wait_for_agent':
+                    wait_for_agent(context, require_workspace(), timeout=timeout)
+                elif step_type == 'wait_for_ip':
+                    runtime['addresses'] = wait_for_ip(context, require_workspace(), timeout=timeout)
                 elif step_type == 'wait_for_ssh':
                     address = wait_for_ssh(context, require_workspace(), timeout)
                     runtime['addresses'] = [address]
@@ -579,7 +641,7 @@ def run_blueprint_workflow(context, executor):
                     if not context.ansible:
                         raise ExecutionFailed('Workflow requests Ansible but deployment has no Ansible configuration')
                     if runtime['addresses'] is None:
-                        runtime['addresses'] = wait_for_vm(context, require_workspace(), timeout=timeout)
+                        runtime['addresses'] = wait_for_ip(context, require_workspace(), timeout=timeout)
                     context.ansible.inventory = Inventory(hosts=runtime['addresses'])
                     AnsibleExecutor().execute('ansible.execute', context)
                     runtime['ansible_ran'] = True
@@ -623,11 +685,18 @@ def run_blueprint_workflow(context, executor):
                 raise
             except Exception as exc:
                 if attempt >= attempts:
-                    if isinstance(exc, ExecutionFailed):
-                        raise
-                    raise ExecutionFailed(
+                    terminal = exc if isinstance(exc, ExecutionFailed) else ExecutionFailed(
                         f'Workflow step {step_id} ({step_type}) failed'
-                    ) from None
+                    )
+                    rollback_id = step.get('rollback')
+                    if rollback_id:
+                        try:
+                            execute_rollback(rollback_id, step_id)
+                        except Exception as rollback_exc:
+                            raise ExecutionFailed(
+                                f'{terminal}; rollback {rollback_id} failed: {str(rollback_exc)[:200]}'
+                            ) from None
+                    raise terminal
                 context.log(
                     f'workflow.step.retry: {step_id}:{step_type} '
                     f'attempt={attempt}/{attempts} error={str(exc)[:500]}'
@@ -648,7 +717,7 @@ def run_blueprint_workflow(context, executor):
     if context.ansible and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
         if runtime['addresses'] is None:
-            runtime['addresses'] = wait_for_vm(context, require_workspace())
+            runtime['addresses'] = wait_for_ip(context, require_workspace())
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
 
