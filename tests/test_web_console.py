@@ -450,6 +450,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'UPDATE_PHASES' in script
     assert 'updatePipeline' in script
     assert 'function normalizedUpdateStatus(' in script
+    assert 'function captureTechnicalLogView(' in script
+    assert 'function restoreTechnicalLogView(' in script
+    assert 'distanceFromBottom <= 24' in script
+    assert 'log.scrollTop = log.scrollHeight' in script
+    assert 'log.scrollTop = Math.min(previous.scrollTop, maxScrollTop)' in script
     assert 'let updateStartPending = false' in script
     assert 'status.operation_active' in script
     assert "result.already_running" in script
