@@ -61,6 +61,27 @@ def scan_ssh_host_key(endpoint: str) -> dict:
             transport.close()
 
 
+def public_key_from_private_key(private_key: str) -> str:
+    raw = str(private_key or '').strip().encode('utf-8')
+    if not raw:
+        raise HTTPException(422, 'Wybrany credential SSH nie zawiera klucza prywatnego.')
+    key = None
+    try:
+        key = serialization.load_ssh_private_key(raw, password=None)
+    except (ValueError, TypeError):
+        try:
+            key = serialization.load_pem_private_key(raw, password=None)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                422,
+                'Wybrany credential SSH musi zawierać niezaszyfrowany klucz prywatny zgodny z cloud-init.',
+            ) from exc
+    return key.public_key().public_bytes(
+        serialization.Encoding.OpenSSH,
+        serialization.PublicFormat.OpenSSH,
+    ).decode('ascii')
+
+
 def generate_ed25519_key_pair():
     private = Ed25519PrivateKey.generate()
     private_text = private.private_bytes(
