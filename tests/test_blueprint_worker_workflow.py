@@ -182,11 +182,7 @@ def test_blueprint_workflow_sets_completion_marker_only_after_all_steps(monkeypa
         'register_managed_inventory',
         lambda context, workspace: {'external_id': '104', 'vm_id': 104, 'node': 'pve01'},
     )
-    monkeypatch.setattr(
-        worker,
-        'provider_for',
-        lambda credential: SimpleNamespace(execution_availability=lambda: {'ok': True}),
-    )
+    monkeypatch.setattr(worker, 'health_check_vm', lambda context, workspace: True)
 
     worker.run_blueprint_workflow(context, executor)
 
@@ -210,9 +206,9 @@ def test_blueprint_workflow_does_not_mark_completed_when_post_apply_step_fails(m
     )
     monkeypatch.setattr(
         worker,
-        'provider_for',
-        lambda credential: SimpleNamespace(
-            execution_availability=lambda: {'ok': False, 'reason': 'provider check failed'}
+        'health_check_vm',
+        lambda context, workspace: (_ for _ in ()).throw(
+            ExecutionFailed('Blueprint health_check failed: VM is not running')
         ),
     )
 
@@ -254,9 +250,9 @@ def test_notification_rollback_runs_when_step_fails(monkeypatch):
     )
     monkeypatch.setattr(
         worker,
-        'provider_for',
-        lambda credential: SimpleNamespace(
-            execution_availability=lambda: {'ok': False, 'reason': 'health failed'}
+        'health_check_vm',
+        lambda context, workspace: (_ for _ in ()).throw(
+            ExecutionFailed('Blueprint health_check failed: VM is not running')
         ),
     )
 
@@ -397,7 +393,9 @@ def test_wait_for_ip_uses_configured_static_address_without_guest_agent(monkeypa
     monkeypatch.setattr(
         worker,
         'provider_for',
-        lambda credential: (_ for _ in ()).throw(AssertionError('provider must not be used')),
+        lambda credential: SimpleNamespace(
+            vm_status=lambda node, vm_id: {'status': 'running'}
+        ),
     )
 
     assert worker.wait_for_ip(context, workspace, timeout=5) == ['192.0.2.111']
