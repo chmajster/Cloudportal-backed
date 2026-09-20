@@ -48,7 +48,14 @@
           node('strong', { text: 'Pattern jest w pełni automatyczny.' }),
           node('span', { text: 'Nie wymaga dodatkowych wartości domyślnych.' })));
       } else {
-        for (const token of tokens) {
+        const globalTokens = tokens.filter(token => ['location', 'role'].includes(token));
+        if (globalTokens.length) {
+          tokenFields.append(node('div', { class: 'blueprint-wizard-info wide' },
+            node('strong', { text: 'Location i Role są ustawiane globalnie.' }),
+            node('span', { text: globalTokens.map(token =>
+              '{' + token + '}=' + (state.hostnameValues[token] || '—')).join(' · ') + '. Zmienisz je w Narzędzia → Location i Role.' })));
+        }
+        for (const token of tokens.filter(token => !['location', 'role'].includes(token))) {
           const wrapper = field(core.HOSTNAME_LABELS[token] || token, 'hostname_value_' + token, {
             value: state.hostnameValues[token] || '',
             required: true,
@@ -167,6 +174,7 @@
         errors.hostnameSchemeId = 'Wybierz pattern hostname.';
       } else {
         for (const token of parts.core.hostnameTokens(scheme.pattern)) {
+          if (['location', 'role'].includes(token)) continue;
           if (!String(state.hostnameValues[token] || '').trim()) {
             errors['hostname_value_' + token] = 'Uzupełnij wartość dla {' + token + '}.';
           }

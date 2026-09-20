@@ -327,11 +327,18 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Edytuj'" in script
     assert "button('Usuń'" in script
     assert "id: 'apmid'" in script
+    assert "function hostnameDefaultsTool(config)" in script
+    assert "function hostnameDefaultsView()" in script
+    assert "button('Konfiguruj Location i Role'" in script
+    assert "id: 'hostname-defaults'" in script
+    assert "Location i Role są ustawiane globalnie." in script
+    assert "!['location', 'role'].includes(token)" in script
     assert "navigationParent: 'tools'" in script
     assert '/settings/vm-classification' in script
     assert 'settings-environment-grid' in stylesheet
     assert '.apmid-list' in stylesheet
     assert '.apmid-inline-form' in stylesheet
+    assert '.hostname-defaults-form' in stylesheet
     assert "environment: 'environment'" in script
     assert "apmid: 'apmid'" in script
     assert 'function fixedApmid(item)' in script

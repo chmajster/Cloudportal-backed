@@ -19,7 +19,13 @@ function normalizeGeneratorPattern(pattern, padding = 3) {
 function generatorValueFields(pattern, values = {}) {
   const wrapper = node('div', { class: 'form-grid hostname-values wide' });
   const tokens = generatorPatternTokens(pattern);
-  tokens.forEach(token => {
+  const globalTokens = tokens.filter(token => ['location', 'role'].includes(token));
+  if (globalTokens.length) {
+    wrapper.append(node('div', { class: 'blueprint-wizard-info wide' },
+      node('strong', { text: 'Location i Role są pobierane z Narzędzi.' }),
+      node('span', { text: globalTokens.map(token => '{' + token + '}').join(', ') + ' zostaną uzupełnione automatycznie.' })));
+  }
+  tokens.filter(token => !['location', 'role'].includes(token)).forEach(token => {
     const item = field(token, 'hostname_' + token, { value: values[token] || '', required: true });
     item.dataset.hostnameToken = token;
     wrapper.append(item);
@@ -45,7 +51,7 @@ function hostnameSchemePreview(pattern, padding, nextNumber) {
     .replaceAll('{number}', String(nextNumber || 1).padStart(Number(normalized.padding || 3), '0'));
   const samples = {
     location: 'wro', environment: 'prod', env: 'prod', application: 'app',
-    service: 'api', role: 'web', os: 'linux', cluster: 'c1', site: 'dc1',
+    service: 'api', role: 'server', os: 'linux', cluster: 'c1', site: 'dc1',
   };
   generatorPatternTokens(normalized.pattern).forEach(token => {
     value = value.replaceAll('{' + token + '}', samples[token] || token);

@@ -258,7 +258,9 @@
       template: template.id,
       variables,
       executor: state.executor,
-      hostname_values: { ...state.hostnameValues },
+      hostname_values: Object.fromEntries(
+        Object.entries(state.hostnameValues).filter(([name]) => !['location', 'role'].includes(name))
+      ),
     };
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
