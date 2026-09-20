@@ -684,6 +684,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_scheme_id: Number(schemeId),
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
+            apmid: deployment.apmid || null,
             template: 'proxmox-vm',
             executor: data.get('executor'),
             variables: vmVariables,
@@ -1246,6 +1247,7 @@ async function blueprintForm(item = null) {
           executor: form.elements.deployment_executor.value,
           variables: deploymentVariables,
           hostname_values: deployment.hostname_values || {},
+          apmid: deployment.apmid || null,
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
@@ -1309,6 +1311,8 @@ async function blueprintForm(item = null) {
 async function executeBlueprint(item) {
   try {
     const fields = node('div', { class: 'form-grid' });
+    const apmidContext = await window.BlueprintRuntimeApmid.prepare(item, fields);
+
     for (const [name, definition] of Object.entries(item.variables_schema || {})) {
       if (definition.type === 'select') {
         fields.append(selectField(definition.label || name, name, (definition.options || []).map(value => ({ value, label: value })), definition.default, { required: definition.required }));
@@ -1360,10 +1364,17 @@ async function executeBlueprint(item) {
           if (definition.type === 'boolean') variables[name] = control.checked;
           else if (control.value !== '') variables[name] = definition.type === 'integer' ? Number(control.value) : control.value;
         }
+        const payload = {
+          variables,
+          hostname_values: readHostnameValues(form),
+        };
+        const runtimeApmid = window.BlueprintRuntimeApmid.read(form, apmidContext);
+        if (runtimeApmid) payload.apmid = runtimeApmid;
+
         const result = await api(`/blueprints/${item.id}/execute`, {
           method: 'POST',
           idempotent: true,
-          body: { variables, hostname_values: readHostnameValues(form) },
+          body: payload,
         });
         toast(`Utworzono „${result.name}”. Konfiguracja została zapisana w lokalnej bazie i dodana do kolejki. Jeśli Proxmox jest offline, VM utworzy się automatycznie po odzyskaniu połączenia.`);
         navigate('jobs');
