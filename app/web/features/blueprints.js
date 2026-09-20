@@ -61,7 +61,7 @@ async function blueprintsView() {
       { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
         ? (item.manager_role_ids || []).map(id => roleNames.get(Number(id)) || ('Rola #' + id)).join(', ')
         : badge('Bez roli dedykowanej', 'warning') },
-      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Wymaga akceptacji', 'warning') : badge('Bez akceptacji', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
+      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Approval wg polityki globalnej', 'warning') : badge('Bez approval', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
