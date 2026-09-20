@@ -10,7 +10,7 @@ from app.database import session
 from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
-from app.executors.terraform import TerraformExecutor, workspace_lock
+from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, workspace_lock
 from app.jobs.worker import execute
 from app.jobs.queue import reconcile_cancelled_jobs
 from app.terraform.state import persist_state
@@ -614,3 +614,19 @@ def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
         worker.terminate()
         output, _ = worker.communicate(timeout=15)
     assert 'TimeoutError' not in output and 'Error connecting' not in output
+
+
+def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
+    credential = SimpleNamespace(endpoint='https://pve.example.com:8006')
+    observed = []
+
+    def connect(address, timeout):
+        observed.append((address, timeout))
+        raise OSError('connection refused')
+
+    monkeypatch.setattr('app.executors.terraform.socket.create_connection', connect)
+
+    with pytest.raises(ExecutionFailed, match='requires reachable SSH'):
+        proxmox_ssh_preflight(credential, {'PROXMOX_VE_SSH_PORT': '22'})
+
+    assert observed == [(('pve.example.com', 22), 5)]
