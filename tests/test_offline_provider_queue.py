@@ -162,4 +162,7 @@ def test_provider_offline_retry_limit_becomes_terminal_failure(client, headers, 
     execute(job_id)
     terminal = client.get('/api/v1/jobs/' + job_id, headers=headers).json()
     assert terminal['status'] == 'failed'
+    assert terminal['provider_waiting'] is False
+    assert terminal['provider_retry_attempts'] == 0
+    assert terminal['provider_next_retry_at'] is None
     assert 'retry attempts' in terminal['error']
