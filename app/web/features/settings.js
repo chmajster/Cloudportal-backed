@@ -123,10 +123,11 @@ async function testLdap() {
 }
 
 async function settingsView() {
-  const [config, health, updateSettings] = await Promise.all([
+  const [config, health, updateSettings, blueprintSettings] = await Promise.all([
     api('/settings/ldap'),
     api('/health', { auth: false, allow: [503] }),
     allowed('updates.read') ? api('/updates/settings').catch(() => null) : Promise.resolve(null),
+    api('/settings/blueprints'),
   ]);
 
   const user = state.identity?.user || {};
@@ -200,6 +201,42 @@ async function settingsView() {
       : null
   );
 
+  const blueprints = settingsCard(
+    'box',
+    'Blueprinty',
+    'Globalna polityka zatwierdzania uruchomień Blueprintów.',
+    node('div', { class: 'settings-values' },
+      settingsValue(
+        'Automatyczne zatwierdzanie wykonania',
+        blueprintSettings.auto_approve_for_executors ? 'Włączone' : 'Wyłączone'
+      ),
+      settingsValue(
+        'Użytkownik z blueprints.execute',
+        blueprintSettings.auto_approve_for_executors
+          ? 'Uruchamia bez pytania o approval'
+          : 'Tworzy request oczekujący na approval'
+      )),
+    allowed('settings.update')
+      ? node('div', { class: 'settings-card-actions' },
+          button(
+            blueprintSettings.auto_approve_for_executors
+              ? 'Wyłącz auto-approval'
+              : 'Włącz auto-approval',
+            async () => {
+              await api('/settings/blueprints', {
+                method: 'PUT',
+                body: {
+                  auto_approve_for_executors: !blueprintSettings.auto_approve_for_executors,
+                },
+              });
+              toast('Polityka wykonywania Blueprintów została zapisana.');
+              settingsView();
+            },
+            blueprintSettings.auto_approve_for_executors ? 'danger' : 'primary'
+          ))
+      : null
+  );
+
   const security = settingsCard(
     'shield',
     'Bezpieczeństwo',
@@ -270,7 +307,7 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.'),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security),
+    node('div', { class: 'settings-grid' }, appearance, account, system, updates, blueprints, security),
     ldap
   );
 }
