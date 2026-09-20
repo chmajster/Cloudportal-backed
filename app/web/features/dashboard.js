@@ -25,6 +25,16 @@ function metric(label, value, detail) {
     node('small', { text: detail }));
 }
 
+function observabilityMetric(iconName, label, value, detail, stateKind = 'neutral') {
+  return node('article', { class: `observability-metric observability-${stateKind}` },
+    node('div', { class: 'observability-metric-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
+    node('div', { class: 'observability-metric-copy' },
+      node('span', { class: 'observability-metric-label', text: label }),
+      node('strong', { text: String(value) }),
+      node('small', { text: detail })),
+    node('span', { class: `observability-state-dot ${stateKind}`, 'aria-hidden': 'true' }));
+}
+
 function dashboardAction(iconName, label, route, command = null) {
   return node('button', {
     class: 'dashboard-quick-action',
@@ -173,24 +183,64 @@ async function observabilityView() {
     apiText('/metrics'),
   ]);
   const items = alerts.items || [];
-  dom.content.replaceChildren(
-    heading('Stan platformy, alerty oraz surowe metryki w formacie Prometheus.'),
-    node('div', { class: 'metrics' },
-      metric('Backend', statusLabel(health.status), 'health'),
-      metric('Workery', `${health.checks.workers.online}/${health.checks.workers.expected}`, 'online/expected'),
-      metric('Alerty', items.length, 'aktywne'),
-      metric('Dispatcher', health.checks.dispatcher ? 'OK' : 'Niedostępny', 'heartbeat')),
-    node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Alerty' })),
-      table([
+  const backendOk = health.status === 'ok';
+  const workersOk = health.checks.workers.online >= health.checks.workers.expected;
+  const dispatcherOk = Boolean(health.checks.dispatcher);
+  const alertsOk = items.length === 0;
+
+  const overview = node('section', { class: 'observability-hero' },
+    node('div', {},
+      node('span', { class: 'dashboard-kicker', text: 'Monitoring' }),
+      node('h2', { text: 'Stan platformy' }),
+      node('p', { class: 'muted', text: 'Najważniejsze komponenty, aktywne alerty i metryki Prometheus w jednym widoku.' })),
+    badge(backendOk && workersOk && dispatcherOk ? 'System działa poprawnie' : 'Wymaga uwagi',
+      backendOk && workersOk && dispatcherOk ? 'ok' : 'warning'));
+
+  const cards = node('section', { class: 'observability-metrics', 'aria-label': 'Stan komponentów platformy' },
+    observabilityMetric('activity', 'Backend', backendOk ? 'OK' : 'Problem', backendOk ? 'API i health check działają' : 'Sprawdź health endpoint', backendOk ? 'ok' : 'danger'),
+    observabilityMetric('server', 'Workery', `${health.checks.workers.online}/${health.checks.workers.expected}`, workersOk ? 'Wszystkie workery online' : 'Brakuje aktywnych workerów', workersOk ? 'ok' : 'warning'),
+    observabilityMetric('file-text', 'Alerty', items.length, alertsOk ? 'Brak aktywnych alertów' : 'Aktywne alerty wymagają uwagi', alertsOk ? 'ok' : 'warning'),
+    observabilityMetric('refresh', 'Dispatcher', dispatcherOk ? 'OK' : 'Offline', dispatcherOk ? 'Heartbeat prawidłowy' : 'Brak heartbeat', dispatcherOk ? 'ok' : 'danger'));
+
+  const alertContent = items.length
+    ? table([
         { label: 'Ważność', value: item => badge(statusLabel(item.severity), item.severity === 'critical' ? 'danger' : 'warning') },
         { label: 'Kod', class: 'mono', value: item => item.code },
         { label: 'Zasób', class: 'mono', value: item => item.resource_id || '—' },
         { label: 'Opis', value: item => item.message },
-      ], items)),
-    node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Prometheus exposition' }), badge('/api/v1/metrics', 'info')),
-      node('pre', { class: 'log-output mono', text: metricsText }))
+      ], items)
+    : node('div', { class: 'observability-empty-state' },
+        node('span', { class: 'observability-empty-icon', 'aria-hidden': 'true' }, appIcon('check')),
+        node('div', {},
+          node('strong', { text: 'Brak aktywnych alertów' }),
+          node('p', { class: 'muted', text: 'Platforma nie raportuje obecnie problemów wymagających reakcji.' })));
+
+  const copyMetrics = button('Kopiuj metryki', async () => {
+    try {
+      await copyText(metricsText);
+      toast('Metryki Prometheus skopiowane do schowka.');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+
+  dom.content.replaceChildren(
+    overview,
+    cards,
+    node('section', { class: 'panel observability-panel' },
+      node('div', { class: 'panel-header observability-panel-header' },
+        node('div', {},
+          node('span', { class: 'dashboard-panel-kicker', text: 'Stan bieżący' }),
+          node('h2', { text: 'Alerty' })),
+        badge(items.length ? `${items.length} aktywnych` : '0 aktywnych', items.length ? 'warning' : 'ok')),
+      alertContent),
+    node('section', { class: 'panel observability-panel' },
+      node('div', { class: 'panel-header observability-panel-header' },
+        node('div', {},
+          node('span', { class: 'dashboard-panel-kicker', text: 'Eksport' }),
+          node('h2', { text: 'Metryki Prometheus' })),
+        node('div', { class: 'action-group' }, badge('/api/v1/metrics', 'info'), copyMetrics)),
+      node('pre', { class: 'log-output mono observability-metrics-output', text: metricsText }))
   );
 }
 
