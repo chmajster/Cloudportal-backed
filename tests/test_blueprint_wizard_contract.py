@@ -54,6 +54,8 @@ state.tags = 'linux, production';
 state.ansibleEnabled = true;
 state.playbookId = 'bootstrap-linux';
 state.ansibleCredentialId = '17';
+state.guestCredentialId = '18';
+state.cloudInitSnippetStorage = 'local';
 state.waitAgent = true;
 
 const data = {
@@ -82,6 +84,9 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['hostname_scheme_id'] == 11
     assert deployment['hostname_values'] == {'env': 'prod'}
     assert deployment['ipam_pool_id'] == 13
+    assert deployment['guest_credential_id'] == 18
+    assert deployment['variables']['install_qemu_guest_agent'] is True
+    assert deployment['variables']['cloud_init_snippet_storage'] == 'local'
     assert deployment['environment'] == 'dev'
     assert deployment['apmid'] == 'IAASTEAM'
     assert deployment['select_environment_on_execute'] is True
