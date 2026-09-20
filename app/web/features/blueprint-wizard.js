@@ -202,6 +202,7 @@
           state.nodes = [];
           state.templates = [];
           state.storages = [];
+          state.snippetStorages = [];
           state.networks = [];
           state.providerConnected = Boolean(provider.credentials_id);
           return;
@@ -241,11 +242,21 @@
             api('/providers/' + provider.id + '/storages?node=' + encodeURIComponent(state.node)),
             api('/providers/' + provider.id + '/networks?node=' + encodeURIComponent(state.node)),
           ]);
-          state.storages = (storageResult.items || []).filter(value => {
-            if (value.disable) return false;
-            const content = Array.isArray(value.content) ? value.content.join(',') : String(value.content || '');
+          const allStorages = (storageResult.items || []).filter(value => !value.disable);
+          const storageContent = value => Array.isArray(value.content)
+            ? value.content.join(',')
+            : String(value.content || '');
+          state.storages = allStorages.filter(value => {
+            const content = storageContent(value);
             return !content || content.includes('images');
           });
+          state.snippetStorages = allStorages.filter(value => storageContent(value).includes('snippets'));
+          if (!state.snippetStorages.some(value =>
+            String(value.storage || value.id) === String(state.cloudInitSnippetStorage))) {
+            const preferredSnippet = state.snippetStorages.find(value => String(value.storage || value.id) === 'local')
+              || state.snippetStorages[0];
+            state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || 'local');
+          }
           state.networks = (networkResult.items || []).filter(value => value.iface);
           if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
             state.storage = String(state.storages[0]?.storage || state.storages[0]?.id || '');
@@ -817,6 +828,12 @@
         const runtimeParts = [];
         if (state.selectApmidOnExecute) runtimeParts.push('APMID');
         if (state.selectEnvironmentOnExecute) runtimeParts.push('Environment');
+        const qemuAgentInfo = node('div', { class: 'blueprint-wizard-info' },
+          node('strong', { text: 'QEMU Guest Agent' }),
+          node('span', { text: state.waitAgent
+            ? 'Terraform utworzy vendor-data cloud-init i zainstaluje qemu-guest-agent. Snippet storage: ' + (state.cloudInitSnippetStorage || 'local') + '.'
+            : 'Automatyczna instalacja qemu-guest-agent jest wyłączona.' }));
+
         const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'Klasyfikacja VM' }),
           node('span', { text: state.apmid && state.environment
@@ -833,6 +850,7 @@
           fields,
           guestCredentialField,
           runtimeClassification,
+          qemuAgentInfo,
           classificationPreview,
           advanced);
       }
