@@ -198,7 +198,8 @@ async function myResourcesView() {
     clearTimeout(myResourcesPollTimer);
     myResourcesPollTimer = null;
   }
-  const preservedScrollY = window.scrollY;
+  const preserveScroll = Boolean(dom.content.querySelector('.my-resources-page-head'));
+  const preservedScrollY = preserveScroll ? window.scrollY : 0;
   const canReadInventory = allowed('inventory.read');
   const [deploymentResult, vmResult, resourceResult, providerResult] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
