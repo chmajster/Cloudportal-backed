@@ -137,6 +137,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "id: 'my-resources'" in script
     assert "function productResourceTabs(" in script
     assert "function myResourcesView()" in script
+    assert "function resourceSummaryCard(" in script
+    assert "function resourceEmptyState(" in script
+    assert "function resourceSection(" in script
+    assert "my-resources-summary-card" in script
+    assert "my-resources-empty-icon" in script
+    assert "my-resources-section-icon" in script
+    assert "document.getElementById(sectionId)?.scrollIntoView" in script
     assert "button('Utwórz VM'" in script
     assert "button('Zarządzaj VM'" in script
     assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
@@ -146,6 +153,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.product-grid' in stylesheet
     assert '.product-card' in stylesheet
     assert '.product-resource-tabs' in stylesheet
+    assert '.my-resources-page-head' in stylesheet
+    assert '.my-resources-summary-card' in stylesheet
+    assert '.my-resources-summary-icon' in stylesheet
+    assert '.my-resources-section-icon' in stylesheet
+    assert '.my-resources-empty-icon' in stylesheet
     assert '.my-resource-grid' in stylesheet
     assert 'function navigationGroup(' in core
     assert 'function navigationGroupRank(' in core
