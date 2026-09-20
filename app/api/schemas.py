@@ -44,6 +44,7 @@ class VMClassificationSettingsInput(Input):
         'prod': True,
     })
     apmids: Annotated[list[str], Field(max_length=200)] = Field(default_factory=list)
+    hostname_defaults: dict[str, str] | None = None
 
     @field_validator('environments')
     @classmethod
@@ -64,6 +65,23 @@ class VMClassificationSettingsInput(Input):
                 raise ValueError('APMID must use letters, digits, underscore or hyphen')
             if normalized not in result:
                 result.append(normalized)
+        return result
+
+
+    @field_validator('hostname_defaults')
+    @classmethod
+    def valid_hostname_defaults(cls, value):
+        if value is None:
+            return None
+        import re
+        if set(value) != {'location', 'role'}:
+            raise ValueError('Hostname defaults must contain exactly location and role')
+        result = {}
+        for name in ('location', 'role'):
+            normalized = str(value[name]).strip().lower()
+            if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', normalized):
+                raise ValueError(f'Hostname default {name} must be a valid DNS label')
+            result[name] = normalized
         return result
 
 
