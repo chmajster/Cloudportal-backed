@@ -315,7 +315,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Konfiguracja LDAP' in script
     assert '/settings/ldap/test' in script
     assert 'JIT provisioning i RBAC' in script
-    assert 'Environment i APMID' in script
+    assert "function environmentSettingsForm(config)" in script
+    assert "function apmidSettingsForm(config)" in script
+    assert "title: 'Environment'" in script
+    assert "title: 'APMID'" in script
+    assert "button('Konfiguruj Environment'" in script
+    assert "button('Konfiguruj APMID'" in script
     assert '/settings/vm-classification' in script
     assert 'settings-environment-grid' in stylesheet
     assert "environment: 'environment'" in script

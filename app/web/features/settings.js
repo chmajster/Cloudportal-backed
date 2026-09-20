@@ -105,7 +105,16 @@ function ldapSettingsForm(config) {
   });
 }
 
-function vmClassificationSettingsForm(config) {
+function vmEnvironmentPayload(config) {
+  return {
+    test: config.environments?.test !== false,
+    dev: config.environments?.dev !== false,
+    nonprod: config.environments?.nonprod !== false,
+    prod: config.environments?.prod !== false,
+  };
+}
+
+function environmentSettingsForm(config) {
   const environmentLabels = {
     test: 'TEST',
     dev: 'DEV',
@@ -127,12 +136,44 @@ function vmClassificationSettingsForm(config) {
 
   const fields = node('div', { class: 'form-grid' },
     node('div', { class: 'wide blueprint-wizard-info' },
-      node('strong', { text: 'Klasyfikacja VM' }),
-      node('span', { text: 'Environment oraz APMID są używane przez kreator VM i automatycznie dodawane jako tagi Proxmox.' })),
-    node('div', { class: 'wide settings-form-heading' },
       node('strong', { text: 'Environment' }),
-      node('span', { class: 'muted', text: 'Wyłączone środowiska nie pojawią się przy tworzeniu nowych Blueprintów.' })),
-    environmentControls,
+      node('span', { text: 'Wybierz środowiska dostępne przy tworzeniu nowych Blueprintów i VM.' })),
+    node('div', { class: 'wide settings-form-heading' },
+      node('strong', { text: 'Dostępne środowiska' }),
+      node('span', { class: 'muted', text: 'Wyłączone środowiska nie pojawią się w kreatorze Blueprintu.' })),
+    environmentControls
+  );
+
+  openModal({
+    title: 'Environment',
+    eyebrow: 'Klasyfikacja VM',
+    body: fields,
+    submitLabel: 'Zapisz Environment',
+    wide: true,
+    onSubmit: async (data) => {
+      await api('/settings/vm-classification', {
+        method: 'PUT',
+        body: {
+          environments: {
+            test: data.has('environment_test'),
+            dev: data.has('environment_dev'),
+            nonprod: data.has('environment_nonprod'),
+            prod: data.has('environment_prod'),
+          },
+          apmids: config.apmids || [],
+        },
+      });
+      toast('Ustawienia Environment zapisane.');
+      navigate('settings');
+    },
+  });
+}
+
+function apmidSettingsForm(config) {
+  const fields = node('div', { class: 'form-grid' },
+    node('div', { class: 'wide blueprint-wizard-info' },
+      node('strong', { text: 'APMID' }),
+      node('span', { text: 'Zarządzaj identyfikatorami aplikacji dostępnymi w kreatorze VM. APMID jest również dodawany jako tag Proxmox.' })),
     field('APMID', 'apmids', {
       tag: 'textarea',
       value: (config.apmids || []).join('\n'),
@@ -143,31 +184,28 @@ function vmClassificationSettingsForm(config) {
   );
 
   openModal({
-    title: 'Environment i APMID',
+    title: 'APMID',
     eyebrow: 'Klasyfikacja VM',
     body: fields,
-    submitLabel: 'Zapisz ustawienia',
+    submitLabel: 'Zapisz APMID',
     wide: true,
     onSubmit: async (data) => {
-      const payload = {
-        environments: {
-          test: data.has('environment_test'),
-          dev: data.has('environment_dev'),
-          nonprod: data.has('environment_nonprod'),
-          prod: data.has('environment_prod'),
+      const apmids = String(data.get('apmids') || '')
+        .split(/[\n,]+/)
+        .map(value => value.trim().toUpperCase())
+        .filter(Boolean);
+      await api('/settings/vm-classification', {
+        method: 'PUT',
+        body: {
+          environments: vmEnvironmentPayload(config),
+          apmids,
         },
-        apmids: String(data.get('apmids') || '')
-          .split(/[\n,]+/)
-          .map(value => value.trim().toUpperCase())
-          .filter(Boolean),
-      };
-      await api('/settings/vm-classification', { method: 'PUT', body: payload });
-      toast('Ustawienia Environment i APMID zapisane.');
+      });
+      toast('Ustawienia APMID zapisane.');
       navigate('settings');
     },
   });
 }
-
 
 async function testLdap() {
   try {
@@ -276,19 +314,31 @@ async function settingsView() {
       allowed('tokens.read') ? button('Tokeny API', () => navigate('tokens')) : null)
   );
 
-  const vmClassificationCard = settingsCard(
-    'box',
-    'Environment i APMID',
-    'Klasyfikacja maszyn wirtualnych i automatyczne tagi Proxmox.',
+  const environmentCard = settingsCard(
+    'server',
+    'Environment',
+    'Środowiska dostępne przy tworzeniu Blueprintów i maszyn wirtualnych.',
     node('div', { class: 'settings-values' },
       settingsValue('TEST', vmClassification.environments?.test ? 'Włączony' : 'Wyłączony'),
       settingsValue('DEV', vmClassification.environments?.dev ? 'Włączony' : 'Wyłączony'),
       settingsValue('NONPROD', vmClassification.environments?.nonprod ? 'Włączony' : 'Wyłączony'),
-      settingsValue('PROD', vmClassification.environments?.prod ? 'Włączony' : 'Wyłączony'),
-      settingsValue('APMID', (vmClassification.apmids || []).length ? vmClassification.apmids.join(', ') : 'Brak')),
+      settingsValue('PROD', vmClassification.environments?.prod ? 'Włączony' : 'Wyłączony')),
     allowed('settings.update')
       ? node('div', { class: 'settings-card-actions' },
-          button('Konfiguruj', () => vmClassificationSettingsForm(vmClassification), 'primary'))
+          button('Konfiguruj Environment', () => environmentSettingsForm(vmClassification), 'primary'))
+      : null
+  );
+
+  const apmidCard = settingsCard(
+    'box',
+    'APMID',
+    'Identyfikatory aplikacji używane przez kreator VM i tagi Proxmox.',
+    node('div', { class: 'settings-values' },
+      settingsValue('Liczba APMID', String((vmClassification.apmids || []).length)),
+      settingsValue('Wartości', (vmClassification.apmids || []).length ? vmClassification.apmids.join(', ') : 'Brak')),
+    allowed('settings.update')
+      ? node('div', { class: 'settings-card-actions' },
+          button('Konfiguruj APMID', () => apmidSettingsForm(vmClassification), 'primary'))
       : null
   );
 
@@ -314,7 +364,7 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.', actions),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security, vmClassificationCard),
+    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security, environmentCard, apmidCard),
     ldap,
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Przykładowe filtry LDAP' })),
