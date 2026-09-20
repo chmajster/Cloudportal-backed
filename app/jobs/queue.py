@@ -7,11 +7,12 @@ from rq import Queue, Worker
 from rq.job import Job as RQJob
 from rq.exceptions import NoSuchJobError
 from rq.serializers import JSONSerializer
-from sqlalchemy import select
+from sqlalchemy import select, update
 from app.config import settings
+from app.blueprint_settings import blueprint_execution_settings
 from app.database import session
 from app.inventory_sync import repair_inventory_from_states
-from app.models import Deployment, Job, JobLog, now
+from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
 from app.security.core import redis_client
 
@@ -124,10 +125,78 @@ def reconcile_deployment_job_statuses(db):
             deployment.status = 'successful'
 
 
+def expire_waiting_approvals(db):
+    config = blueprint_execution_settings(db)
+    rows = db.scalars(
+        select(Job).where(
+            Job.status == 'waiting_approval',
+            Job.cancel_requested.is_(False),
+        ).with_for_update(skip_locked=True).limit(200)
+    ).all()
+    current_time = now()
+    for job in rows:
+        payload = dict(job.payload or {})
+        approval = dict(payload.get('_approval') or {})
+        raw_expiry = approval.get('expires_at')
+        if raw_expiry:
+            try:
+                expires_at = datetime.fromisoformat(raw_expiry)
+            except (TypeError, ValueError):
+                expires_at = current_time
+        else:
+            basis = job.updated_at or job.created_at or current_time
+            expires_at = basis + timedelta(hours=config['approval_timeout_hours'])
+        if expires_at > current_time:
+            continue
+
+        deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
+        has_resource = False
+        if deployment is not None:
+            has_resource = bool(
+                db.scalar(select(ManagedResource.id).where(
+                    ManagedResource.deployment_id == deployment.id,
+                    ManagedResource.lifecycle_status == 'active',
+                ).limit(1))
+                or db.scalar(select(ManagedVM.id).where(
+                    ManagedVM.deployment_id == deployment.id,
+                    ManagedVM.lifecycle_status == 'active',
+                ).limit(1))
+            )
+
+        if has_resource:
+            job.status = 'failed'
+            job.error = (
+                'Approval request expired after infrastructure state was created; '
+                'inspect the deployment and clean up manually'
+            )
+            if deployment is not None and deployment.active_job_id == job.id:
+                deployment.active_job_id = None
+                deployment.status = 'failed'
+        else:
+            job.status = 'cancelled'
+            job.error = 'Approval request expired'
+            if deployment is not None and deployment.active_job_id == job.id:
+                deployment.active_job_id = None
+                deployment.status = 'cancelled'
+                released_at = current_time
+                db.execute(update(HostnameReservation).where(
+                    HostnameReservation.resource_id == deployment.id,
+                    HostnameReservation.status != 'released',
+                ).values(status='released', released_at=released_at))
+                db.execute(update(IPAllocation).where(
+                    IPAllocation.resource_id == deployment.id,
+                    IPAllocation.status != 'released',
+                ).values(status='released', released_at=released_at))
+
+        db.add(JobLog(job_id=job.id, message='workflow.approval.expired: ' + job.error))
+        queue_job_webhooks(db, job)
+
+
 def dispatch_once():
     materialize_scheduled_jobs()
     q = queue()
     with session() as db:
+        expire_waiting_approvals(db)
         jobs = db.scalars(select(Job).where(Job.status == 'queued', Job.cancel_requested.is_(False))
                           .with_for_update(skip_locked=True).limit(100)).all()
         for job in jobs:
