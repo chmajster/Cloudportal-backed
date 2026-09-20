@@ -99,7 +99,6 @@ async function deploymentsView() {
     item.is_active
     && item.deployment?.template
     && enabledTemplates.has(item.deployment.template)
-    && (!item.requires_approval || allowed('blueprints.approve'))
   );
 
   dom.content.replaceChildren(
@@ -277,7 +276,7 @@ async function myResourcesView(repairInventory = true) {
   }
 
   const provisioningActive = deployments.some(item =>
-    item.active_job_id || ['queued', 'running', 'cancelling', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
+    item.active_job_id || ['waiting_approval', 'queued', 'running', 'cancelling', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
   if (provisioningActive) {
     myResourcesPollTimer = window.setTimeout(() => {
       if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
@@ -289,6 +288,13 @@ async function myResourcesView(repairInventory = true) {
 
 function deploymentActions(item, returnTo = 'my-resources') {
   const actions = [button('Szczegóły', () => showDeploymentDetails(item))];
+  if (item.status === 'waiting_approval' && item.active_job_id && allowed('blueprints.approve')) {
+    actions.push(button('Zatwierdź i uruchom', async () => {
+      await api('/jobs/' + item.active_job_id + '/approve', { method: 'POST' });
+      toast('Wdrożenie zatwierdzone i przekazane do kolejki.');
+      navigate(returnTo);
+    }, 'primary'));
+  }
   if (item.active_job_id && allowed('jobs.cancel') && item.status !== 'cancelling') {
     actions.push(button('Anuluj', () => confirmAction(
       'Anuluj aktywne zadanie',
@@ -338,6 +344,14 @@ function showDeploymentDetails(item) {
   dom.modalEyebrow.textContent = `Wdrożenie · ${short(item.id, 18)}`;
   dom.modalBody.replaceChildren(content);
   const actions = [button('Zamknij', closeModal)];
+  if (item.status === 'waiting_approval' && item.active_job_id && allowed('blueprints.approve')) {
+    actions.unshift(button('Zatwierdź i uruchom', async () => {
+      await api('/jobs/' + item.active_job_id + '/approve', { method: 'POST' });
+      toast('Wdrożenie zatwierdzone i przekazane do kolejki.');
+      closeModal();
+      navigate('my-resources');
+    }, 'primary'));
+  }
   if (item.active_job_id && allowed('jobs.read')) actions.unshift(button('Przejdź do zadań', () => navigate('jobs'), 'primary'));
   dom.modalActions.replaceChildren(...actions);
   if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) dom.modal.showModal();
