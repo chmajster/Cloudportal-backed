@@ -524,7 +524,10 @@ def run_blueprint_workflow(context, executor):
                     message = str((step.get('conditions') or {}).get('message') or step_id)
                     context.log('workflow.notification: ' + message[:1000])
 
-                context.stage(f'workflow.step.completed:{step_id}:{step_type}')
+                if step_type in BLUEPRINT_DECLARATIVE_STEPS:
+                    context.stage(f'workflow.step.prepared:{step_id}:{step_type}')
+                else:
+                    context.stage(f'workflow.step.completed:{step_id}:{step_type}')
                 break
             except Cancelled:
                 raise
