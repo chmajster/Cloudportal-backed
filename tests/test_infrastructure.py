@@ -199,11 +199,41 @@ def test_failed_job_can_be_retried_with_lineage(client, headers, monkeypatch, tm
 
     inventory = client.get('/api/v1/inventory/vms?management_mode=terraform', headers=headers)
     assert any(row['vm_id'] == 404 and row['deployment_id'] == d['id'] for row in inventory.json()['items'])
+    logs = client.get('/api/v1/jobs/' + retried['id'] + '/logs', headers=headers).json()['items']
+    messages = [row['message'] for row in logs]
+    assert 'inventory.synchronizing' in messages
+    assert any('inventory.vm.registered:' in message and 'VMID 404' in message for message in messages)
 
     assert client.post(
         '/api/v1/jobs/' + retried['id'] + '/retry',
         headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
     ).status_code == 409
+
+def test_reapply_can_reconcile_changed_proxmox_vm_identity(client, headers, monkeypatch, tmp_path):
+    d = deployment(client, headers)
+
+    first_workspace = terraform_state_workspace(tmp_path, vm_id=501)
+    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: first_workspace)
+    execute(d['job']['id'])
+    assert client.get('/api/v1/jobs/' + d['job']['id'], headers=headers).json()['status'] == 'successful'
+
+    second = client.post(
+        '/api/v1/jobs',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json={'operation': 'terraform.apply', 'deployment_id': d['id']},
+    )
+    assert second.status_code == 202, second.text
+
+    second_workspace = terraform_state_workspace(tmp_path, vm_id=502)
+    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: second_workspace)
+    execute(second.json()['id'])
+    assert client.get('/api/v1/jobs/' + second.json()['id'], headers=headers).json()['status'] == 'successful'
+
+    inventory = client.get('/api/v1/inventory/vms?management_mode=terraform', headers=headers).json()['items']
+    linked = [row for row in inventory if row['deployment_id'] == d['id']]
+    assert len(linked) == 1
+    assert linked[0]['vm_id'] == 502
+
 
 def test_workspace_lock_excludes_second_executor(tmp_path):
     import pytest
