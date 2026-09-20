@@ -76,15 +76,15 @@ resource "proxmox_virtual_environment_vm" "vm" {
   }
 }
 locals {
-  configured_primary_ip   = var.ipv4_address == null ? null : split("/", var.ipv4_address)[0]
+  configured_primary_ip = var.ipv4_address == null ? null : split("/", var.ipv4_address)[0]
   reported_ipv4_addresses = distinct(compact(flatten([
     try(proxmox_virtual_environment_vm.vm.ipv4_addresses, [])
   ])))
-  reported_primary_ip     = try([
+  reported_primary_ip = try([
     for address in local.reported_ipv4_addresses : address
     if can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}$", address))
-      && address != "127.0.0.1"
-      && !startswith(address, "169.254.")
+    && address != "127.0.0.1"
+    && !startswith(address, "169.254.")
   ][0], null)
 }
 
