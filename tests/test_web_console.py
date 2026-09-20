@@ -52,6 +52,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/credentials.js',
         'features/providers.js',
         'features/catalog.js',
+        'features/blueprint-runtime-apmid.js',
         'features/blueprint-wizard-core.js',
         'features/blueprint-wizard-hostname.js',
         'features/blueprint-wizard-network.js',
@@ -326,13 +327,26 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Edytuj'" in script
     assert "button('Usuń'" in script
     assert "id: 'apmid'" in script
+    assert "function hostnameDefaultsTool(config)" in script
+    assert "function hostnameDefaultsView()" in script
+    assert "button('Konfiguruj Location i Role'" in script
+    assert "id: 'hostname-defaults'" in script
+    assert "Location i Role są ustawiane globalnie." in script
+    assert "!['location', 'role'].includes(token)" in script
     assert "navigationParent: 'tools'" in script
     assert '/settings/vm-classification' in script
     assert 'settings-environment-grid' in stylesheet
     assert '.apmid-list' in stylesheet
     assert '.apmid-inline-form' in stylesheet
+    assert '.hostname-defaults-form' in stylesheet
     assert "environment: 'environment'" in script
     assert "apmid: 'apmid'" in script
+    assert 'function fixedApmid(item)' in script
+    assert "registerExtension('blueprint-runtime-apmid'" in script
+    assert "'/vm-classification/options'" in script
+    assert "'runtime_apmid'" in script
+    assert 'Ten Blueprint nie ma przypisanego APMID' in script
+    assert "deployment.apmid = String(state.apmid).trim().toUpperCase()" in script
     assert "apmid + '.' + environment" in script
     assert "'apmid-' + apmid" in script
     assert "'env-' + environment" in script
