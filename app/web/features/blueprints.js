@@ -124,8 +124,7 @@ function blueprintWorkflow(options) {
   add('cloud_init', 'cloud_init');
   if (options.tags) add('tags', 'set_tags');
   add('apply', 'terraform_apply');
-  if (options.waitAgent || options.ansible) { add('agent', 'wait_for_agent'); add('guest_ip', 'wait_for_ip'); }
-  if (options.ansible) add('ansible', 'run_ansible_playbook');
+  if (options.waitAgent || options.ansible) { add('agent', 'wait_for_agent'); add('guest_ip', 'wait_for_ip'); }  if (options.ansible) add('ansible', 'run_ansible_playbook');
   return steps;
 }
 async function proxmoxBlueprintForm(item = null, options = {}) {
@@ -461,20 +460,14 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const [storageResult, networkResult, qemuReadiness] = await Promise.all([
         api('/providers/' + providerId + '/storages?node=' + encodeURIComponent(targetNode)),
         api('/providers/' + providerId + '/networks?node=' + encodeURIComponent(targetNode)),
-        api('/providers/' + providerId + '/qemu-agent-readiness').catch(error => ({
-          ok: false,
-          reason: error.message || 'readiness_check_failed',
-        })),
+        api('/providers/' + providerId + '/qemu-agent-readiness')
+          .catch(error => ({ ok: false, reason: error.message || 'readiness_check_failed' })),
       ]);
       const availableStorages = storageResult.items.filter(value => !value.disable);
       const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
       const snippetState = window.BlueprintProvisioningGuards.selectSnippetStorage(availableStorages, cloudInitSnippetStorage);
       cloudInitSnippetStorage = snippetState.storage;
-      window.BlueprintProvisioningGuards.syncWaitAgentControl(
-        fields.querySelector('[name="wait_agent"]'),
-        snippetState.snippets,
-        qemuReadiness
-      );
+      window.BlueprintProvisioningGuards.syncWaitAgentControl(fields.querySelector('[name="wait_agent"]'), snippetState.snippets, qemuReadiness);
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
