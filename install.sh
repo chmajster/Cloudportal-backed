@@ -225,7 +225,11 @@ lock_holder_pid=''
 
 stop_cloudportal_application() {
   ui_info 'Zatrzymuję usługi aplikacyjne Cloudportal...'
-  systemctl stop cloudportal-updater.service >/dev/null 2>&1 || true
+  if ((update_in_progress)); then
+    ui_info 'Serwis updatera pozostaje aktywny na czas aktualizacji.'
+  else
+    systemctl stop cloudportal-updater.service >/dev/null 2>&1 || true
+  fi
   systemctl stop cloudportal-backup.timer cloudportal-backup.service >/dev/null 2>&1 || true
   systemctl stop cloudportal-dispatcher.service cloudportal-api.service >/dev/null 2>&1 || true
 
