@@ -332,12 +332,18 @@ class VMVariables(Input):
     ssh_username: Slug = 'clouduser'
     ssh_public_key: Annotated[str, Field(max_length=8192)] | None = None
     install_qemu_guest_agent: bool = False
-    cloud_init_snippet_storage: Slug = 'local'
+    cloud_init_snippet_storage: Slug | None = None
     ipv4_address: Annotated[str, Field(max_length=32)] | None = None
     ipv4_gateway: Annotated[str, Field(max_length=15)] | None = None
     dns_servers: Annotated[list[str], Field(max_length=8)] = Field(default_factory=list)
     dns_domain: Annotated[str | None, Field(max_length=253)] = None
     tags: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def qemu_agent_snippet_storage(self):
+        if self.install_qemu_guest_agent and not self.cloud_init_snippet_storage:
+            raise ValueError('QEMU Guest Agent installation requires cloud_init_snippet_storage')
+        return self
 
     @field_validator('ssh_public_key')
     @classmethod
