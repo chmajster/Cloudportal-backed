@@ -688,3 +688,80 @@ def test_blueprint_qemu_agent_requires_explicit_snippet_storage(client, headers)
     })
     assert response.status_code == 422
     assert 'cloud_init_snippet_storage' in response.text
+
+
+def test_blueprint_rejects_declarative_step_after_apply(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'bad-order',
+        'name': 'Bad order',
+        'deployment': {
+            'name': 'bad-order',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'tags', 'type': 'set_tags', 'depends_on': ['apply']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'before terraform_apply' in response.text
+
+
+def test_blueprint_rejects_release_ip_during_provisioning(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'unsafe-release-ip',
+        'name': 'Unsafe release IP',
+        'deployment': {
+            'name': 'unsafe-release-ip',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'release', 'type': 'release_ip', 'depends_on': ['apply']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'release_ip is not allowed' in response.text
+
+
+def test_blueprint_allows_destroy_only_as_rollback_target(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    invalid = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'destroy-normal-flow',
+        'name': 'Destroy normal flow',
+        'deployment': {
+            'name': 'destroy-normal-flow',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'destroy', 'type': 'terraform_destroy', 'depends_on': ['apply']},
+        ],
+    })
+    assert invalid.status_code == 422
+    assert 'rollback target' in invalid.text
+
+    valid = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'destroy-rollback',
+        'name': 'Destroy rollback',
+        'deployment': {
+            'name': 'destroy-rollback',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [
+            {'id': 'rollback_destroy', 'type': 'terraform_destroy'},
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'rollback': 'rollback_destroy'},
+        ],
+    })
+    assert valid.status_code == 201, valid.text
