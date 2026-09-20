@@ -397,6 +397,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'X-Update-Status-Token': token" in script
     assert 'Witaj, ${greetingName}!' in script
     assert 'dashboard-metrics' in script
+    assert 'function observabilityMetric(' in script
+    assert 'Stan platformy' in script
+    assert 'System działa poprawnie' in script
+    assert 'Brak aktywnych alertów' in script
+    assert 'Kopiuj metryki' in script
     assert 'dashboard-metric-action' in script
     assert "runCommand('deployments.open'" in script
     assert "entity: { type: 'deployment', item }" in script
@@ -514,6 +519,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.sidebar-profile-card' in stylesheet
     assert '.nav-link.active::before' in stylesheet
     assert '.dashboard-metrics' in stylesheet
+    assert '.observability-hero' in stylesheet
+    assert '.observability-metrics' in stylesheet
+    assert '.observability-metric' in stylesheet
+    assert '.observability-empty-state' in stylesheet
+    assert '.observability-metrics-output' in stylesheet
     assert '.dashboard-quick-action' in stylesheet
     assert '.dashboard-metric-action' in stylesheet
     assert '.global-search-dialog' in stylesheet
