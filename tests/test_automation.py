@@ -661,3 +661,30 @@ def test_blueprint_hostname_defaults_must_match_pattern(client, headers):
     })
     assert response.status_code == 422
     assert 'tokens not used' in response.text
+
+
+def test_blueprint_qemu_agent_requires_explicit_snippet_storage(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    variables = {
+        **deployment_payload['variables'],
+        'install_qemu_guest_agent': True,
+    }
+    variables.pop('cloud_init_snippet_storage', None)
+
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'missing-snippet-storage',
+        'name': 'Missing snippet storage',
+        'deployment': {
+            'name': 'missing-snippet-storage',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': variables,
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'agent', 'type': 'wait_for_agent', 'depends_on': ['apply']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'cloud_init_snippet_storage' in response.text
