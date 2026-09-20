@@ -681,7 +681,7 @@ def run_blueprint_workflow(context, executor):
         dependencies = [str(value) for value in (step.get('depends_on') or [])]
         blocked_dependencies = [
             dependency for dependency in dependencies
-            if runtime['step_states'].get(dependency) in {'skipped', 'blocked'}
+            if runtime['step_states'].get(dependency) != 'completed'
         ]
         if blocked_dependencies:
             runtime['step_states'][step_id] = 'blocked'
