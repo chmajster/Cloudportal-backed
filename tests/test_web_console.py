@@ -322,6 +322,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "function apmidView()" in script
     assert "function apmidTool(config)" in script
     assert "function apmidInputForm(" in script
+    assert "const IMMUTABLE_APMIDS = new Set(['LEO'])" in script
+    assert "Domyślny APMID systemowy — nie można edytować ani usunąć" in script
+    assert "Domyślny · zablokowany" in script
+    assert "apmid: 'LEO'" in script
+    assert "apmids.includes('LEO') ? 'LEO' : ''" in script
     assert "button('Otwórz listę APMID'" in script
     assert "button('Dodaj APMID'" in script
     assert "button('Edytuj'" in script

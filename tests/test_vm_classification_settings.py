@@ -12,7 +12,7 @@ def test_vm_classification_defaults_and_update(client, headers):
             'nonprod': True,
             'prod': True,
         },
-        'apmids': [],
+        'apmids': ['LEO'],
         'hostname_defaults': {'location': 'wro', 'role': 'server'},
     }
 
@@ -28,7 +28,7 @@ def test_vm_classification_defaults_and_update(client, headers):
     saved = client.put('/api/v1/settings/vm-classification', headers=headers, json=payload)
     assert saved.status_code == 200, saved.text
     assert saved.json()['environments'] == payload['environments']
-    assert saved.json()['apmids'] == ['IAASTEAM', 'CRM']
+    assert saved.json()['apmids'] == ['LEO', 'IAASTEAM', 'CRM']
     assert saved.json()['hostname_defaults'] == {'location': 'wro', 'role': 'server'}
 
     hostname_defaults = client.put('/api/v1/settings/vm-classification', headers=headers, json={
@@ -43,8 +43,28 @@ def test_vm_classification_defaults_and_update(client, headers):
         assert row is not None
         assert row.value['environments']['dev'] is True
         assert row.value['environments']['prod'] is False
-        assert row.value['apmids'] == ['IAASTEAM', 'CRM']
+        assert row.value['apmids'] == ['LEO', 'IAASTEAM', 'CRM']
         assert row.value['hostname_defaults'] == {'location': 'dc1', 'role': 'web'}
+
+
+def test_leo_apmid_is_immutable_system_default(client, headers):
+    removed = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
+        'apmids': [],
+    })
+    assert removed.status_code == 200, removed.text
+    assert removed.json()['apmids'] == ['LEO']
+
+    renamed = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
+        'apmids': ['LEO2'],
+    })
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()['apmids'] == ['LEO', 'LEO2']
+
+    with session() as db:
+        row = db.get(Setting, 'vm_classification')
+        assert row.value['apmids'] == ['LEO', 'LEO2']
 
 
 def test_vm_classification_requires_settings_permissions(client, headers):
@@ -74,7 +94,7 @@ def test_blueprint_execution_can_read_vm_classification_without_settings_permiss
     )
     response = client.get('/api/v1/vm-classification/options', headers=executor)
     assert response.status_code == 200, response.text
-    assert response.json()['apmids'] == ['IAASTEAM', 'CRM']
+    assert response.json()['apmids'] == ['LEO', 'IAASTEAM', 'CRM']
 
     _reader, reader = new_user(
         client,
