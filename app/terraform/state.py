@@ -54,10 +54,14 @@ def read_stored_state(db, deployment_id: str):
 
 def restore_state(deployment_id: str, workspace):
     with session() as db:
-        state = read_stored_state(db, deployment_id)
-        if state is None:
+        row = db.get(TerraformState, deployment_id)
+        if row is None:
             return False
-        raw = json.dumps(state, separators=(',', ':'), sort_keys=True).encode()
+        raw = decrypt_blob(row.encrypted_state, f'terraform-state:{deployment_id}')
+        if len(raw) > MAX_STATE_BYTES:
+            raise RuntimeError('Stored Terraform state exceeds the safety limit')
+        if hashlib.sha256(raw).hexdigest() != row.state_sha256:
+            raise RuntimeError('Stored Terraform state integrity check failed')
     target = workspace / 'terraform.tfstate'
     temporary = workspace / '.terraform.tfstate.restore'
     temporary.write_bytes(raw)
