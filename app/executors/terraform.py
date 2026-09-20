@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -26,6 +27,51 @@ def workspace_lock(workspace):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+@contextmanager
+def terraform_plugin_cache_lock(cache_dir):
+    cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (cache_dir / '.init.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def terraform_init_fingerprint(source, binary):
+    digest = hashlib.sha256()
+    digest.update(binary.encode())
+    candidates = sorted(source.glob('*.tf'), key=lambda path: path.name)
+    lock_file = source / '.terraform.lock.hcl'
+    if lock_file.exists():
+        candidates.append(lock_file)
+    for path in candidates:
+        digest.update(path.name.encode())
+        digest.update(b'\0')
+        digest.update(path.read_bytes())
+        digest.update(b'\0')
+    return digest.hexdigest()
+
+
+def terraform_init_ready(workspace, fingerprint, binary):
+    if not (workspace / '.terraform' / 'providers').exists():
+        return False
+    marker = workspace / '.cloudportal-terraform-init.json'
+    try:
+        data = json.loads(marker.read_text())
+    except (OSError, ValueError, TypeError):
+        return False
+    return data.get('fingerprint') == fingerprint and data.get('binary') == binary
+
+
+def mark_terraform_initialized(workspace, fingerprint, binary):
+    marker = workspace / '.cloudportal-terraform-init.json'
+    temporary = workspace / '.cloudportal-terraform-init.tmp'
+    temporary.write_text(json.dumps({'fingerprint': fingerprint, 'binary': binary}, sort_keys=True))
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, marker)
+
+
 class TerraformExecutor(Executor):
     binary = 'terraform'
 
@@ -38,6 +84,9 @@ class TerraformExecutor(Executor):
             raise ExecutionFailed('Unapproved Terraform template') from None
         secret = decrypt_secret(credential)
         env = execution_environment(workspace)
+        plugin_cache = settings().data_dir / 'terraform-plugin-cache'
+        plugin_cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+        env['TF_PLUGIN_CACHE_DIR'] = str(plugin_cache)
         provider_type = definition['provider']
         if credential.type != provider_type:
             raise ExecutionFailed('Credential type does not match Terraform template provider')
@@ -127,8 +176,20 @@ class TerraformExecutor(Executor):
                 variables_path = workspace / 'terraform.tfvars.json'
                 variables_path.write_text(json.dumps(deployment.variables))
                 os.chmod(variables_path, 0o600)
-                context.stage('terraform.init')
-                run_process([self.binary, 'init', '-input=false', '-no-color'], workspace, env, context, sensitive_values)
+                init_fingerprint = terraform_init_fingerprint(source, self.binary)
+                if terraform_init_ready(workspace, init_fingerprint, self.binary):
+                    context.log('terraform.init.cached: pominięto ponowną inicjalizację; provider i workspace są już gotowe')
+                else:
+                    init_command = [self.binary, 'init', '-input=false', '-no-color']
+                    if (workspace / '.terraform.lock.hcl').exists():
+                        init_command.append('-lockfile=readonly')
+                    context.stage('terraform.init')
+                    with terraform_plugin_cache_lock(plugin_cache):
+                        if terraform_init_ready(workspace, init_fingerprint, self.binary):
+                            context.log('terraform.init.cached: inicjalizacja została wykonana przez inny worker')
+                        else:
+                            run_process(init_command, workspace, env, context, sensitive_values)
+                            mark_terraform_initialized(workspace, init_fingerprint, self.binary)
                 try:
                     if operation == 'terraform.import':
                         import_values = (context.job.payload or {}).get('import_values') or {}
