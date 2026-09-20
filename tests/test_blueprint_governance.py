@@ -403,7 +403,7 @@ def test_waiting_approval_expires_and_removes_plan(client, headers, monkeypatch,
     )
     assert launched.status_code == 202
 
-    monkeypatch.setattr('app.jobs.worker.settings().data_dir', tmp_path)
+    monkeypatch.setattr(worker.settings(), 'data_dir', tmp_path)
 
     def terraform_execute(self, operation, context):
         workspace = tmp_path / 'workspaces' / context.deployment.workspace
