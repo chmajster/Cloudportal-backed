@@ -26,6 +26,7 @@ class Context:
         self.last_check = 0
         self.step_deadline = None
         self.blueprint_workflow_completed = False
+        self.rollback_destroyed = False
         self.deployment = self.credential = self.ansible = self.ansible_credential = None
 
     def check(self):
@@ -558,25 +559,31 @@ def run_blueprint_workflow(context, executor):
         if rollback_step is None:
             raise ExecutionFailed(f'Rollback target {target_id} does not exist')
         rollback_type = str(rollback_step.get('type'))
-        context.stage(f'workflow.rollback.start:{failed_step_id}:{target_id}:{rollback_type}')
-        if rollback_type == 'terraform_destroy':
-            executor.execute('terraform.destroy', context)
-            mark_destroyed_after_rollback()
-        elif rollback_type == 'notification':
-            message = str((rollback_step.get('conditions') or {}).get('message') or target_id)
-            context.log('workflow.rollback.notification: ' + message[:1000])
-        elif rollback_type == 'delay':
-            seconds = float((rollback_step.get('conditions') or {}).get('seconds', 1))
-            timeout = int(rollback_step.get('timeout') or 600)
-            if seconds < 0 or seconds > timeout:
-                raise ExecutionFailed('Rollback delay seconds must be between 0 and rollback timeout')
-            deadline = time.monotonic() + seconds
-            while time.monotonic() < deadline:
-                context.check()
-                time.sleep(min(1, max(0, deadline - time.monotonic())))
-        else:
-            raise ExecutionFailed(f'Unsupported rollback step type: {rollback_type}')
-        context.stage(f'workflow.rollback.completed:{failed_step_id}:{target_id}:{rollback_type}')
+        rollback_timeout = int(rollback_step.get('timeout') or 600)
+        previous_deadline = context.step_deadline
+        context.step_deadline = time.monotonic() + rollback_timeout
+        try:
+            context.stage(f'workflow.rollback.start:{failed_step_id}:{target_id}:{rollback_type}')
+            if rollback_type == 'terraform_destroy':
+                executor.execute('terraform.destroy', context)
+                mark_destroyed_after_rollback()
+                context.rollback_destroyed = True
+            elif rollback_type == 'notification':
+                message = str((rollback_step.get('conditions') or {}).get('message') or target_id)
+                context.log('workflow.rollback.notification: ' + message[:1000])
+            elif rollback_type == 'delay':
+                seconds = float((rollback_step.get('conditions') or {}).get('seconds', 1))
+                if seconds < 0 or seconds > rollback_timeout:
+                    raise ExecutionFailed('Rollback delay seconds must be between 0 and rollback timeout')
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    context.check()
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
+            else:
+                raise ExecutionFailed(f'Unsupported rollback step type: {rollback_type}')
+            context.stage(f'workflow.rollback.completed:{failed_step_id}:{target_id}:{rollback_type}')
+        finally:
+            context.step_deadline = previous_deadline
 
     def apply_and_sync():
         context.stage('workflow.terraform_apply')
@@ -844,6 +851,7 @@ def execute(job_id):
             and current.source != 'Recovery'
             and current.deployment_id
             and blueprint.get('recovery_policy') == 'destroy_on_failure'
+            and not context.rollback_destroyed
         ):
             deployment = db.get(Deployment, current.deployment_id)
             if deployment is not None and deployment.active_job_id is None:
