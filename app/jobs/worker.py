@@ -609,6 +609,7 @@ def run_blueprint_workflow(context, executor):
         'ansible_ran': False,
         'prepared': [],
         'step_states': {},
+        'plan_ready': False,
     }
 
     by_id = {str(step.get('id')): step for step in steps}
@@ -679,7 +680,12 @@ def run_blueprint_workflow(context, executor):
         context.stage('workflow.terraform_apply')
         if reason != 'explicit':
             context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
-        workspace = executor.execute('terraform.apply', context)
+        context.apply_saved_terraform_plan = bool(runtime['plan_ready'])
+        try:
+            workspace = executor.execute('terraform.apply', context)
+        finally:
+            context.apply_saved_terraform_plan = False
+        runtime['plan_ready'] = False
         runtime['workspace'] = workspace
         runtime['applied'] = True
         context.stage('inventory.synchronizing')
@@ -755,7 +761,12 @@ def run_blueprint_workflow(context, executor):
                         'desired state is owned by terraform_apply'
                     )
                 elif step_type == 'terraform_plan':
-                    runtime['workspace'] = executor.execute('terraform.plan', context)
+                    context.keep_terraform_plan = True
+                    try:
+                        runtime['workspace'] = executor.execute('terraform.plan', context)
+                    finally:
+                        context.keep_terraform_plan = False
+                    runtime['plan_ready'] = True
                 elif step_type == 'terraform_apply':
                     apply_and_sync()
                 elif step_type == 'terraform_destroy':
