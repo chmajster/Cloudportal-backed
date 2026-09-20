@@ -15,6 +15,7 @@ from app.inventory_sync import repair_inventory_from_states
 from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
 from app.security.core import redis_client
+from app.terraform.state import delete_plan
 
 
 @lru_cache
@@ -162,6 +163,9 @@ def expire_waiting_approvals(db):
                     ManagedVM.lifecycle_status == 'active',
                 ).limit(1))
             )
+
+        if deployment is not None:
+            delete_plan(deployment.id)
 
         if has_resource:
             job.status = 'failed'
