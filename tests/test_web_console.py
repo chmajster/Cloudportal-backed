@@ -361,7 +361,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Domyślny APMID systemowy — nie można edytować ani usunąć" in script
     assert "Domyślny · zablokowany" in script
     assert "apmid: 'LEO'" in script
-    assert "apmids.includes('LEO') ? 'LEO' : ''" in script
+    assert "apmids.includes('LEO') ? 'LEO' : apmids[0]" in script
     assert "button('Otwórz listę APMID'" in script
     assert "button('Dodaj APMID'" in script
     assert "button('Edytuj'" in script
@@ -381,12 +381,24 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.hostname-defaults-form' in stylesheet
     assert "environment: 'environment'" in script
     assert "apmid: 'apmid'" in script
+    assert "select_environment_on_execute: 'selectEnvironmentOnExecute'" in script
+    assert "select_apmid_on_execute: 'selectApmidOnExecute'" in script
+    assert 'Wybieraj Environment podczas tworzenia VM' in script
+    assert 'Wybieraj APMID podczas tworzenia VM' in script
+    assert 'Parametry wybierane przy użyciu Blueprintu' in script
     assert 'function fixedApmid(item)' in script
+    assert 'function fixedEnvironment(item)' in script
+    assert 'function allowsRuntimeEnvironment(item)' in script
     assert "registerExtension('blueprint-runtime-apmid'" in script
     assert "'/vm-classification/options'" in script
     assert "'runtime_apmid'" in script
-    assert 'Ten Blueprint nie ma przypisanego APMID' in script
+    assert "'runtime_environment'" in script
+    assert 'Ten Blueprint pozwala wybrać APMID podczas tworzenia VM.' in script
+    assert 'Ten Blueprint pozwala wybrać środowisko podczas tworzenia VM.' in script
     assert "deployment.apmid = String(state.apmid).trim().toUpperCase()" in script
+    assert "deployment.environment = String(state.environment).trim().toLowerCase()" in script
+    assert "deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute)" in script
+    assert "deployment.select_environment_on_execute = Boolean(state.selectEnvironmentOnExecute)" in script
     assert "apmid + '.' + environment" in script
     assert "'apmid-' + apmid" in script
     assert "'env-' + environment" in script
