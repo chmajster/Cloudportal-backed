@@ -171,7 +171,7 @@ async function myResourcesView() {
   const canReadInventory = allowed('inventory.read');
   const [deploymentResult, vmResult, resourceResult, providerResult] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
-    canReadInventory ? api('/inventory/vms?refresh=true&limit=200') : Promise.resolve({ items: [] }),
+    canReadInventory ? api('/inventory/vms?limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
   ]);
