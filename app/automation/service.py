@@ -154,7 +154,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
     if scheme_id:
         global_hostname_defaults = vm_classification_settings(db)['hostname_defaults']
         defaults = render_template(default_hostname_values, variables)
-        merged_hostname_values = {**global_hostname_defaults, **defaults, **hostname_values}
+        merged_hostname_values = {**defaults, **hostname_values, **global_hostname_defaults}
         hostname, reservation = generate_hostname(db, scheme_id, merged_hostname_values, actor_id, reserve=True)
         variables['hostname'] = hostname
         # A Blueprint with a hostname scheme uses the generated hostname as the
