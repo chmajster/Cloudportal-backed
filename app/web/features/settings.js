@@ -24,10 +24,18 @@ function settingsHealth(value) {
   return badge(String(value ?? 'Nieznany'), 'info');
 }
 
-function ldapDetailRow(label, value) {
-  return node('div', { class: 'detail-item' },
-    node('span', { class: 'muted', text: label }),
-    node('strong', { text: String(value ?? '—') }));
+function ldapDetailRow(label, value, options = {}) {
+  return node('div', { class: 'settings-ldap-detail' + (options.wide ? ' wide' : '') },
+    node('span', { class: 'settings-ldap-detail-label', text: label }),
+    node('strong', { class: options.mono ? 'mono' : '', text: String(value ?? '—') }));
+}
+
+function ldapFilterCard(title, filter) {
+  return node('article', { class: 'settings-ldap-filter-card' },
+    node('div', { class: 'settings-ldap-filter-head' },
+      node('span', { class: 'settings-ldap-filter-icon', 'aria-hidden': 'true' }, appIcon('filter')),
+      node('strong', { text: title })),
+    node('code', { text: filter }));
 }
 
 function ldapSettingsForm(config) {
@@ -177,12 +185,6 @@ async function settingsView() {
     allowed('updates.read') ? api('/updates/settings').catch(() => null) : Promise.resolve(null),
   ]);
 
-  const actions = [];
-  if (allowed('settings.update')) {
-    actions.push(button('Konfiguruj LDAP', () => ldapSettingsForm(config), 'primary'));
-    actions.push(button('Testuj LDAP', testLdap));
-  }
-
   const user = state.identity?.user || {};
   const roles = state.identity?.roles || [];
   const permissions = state.identity?.permissions || [];
@@ -282,35 +284,65 @@ async function settingsView() {
       : null
   );
 
+  const ldapActions = [];
+  if (allowed('settings.update')) {
+    ldapActions.push(button('Testuj połączenie', testLdap));
+    ldapActions.push(button('Konfiguruj LDAP', () => ldapSettingsForm(config), 'primary'));
+  }
+
+  const ldapTls = config.url?.startsWith('ldaps://') ? 'LDAPS' : (config.start_tls ? 'StartTLS' : 'Bez TLS');
   const ldap = node('section', { class: 'panel settings-ldap-panel' },
-    node('div', { class: 'panel-header' },
+    node('div', { class: 'settings-ldap-hero' },
+      node('div', { class: 'settings-ldap-heading' },
+        node('span', { class: 'settings-ldap-icon', 'aria-hidden': 'true' }, appIcon('server')),
+        node('div', {},
+          node('div', { class: 'settings-ldap-title-row' },
+            node('h2', { text: 'LDAP' }),
+            badge(config.enabled ? 'Włączony' : 'Wyłączony', config.enabled ? 'ok' : 'warning')),
+          node('p', { class: 'muted', text: 'Logowanie katalogowe, JIT provisioning lokalnego konta i późniejsze przypisanie ról przez RBAC.' }))),
+      ldapActions.length ? node('div', { class: 'settings-ldap-actions' }, ldapActions) : null),
+
+    node('div', { class: 'settings-ldap-overview' },
+      node('section', { class: 'settings-ldap-section' },
+        node('div', { class: 'settings-ldap-section-head' },
+          node('span', { class: 'settings-ldap-section-icon', 'aria-hidden': 'true' }, appIcon('server')),
+          node('div', {}, node('strong', { text: 'Połączenie' }), node('small', { text: 'Serwer katalogowy i zakres wyszukiwania' }))),
+        node('div', { class: 'settings-ldap-detail-grid' },
+          ldapDetailRow('Serwer', config.url || '—', { mono: true, wide: true }),
+          ldapDetailRow('Base DN', config.base_dn || 'Nie skonfigurowano', { mono: true, wide: true }),
+          ldapDetailRow('Bind DN', config.bind_dn || 'Anonymous bind', { mono: Boolean(config.bind_dn), wide: true }),
+          ldapDetailRow('Sekret bind', config.bind_password_configured ? 'Skonfigurowany' : 'Brak'))),
+
+      node('section', { class: 'settings-ldap-section' },
+        node('div', { class: 'settings-ldap-section-head' },
+          node('span', { class: 'settings-ldap-section-icon', 'aria-hidden': 'true' }, appIcon('shield')),
+          node('div', {}, node('strong', { text: 'TLS i mapowanie' }), node('small', { text: 'Bezpieczeństwo oraz atrybuty konta' }))),
+        node('div', { class: 'settings-ldap-detail-grid' },
+          ldapDetailRow('Transport', ldapTls),
+          ldapDetailRow('Weryfikacja TLS', config.verify_tls ? 'Włączona' : 'Wyłączona'),
+          ldapDetailRow('Login', config.username_attribute || 'uid', { mono: true }),
+          ldapDetailRow('E-mail', config.email_attribute || 'mail', { mono: true }),
+          ldapDetailRow('Filtr użytkownika', config.user_filter || '—', { mono: true, wide: true })))),
+    
+    node('div', { class: 'settings-ldap-jit' },
+      node('span', { class: 'settings-ldap-jit-icon', 'aria-hidden': 'true' }, appIcon('users')),
       node('div', {},
-        node('h2', { text: 'LDAP' }),
-        node('p', { class: 'muted', text: 'Logowanie katalogowe z automatycznym utworzeniem lokalnego konta i późniejszym przypisaniem ról przez RBAC.' })),
-      badge(config.enabled ? 'Włączony' : 'Wyłączony', config.enabled ? 'ok' : 'warning')),
-    node('div', { class: 'detail-grid' },
-      ldapDetailRow('Serwer', config.url || '—'),
-      ldapDetailRow('Base DN', config.base_dn || '—'),
-      ldapDetailRow('Bind DN', config.bind_dn || 'Anonymous bind'),
-      ldapDetailRow('Sekret bind', config.bind_password_configured ? 'Skonfigurowany' : 'Brak'),
-      ldapDetailRow('TLS', config.url?.startsWith('ldaps://') ? 'LDAPS' : (config.start_tls ? 'StartTLS' : 'Bez TLS')),
-      ldapDetailRow('Weryfikacja TLS', config.verify_tls ? 'Włączona' : 'Wyłączona'),
-      ldapDetailRow('Filtr użytkownika', config.user_filter || '—'),
-      ldapDetailRow('Mapowanie loginu', config.username_attribute || 'uid'),
-      ldapDetailRow('Mapowanie e-mail', config.email_attribute || 'mail')),
-    node('div', { class: 'callout info' },
-      node('strong', { text: 'JIT provisioning i RBAC' }),
-      node('p', { text: 'Po pierwszym poprawnym logowaniu LDAP Cloudportal tworzy konto z auth_source=ldap bez żadnych ról. Administrator przypisuje role później w Użytkownicy → Role. Hasło pozostaje wyłącznie w LDAP i nie jest zapisywane przez Cloudportal.' })));
+        node('strong', { text: 'JIT provisioning i RBAC' }),
+        node('p', { text: 'Po pierwszym poprawnym logowaniu LDAP Cloudportal tworzy lokalne konto bez ról. Administrator przypisuje role później w Użytkownicy → Role. Hasło pozostaje wyłącznie w LDAP i nie jest zapisywane przez Cloudportal.' }))),
+
+    node('div', { class: 'settings-ldap-filters' },
+      node('div', { class: 'settings-ldap-filters-head' },
+        node('div', {},
+          node('strong', { text: 'Przykładowe filtry użytkownika' }),
+          node('span', { class: 'muted', text: 'Gotowe wzorce dla najczęstszych katalogów.' }))),
+      node('div', { class: 'settings-ldap-filter-grid' },
+        ldapFilterCard('LDAP / LLDAP', '(&(objectClass=person)(uid={username}))'),
+        ldapFilterCard('Active Directory', '(&(objectClass=user)(sAMAccountName={username}))'))));
 
   dom.content.replaceChildren(
-    heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.', actions),
+    heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.'),
     node('div', { class: 'settings-grid' }, appearance, account, system, updates, security, environmentCard),
-    ldap,
-    node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Przykładowe filtry LDAP' })),
-      node('div', { class: 'detail-grid' },
-        ldapDetailRow('LDAP / LLDAP', '(&(objectClass=person)(uid={username}))'),
-        ldapDetailRow('Active Directory', '(&(objectClass=user)(sAMAccountName={username}))')))
+    ldap
   );
 }
 
