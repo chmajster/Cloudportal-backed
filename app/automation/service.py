@@ -71,6 +71,7 @@ def generate_hostname(db, scheme_id, values, actor_id, reserve=True):
     scheme = db.scalar(query)
     if not scheme or not scheme.is_active:
         raise HTTPException(404, 'Active hostname scheme not found')
+    values = {**vm_classification_settings(db)['hostname_defaults'], **values}
     number = scheme.next_number
     for _ in range(1000):
         hostname = _hostname(scheme, values, number)
@@ -152,9 +153,9 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id):
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
     if scheme_id:
-        global_hostname_defaults = vm_classification_settings(db)['hostname_defaults']
         defaults = render_template(default_hostname_values, variables)
-        merged_hostname_values = {**defaults, **hostname_values, **global_hostname_defaults}
+        defaults = {key: value for key, value in defaults.items() if key not in {'location', 'role'}}
+        merged_hostname_values = {**defaults, **hostname_values}
         hostname, reservation = generate_hostname(db, scheme_id, merged_hostname_values, actor_id, reserve=True)
         variables['hostname'] = hostname
         # A Blueprint with a hostname scheme uses the generated hostname as the
