@@ -146,10 +146,10 @@ async function showProxmoxTask(item, result, title) {
       node('summary', { text: 'Identyfikator zadania' }),
       node('div', { class: 'secret-box mono', text: String(result.task) })));
   dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-  if (!dom.modal.open) dom.modal.showModal();
+  if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) dom.modal.showModal();
 
   const poll = async () => {
-    if (nonce !== state.taskPollNonce || !dom.modal.open) return;
+    if (nonce !== state.taskPollNonce || !(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) return;
     try {
       const task = await api(`/providers/${item.provider_id}/tasks/${encodeURIComponent(item.node)}/${encodeURIComponent(String(result.task))}`);
       const stopped = task.status === 'stopped' || Boolean(task.exitstatus);
