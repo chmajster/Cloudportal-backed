@@ -274,6 +274,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         required_workflow_permissions.add('snapshots.create')
     if 'release_ip' in workflow_types:
         required_workflow_permissions.add('ipam.release')
+    if 'terraform_destroy' in workflow_types:
+        required_workflow_permissions.add('deployments.destroy')
     missing_workflow_permissions = required_workflow_permissions - request.state.permissions
     if missing_workflow_permissions:
         raise HTTPException(
