@@ -105,15 +105,6 @@ function ldapSettingsForm(config) {
   });
 }
 
-function vmEnvironmentPayload(config) {
-  return {
-    test: config.environments?.test !== false,
-    dev: config.environments?.dev !== false,
-    nonprod: config.environments?.nonprod !== false,
-    prod: config.environments?.prod !== false,
-  };
-}
-
 function environmentSettingsForm(config) {
   const environmentLabels = {
     test: 'TEST',
@@ -164,44 +155,6 @@ function environmentSettingsForm(config) {
         },
       });
       toast('Ustawienia Environment zapisane.');
-      navigate('settings');
-    },
-  });
-}
-
-function apmidSettingsForm(config) {
-  const fields = node('div', { class: 'form-grid' },
-    node('div', { class: 'wide blueprint-wizard-info' },
-      node('strong', { text: 'APMID' }),
-      node('span', { text: 'Zarządzaj identyfikatorami aplikacji dostępnymi w kreatorze VM. APMID jest również dodawany jako tag Proxmox.' })),
-    field('APMID', 'apmids', {
-      tag: 'textarea',
-      value: (config.apmids || []).join('\n'),
-      wide: true,
-      placeholder: 'IAASTEAM\nCRM\nPAYMENTS',
-      help: 'Jeden APMID w wierszu. Dozwolone: litery, cyfry, _ oraz -. Wartości są zapisywane wielkimi literami.',
-    })
-  );
-
-  openModal({
-    title: 'APMID',
-    eyebrow: 'Klasyfikacja VM',
-    body: fields,
-    submitLabel: 'Zapisz APMID',
-    wide: true,
-    onSubmit: async (data) => {
-      const apmids = String(data.get('apmids') || '')
-        .split(/[\n,]+/)
-        .map(value => value.trim().toUpperCase())
-        .filter(Boolean);
-      await api('/settings/vm-classification', {
-        method: 'PUT',
-        body: {
-          environments: vmEnvironmentPayload(config),
-          apmids,
-        },
-      });
-      toast('Ustawienia APMID zapisane.');
       navigate('settings');
     },
   });
@@ -329,19 +282,6 @@ async function settingsView() {
       : null
   );
 
-  const apmidCard = settingsCard(
-    'box',
-    'APMID',
-    'Identyfikatory aplikacji używane przez kreator VM i tagi Proxmox.',
-    node('div', { class: 'settings-values' },
-      settingsValue('Liczba APMID', String((vmClassification.apmids || []).length)),
-      settingsValue('Wartości', (vmClassification.apmids || []).length ? vmClassification.apmids.join(', ') : 'Brak')),
-    allowed('settings.update')
-      ? node('div', { class: 'settings-card-actions' },
-          button('Konfiguruj APMID', () => apmidSettingsForm(vmClassification), 'primary'))
-      : null
-  );
-
   const ldap = node('section', { class: 'panel settings-ldap-panel' },
     node('div', { class: 'panel-header' },
       node('div', {},
@@ -364,7 +304,7 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.', actions),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security, environmentCard, apmidCard),
+    node('div', { class: 'settings-grid' }, appearance, account, system, updates, security, environmentCard),
     ldap,
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Przykładowe filtry LDAP' })),
