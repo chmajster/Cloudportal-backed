@@ -377,7 +377,7 @@ function short(value, length = 12) {
 function badge(text, kind = '') { return node('span', { class: `badge ${kind}`, text }); }
 function statusKind(status) {
   if (['ok', 'active', 'successful', 'configured'].includes(status)) return 'ok';
-  if (['queued', 'running', 'degraded', 'waiting_provider'].includes(status)) return 'warning';
+  if (['queued', 'running', 'cancelling', 'degraded', 'waiting_provider'].includes(status)) return 'warning';
   if (['failed', 'locked', 'revoked', 'inactive'].includes(status)) return 'danger';
   return 'info';
 }
@@ -683,7 +683,7 @@ function formSection(title, description, ...children) {
 const STATUS_LABELS = {
   ok: 'OK', active: 'Aktywny', inactive: 'Nieaktywny', configured: 'Skonfigurowany', locked: 'Zablokowany',
   revoked: 'Unieważniony', expired: 'Wygasły', queued: 'W kolejce', running: 'W trakcie',
-  waiting_provider: 'Oczekuje na Proxmox',
+  waiting_provider: 'Oczekuje na Proxmox', cancelling: 'Anulowanie…',
   successful: 'Zakończony', failed: 'Błąd', cancelled: 'Anulowany', destroyed: 'Usunięty',
   degraded: 'Ograniczony', missing: 'Brak', present: 'Dostępny', defined: 'Zdefiniowany',
   released: 'Zwolniony', reserved: 'Zarezerwowany', assigned: 'Przypisany', disabled: 'Wyłączony',
