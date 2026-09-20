@@ -521,16 +521,17 @@ def run_blueprint_workflow(context, executor):
         'applied': False,
         'ansible_ran': False,
         'prepared': [],
+        'step_states': {},
     }
 
     by_id = {str(step.get('id')): step for step in steps}
     rollback_targets = {str(step.get('rollback')) for step in steps if step.get('rollback')}
-
-
-    def require_workspace():
-        if runtime['workspace'] is None:
-            raise ExecutionFailed('Workflow step requires terraform_apply to run first')
-        return runtime['workspace']
+    explicit_apply_ids = {
+        str(step.get('id')) for step in steps if str(step.get('type')) == 'terraform_apply'
+    }
+    legacy_provisioning = any(
+        str(step.get('type')) in BLUEPRINT_DECLARATIVE_STEPS for step in steps
+    )
 
     def mark_destroyed_after_rollback():
         released_at = now()
@@ -560,6 +561,8 @@ def run_blueprint_workflow(context, executor):
             raise ExecutionFailed(f'Rollback target {target_id} does not exist')
         rollback_type = str(rollback_step.get('type'))
         rollback_timeout = int(rollback_step.get('timeout') or 600)
+        if rollback_type == 'terraform_destroy':
+            rollback_timeout = max(rollback_timeout, settings().execution_timeout)
         previous_deadline = context.step_deadline
         context.step_deadline = time.monotonic() + rollback_timeout
         try:
@@ -585,8 +588,10 @@ def run_blueprint_workflow(context, executor):
         finally:
             context.step_deadline = previous_deadline
 
-    def apply_and_sync():
+    def apply_and_sync(reason='explicit'):
         context.stage('workflow.terraform_apply')
+        if reason != 'explicit':
+            context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
         workspace = executor.execute('terraform.apply', context)
         runtime['workspace'] = workspace
         runtime['applied'] = True
@@ -602,18 +607,46 @@ def run_blueprint_workflow(context, executor):
         runtime['prepared'].clear()
         return workspace
 
+    def workspace_for(step_type):
+        if runtime['workspace'] is not None and runtime['applied']:
+            return runtime['workspace']
+        if explicit_apply_ids:
+            raise ExecutionFailed(
+                f'Workflow step {step_type} requires a completed terraform_apply dependency'
+            )
+        if legacy_provisioning:
+            return apply_and_sync(step_type)
+        raise ExecutionFailed(f'Workflow step {step_type} requires terraform_apply')
+
     for step in steps:
         step_id = str(step.get('id'))
         step_type = str(step.get('type'))
+
         if step_id in rollback_targets:
+            runtime['step_states'][step_id] = 'rollback_only'
             context.log(f'workflow.step.rollback_only: {step_id}:{step_type}')
             continue
+
+        dependencies = [str(value) for value in (step.get('depends_on') or [])]
+        blocked_dependencies = [
+            dependency for dependency in dependencies
+            if runtime['step_states'].get(dependency) in {'skipped', 'blocked'}
+        ]
+        if blocked_dependencies:
+            runtime['step_states'][step_id] = 'blocked'
+            context.log(
+                f'workflow.step.blocked: {step_id}:{step_type}: '
+                'dependency not executed: ' + ', '.join(blocked_dependencies)
+            )
+            continue
+
         retry = int(step.get('retry') or 0)
         timeout = int(step.get('timeout') or 600)
         if step_type in {'terraform_plan', 'terraform_apply'}:
             timeout = max(timeout, settings().execution_timeout)
 
         if not blueprint_conditions_match(step, context):
+            runtime['step_states'][step_id] = 'skipped'
             context.log(f'workflow.step.skipped: {step_id}:{step_type}: condition=false')
             continue
 
@@ -624,14 +657,17 @@ def run_blueprint_workflow(context, executor):
             try:
                 context.stage(f'workflow.step.start:{step_id}:{step_type}')
                 if step_type in BLUEPRINT_PRECOMPILED_STEPS:
-                    context.log(f'workflow.step.precompiled: {step_id}:{step_type}')
+                    context.log(
+                        f'workflow.step.legacy_marker: {step_id}:{step_type}; '
+                        'value was resolved before the job was queued'
+                    )
                 elif step_type in BLUEPRINT_DECLARATIVE_STEPS:
                     if runtime['applied']:
                         raise ExecutionFailed('Declarative VM step cannot run after terraform_apply')
                     runtime['prepared'].append(step_id + ':' + step_type)
                     context.log(
-                        f'workflow.step.prepared: {step_id}:{step_type}; '
-                        'desired state will be materialized by terraform_apply'
+                        f'workflow.step.legacy_marker: {step_id}:{step_type}; '
+                        'desired state is owned by terraform_apply'
                     )
                 elif step_type == 'terraform_plan':
                     runtime['workspace'] = executor.execute('terraform.plan', context)
@@ -640,24 +676,30 @@ def run_blueprint_workflow(context, executor):
                 elif step_type == 'terraform_destroy':
                     raise ExecutionFailed('terraform_destroy is rollback-only')
                 elif step_type == 'wait_for_vm':
-                    wait_for_vm(context, require_workspace(), timeout=timeout)
+                    wait_for_vm(context, workspace_for(step_type), timeout=timeout)
                 elif step_type == 'wait_for_agent':
-                    wait_for_agent(context, require_workspace(), timeout=timeout)
+                    wait_for_agent(context, workspace_for(step_type), timeout=timeout)
                 elif step_type == 'wait_for_ip':
-                    runtime['addresses'] = wait_for_ip(context, require_workspace(), timeout=timeout)
+                    runtime['addresses'] = wait_for_ip(
+                        context, workspace_for(step_type), timeout=timeout
+                    )
                 elif step_type == 'wait_for_ssh':
-                    address = wait_for_ssh(context, require_workspace(), timeout)
+                    address = wait_for_ssh(context, workspace_for(step_type), timeout)
                     runtime['addresses'] = [address]
                 elif step_type == 'run_ansible_playbook':
                     if not context.ansible:
-                        raise ExecutionFailed('Workflow requests Ansible but deployment has no Ansible configuration')
+                        raise ExecutionFailed(
+                            'Workflow requests Ansible but deployment has no Ansible configuration'
+                        )
                     if runtime['addresses'] is None:
-                        runtime['addresses'] = wait_for_ip(context, require_workspace(), timeout=timeout)
+                        runtime['addresses'] = wait_for_ip(
+                            context, workspace_for(step_type), timeout=timeout
+                        )
                     context.ansible.inventory = Inventory(hosts=runtime['addresses'])
                     AnsibleExecutor().execute('ansible.execute', context)
                     runtime['ansible_ran'] = True
                 elif step_type == 'create_snapshot':
-                    create_blueprint_snapshot(context, require_workspace(), step)
+                    create_blueprint_snapshot(context, workspace_for(step_type), step)
                 elif step_type == 'release_ip':
                     release_blueprint_ip(context)
                 elif step_type == 'health_check':
@@ -678,7 +720,9 @@ def run_blueprint_workflow(context, executor):
                 elif step_type == 'delay':
                     seconds = float((step.get('conditions') or {}).get('seconds', 1))
                     if seconds < 0 or seconds > timeout:
-                        raise ExecutionFailed('Workflow delay seconds must be between 0 and step timeout')
+                        raise ExecutionFailed(
+                            'Workflow delay seconds must be between 0 and step timeout'
+                        )
                     deadline = time.monotonic() + seconds
                     while time.monotonic() < deadline:
                         context.check()
@@ -687,10 +731,8 @@ def run_blueprint_workflow(context, executor):
                     message = str((step.get('conditions') or {}).get('message') or step_id)
                     context.log('workflow.notification: ' + message[:1000])
 
-                if step_type in BLUEPRINT_DECLARATIVE_STEPS:
-                    context.stage(f'workflow.step.prepared:{step_id}:{step_type}')
-                else:
-                    context.stage(f'workflow.step.completed:{step_id}:{step_type}')
+                runtime['step_states'][step_id] = 'completed'
+                context.stage(f'workflow.step.completed:{step_id}:{step_type}')
                 break
             except Cancelled:
                 raise
@@ -705,7 +747,8 @@ def run_blueprint_workflow(context, executor):
                             execute_rollback(rollback_id, step_id)
                         except Exception as rollback_exc:
                             raise ExecutionFailed(
-                                f'{terminal}; rollback {rollback_id} failed: {str(rollback_exc)[:200]}'
+                                f'{terminal}; rollback {rollback_id} failed: '
+                                f'{str(rollback_exc)[:200]}'
                             ) from None
                     raise terminal
                 context.log(
@@ -715,12 +758,15 @@ def run_blueprint_workflow(context, executor):
             finally:
                 context.step_deadline = previous_deadline
 
-    if not runtime['applied'] and (
-        runtime['prepared']
-        or any(step.get('type') in {'create_vm', 'clone_vm'} for step in steps)
-    ):
-        context.log('workflow.compatibility: implicit terraform_apply for declarative VM steps')
-        apply_and_sync()
+    if not runtime['applied']:
+        completed_explicit_apply = any(
+            runtime['step_states'].get(step_id) == 'completed'
+            for step_id in explicit_apply_ids
+        )
+        if explicit_apply_ids and not completed_explicit_apply:
+            raise ExecutionFailed('terraform_apply was skipped or blocked; VM was not provisioned')
+        if legacy_provisioning and not explicit_apply_ids:
+            apply_and_sync('workflow completion')
 
     if runtime['applied'] and not runtime['inventory_synced']:
         register_managed_inventory(context, runtime['workspace'])
@@ -728,14 +774,15 @@ def run_blueprint_workflow(context, executor):
     if context.ansible and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
         if runtime['addresses'] is None:
-            runtime['addresses'] = wait_for_ip(context, require_workspace())
+            runtime['addresses'] = wait_for_ip(
+                context, workspace_for('ansible compatibility')
+            )
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
 
     context.blueprint_workflow_completed = True
     context.stage('workflow.completed')
     return runtime['workspace']
-
 
 def execute(job_id):
     os.umask(0o077)
