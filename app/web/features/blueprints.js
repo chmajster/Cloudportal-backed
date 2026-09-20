@@ -1,5 +1,4 @@
 'use strict';
-
 (() => {
 function blueprintTemplateVariableField(name, spec, value) {
   const type = schemaType(spec);
@@ -642,18 +641,15 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           waitAgent: data.has('wait_agent'),
           ansible: Boolean(ansible),
         });
-
         const managerRoleIds = [...form.querySelectorAll('[name="manager_role_ids"]:checked')].map(input => Number(input.value));
         if (templateWizard && !item && roleChoices.length && !managerRoleIds.length) {
           throw new Error('Wybierz co najmniej jedną rolę zarządzającą szablonem.');
         }
-
         const blueprintSlug = String(data.get('slug') || '').trim();
         if (!blueprintSlug) throw new Error('Podaj slug / identyfikator szablonu.');
         const blueprintName = item?.name || blueprintSlug
           .replace(/[-_]+/g, ' ')
           .replace(/\b\w/g, value => value.toUpperCase());
-
         const payload = {
           slug: blueprintSlug,
           name: blueprintName,
@@ -689,7 +685,6 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           requires_approval: data.has('requires_approval'),
           recovery_policy: data.get('recovery_policy'),
         };
-
         await api(item ? '/blueprints/' + item.id : '/blueprints', {
           method: item ? 'PUT' : 'POST',
           body: payload,
