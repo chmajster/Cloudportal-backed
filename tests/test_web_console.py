@@ -141,6 +141,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "function resourceEmptyState(" in script
     assert "function resourceSection(" in script
     assert "my-resources-summary-card" in script
+    assert "my-resources-body" in script
     assert "my-resources-empty-icon" in script
     assert "my-resources-section-icon" in script
     assert "document.getElementById(sectionId)?.scrollIntoView" in script
@@ -154,6 +155,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.product-card' in stylesheet
     assert '.product-resource-tabs' in stylesheet
     assert '.my-resources-page-head' in stylesheet
+    assert '.my-resources-body' in stylesheet
     assert '.my-resources-summary-card' in stylesheet
     assert '.my-resources-summary-icon' in stylesheet
     assert '.my-resources-section-icon' in stylesheet
