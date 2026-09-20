@@ -256,7 +256,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
         raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
     def create():
-        rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id, data.apmid)
+        rendered, reservation, ip_allocation = compile_blueprint(db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment)
         blueprint_variables = rendered.pop('blueprint_variables')
         parsed = DeploymentInput.model_validate(rendered)
         require_catalog_item_enabled(db, 'templates', parsed.template)
