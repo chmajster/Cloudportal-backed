@@ -265,8 +265,6 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     source = portal_source(source_header)
     if not available_to(row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
-    if row.requires_approval and 'blueprints.approve' not in request.state.permissions:
-        raise HTTPException(403, 'blueprints.approve required by this blueprint')
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
         raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
     workflow_types = {step.get('type') for step in (row.workflow or [])}
@@ -328,6 +326,13 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         job = new_job(db, request, actor, 'terraform.apply', deployment,
                       {'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                        'blueprint': deployment.workflow['blueprint']})
+        if row.requires_approval:
+            payload = dict(job.payload or {})
+            payload['_approval'] = {'status': 'pending'}
+            job.payload = payload
+            job.status = 'waiting_approval'
+            deployment.status = 'waiting_approval'
+            db.add(JobLog(job_id=job.id, message='workflow.approval.pending: oczekiwanie na zatwierdzenie'))
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
         if ip_allocation:
