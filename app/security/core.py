@@ -238,8 +238,9 @@ def authenticate(request: Request, auth: HTTPAuthorizationCredentials | None = D
     permissions = effective_permissions(token.user)
     if token.kind == 'api':
         permissions &= set(token.scopes)
-    source = request.headers.get('X-Portal-Source', 'API')[:32]
-    if source == 'CloudPortal':
+    requested_source = request.headers.get('X-Portal-Source', 'API')[:32]
+    source = 'API'
+    if requested_source == 'CloudPortal':
         service_plain = request.headers.get('X-Portal-Token', '')
         service = db.scalar(select(Token).where(Token.token_hash == digest(service_plain))) if service_plain else None
         service_permissions = effective_permissions(service.user) & set(service.scopes) if service and service.kind == 'api' else set()
@@ -249,8 +250,11 @@ def authenticate(request: Request, auth: HTTPAuthorizationCredentials | None = D
                 or 'portal.connect' not in service_permissions):
             raise HTTPException(401, 'Valid CloudPortal service authentication required')
         service.last_used_at = now()
-    elif source not in {'API', 'Cloudportal-backed'}:
-        source = 'API'
+        source = 'CloudPortal'
+    elif requested_source == 'Cloudportal-backed' and token.kind == 'session':
+        # Backend UI provenance is trusted only for an authenticated browser session.
+        # API tokens cannot self-assert backend visibility with a caller-controlled header.
+        source = 'Cloudportal-backed'
     request.state.actor = token
     request.state.permissions = permissions
     request.state.source = source

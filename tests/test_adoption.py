@@ -124,3 +124,19 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
 
     blocked = client.delete(f"/api/v1/inventory/vms/{inventory['id']}", headers=headers)
     assert blocked.status_code == 409
+
+    apply = client.post('/api/v1/jobs', headers=idem(headers), json={
+        'operation': 'terraform.apply',
+        'deployment_id': deployment['id'],
+    })
+    assert apply.status_code == 409
+    assert 'plan-only' in apply.text
+
+    schedule = client.post('/api/v1/schedules', headers=headers, json={
+        'name': 'invalid adopted apply',
+        'deployment_id': deployment['id'],
+        'operation': 'terraform.apply',
+        'next_run_at': '2099-01-01T00:00:00Z',
+    })
+    assert schedule.status_code == 409
+    assert 'plan-only' in schedule.text

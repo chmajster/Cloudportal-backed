@@ -885,3 +885,72 @@ def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, 
     })
     assert plan_after_apply.status_code == 422
     assert 'terraform_plan must be an ancestor' in plan_after_apply.text
+
+
+def test_api_token_cannot_spoof_backend_blueprint_visibility(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'backend-only-blueprint',
+        'name': 'Backend only',
+        'visibility': {'backend': True, 'cloudportal': False, 'api': False},
+        'deployment': {
+            'name': 'backend-only',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    spoofed = client.get('/api/v1/blueprints?available=true', headers={
+        **headers,
+        'X-Portal-Source': 'Cloudportal-backed',
+    })
+    assert spoofed.status_code == 200, spoofed.text
+    assert 'backend-only-blueprint' not in {row['slug'] for row in spoofed.json()['items']}
+
+
+def test_non_proxmox_blueprint_rejects_proxmox_runtime_steps(client, headers):
+    credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'AWS automation',
+        'type': 'aws',
+        'secrets': {
+            'access_key_id': 'AKIAEXAMPLE123456',
+            'secret_access_key': 'secret-example-value',
+        },
+    })
+    assert credential.status_code == 201, credential.text
+    provider = client.post('/api/v1/providers', headers=headers, json={
+        'name': 'AWS provider',
+        'type': 'aws',
+        'credentials_id': credential.json()['id'],
+    })
+    assert provider.status_code == 201, provider.text
+
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'aws-invalid-runtime',
+        'name': 'AWS invalid runtime',
+        'deployment': {
+            'name': 'aws-vm',
+            'provider_id': provider.json()['id'],
+            'credentials_id': credential.json()['id'],
+            'template': 'aws-ec2',
+            'variables': {
+                'name': 'aws-vm',
+                'region': 'eu-central-1',
+                'ami': 'ami-1234567890abcdef0',
+                'instance_type': 't3.micro',
+                'subnet_id': 'subnet-1234567890abcdef0',
+                'security_group_ids': ['sg-12345678'],
+                'root_volume_size': 20,
+                'associate_public_ip': False,
+            },
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'wait', 'type': 'wait_for_vm', 'depends_on': ['apply']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'require Proxmox' in response.text

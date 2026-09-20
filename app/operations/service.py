@@ -12,6 +12,8 @@ from sqlalchemy import delete, select
 
 from app.config import settings
 from app.database import session
+from app.jobs.approval import gate_job_for_approval
+from app.jobs.lifecycle import has_released_allocations
 from app.models import (
     Audit,
     Credential,
@@ -88,7 +90,9 @@ def materialize_scheduled_jobs():
             .limit(100)
         ).all()
         for schedule in rows:
-            deployment = db.get(Deployment, schedule.deployment_id)
+            deployment = db.scalar(select(Deployment).where(
+                Deployment.id == schedule.deployment_id
+            ).with_for_update())
             if deployment is None:
                 schedule.is_active = False
                 schedule.last_error = 'Deployment no longer exists'
@@ -97,6 +101,19 @@ def materialize_scheduled_jobs():
             if deployment.status == 'destroyed':
                 schedule.is_active = False
                 schedule.last_error = 'Deployment is already destroyed'
+                continue
+
+            if schedule.operation == 'terraform.apply' and has_released_allocations(db, deployment.id):
+                schedule.is_active = False
+                schedule.last_error = 'Deployment allocations were released; execute the Blueprint again'
+                continue
+
+            if (
+                schedule.operation == 'terraform.apply'
+                and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only')
+            ):
+                schedule.is_active = False
+                schedule.last_error = 'Adopted deployment is plan-only; terraform.apply is disabled'
                 continue
 
             if deployment.active_job_id:
@@ -120,6 +137,7 @@ def materialize_scheduled_jobs():
             db.flush()
             deployment.active_job_id = job.id
             deployment.status = 'queued'
+            gate_job_for_approval(db, job, deployment)
             schedule.last_run_at = current_time
             schedule.last_error = None
             if schedule.interval_seconds:

@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from redis import Redis
 from redis.exceptions import RedisError
@@ -13,6 +13,7 @@ from app.database import session
 from app.inventory_sync import repair_inventory_from_states
 from app.models import Deployment, Job, JobLog, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
+from app.providers.task_reconcile import reconcile_proxmox_tasks_once
 from app.security.core import redis_client
 
 
@@ -38,7 +39,7 @@ def provider_retry_ready(job):
         return True
 
 
-CANCELLATION_GRACE_SECONDS = 10
+CANCELLATION_GRACE_SECONDS = 60
 
 
 def reconcile_cancelled_jobs(db):
@@ -58,6 +59,27 @@ def reconcile_cancelled_jobs(db):
 
         last_seen = job.heartbeat_at or job.updated_at or job.created_at
         if last_seen is not None and last_seen > threshold:
+            continue
+
+        try:
+            rq_job = RQJob.fetch(job.id, connection=redis_client(), serializer=JSONSerializer)
+            rq_status = rq_job.get_status(refresh=True)
+            if rq_status in {'queued', 'deferred', 'scheduled'}:
+                continue
+            if rq_status == 'started':
+                rq_last_seen = getattr(rq_job, 'last_heartbeat', None) or getattr(rq_job, 'started_at', None)
+                if rq_last_seen is None:
+                    continue
+                # RQ versions may return timezone-aware timestamps while the DB model
+                # uses naive UTC datetimes. Normalize before comparing.
+                if getattr(rq_last_seen, 'tzinfo', None) is not None:
+                    rq_last_seen = rq_last_seen.astimezone(timezone.utc).replace(tzinfo=None)
+                if rq_last_seen > threshold:
+                    continue
+        except NoSuchJobError:
+            pass
+        except RedisError:
+            # Redis uncertainty is not evidence that the worker stopped.
             continue
 
         job.status = 'cancelled'
@@ -110,7 +132,9 @@ def reconcile_deployment_job_statuses(db):
             continue
 
         deployment.active_job_id = None
-        if job.status != 'successful':
+        if job.operation == 'terraform.plan':
+            deployment.status = (job.payload or {}).get('previous_status', deployment.status or 'failed')
+        elif job.status != 'successful':
             deployment.status = job.status
         elif job.operation == 'terraform.destroy':
             deployment.status = 'destroyed'
@@ -118,8 +142,6 @@ def reconcile_deployment_job_statuses(db):
                 deployment.destroyed_at = now()
         elif job.operation == 'terraform.import':
             deployment.status = 'imported'
-        elif job.operation == 'terraform.plan':
-            deployment.status = (job.payload or {}).get('previous_status', deployment.status or 'failed')
         else:
             deployment.status = 'successful'
 
@@ -161,6 +183,7 @@ def dispatch_once():
             db.add(JobLog(job_id=job.id, message=job.error))
             queue_job_webhooks(db, job)
         db.commit()
+    reconcile_proxmox_tasks_once()
     queue_system_alert_webhooks_once()
     deliver_webhooks_once()
     cleanup_retention_once()

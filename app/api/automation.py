@@ -1,11 +1,10 @@
 import re
 from typing import Annotated, Literal
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
 from app.catalog_control import require_catalog_item_enabled
-from app.blueprint_settings import blueprint_execution_settings
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items, VMClassificationSettingsOutput)
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
@@ -14,7 +13,7 @@ from app.automation.service import (available_to, blueprint_public, can_manage_b
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
-                        IPPool, JobLog, Provider, Role, User, now)
+                        IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
 from app.security.core import audit, require
 from app.vm_classification import vm_classification_settings
@@ -131,6 +130,19 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
+    if provider.type != 'proxmox':
+        proxmox_runtime_steps = {
+            'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+            'run_ansible_playbook', 'create_snapshot',
+        }
+        invalid_steps = sorted(
+            {step.type for step in data.workflow} & proxmox_runtime_steps
+        )
+        if invalid_steps:
+            raise HTTPException(
+                422,
+                'Blueprint workflow steps require Proxmox: ' + ', '.join(invalid_steps),
+            )
     if (
         data.deployment.template == 'proxmox-vm'
         and data.deployment.variables.get('install_qemu_guest_agent') is True
@@ -186,11 +198,11 @@ def require_blueprint_manager(row, actor):
 
 
 @router.get('/blueprints', response_model=Items[BlueprintOutput])
-def blueprints(request: Request, available: bool = False, source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
+def blueprints(request: Request, available: bool = False,
                limit: Limit = 100, offset: Offset = 0, actor=Depends(require('blueprints.read')),
                db=Depends(get_db, scope='function')):
     rows = paginate(db, Blueprint, offset, limit)
-    source = portal_source(source_header)
+    source = portal_source(getattr(request.state, 'source', 'API'))
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
     if available or source != 'backend' and not can_manage:
         rows = [row for row in rows if available_to(row, actor, source)]
@@ -198,10 +210,10 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
 
 
 @router.get('/blueprints/{id}', response_model=BlueprintOutput)
-def blueprint(id: int, request: Request, source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
+def blueprint(id: int, request: Request,
               actor=Depends(require('blueprints.read')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
-    source = portal_source(source_header)
+    source = portal_source(getattr(request.state, 'source', 'API'))
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
     if source != 'backend' and not can_manage and not available_to(row, actor, source):
         raise HTTPException(404, 'Blueprint not found')
@@ -259,11 +271,10 @@ def delete_blueprint(id: int, request: Request, actor=Depends(require('blueprint
 
 @router.post('/blueprints/{id}/execute', status_code=202, response_model=CreatedDeploymentOutput)
 def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
-                      source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
                       actor=Depends(require('blueprints.execute')), db=Depends(get_db, scope='function')):
     from app.api.infrastructure import deployment_public, job_public, locked_credential, new_job, validate_ansible
     row = find(db, Blueprint, id)
-    source = portal_source(source_header)
+    source = portal_source(getattr(request.state, 'source', 'API'))
     if not available_to(row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
@@ -327,29 +338,6 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         job = new_job(db, request, actor, 'terraform.apply', deployment,
                       {'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                        'blueprint': deployment.workflow['blueprint']})
-        if row.requires_approval:
-            approval_settings = blueprint_execution_settings(db)
-            payload = dict(job.payload or {})
-            if approval_settings['auto_approve_for_executors']:
-                payload['_approval'] = {
-                    'status': 'approved',
-                    'approved_by': actor.user_id,
-                    'approved_at': now().isoformat(),
-                    'automatic': True,
-                }
-                db.add(JobLog(
-                    job_id=job.id,
-                    message='workflow.approval.auto: blueprints.execute uprawnia do automatycznej akceptacji',
-                ))
-            else:
-                payload['_approval'] = {'status': 'pending'}
-                job.status = 'waiting_approval'
-                deployment.status = 'waiting_approval'
-                db.add(JobLog(
-                    job_id=job.id,
-                    message='workflow.approval.pending: oczekiwanie na zatwierdzenie',
-                ))
-            job.payload = payload
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
         if ip_allocation:

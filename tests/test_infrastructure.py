@@ -9,13 +9,15 @@ import pytest
 from sqlalchemy import select
 from app.config import settings
 from app.database import session
-from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
+from app.models import (Credential, Deployment, HostnameReservation, HostnameScheme, Idempotency,
+                        IPAllocation, IPPool, Job, ManagedVM, User, now)
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
 from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, workspace_lock
 from app.jobs.worker import execute
 from app.jobs.queue import reconcile_cancelled_jobs
 from app.terraform.state import persist_state
+from conftest import new_user
 
 
 def terraform_state_workspace(tmp_path, vm_id=101):
@@ -157,10 +159,66 @@ def test_terraform_failure_and_retry(client,headers,monkeypatch):
 
 def test_cancel_before_execution(client,headers,monkeypatch):
     d=deployment(client,headers)
+    with session() as db:
+        dep = db.get(Deployment, d['id'])
+        scheme = HostnameScheme(
+            name='cancel-scheme-' + d['id'][:8],
+            pattern='cancel-{number}',
+            created_by=dep.created_by,
+        )
+        pool = IPPool(
+            name='cancel-pool-' + d['id'][:8],
+            cidr='198.51.100.0/24',
+            created_by=dep.created_by,
+        )
+        db.add_all([scheme, pool])
+        db.flush()
+        hostname = HostnameReservation(
+            scheme_id=scheme.id,
+            hostname='cancel-' + d['id'][:8],
+            status='assigned',
+            resource_id=dep.id,
+            created_by=dep.created_by,
+        )
+        allocation = IPAllocation(
+            pool_id=pool.id,
+            address='198.51.100.10',
+            prefix_length=24,
+            status='assigned',
+            resource_id=dep.id,
+            created_by=dep.created_by,
+        )
+        db.add_all([hostname, allocation])
+        db.commit()
+        hostname_id, allocation_id = hostname.id, allocation.id
+
     assert client.post('/api/v1/jobs/'+d['job']['id']+'/cancel',headers=headers).status_code==200
     monkeypatch.setattr(TerraformExecutor,'execute',lambda *a: (_ for _ in ()).throw(AssertionError('must not run')))
     execute(d['job']['id'])
     assert client.get('/api/v1/jobs/'+d['job']['id'],headers=headers).json()['status']=='cancelled'
+
+    with session() as db:
+        hostname = db.get(HostnameReservation, hostname_id)
+        allocation = db.get(IPAllocation, allocation_id)
+        assert hostname.status == 'released'
+        assert hostname.released_at is not None
+        assert allocation.status == 'released'
+        assert allocation.released_at is not None
+
+    retry = client.post('/api/v1/jobs/'+d['job']['id']+'/retry', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4())
+    })
+    assert retry.status_code == 409
+    assert 'allocations were released' in retry.text
+
+    manual = client.post('/api/v1/jobs', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4())
+    }, json={
+        'operation': 'terraform.apply',
+        'deployment_id': d['id'],
+    })
+    assert manual.status_code == 409
+    assert 'allocations were released' in manual.text
 
 
 def test_running_cancel_is_visible_and_orphan_is_finalized(client, headers):
@@ -729,3 +787,114 @@ def test_regular_deployment_ansible_uses_ip_inventory(client, headers, monkeypat
     result = client.get('/api/v1/jobs/' + created.json()['job']['id'], headers=headers).json()
     assert result['status'] == 'successful'
     assert observed == {'operation': 'ansible.execute', 'hosts': ['192.0.2.70']}
+
+
+def _finish_initial_deployment_job(deployment_body):
+    with session() as db:
+        dep = db.get(Deployment, deployment_body['id'])
+        initial = db.get(Job, dep.active_job_id)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        db.commit()
+
+
+def test_failed_and_cancelled_plan_preserve_deployment_status(client, headers, monkeypatch):
+    created = deployment(client, headers)
+    _finish_initial_deployment_job(created)
+
+    failed_plan = client.post('/api/v1/jobs', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4())
+    }, json={'operation': 'terraform.plan', 'deployment_id': created['id']})
+    assert failed_plan.status_code == 202, failed_plan.text
+
+    monkeypatch.setattr(
+        TerraformExecutor,
+        'execute',
+        lambda *args: (_ for _ in ()).throw(ExecutionFailed('plan failed')),
+    )
+    execute(failed_plan.json()['id'])
+
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        job = db.get(Job, failed_plan.json()['id'])
+        assert job.status == 'failed'
+        assert dep.status == 'successful'
+        assert dep.active_job_id is None
+
+    cancelled_plan = client.post('/api/v1/jobs', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4())
+    }, json={'operation': 'terraform.plan', 'deployment_id': created['id']})
+    assert cancelled_plan.status_code == 202, cancelled_plan.text
+    cancelled = client.post('/api/v1/jobs/' + cancelled_plan.json()['id'] + '/cancel', headers=headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json()['status'] == 'cancelled'
+
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        assert dep.status == 'successful'
+        assert dep.active_job_id is None
+
+
+def test_old_worker_cannot_clear_newer_active_job(client, headers, monkeypatch, tmp_path):
+    created = deployment(client, headers)
+    _finish_initial_deployment_job(created)
+
+    first = client.post('/api/v1/jobs', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4())
+    }, json={'operation': 'terraform.plan', 'deployment_id': created['id']})
+    assert first.status_code == 202, first.text
+
+    holder = {}
+
+    def finish_after_new_job(self, operation, context):
+        with session() as db:
+            dep = db.get(Deployment, created['id'])
+            newer = Job(
+                operation='terraform.plan',
+                deployment_id=dep.id,
+                payload={'previous_status': 'successful'},
+                status='queued',
+                created_by=context.job.created_by,
+                token_id=context.job.token_id,
+                request_id=str(uuid.uuid4()),
+                ip='127.0.0.1',
+                source='API',
+            )
+            db.add(newer)
+            db.flush()
+            dep.active_job_id = newer.id
+            dep.status = 'queued'
+            holder['job_id'] = newer.id
+            db.commit()
+        return tmp_path
+
+    monkeypatch.setattr(TerraformExecutor, 'execute', finish_after_new_job)
+    execute(first.json()['id'])
+
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        old = db.get(Job, first.json()['id'])
+        assert old.status == 'successful'
+        assert dep.active_job_id == holder['job_id']
+        assert dep.status == 'queued'
+
+
+def test_resource_read_permissions_do_not_expose_other_users_objects(client, headers):
+    created = deployment(client, headers)
+    _, viewer = new_user(
+        client,
+        headers,
+        username='self-service-reader',
+        permissions=['deployments.read', 'jobs.read', 'inventory.read'],
+    )
+
+    deployments_response = client.get('/api/v1/deployments', headers=viewer)
+    assert deployments_response.status_code == 200
+    assert deployments_response.json()['items'] == []
+    assert client.get('/api/v1/deployments/' + created['id'], headers=viewer).status_code == 404
+
+    jobs_response = client.get('/api/v1/jobs', headers=viewer)
+    assert jobs_response.status_code == 200
+    assert jobs_response.json()['items'] == []
+    assert client.get('/api/v1/jobs/' + created['job']['id'], headers=viewer).status_code == 404

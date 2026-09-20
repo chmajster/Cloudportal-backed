@@ -12,11 +12,13 @@ from websockets.asyncio.client import connect as websocket_connect
 from pydantic import Field, model_validator
 
 from app.api.common import find, idempotent
+from app.access import ensure_not_terraform_managed, managed_vm_for_access, request_permissions
 from app.api.schemas import Input, Name, Slug
 from app.config import settings
 from app.database import get_db, session as db_session
 from app.models import Credential, Provider
 from app.providers.registry import provider_for
+from app.providers.task_reconcile import track_proxmox_task
 from app.security.core import audit, redis_client, require
 
 
@@ -138,8 +140,9 @@ def task_result(task):
 
 
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/status')
-def vm_status(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('vms.read')),
-              db=Depends(get_db, scope='function')):
+def vm_status(provider_id: int, node: NODE, vmid: VMID, request: Request,
+              actor=Depends(require('vms.read')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=False)
     data = adapter(db, provider_id).vm_status(node, vmid)
     allowed = 'vmid name status qmpstatus cpu cpus mem maxmem disk maxdisk uptime pid lock template tags'.split()
     return {key: value for key, value in data.items() if key in allowed}
@@ -148,16 +151,18 @@ def vm_status(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('v
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/power')
 def vm_power(provider_id: int, node: NODE, vmid: VMID, data: VMPowerInput, request: Request,
              actor=Depends(require('vms.power')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
     def execute():
         task = adapter(db, provider_id).vm_power(node, vmid, data.action)
         audit(db, request, f'vm.{data.action}', 'vms', f'{provider_id}:{node}:{vmid}')
         return task_result(task)
-    return idempotent(db, request, actor, data.model_dump(), execute)
+    return idempotent(db, request, actor, data.model_dump(), execute, required=True)
 
 
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/snapshots')
-def snapshots(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('snapshots.read')),
-              db=Depends(get_db, scope='function')):
+def snapshots(provider_id: int, node: NODE, vmid: VMID, request: Request,
+              actor=Depends(require('snapshots.read')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=False)
     rows = adapter(db, provider_id).snapshots(node, vmid)
     allowed = 'name snaptime description vmstate parent'.split()
     return {'items': [{key: value for key, value in row.items() if key in allowed} for row in rows]}
@@ -166,6 +171,7 @@ def snapshots(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('s
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/snapshots', status_code=202)
 def create_snapshot(provider_id: int, node: NODE, vmid: VMID, data: SnapshotInput, request: Request,
                     actor=Depends(require('snapshots.create')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
     def execute():
         task = adapter(db, provider_id).create_snapshot(
             node, vmid, data.snapname, data.description, data.include_ram
@@ -178,6 +184,7 @@ def create_snapshot(provider_id: int, node: NODE, vmid: VMID, data: SnapshotInpu
 @router.delete('/providers/{provider_id}/vms/{node}/{vmid}/snapshots/{snapname}', status_code=202)
 def delete_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSHOT, request: Request,
                     actor=Depends(require('snapshots.delete')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
     payload = {'snapname': snapname}
     def execute():
         task = adapter(db, provider_id).delete_snapshot(node, vmid, snapname)
@@ -189,6 +196,7 @@ def delete_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSHOT
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/snapshots/{snapname}/rollback', status_code=202)
 def rollback_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSHOT, request: Request,
                       actor=Depends(require('snapshots.rollback')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
     payload = {'snapname': snapname}
     def execute():
         task = adapter(db, provider_id).rollback_snapshot(node, vmid, snapname)
@@ -198,9 +206,10 @@ def rollback_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSH
 
 
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/backups')
-def vm_backups(provider_id: int, node: NODE, vmid: VMID,
+def vm_backups(provider_id: int, node: NODE, vmid: VMID, request: Request,
                storage: Annotated[str, Query(min_length=1, max_length=63)],
                actor=Depends(require('backups.read')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=False)
     if not all(ch.isalnum() or ch in '_.-' for ch in storage):
         raise HTTPException(422, 'Invalid backup storage identifier')
     rows = adapter(db, provider_id).backups(node, storage, vmid)
@@ -211,6 +220,7 @@ def vm_backups(provider_id: int, node: NODE, vmid: VMID,
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/backups', status_code=202)
 def backup_vm(provider_id: int, node: NODE, vmid: VMID, data: BackupVMInput, request: Request,
               actor=Depends(require('backups.create')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
     def execute():
         task = adapter(db, provider_id).backup_vm(
             node, vmid, storage=data.storage, mode=data.mode, compress=data.compress, notes=data.notes
@@ -223,6 +233,8 @@ def backup_vm(provider_id: int, node: NODE, vmid: VMID, data: BackupVMInput, req
 @router.post('/providers/{provider_id}/restore/{node}', status_code=202)
 def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Request,
                actor=Depends(require('backups.restore')), db=Depends(get_db, scope='function')):
+    if 'vms.manage_all' not in request_permissions(request):
+        raise HTTPException(403, 'Restoring arbitrary provider backups requires vms.manage_all')
     source_storage = data.archive.split(':', 1)[0]
     provider = adapter(db, provider_id)
     available = provider.backups(node, source_storage)
@@ -233,6 +245,10 @@ def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Requ
         task = provider.restore_vm(
             node, vm_id=data.vm_id, archive=data.archive, storage=data.storage, unique=data.unique
         )
+        track_proxmox_task(
+            provider_id=provider_id, node=node, upid=task, action='restore',
+            target_node=node, target_vm_id=data.vm_id, created_by=actor.user_id,
+        )
         audit(db, request, 'vm.restore_started', 'vms', f'{provider_id}:{node}:{data.vm_id}')
         return task_result(task)
     return idempotent(db, request, actor, data.model_dump(), execute, required=True)
@@ -241,8 +257,14 @@ def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Requ
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/template', status_code=202)
 def convert_to_template(provider_id: int, node: NODE, vmid: VMID, request: Request,
                         actor=Depends(require('vms.template')), db=Depends(get_db, scope='function')):
+    managed = managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
+    ensure_not_terraform_managed(managed, 'converted to a template')
     def execute():
         task = adapter(db, provider_id).convert_to_template(node, vmid)
+        track_proxmox_task(
+            provider_id=provider_id, node=node, upid=task, action='template',
+            vm_id=vmid, created_by=actor.user_id,
+        )
         audit(db, request, 'vm.converted_to_template', 'vms', f'{provider_id}:{node}:{vmid}')
         return task_result(task)
     return idempotent(db, request, actor, {}, execute, required=True)
@@ -251,6 +273,7 @@ def convert_to_template(provider_id: int, node: NODE, vmid: VMID, request: Reque
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/clone', status_code=202)
 def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, request: Request,
              actor=Depends(require('vms.clone')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
     def execute():
         task = adapter(db, provider_id).clone_vm(
             node,
@@ -262,6 +285,11 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
             storage=data.storage,
             pool=data.pool,
         )
+        track_proxmox_task(
+            provider_id=provider_id, node=node, upid=task, action='clone',
+            vm_id=vmid, target_node=data.target or node, target_vm_id=data.new_vm_id,
+            name=data.name, created_by=actor.user_id,
+        )
         audit(db, request, 'vm.cloned', 'vms', f'{provider_id}:{node}:{vmid}->{data.new_vm_id}')
         return task_result(task)
     return idempotent(db, request, actor, data.model_dump(), execute, required=True)
@@ -270,6 +298,8 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
 @router.put('/providers/{provider_id}/vms/{node}/{vmid}/disk', status_code=202)
 def resize_disk(provider_id: int, node: NODE, vmid: VMID, data: ResizeDiskInput, request: Request,
                 actor=Depends(require('vms.update')), db=Depends(get_db, scope='function')):
+    managed = managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
+    ensure_not_terraform_managed(managed, 'resized directly')
     def execute():
         task = adapter(db, provider_id).resize_disk(
             node, vmid, disk=data.disk, grow_gib=data.grow_gib
@@ -282,12 +312,20 @@ def resize_disk(provider_id: int, node: NODE, vmid: VMID, data: ResizeDiskInput,
 @router.put('/providers/{provider_id}/vms/{node}/{vmid}/config', status_code=202)
 def update_vm_config(provider_id: int, node: NODE, vmid: VMID, data: VMConfigInput, request: Request,
                      actor=Depends(require('vms.update')), db=Depends(get_db, scope='function')):
+    managed = managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
+    ensure_not_terraform_managed(managed, 'reconfigured directly')
     payload = data.model_dump(exclude_none=True)
     def execute():
         values = dict(payload)
         if 'onboot' in values:
             values['onboot'] = int(values['onboot'])
         task = adapter(db, provider_id).update_vm_config(node, vmid, **values)
+        tracked = track_proxmox_task(
+            provider_id=provider_id, node=node, upid=task, action='config',
+            vm_id=vmid, name=values.get('name'), created_by=actor.user_id,
+        )
+        if not task and managed is not None and values.get('name'):
+            managed.name = str(values['name'])
         audit(db, request, 'vm.config_updated', 'vms', f'{provider_id}:{node}:{vmid}')
         return task_result(task)
     return idempotent(db, request, actor, payload, execute, required=True)
@@ -296,6 +334,8 @@ def update_vm_config(provider_id: int, node: NODE, vmid: VMID, data: VMConfigInp
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/migrate', status_code=202)
 def migrate_vm(provider_id: int, node: NODE, vmid: VMID, data: MigrateVMInput, request: Request,
                actor=Depends(require('vms.migrate')), db=Depends(get_db, scope='function')):
+    managed = managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
+    ensure_not_terraform_managed(managed, 'migrated directly')
     def execute():
         task = adapter(db, provider_id).migrate_vm(
             node,
@@ -303,6 +343,10 @@ def migrate_vm(provider_id: int, node: NODE, vmid: VMID, data: MigrateVMInput, r
             target=data.target,
             online=data.online,
             with_local_disks=data.with_local_disks,
+        )
+        track_proxmox_task(
+            provider_id=provider_id, node=node, upid=task, action='migrate',
+            vm_id=vmid, target_node=data.target, created_by=actor.user_id,
         )
         audit(db, request, 'vm.migrated', 'vms', f'{provider_id}:{node}:{vmid}->{data.target}')
         return task_result(task)
@@ -314,6 +358,8 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
               purge: Annotated[bool, Query()] = False,
               destroy_unreferenced_disks: Annotated[bool, Query()] = False,
               actor=Depends(require('vms.delete')), db=Depends(get_db, scope='function')):
+    managed = managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
+    ensure_not_terraform_managed(managed, 'deleted directly')
     payload = {'purge': purge, 'destroy_unreferenced_disks': destroy_unreferenced_disks}
     def execute():
         task = adapter(db, provider_id).delete_vm(
@@ -321,6 +367,10 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
             vmid,
             purge=purge,
             destroy_unreferenced_disks=destroy_unreferenced_disks,
+        )
+        track_proxmox_task(
+            provider_id=provider_id, node=node, upid=task, action='delete',
+            vm_id=vmid, created_by=actor.user_id,
         )
         audit(db, request, 'vm.deleted', 'vms', f'{provider_id}:{node}:{vmid}')
         return task_result(task)
@@ -330,6 +380,7 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/console')
 def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
                     actor=Depends(require('vms.console')), db=Depends(get_db, scope='function')):
+    managed_vm_for_access(db, request, actor, provider_id, vmid, node=node, manage=True)
     result = adapter(db, provider_id).console_session(node, vmid)
     session_id = secrets.token_urlsafe(32)
     payload = {

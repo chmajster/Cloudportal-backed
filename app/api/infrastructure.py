@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, or_
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
+from app.access import (deployment_predicate, ensure_deployment_access, ensure_job_access, job_predicate)
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
                              SSHHostKeyOutput, SSHKeyBootstrapOutput)
@@ -16,6 +17,8 @@ from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
+from app.jobs.approval import gate_job_for_approval
+from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
 from app.models import Blueprint, Credential, Deployment, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
@@ -388,6 +391,20 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
     if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
         raise HTTPException(409, 'Deployment is busy or destroyed')
+    if deployment and operation == 'terraform.apply' and has_released_allocations(db, deployment.id):
+        raise HTTPException(
+            409,
+            'Deployment allocations were released; execute the Blueprint again',
+        )
+    if (
+        deployment
+        and operation == 'terraform.apply'
+        and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only')
+    ):
+        raise HTTPException(
+            409,
+            'Adopted deployment is plan-only; terraform.apply is disabled for this imported VM',
+        )
     job_payload = dict(payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}))
     if deployment:
         job_payload['previous_status'] = deployment.status
@@ -400,6 +417,7 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
     if deployment:
         deployment.active_job_id = job.id
         deployment.status = 'queued'
+    gate_job_for_approval(db, job, deployment)
     audit(db, request, 'job.created', 'jobs', job.id)
     return job
 
@@ -438,13 +456,16 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
 
 
 @router.get('/deployments', response_model=Items[DeploymentOutput])
-def deployments(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
-    return {'items': [deployment_public(d) for d in paginate(db, Deployment, offset, limit)]}
+def deployments(request: Request, limit: Limit = 100, offset: Offset = 0,
+                actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
+    predicate = deployment_predicate(request, actor)
+    return {'items': [deployment_public(d) for d in paginate(db, Deployment, offset, limit, predicate)]}
 
 
 @router.get('/deployments/{id}', response_model=DeploymentOutput)
-def deployment(id: str, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
-    return deployment_public(find(db, Deployment, id))
+def deployment(id: str, request: Request, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
+    row = ensure_deployment_access(request, actor, find(db, Deployment, id))
+    return deployment_public(row)
 
 
 @router.post('/deployments/{id}/destroy', status_code=202, response_model=JobOutput)
@@ -452,8 +473,7 @@ def deployment(id: str, actor=Depends(require('deployments.read')), db=Depends(g
 def destroy_deployment(id: str, request: Request, actor=Depends(require('deployments.destroy')), db=Depends(get_db, scope='function')):
     def create():
         d = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
-        if not d:
-            raise HTTPException(404, 'Deployment not found')
+        ensure_deployment_access(request, actor, d)
         return job_public(new_job(db, request, actor, 'terraform.destroy', d))
     return idempotent(db, request, actor, {'id': id}, create, required=True)
 
@@ -467,20 +487,21 @@ def create_job(data: JobInput, request: Request, actor=Depends(require('jobs.exe
         d = None
         if data.deployment_id:
             d = db.scalar(select(Deployment).where(Deployment.id == data.deployment_id).with_for_update())
-            if not d:
-                raise HTTPException(404, 'Deployment not found')
+            ensure_deployment_access(request, actor, d)
         return job_public(new_job(db, request, actor, data.operation, d, {'ansible': data.ansible.model_dump()} if data.ansible else None))
     return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 
 @router.get('/jobs', response_model=Items[JobOutput])
-def jobs(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
-    return {'items': [job_public(j) for j in paginate(db, Job, offset, limit)]}
+def jobs(request: Request, limit: Limit = 100, offset: Offset = 0,
+         actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
+    predicate = job_predicate(request, actor)
+    return {'items': [job_public(j) for j in paginate(db, Job, offset, limit, predicate)]}
 
 
 @router.get('/jobs/{id}', response_model=JobOutput)
-def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
-    return job_public(find(db, Job, id))
+def job(id: str, request: Request, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
+    return job_public(ensure_job_access(request, actor, find(db, Job, id)))
 
 
 @router.post('/jobs/{id}/approve', response_model=JobOutput)
@@ -516,8 +537,7 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
 @router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)
 def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
     original = db.scalar(select(Job).where(Job.id == id).with_for_update())
-    if original is None:
-        raise HTTPException(404, 'Job not found')
+    ensure_job_access(request, actor, original)
     if original.status not in {'failed', 'cancelled'}:
         raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
     check_job_permissions(request, original.operation)
@@ -532,6 +552,8 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
             deployment = db.scalar(select(Deployment).where(Deployment.id == original.deployment_id).with_for_update())
             if deployment is None:
                 raise HTTPException(404, 'Deployment not found')
+        payload.pop('_approval', None)
+        payload.pop('_provider_wait', None)
         new = new_job(
             db,
             request,
@@ -556,9 +578,9 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
 
 
 @router.get('/jobs/{id}/logs', response_model=JobLogsOutput)
-def logs(id: str, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
+def logs(id: str, request: Request, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
          actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
-    j = find(db, Job, id)
+    j = ensure_job_access(request, actor, find(db, Job, id))
     rows = db.scalars(select(JobLog).where(JobLog.job_id == id, JobLog.id > after).order_by(JobLog.id).limit(limit)).all()
     return {'request_id': j.request_id, 'status': j.status, 'items': [public(r, 'id timestamp message') for r in rows], 'next_after': rows[-1].id if rows else after}
 
@@ -566,8 +588,7 @@ def logs(id: str, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
 @router.post('/jobs/{id}/cancel', response_model=JobOutput)
 def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')), db=Depends(get_db, scope='function')):
     j = db.scalar(select(Job).where(Job.id == id).with_for_update())
-    if j is None:
-        raise HTTPException(404, 'Job not found')
+    ensure_job_access(request, actor, j)
     if j.status in {'successful', 'failed', 'cancelled'}:
         raise HTTPException(409, 'Job already finished')
     if j.cancel_requested and j.status == 'cancelling':
@@ -580,10 +601,18 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
         j.status = 'cancelled'
         j.error = 'Cancellation requested before execution'
         if j.deployment_id:
-            d = find(db, Deployment, j.deployment_id)
-            if d.active_job_id == j.id:
+            d = db.scalar(select(Deployment).where(
+                Deployment.id == j.deployment_id
+            ).with_for_update())
+            if d is not None and d.active_job_id == j.id:
                 d.active_job_id = None
-            d.status = 'cancelled'
+                d.status = (
+                    (j.payload or {}).get('previous_status', d.status or 'failed')
+                    if j.operation == 'terraform.plan'
+                    else 'cancelled'
+                )
+                if j.operation != 'terraform.plan':
+                    release_pre_execution_allocations(db, d.id)
     else:
         j.status = 'cancelling'
         if j.deployment_id:

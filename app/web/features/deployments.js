@@ -16,6 +16,7 @@ function productCard(item) {
   const deployment = item.deployment || {};
   const template = deployment.template || 'VM';
   const provider = deployment.provider || '';
+  const missingPermissions = window.BlueprintProvisioningGuards.missingExecutionPermissions(item);
   const meta = node('div', { class: 'product-card-meta' },
     badge('v' + item.version, 'info'),
     badge(template, ''),
@@ -34,7 +35,13 @@ function productCard(item) {
     }),
     meta,
     node('div', { class: 'product-card-actions' },
-      button('Utwórz VM', () => launchProductBlueprint(item), 'primary')));
+      missingPermissions.length
+        ? node('span', {
+            class: 'badge warning',
+            title: 'Brak uprawnień: ' + missingPermissions.join(', '),
+            text: 'Brak uprawnień do uruchomienia',
+          })
+        : button('Utwórz VM', () => launchProductBlueprint(item), 'primary')));
 }
 
 function productsPanel(blueprints, canUseProducts) {
@@ -82,10 +89,7 @@ function productResourceTabs(active) {
 }
 
 async function deploymentsView() {
-  const canUseProducts = allowed('blueprints.read')
-    && allowed('blueprints.execute')
-    && allowed('deployments.create')
-    && allowed('terraform.read');
+  const canUseProducts = allowed('blueprints.read');
 
   const [blueprintResult, templateResult] = await Promise.all([
     canUseProducts ? api('/blueprints?available=true&limit=200') : Promise.resolve({ items: [] }),
@@ -308,7 +312,8 @@ function deploymentActions(item, returnTo = 'my-resources') {
   }
   if (allowed('jobs.execute') && allowed('terraform.execute') && !item.active_job_id && item.status !== 'destroyed') {
     actions.push(button('Plan', () => createTerraformJob(item, 'terraform.plan')));
-    actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
+    const planOnlyAdoption = Boolean(item.workflow?.adoption?.plan_only);
+    if (!planOnlyAdoption) actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
   }
   if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate(returnTo); }), 'danger'));
   return actions;

@@ -7,15 +7,15 @@ PERMISSIONS = {
     **{area: actions.split() for area, actions in {
         'users': 'read create update delete', 'roles': 'read create update delete assign',
         'credentials': 'read create update delete test', 'providers': 'read create update delete',
-        'deployments': 'read create destroy adopt', 'jobs': 'read execute cancel',
+        'deployments': 'read read_all create destroy adopt', 'jobs': 'read read_all execute cancel',
         'terraform': 'read execute', 'ansible': 'read execute', 'audit': 'read',
         'blueprints': 'read create update delete execute approve',
         'hostnames': 'read create update delete reserve release',
-        'vms': 'read power update delete clone migrate template console',
+        'vms': 'read read_all manage_all power update delete clone migrate template console',
         'snapshots': 'read create delete rollback',
         'backups': 'read create restore',
         'ipam': 'read create update delete allocate release',
-        'inventory': 'read import update delete',
+        'inventory': 'read read_all import update delete',
         'schedules': 'read create update delete',
         'webhooks': 'read create update delete',
         'metrics': 'read',
@@ -36,9 +36,9 @@ def seed(db):
     defaults = {
         'Administrator': ALL_PERMISSIONS,
         'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates'}} | {'updates.read'}),
-        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.create', 'jobs.read', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update'},
-        'Viewer': {'providers.read', 'deployments.read', 'jobs.read', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'schedules.read'},
-        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'deployments.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'schedules.read', 'metrics.read', 'updates.read'},
+        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update'},
+        'Viewer': {'providers.read', 'deployments.read', 'deployments.read_all', 'jobs.read', 'jobs.read_all', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read'},
+        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'metrics.read', 'updates.read'},
         'Portal Service': {'portal.connect'},
     }
     for name, permissions in defaults.items():
