@@ -114,6 +114,7 @@ def repair_inventory_from_states(db, limit=200):
         select(Deployment)
         .where(Deployment.status != 'destroyed')
         .order_by(Deployment.updated_at.desc())
+        .with_for_update(skip_locked=True)
         .limit(limit)
     ).all()
 
