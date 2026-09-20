@@ -188,8 +188,9 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
             raise HTTPException(422, 'APMID must be selected when this Blueprint is executed')
         if runtime_apmid not in classification['apmids']:
             raise HTTPException(422, 'Selected APMID is not configured or is no longer available')
-    elif runtime_apmid and fixed_apmid and runtime_apmid != fixed_apmid:
-        raise HTTPException(422, 'Blueprint does not allow changing APMID at runtime')
+    elif runtime_apmid:
+        if not fixed_apmid or runtime_apmid != fixed_apmid:
+            raise HTTPException(422, 'Blueprint does not allow changing APMID at runtime')
 
     enabled_environments = {
         name for name, enabled in classification['environments'].items() if enabled
@@ -199,8 +200,9 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
             raise HTTPException(422, 'Environment must be selected when this Blueprint is executed')
         if runtime_environment not in enabled_environments:
             raise HTTPException(422, 'Selected Environment is disabled or unavailable')
-    elif runtime_environment and fixed_environment and runtime_environment != fixed_environment:
-        raise HTTPException(422, 'Blueprint does not allow changing Environment at runtime')
+    elif runtime_environment:
+        if not fixed_environment or runtime_environment != fixed_environment:
+            raise HTTPException(422, 'Blueprint does not allow changing Environment at runtime')
 
     effective_apmid = runtime_apmid if select_apmid_on_execute else (fixed_apmid or runtime_apmid)
     effective_environment = (
