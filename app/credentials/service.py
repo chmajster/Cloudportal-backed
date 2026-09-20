@@ -5,8 +5,19 @@ from app.security.core import decrypt_secret, encrypt_secret
 
 
 def credential_public(c):
-    return {**public(c, 'id name type endpoint username verify_ssl expires_at rotation_due_at secret_updated_at created_at updated_at'),
-            'configured': bool(c.encrypted_secret), 'secret': '********'}
+    supports_cloud_init_ssh_key = False
+    if c.type == 'ssh' and c.encrypted_secret:
+        try:
+            supports_cloud_init_ssh_key = bool(decrypt_secret(c).get('private_key'))
+        except Exception:
+            # Capability metadata must never expose secret material or make credential listing fail.
+            supports_cloud_init_ssh_key = False
+    return {
+        **public(c, 'id name type endpoint username verify_ssl expires_at rotation_due_at secret_updated_at created_at updated_at'),
+        'configured': bool(c.encrypted_secret),
+        'supports_cloud_init_ssh_key': supports_cloud_init_ssh_key,
+        'secret': '********',
+    }
 
 
 def save_secret(db, c, value):
