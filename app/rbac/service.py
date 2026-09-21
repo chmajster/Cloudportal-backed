@@ -16,6 +16,9 @@ PERMISSIONS = {
         'backups': 'read create restore',
         'ipam': 'read create update delete allocate release',
         'inventory': 'read read_all import update delete',
+        'day2': ('view power snapshot.create snapshot.restore snapshot.delete compute.resize disk.add disk.resize '
+                 'disk.delete network.manage cloudinit.update credentials.manage ansible.run package.manage '
+                 'tags.manage metadata.manage migrate clone rebuild delete cancel retry approve admin override_protection'),
         'schedules': 'read create update delete',
         'webhooks': 'read create update delete',
         'metrics': 'read',
@@ -33,12 +36,18 @@ def seed(db):
         db.add(p)
         existing[name] = p
     db.flush()
+    day2_operator = {
+        'day2.view', 'day2.power', 'day2.snapshot.create', 'day2.snapshot.restore', 'day2.snapshot.delete',
+        'day2.compute.resize', 'day2.disk.add', 'day2.disk.resize', 'day2.disk.delete', 'day2.network.manage',
+        'day2.cloudinit.update', 'day2.credentials.manage', 'day2.ansible.run', 'day2.package.manage',
+        'day2.tags.manage', 'day2.metadata.manage', 'day2.migrate', 'day2.clone', 'day2.cancel', 'day2.retry',
+    }
     defaults = {
         'Administrator': ALL_PERMISSIONS,
         'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates'}} | {'updates.read'}),
-        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update'},
-        'Viewer': {'providers.read', 'deployments.read', 'deployments.read_all', 'jobs.read', 'jobs.read_all', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read'},
-        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'metrics.read', 'updates.read'},
+        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update'} | day2_operator,
+        'Viewer': {'providers.read', 'deployments.read', 'deployments.read_all', 'jobs.read', 'jobs.read_all', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'day2.view'},
+        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'metrics.read', 'updates.read', 'day2.view'},
         'Portal Service': {'portal.connect'},
     }
     for name, permissions in defaults.items():
@@ -48,13 +57,8 @@ def seed(db):
         else:
             current = {p.name for p in role.permissions}
             if name == 'Administrator':
-                # The built-in Administrator role is authoritative and must always
-                # receive every permission, including permissions that already exist
-                # in the database but were missing from the role assignment.
                 additions = permissions - current
             else:
-                # Other built-in roles receive only newly introduced defaults so
-                # administrators can intentionally customize them.
                 additions = permissions & new_permission_names - current
             role.permissions.extend(existing[p] for p in sorted(additions))
     if not db.get(Setting, 'governance'):
