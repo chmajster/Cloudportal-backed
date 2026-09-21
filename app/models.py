@@ -337,7 +337,9 @@ class ScheduledOperation(Timestamp, Base):
 
 class EventRecord(Base):
     __tablename__ = "event_records"
-    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sequence: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite'), primary_key=True, autoincrement=True
+    )
     id: Mapped[str] = mapped_column(String(36), default=uid, unique=True, index=True)
     type: Mapped[str] = mapped_column(String(128), index=True)
     schema_version: Mapped[int] = mapped_column(Integer, default=1)
@@ -372,7 +374,9 @@ class ExtensionDelivery(Timestamp, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     extension_name: Mapped[str] = mapped_column(String(128), index=True)
     event_sequence: Mapped[int] = mapped_column(
-        ForeignKey("event_records.sequence", ondelete="CASCADE"), index=True
+        BigInteger().with_variant(Integer, 'sqlite'),
+        ForeignKey("event_records.sequence", ondelete="CASCADE"),
+        index=True,
     )
     materialization_key: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
