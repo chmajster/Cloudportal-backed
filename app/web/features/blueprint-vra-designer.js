@@ -134,9 +134,11 @@
       ]) result[key] = deepClone(item[key]);
       return result;
     }
-    const provider = data.providers[0] || {};
     const enabledTemplates = data.templates.filter(value => value.enabled !== false);
-    const template = enabledTemplates.find(value => value.provider === provider.type) || enabledTemplates[0] || {};
+    const preferredTemplate = enabledTemplates.find(template =>
+      data.providers.some(provider => provider.type === template.provider));
+    const provider = data.providers.find(value => value.type === preferredTemplate?.provider) || data.providers[0] || {};
+    const template = enabledTemplates.find(value => value.provider === provider.type) || {};
     const defaults = {};
     for (const [name, spec] of Object.entries(template.variables_schema?.properties || {})) {
       if (spec.default !== undefined && spec.default !== null) defaults[name] = spec.default;
@@ -819,7 +821,12 @@
       const bp = state.blueprint;
       const deployment = bp.deployment || (bp.deployment = {});
       const providerChoices = data.providers.map(value => ({ value: value.id, label: value.name + ' [' + value.type + ']' }));
-      const templateChoices = data.templates.map(value => ({ value: value.id, label: value.name + ' [' + value.provider + ']' }));
+      const visibleTemplates = data.templates.filter(value =>
+        value.enabled !== false || (state.id && value.id === deployment.template));
+      const templateChoices = visibleTemplates.map(value => ({
+        value: value.id,
+        label: value.name + ' [' + value.provider + ']' + (value.enabled === false ? ' — wyłączony' : ''),
+      }));
       const credentialChoices = data.credentials.map(value => ({ value: value.id, label: value.name + ' [' + value.type + ']' }));
 
       body.append(textField('Nazwa', bp.name, value => mutate(() => {
