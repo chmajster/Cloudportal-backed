@@ -3,7 +3,7 @@ from collections.abc import Mapping
 
 
 _SECRET_KEY = re.compile(
-    r'(?:password|passwd|secret|token|authorization|private[_-]?key|client[_-]?secret|credential)',
+    r'(?:password|passwd|secret|token|authorization|private[_-]?key|client[_-]?secret)',
     re.IGNORECASE,
 )
 

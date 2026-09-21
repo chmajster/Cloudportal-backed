@@ -15,14 +15,14 @@ class Day2ActionRequest(Timestamp, Base):
     parameters: Mapped[dict] = mapped_column(JSON, default=dict)
     reason: Mapped[str] = mapped_column(Text, default='')
     requested_by: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
-    requested_at: Mapped[DateTime] = mapped_column(DateTime, default=now, index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     approved_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'))
-    approved_at: Mapped[DateTime | None] = mapped_column(DateTime)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
     approval_state: Mapped[str] = mapped_column(String(24), default='not_required', index=True)
     job_id: Mapped[str | None] = mapped_column(ForeignKey('jobs.id'), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default='REQUESTED', index=True)
-    started_at: Mapped[DateTime | None] = mapped_column(DateTime)
-    finished_at: Mapped[DateTime | None] = mapped_column(DateTime)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
     correlation_id: Mapped[str] = mapped_column(String(36), default=uid, index=True)
@@ -40,8 +40,8 @@ class Day2ResourceLock(Base):
     action_request_id: Mapped[str] = mapped_column(
         ForeignKey('day2_action_requests.id', ondelete='CASCADE'), unique=True, index=True
     )
-    expires_at: Mapped[DateTime] = mapped_column(DateTime, index=True)
-    created_at: Mapped[DateTime] = mapped_column(DateTime, default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
 class Day2ResourceState(Timestamp, Base):
@@ -53,7 +53,7 @@ class Day2ResourceState(Timestamp, Base):
     provider_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     desired_configuration: Mapped[dict] = mapped_column(JSON, default=dict)
     actual_configuration: Mapped[dict] = mapped_column(JSON, default=dict)
-    last_synced_at: Mapped[DateTime | None] = mapped_column(DateTime)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class BulkDay2ActionRequest(Timestamp, Base):
