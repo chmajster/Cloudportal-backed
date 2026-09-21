@@ -177,7 +177,7 @@ def deliver_extension_deliveries(db, batch_size: int = 100):
             ExtensionState.is_enabled.is_(True),
         )
         .order_by(ExtensionDelivery.next_attempt_at, ExtensionDelivery.created_at)
-        .with_for_update(skip_locked=True)
+        .with_for_update(skip_locked=True, of=ExtensionDelivery)
         .limit(batch_size)
     ).all()
 
