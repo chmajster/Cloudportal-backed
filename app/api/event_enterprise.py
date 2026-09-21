@@ -328,11 +328,16 @@ def update_event_consumer(
     row = db.scalar(select(EventConsumer).where(EventConsumer.id == consumer_id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Event consumer not found')
+    subscription_changed = row.event_patterns != data.event_patterns
+    activation_changed = row.is_active != data.is_active
     row.name = data.name
     row.event_patterns = data.event_patterns
     row.max_batch = data.max_batch
     row.is_active = data.is_active
     row.owner_user_id = data.owner_user_id
+    if subscription_changed or activation_changed:
+        row.last_checkpoint_sequence = None
+        row.last_polled_at = None
     audit(db, request, 'event_consumer.updated', 'event_consumers', row.id)
     return consumer_public(db, row)
 
