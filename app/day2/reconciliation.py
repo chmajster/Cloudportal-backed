@@ -6,8 +6,12 @@ from app.models import Job, now
 
 
 def reconcile_finished_jobs(db):
-    jobs = db.scalars(select(Job).where(Job.operation.like('day2.%'),
-        Job.status.in_(['failed', 'cancelled'])).with_for_update(skip_locked=True).limit(200)).all()
+    jobs = db.scalars(
+        select(Job).join(Day2ActionRequest, Day2ActionRequest.job_id == Job.id)
+        .where(Job.operation.like('day2.%'), Job.status.in_(['failed', 'cancelled']),
+               Day2ActionRequest.status.in_(['QUEUED', 'WAITING_APPROVAL', 'RUNNING', 'CANCEL_REQUESTED']))
+        .order_by(Job.id).with_for_update(of=Job, skip_locked=True).limit(200)
+    ).all()
     for job in jobs:
         row = db.scalar(select(Day2ActionRequest).where(Day2ActionRequest.job_id == job.id)
                         .with_for_update())
