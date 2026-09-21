@@ -41,5 +41,6 @@ EXTENSIONS = (
         description='Routes durable broker events to signed HTTPS webhook endpoints.',
         event_patterns=('*',),
         handler=webhook_bridge,
+        replay_existing_events=True,
     ),
 )
