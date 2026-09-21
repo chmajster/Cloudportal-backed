@@ -7,6 +7,8 @@ from pydantic import Field
 from sqlalchemy import select
 
 from app.api.common import Limit, Offset, find, idempotent
+from app.access import (ensure_inventory_resource_access, ensure_inventory_vm_access,
+                        inventory_resource_predicate, inventory_vm_predicate)
 from app.api.schemas import Input, Slug
 from app.catalog import template_import_target, template_public, validate_template_variables
 from app.catalog_control import require_catalog_item_enabled
@@ -121,6 +123,7 @@ def reconcile_inventory(
 
 @router.get('/vms')
 def managed_vms(
+    request: Request,
     provider_id: Annotated[int | None, Query(gt=0)] = None,
     management_mode: Annotated[Literal['external', 'terraform'] | None, Query()] = None,
     lifecycle_status: Annotated[Literal['active', 'missing', 'destroyed'] | None, Query()] = None,
@@ -131,6 +134,9 @@ def managed_vms(
     db=Depends(get_db, scope='function'),
 ):
     query = select(ManagedVM)
+    predicate = inventory_vm_predicate(request, actor)
+    if predicate is not None:
+        query = query.where(predicate)
     if provider_id:
         query = query.where(ManagedVM.provider_id == provider_id)
     if management_mode:
@@ -160,11 +166,12 @@ def managed_vms(
 @router.get('/vms/{id}')
 def managed_vm(
     id: str,
+    request: Request,
     refresh: bool = False,
     actor=Depends(require('inventory.read')),
     db=Depends(get_db, scope='function'),
 ):
-    row = find(db, ManagedVM, id)
+    row = ensure_inventory_vm_access(db, request, actor, find(db, ManagedVM, id))
     result = public(row)
     if refresh:
         _, adapter = provider_adapter(db, row.provider_id)
@@ -215,11 +222,12 @@ def import_vm(
 @router.get('/vms/{id}/adoption-preview')
 def adoption_preview(
     id: str,
+    request: Request,
     template: Annotated[str, Query(max_length=63)] = 'proxmox-vm',
     actor=Depends(require('deployments.adopt')),
     db=Depends(get_db, scope='function'),
 ):
-    row = find(db, ManagedVM, id)
+    row = ensure_inventory_vm_access(db, request, actor, find(db, ManagedVM, id))
     if row.management_mode != 'external' or row.lifecycle_status != 'active' or row.deployment_id:
         raise HTTPException(409, 'Only an active external VM can be adopted')
     provider, adapter = provider_adapter(db, row.provider_id)
@@ -251,8 +259,7 @@ def adopt_vm(
     from app.api.infrastructure import deployment_public, job_public, locked_credential, new_job
 
     row = db.scalar(select(ManagedVM).where(ManagedVM.id == id).with_for_update())
-    if row is None:
-        raise HTTPException(404, 'Resource not found')
+    ensure_inventory_vm_access(db, request, actor, row)
     if row.management_mode != 'external' or row.lifecycle_status != 'active' or row.deployment_id:
         raise HTTPException(409, 'Only an active external VM can be adopted')
 
@@ -324,8 +331,7 @@ def reconcile_vm(
     db=Depends(get_db, scope='function'),
 ):
     row = db.scalar(select(ManagedVM).where(ManagedVM.id == id).with_for_update())
-    if row is None:
-        raise HTTPException(404, 'Resource not found')
+    ensure_inventory_vm_access(db, request, actor, row)
     _, adapter = provider_adapter(db, row.provider_id)
     try:
         live = discover_vm(adapter, row.vm_id)
@@ -349,7 +355,7 @@ def unmanage_vm(
     actor=Depends(require('inventory.delete')),
     db=Depends(get_db, scope='function'),
 ):
-    row = find(db, ManagedVM, id)
+    row = ensure_inventory_vm_access(db, request, actor, find(db, ManagedVM, id))
     if row.management_mode == 'terraform' and row.lifecycle_status != 'destroyed':
         raise HTTPException(409, 'Active Terraform-managed VM must be destroyed through its deployment')
     db.delete(row)
@@ -359,6 +365,7 @@ def unmanage_vm(
 
 @router.get('/resources')
 def managed_resources(
+    request: Request,
     provider: Annotated[str | None, Query(max_length=32)] = None,
     lifecycle_status: Annotated[Literal['active', 'destroyed'] | None, Query()] = None,
     limit: Limit = 100,
@@ -367,6 +374,9 @@ def managed_resources(
     db=Depends(get_db, scope='function'),
 ):
     query = select(ManagedResource)
+    predicate = inventory_resource_predicate(request, actor)
+    if predicate is not None:
+        query = query.where(predicate)
     if provider:
         query = query.where(ManagedResource.provider == provider)
     if lifecycle_status:
@@ -378,7 +388,9 @@ def managed_resources(
 @router.get('/resources/{id}')
 def managed_resource(
     id: str,
+    request: Request,
     actor=Depends(require('inventory.read')),
     db=Depends(get_db, scope='function'),
 ):
-    return resource_public(find(db, ManagedResource, id))
+    row = ensure_inventory_resource_access(db, request, actor, find(db, ManagedResource, id))
+    return resource_public(row)

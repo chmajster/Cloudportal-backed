@@ -3,7 +3,7 @@ from fastapi.routing import APIRoute
 
 _CREATION_RESOURCES = {
     'users', 'roles', 'tokens', 'credentials', 'providers', 'deployments', 'jobs',
-    'blueprints', 'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy',
+    'blueprints', 'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy', 'power',
 }
 
 
@@ -29,6 +29,7 @@ def decorate_router(router):
                 route.path in {
                     '/deployments', '/jobs', '/blueprints/{id}/execute',
                     '/deployments/{id}/destroy',
+                    '/providers/{provider_id}/vms/{node}/{vmid}/power',
                 }
                 or is_destroy
             )
