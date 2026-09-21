@@ -23,7 +23,8 @@ def test_console_session_is_ephemeral_proxied_and_rbac_protected(client, headers
     monkeypatch.setattr(
         ProxmoxProvider,
         'novnc_asset',
-        lambda self, asset: (b'export default class RFB {}', 'text/javascript; charset=utf-8'),
+        # Proxmox/pveproxy may expose static JavaScript with a generic MIME type.
+        lambda self, asset: (b'export default class RFB {}', 'application/octet-stream'),
     )
 
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101/console"
@@ -47,6 +48,7 @@ def test_console_session_is_ephemeral_proxied_and_rbac_protected(client, headers
     assert asset.status_code == 200, asset.text
     assert asset.content == b'export default class RFB {}'
     assert asset.headers['content-type'].startswith('text/javascript')
+    assert asset.headers['X-Content-Type-Options'] == 'nosniff'
     assert asset.headers['Cache-Control'] == 'no-store'
 
     _, reader = new_user(client, headers, username='console-reader', permissions=['vms.read'])

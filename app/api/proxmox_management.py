@@ -28,11 +28,30 @@ NODE = Annotated[str, Path(pattern=r'^[A-Za-z0-9_.-]{1,63}\z')]
 SNAPSHOT = Annotated[str, Path(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\z')]
 CONSOLE_SESSION_TTL = 90
 CONSOLE_TOKEN = re.compile(r'^[A-Za-z0-9_-]{32,128}\Z')
+NOVNC_CONTENT_TYPES = {
+    'js': 'text/javascript; charset=utf-8',
+    'css': 'text/css; charset=utf-8',
+    'html': 'text/html; charset=utf-8',
+    'svg': 'image/svg+xml',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'woff': 'font/woff',
+    'woff2': 'font/woff2',
+    'ttf': 'font/ttf',
+    'map': 'application/json; charset=utf-8',
+}
 
 
 def console_key(session_id):
     return 'cp:console:' + session_id
 
+
+
+def novnc_content_type(asset_path, upstream_content_type):
+    extension = asset_path.rsplit('.', 1)[-1].lower() if '.' in asset_path else ''
+    return NOVNC_CONTENT_TYPES.get(extension, upstream_content_type or 'application/octet-stream')
 
 def load_console_session(session_id):
     if not CONSOLE_TOKEN.fullmatch(session_id):
@@ -398,11 +417,14 @@ def console_asset(session_id: str, asset_path: str):
     record = load_console_session(session_id)
     if record is None:
         raise HTTPException(410, 'Console session expired')
-    body, content_type = console_adapter(record['provider_id']).novnc_asset(asset_path)
+    body, upstream_content_type = console_adapter(record['provider_id']).novnc_asset(asset_path)
     return Response(
         content=body,
         headers={
-            'Content-Type': content_type,
+            # Browsers reject ES modules when Proxmox/pveproxy reports JavaScript
+            # as text/plain or application/octet-stream. The asset path has
+            # already passed strict validation, so its extension is authoritative.
+            'Content-Type': novnc_content_type(asset_path, upstream_content_type),
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
             'Referrer-Policy': 'no-referrer',
