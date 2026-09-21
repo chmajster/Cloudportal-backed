@@ -15,6 +15,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'inventory',
         'ipam',
         'operations',
+        'events',
         'health',
         'updates',
     ]
@@ -37,6 +38,7 @@ def test_feature_registry_exposes_expected_router_contracts():
     assert '/blueprints' in paths('automation')
     assert '/ipam/pools' in paths('ipam')
     assert '/webhooks' in paths('operations')
+    assert '/events' in paths('events')
     assert '/health' in paths('health')
     assert '/updates/status' in paths('updates')
     assert '/manifest.json' in paths('web-ui')

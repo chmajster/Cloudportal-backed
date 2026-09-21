@@ -175,22 +175,26 @@ def materialize_scheduled_jobs():
 
 
 def queue_webhook_event(db, event, resource_id, data):
-    endpoints = db.scalars(
-        select(WebhookEndpoint).where(WebhookEndpoint.is_active.is_(True))
-    ).all()
-    payload = {
-        'event': event,
-        **data,
-        'created_at': now().isoformat() + 'Z',
-    }
-    for endpoint in endpoints:
-        if event in (endpoint.events or []):
-            db.add(WebhookDelivery(
-                endpoint_id=endpoint.id,
-                event=event,
-                resource_id=str(resource_id),
-                payload=payload,
-            ))
+    # Backward-compatible entry point used across jobs/recovery/system alerts.
+    # The event is now persisted transactionally; webhook fan-out happens through
+    # the core.webhook-bridge extension in the dispatcher.
+    from app.events.service import publish_event
+
+    subject_type = event.split('.', 1)[0]
+    request_id = None
+    for key in ('job', 'recovery'):
+        value = data.get(key) if isinstance(data, dict) else None
+        if isinstance(value, dict) and value.get('request_id'):
+            request_id = str(value['request_id'])
+            break
+    return publish_event(
+        db,
+        event,
+        data,
+        subject_type=subject_type,
+        subject_id=str(resource_id),
+        request_id=request_id,
+    )
 
 
 def queue_job_webhooks(db, job):

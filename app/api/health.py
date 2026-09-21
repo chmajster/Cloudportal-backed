@@ -13,6 +13,8 @@ from app.database import session
 from app.models import (
     Credential,
     Deployment,
+    EventRecord,
+    ExtensionDelivery,
     IPAllocation,
     Job,
     ManagedResource,
@@ -196,6 +198,24 @@ def prometheus_metrics():
                 {'status': delivery_status},
             )
 
+        event_count = db.scalar(select(func.count()).select_from(EventRecord)) or 0
+        event_sequence = db.scalar(select(func.max(EventRecord.sequence))) or 0
+        _metric(lines, 'cloudportal_events_total', event_count)
+        _metric(lines, 'cloudportal_event_sequence', event_sequence)
+
+        for extension_name, delivery_status, count in _group_counts(
+            db,
+            ExtensionDelivery,
+            ExtensionDelivery.extension_name,
+            ExtensionDelivery.status,
+        ):
+            _metric(
+                lines,
+                'cloudportal_extension_deliveries_total',
+                count,
+                {'extension': extension_name, 'status': delivery_status},
+            )
+
     return '\n'.join(lines) + '\n'
 
 
@@ -283,5 +303,17 @@ def alerts(actor=Depends(require('metrics.read'))):
                 'code': 'webhook_failures',
                 'count': failed_webhooks,
                 'message': f'{failed_webhooks} webhook deliveries exhausted retries',
+            })
+        dead_extensions = db.scalar(
+            select(func.count()).select_from(ExtensionDelivery).where(
+                ExtensionDelivery.status == 'dead_letter'
+            )
+        ) or 0
+        if dead_extensions:
+            result.append({
+                'severity': 'warning',
+                'code': 'extension_dead_letters',
+                'count': dead_extensions,
+                'message': f'{dead_extensions} extension deliveries are in the dead-letter queue',
             })
     return {'items': result}

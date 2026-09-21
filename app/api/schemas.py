@@ -852,7 +852,37 @@ class ScheduledOperationInput(Input):
 class WebhookEndpointInput(Input):
     name: Name
     url: Annotated[str, Field(min_length=9, max_length=2048)]
-    events: Annotated[list[Literal['job.successful', 'job.failed', 'job.cancelled', 'recovery.queued', 'recovery.successful', 'recovery.failed', 'system.alert']], Field(min_length=1, max_length=7)]
+    events: Annotated[list[str], Field(min_length=1, max_length=64)]
+
+    @field_validator('events')
+    @classmethod
+    def event_patterns(cls, value):
+        import re
+        result = []
+        for item in value:
+            normalized = str(item).strip().lower()
+            valid = (
+                normalized == '*'
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+',
+                        normalized,
+                    )
+                )
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*\.\*',
+                        normalized,
+                    )
+                )
+            )
+            if not valid:
+                raise ValueError('Webhook event must be an event name, prefix wildcard such as job.* or *')
+            if normalized not in result:
+                result.append(normalized)
+        return result
     is_active: bool = True
 
     @field_validator('url')
