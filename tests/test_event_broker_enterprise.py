@@ -266,3 +266,94 @@ def test_event_metrics_include_schema_and_consumer_lag(client, headers):
     assert 'cloudportal_event_schemas_active ' in body
     assert 'cloudportal_event_consumers_active ' in body
     assert 'cloudportal_event_consumer_lag{consumer="metrics-consumer"}' in body
+
+
+def test_consumer_subscription_change_invalidates_previous_checkpoint(client, headers):
+    old_event = publish(client, headers, 'custom.old.match', {'value': 1})
+    new_event = publish(client, headers, 'custom.new.match', {'value': 2})
+
+    created = client.post('/api/v1/event-consumers', headers=idem(headers), json={
+        'name': 'subscription-change',
+        'event_patterns': ['custom.old.*'],
+        'start_from': 'earliest',
+    })
+    assert created.status_code == 201, created.text
+    consumer = created.json()
+
+    poll = client.get(f"/api/v1/event-consumers/{consumer['id']}/events", headers=headers)
+    assert poll.status_code == 200
+    assert [item['id'] for item in poll.json()['items']] == [old_event['id']]
+    stale_checkpoint = poll.json()['checkpoint_sequence']
+    assert stale_checkpoint >= new_event['sequence']
+
+    updated = client.put(f"/api/v1/event-consumers/{consumer['id']}", headers=headers, json={
+        'name': consumer['name'],
+        'event_patterns': ['custom.new.*'],
+        'max_batch': consumer['max_batch'],
+        'is_active': True,
+        'owner_user_id': consumer['owner_user_id'],
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['last_checkpoint_sequence'] is None
+
+    stale_ack = client.post(
+        f"/api/v1/event-consumers/{consumer['id']}/ack",
+        headers=headers,
+        json={'sequence': stale_checkpoint},
+    )
+    assert stale_ack.status_code == 409
+    assert 'last polled checkpoint' in stale_ack.text
+
+    poll = client.get(f"/api/v1/event-consumers/{consumer['id']}/events", headers=headers)
+    assert poll.status_code == 200
+    assert [item['id'] for item in poll.json()['items']] == [new_event['id']]
+
+
+def test_consumer_detects_gap_after_retention_while_disabled(client, headers, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings(), 'retention_events_days', 1)
+
+    with session() as db:
+        old_event = publish_event(db, 'custom.gap.old', {'value': 1})
+        db.flush()
+        old_event.created_at = now() - timedelta(days=10)
+        states = sync_extension_states(db)
+        for state in states.values():
+            state.last_event_sequence = old_event.sequence
+        consumer = EventConsumer(
+            name='gap-consumer',
+            event_patterns=['custom.*'],
+            cursor_sequence=0,
+            max_batch=100,
+            is_active=False,
+            owner_user_id=1,
+            created_by=1,
+        )
+        db.add(consumer)
+        db.commit()
+        consumer_id = consumer.id
+
+    cleanup_retention_once(force=True)
+
+    newer = publish(client, headers, 'custom.gap.new', {'value': 2})
+    assert newer['sequence'] > 1
+
+    with session() as db:
+        consumer = db.get(EventConsumer, consumer_id)
+        consumer.is_active = True
+        db.commit()
+
+    poll = client.get(f'/api/v1/event-consumers/{consumer_id}/events', headers=headers)
+    assert poll.status_code == 409
+    assert 'retained event floor' in poll.text
+
+    reset = client.post(
+        f'/api/v1/event-consumers/{consumer_id}/reset',
+        headers=headers,
+        json={'start_from': 'earliest'},
+    )
+    assert reset.status_code == 200, reset.text
+
+    poll = client.get(f'/api/v1/event-consumers/{consumer_id}/events', headers=headers)
+    assert poll.status_code == 200
+    assert any(item['id'] == newer['id'] for item in poll.json()['items'])
