@@ -31,8 +31,11 @@ requeued. Manual replay creates independent replay deliveries and therefore may 
 performed multiple times.
 
 The built-in `core.webhook-bridge` extension converts broker events into
-`WebhookDelivery` rows. Existing HTTPS allowlisting, HMAC signing, redirect
-blocking and retry handling remain unchanged.
+`WebhookDelivery` rows. Normal delivery uses a private routing snapshot captured
+transactionally when the event is published, so later webhook creation or
+subscription changes never apply retroactively to backlog events. Explicit replay
+uses the currently active webhook subscriptions. Existing HTTPS allowlisting, HMAC
+signing, redirect blocking and retry handling remain unchanged.
 
 ## Subscription patterns
 
@@ -56,8 +59,9 @@ Extensions are trusted application code placed in
 ```python
 from app.events.contracts import ExtensionSpec
 
-def on_vm_event(db, event):
+def on_vm_event(db, event, delivery):
     # Durable handler: write through the supplied transaction.
+    # delivery.is_replay distinguishes normal consumption from explicit replay.
     ...
 
 EXTENSIONS = (
