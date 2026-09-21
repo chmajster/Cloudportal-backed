@@ -183,6 +183,40 @@ def _emit(db, event, request, extra=None):
     })
 
 
+def _fail_before_execution(job_id, code, message):
+    with session() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return
+        request = db.get(Day2ActionRequest, (job.payload or {}).get('day2_action_request_id'))
+        job.status = 'failed'
+        job.error = str(message)[:500]
+        job.heartbeat_at = now()
+        if request is not None:
+            request.status = 'FAILED'
+            request.finished_at = now()
+            request.error_code = code
+            request.error_message = str(message)[:500]
+            request.result = {
+                'status': 'FAILED',
+                'resource_id': request.resource_id,
+                'action': request.action,
+                'changes': request.safe_diff or {},
+                'warnings': [],
+                'duration_ms': 0,
+            }
+            release_resource_lock(db, request.resource_id, request.id)
+            db.add(Audit(
+                user_id=job.created_by, token_id=job.token_id, ip=job.ip, source=job.source,
+                action='day2.failed', resource='day2_actions', resource_id=request.id,
+                result='failed', request_id=job.request_id,
+            ))
+            _emit(db, 'day2.failed', request, {'error_code': code})
+        db.add(JobLog(job_id=job.id, message='day2.failed: ' + str(message)[:500]))
+        queue_job_webhooks(db, job)
+        db.commit()
+
+
 def execute(job_id):
     task = None
     target = None
@@ -195,37 +229,47 @@ def execute(job_id):
     result = {}
     warnings = []
 
-    with session() as db:
-        claimed = db.execute(
-            update(Job)
-            .where(Job.id == job_id, Job.status == 'queued', Job.cancel_requested.is_(False))
-            .values(status='running', heartbeat_at=now())
-        )
-        if claimed.rowcount != 1:
+    try:
+        with session() as db:
+            claimed = db.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status == 'queued', Job.cancel_requested.is_(False))
+                .values(status='running', heartbeat_at=now())
+            )
+            if claimed.rowcount != 1:
+                db.commit()
+                return
+            job = db.get(Job, job_id)
+            request = db.get(Day2ActionRequest, (job.payload or {}).get('day2_action_request_id'))
+            if request is None:
+                job.status = 'failed'
+                job.error = 'Day-2 action request is missing'
+                db.commit()
+                return
+            request.status = 'RUNNING'
+            request.started_at = now()
+            user, permissions = _execution_permissions(db, job, request)
+            target, credential, _ = load_target(db, request.resource_id)
+            refresh_resource_lock(db, target.resource_id, request.id, day2_settings(db)['resource_lock_timeout'])
+            adapter = day2_provider(credential)
+            validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions)
+            context = Day2Context(job, request, day2_settings(db)['action_timeout'])
+            db.add(JobLog(job_id=job.id, message='day2.started: ' + request.action))
+            db.add(Audit(
+                user_id=job.created_by, token_id=job.token_id, ip=job.ip, source=job.source,
+                action='day2.started', resource='day2_actions', resource_id=request.id, request_id=job.request_id,
+            ))
+            _emit(db, 'day2.started', request)
             db.commit()
-            return
-        job = db.get(Job, job_id)
-        request = db.get(Day2ActionRequest, (job.payload or {}).get('day2_action_request_id'))
-        if request is None:
-            job.status = 'failed'
-            job.error = 'Day-2 action request is missing'
-            db.commit()
-            return
-        request.status = 'RUNNING'
-        request.started_at = now()
-        user, permissions = _execution_permissions(db, job, request)
-        target, credential, _ = load_target(db, request.resource_id)
-        refresh_resource_lock(db, target.resource_id, request.id, day2_settings(db)['resource_lock_timeout'])
-        adapter = day2_provider(credential)
-        validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions)
-        context = Day2Context(job, request, day2_settings(db)['action_timeout'])
-        db.add(JobLog(job_id=job.id, message='day2.started: ' + request.action))
-        db.add(Audit(
-            user_id=job.created_by, token_id=job.token_id, ip=job.ip, source=job.source,
-            action='day2.started', resource='day2_actions', resource_id=request.id, request_id=job.request_id,
-        ))
-        _emit(db, 'day2.started', request)
-        db.commit()
+    except Day2Failure as exc:
+        _fail_before_execution(job_id, exc.code, exc.message)
+        return
+    except HTTPException:
+        _fail_before_execution(job_id, 'PROVIDER_ERROR', 'Provider validation failed before Day-2 execution')
+        return
+    except Exception:
+        _fail_before_execution(job_id, 'INTERNAL_ERROR', 'Day-2 preparation failed; inspect backend configuration')
+        return
 
     try:
         context.stage('day2.execution.start:' + context.action_request.action)

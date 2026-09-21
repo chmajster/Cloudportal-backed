@@ -322,7 +322,7 @@ def action_catalog(db, target, credential, permissions):
     }
 
 
-def _current_for_diff(action_id, target, adapter, state):
+def _current_for_diff(action_id, target, adapter, state, params=None):
     if action_id == 'resize_compute':
         config = adapter.configuration(target)
         return {
@@ -339,8 +339,9 @@ def _current_for_diff(action_id, target, adapter, state):
         return {'target_node': target.node}
     if action_id == 'resize_disk':
         rows = adapter.disks(target)
-        row = next((item for item in rows if item['device'] == action_id), None)
-        return row or {}
+        device = (params or {}).get('device')
+        row = next((item for item in rows if item['device'] == device), None)
+        return {'new_size_gib': row.get('size_gib')} if row else {}
     return {}
 
 
@@ -415,7 +416,7 @@ def validate_action(db, target, credential, action_id, params, reason, permissio
         if str(params.get('confirmation') or '') != target.name:
             raise failure('VALIDATION_FAILED', message='Confirmation must exactly match the resource name', status_code=422, details={'expected': target.name})
     warnings = _validate_action_specific(db, target, credential, adapter, action, params)
-    current = _current_for_diff(action.id, target, adapter, state)
+    current = _current_for_diff(action.id, target, adapter, state, params)
     requested = {key: value for key, value in params.items() if key != 'confirmation'}
     changes = configuration_diff(current, requested)
     capabilities = adapter.capabilities(target)
