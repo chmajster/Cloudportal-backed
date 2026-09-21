@@ -5,23 +5,28 @@ from app.models import WebhookDelivery, WebhookEndpoint
 
 def webhook_bridge(db, event):
     endpoints = db.query(WebhookEndpoint).filter(WebhookEndpoint.is_active.is_(True)).all()
+    payload = event.payload or {}
+    event_time = event.created_at.isoformat() + 'Z'
     envelope = {
+        # Keep legacy domain fields (job/recovery/alert) at the top level, but
+        # authoritative broker metadata is written afterwards so an untrusted
+        # custom payload cannot spoof the signed event identity.
+        **payload,
         'specversion': '1.0',
         'id': event.id,
         'type': event.type,
         'source': event.source,
         'subject': f'{event.subject_type}/{event.subject_id}' if event.subject_id else event.subject_type,
-        'time': event.created_at.isoformat() + 'Z',
+        'time': event_time,
+        'created_at': event_time,
         'datacontenttype': 'application/json',
         'schema_version': event.schema_version,
         'sequence': event.sequence,
         'correlation_id': event.correlation_id,
         'causation_id': event.causation_id,
         'request_id': event.request_id,
-        'data': event.payload or {},
-        # Preserve the legacy webhook shape while adding CloudEvents-compatible metadata.
+        'data': payload,
         'event': event.type,
-        **(event.payload or {}),
     }
     for endpoint in endpoints:
         if event_matches(endpoint.events or (), event.type):
