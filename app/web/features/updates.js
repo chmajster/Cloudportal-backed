@@ -336,6 +336,51 @@ function restoreTechnicalLogView(container, previous) {
   log.scrollTop = log.scrollHeight;
 }
 
+const TECHNICAL_LOG_TOKEN_RE = /(\[\s*OK\s*\]|\[INFO\]|\[WARN(?:ING)?\]|\[(?:FAIL(?:ED)?|ERROR)\]|\[\d+\/\d+\]|https?:\/\/[^\s]+|(?:~|\.{1,2})?\/(?:[A-Za-z0-9._@%+~:-]+\/)*[A-Za-z0-9._@%+~:-]+)/gi;
+
+function technicalLogTokenClass(token) {
+  if (/^\[\s*OK\s*\]$/i.test(token)) return 'is-ok';
+  if (/^\[INFO\]$/i.test(token)) return 'is-info';
+  if (/^\[WARN(?:ING)?\]$/i.test(token)) return 'is-warning';
+  if (/^\[(?:FAIL(?:ED)?|ERROR)\]$/i.test(token)) return 'is-danger';
+  if (/^\[\d+\/\d+\]$/.test(token)) return 'is-step';
+  if (/^https?:\/\//i.test(token)) return 'is-url';
+  return 'is-path';
+}
+
+function highlightedTechnicalLogLine(line) {
+  const parts = [];
+  let cursor = 0;
+  TECHNICAL_LOG_TOKEN_RE.lastIndex = 0;
+
+  let match;
+  while ((match = TECHNICAL_LOG_TOKEN_RE.exec(line)) !== null) {
+    if (match.index > cursor) parts.push(line.slice(cursor, match.index));
+    const token = match[0];
+    parts.push(node('span', {
+      class: 'update-log-token ' + technicalLogTokenClass(token),
+      text: token,
+    }));
+    cursor = match.index + token.length;
+  }
+
+  if (cursor < line.length) parts.push(line.slice(cursor));
+  return node('span', { class: 'update-log-line' }, ...parts);
+}
+
+function highlightedTechnicalLog(output) {
+  const value = output || 'Brak logów dla bieżącej sesji aktualizacji.';
+  const lines = value.split('\n');
+  const rendered = [];
+
+  lines.forEach((line, index) => {
+    rendered.push(highlightedTechnicalLogLine(line));
+    if (index < lines.length - 1) rendered.push('\n');
+  });
+
+  return rendered;
+}
+
 function technicalLog(status) {
   const output = (status.output || []).slice(-120).join('\n');
   const expanded = ['running', 'failed'].includes(status.status);
@@ -355,7 +400,7 @@ function technicalLog(status) {
           toast(error.message, 'error');
         }
       }) : null),
-    node('pre', { class: 'log-output mono update-log', text: output || 'Brak logów dla bieżącej sesji aktualizacji.' })
+    node('pre', { class: 'log-output mono update-log' }, ...highlightedTechnicalLog(output))
   );
 }
 
