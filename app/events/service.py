@@ -118,7 +118,11 @@ def materialize_extension_deliveries(db, batch_size: int = 500):
     states = sync_extension_states(db)
     created = 0
     for spec in extension_specs():
-        state = states[spec.name]
+        state = db.scalar(
+            select(ExtensionState)
+            .where(ExtensionState.name == spec.name)
+            .with_for_update()
+        ) or states[spec.name]
         if not state.is_enabled or spec.handler is None:
             continue
         events = db.scalars(
@@ -140,6 +144,7 @@ def materialize_extension_deliveries(db, batch_size: int = 500):
                     db.add(ExtensionDelivery(
                         extension_name=spec.name,
                         event_sequence=event.sequence,
+                        materialization_key=f'{spec.name}:{event.sequence}',
                         is_replay=False,
                     ))
                     created += 1
