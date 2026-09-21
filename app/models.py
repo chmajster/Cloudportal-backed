@@ -357,6 +357,37 @@ class EventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
 
 
+class EventSchema(Timestamp, Base):
+    __tablename__ = "event_schemas"
+    __table_args__ = (UniqueConstraint("event_type", "version"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    schema_json: Mapped[dict] = mapped_column(JSON)
+    compatibility: Mapped[str] = mapped_column(String(16), default="none")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class EventConsumer(Timestamp, Base):
+    __tablename__ = "event_consumers"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    event_patterns: Mapped[list] = mapped_column(JSON, default=list)
+    cursor_sequence: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite'), default=0, index=True
+    )
+    last_checkpoint_sequence: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite')
+    )
+    max_batch: Mapped[int] = mapped_column(Integer, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_acked_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class ExtensionState(Timestamp, Base):
     __tablename__ = "extension_states"
     name: Mapped[str] = mapped_column(String(128), primary_key=True)

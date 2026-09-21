@@ -18,7 +18,7 @@ PERMISSIONS = {
         'inventory': 'read read_all import update delete',
         'schedules': 'read create update delete',
         'webhooks': 'read create update delete',
-        'events': 'read publish replay', 'extensions': 'read manage',
+        'events': 'read publish replay consume manage', 'extensions': 'read manage',
         'metrics': 'read',
         'tokens': 'read create revoke', 'settings': 'read update', 'updates': 'read execute update', 'portal': 'connect',
     }.items()}
