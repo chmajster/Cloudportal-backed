@@ -536,6 +536,32 @@
   border-radius: 0;
 }
 
+.update-log-line {
+  color: var(--log-text);
+}
+.update-log-token {
+  font-weight: 750;
+}
+.update-log-token.is-ok {
+  color: #5ee6ae;
+}
+.update-log-token.is-info {
+  color: #56c7ff;
+}
+.update-log-token.is-warning,
+.update-log-token.is-step {
+  color: #f6c45b;
+}
+.update-log-token.is-danger {
+  color: #ff7d78;
+}
+.update-log-token.is-url {
+  color: #46a6ff;
+}
+.update-log-token.is-path {
+  color: #e879f9;
+}
+
 .update-settings {
   display: grid;
   gap: 20px;
