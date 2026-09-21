@@ -44,7 +44,11 @@ def upgrade():
         sa.Column('is_enabled', sa.Boolean(), nullable=False),
         sa.Column('status', sa.String(length=16), nullable=False),
         sa.Column('config', sa.JSON(), nullable=False),
-        sa.Column('last_event_sequence', sa.Integer(), nullable=False),
+        sa.Column(
+            'last_event_sequence',
+            sa.BigInteger().with_variant(sa.Integer(), 'sqlite'),
+            nullable=False,
+        ),
         sa.Column('failure_count', sa.Integer(), nullable=False),
         sa.Column('last_error', sa.String(length=500), nullable=True),
         sa.Column('updated_by', sa.Integer(), nullable=True),
