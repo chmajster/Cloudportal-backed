@@ -88,6 +88,9 @@ def poll_consumer(db, row: EventConsumer, requested_limit: int | None = None) ->
 def ack_consumer(db, row: EventConsumer, sequence: int) -> EventConsumer:
     if not row.is_active:
         raise ValueError('Event consumer is disabled')
+    floor = retained_event_floor(db)
+    if row.cursor_sequence < floor:
+        raise ValueError('Consumer cursor is behind retained event floor; reset required')
     latest = db.scalar(select(func.max(EventRecord.sequence))) or 0
     if sequence < row.cursor_sequence:
         raise ValueError('ACK sequence cannot move the cursor backwards')
