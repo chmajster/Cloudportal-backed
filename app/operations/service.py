@@ -387,6 +387,9 @@ def cleanup_retention_once(force=False):
     }
     counts = {}
     with session() as db:
+        from app.events.service import sync_extension_states
+        sync_extension_states(db)
+
         counts['job_logs'] = db.execute(
             delete(JobLog).where(JobLog.timestamp < cutoffs['job_logs'])
         ).rowcount or 0
