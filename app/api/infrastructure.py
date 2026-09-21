@@ -17,6 +17,8 @@ from app.credentials.service import credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
+from app.jobs.approval import gate_job_for_approval
+from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
 from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
@@ -386,10 +388,19 @@ def validate_ansible(db, data):
 
 def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
     check_job_permissions(request, operation)
+    blueprint = ((payload or {}).get('blueprint') or {}) if isinstance(payload, dict) else {}
+    if not blueprint and deployment and operation == 'terraform.apply':
+        blueprint = ((deployment.workflow or {}).get('blueprint') or {})
+    if blueprint and operation == 'terraform.apply' and 'blueprints.execute' not in request.state.permissions:
+        raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
     if deployment and deployment.workflow.get('ansible') and operation == 'terraform.apply' and 'ansible.execute' not in request.state.permissions:
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
     if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
         raise HTTPException(409, 'Deployment is busy or destroyed')
+    if deployment and operation == 'terraform.apply' and has_released_allocations(db, deployment.id):
+        raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
+    if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+        raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
     job_payload = dict(payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}))
     if deployment:
         job_payload['previous_status'] = deployment.status
@@ -402,6 +413,7 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
     if deployment:
         deployment.active_job_id = job.id
         deployment.status = 'queued'
+    gate_job_for_approval(db, job, deployment)
     audit(db, request, 'job.created', 'jobs', job.id)
     return job
 
@@ -633,21 +645,18 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
         j.status = 'cancelled'
         j.error = 'Cancellation requested before execution'
         if j.deployment_id:
-            d = find(db, Deployment, j.deployment_id)
-            if d.active_job_id == j.id:
+            d = db.scalar(select(Deployment).where(Deployment.id == j.deployment_id).with_for_update())
+            if d is not None and d.active_job_id == j.id:
                 d.active_job_id = None
-            d.status = 'cancelled'
-            if was_waiting_approval:
-                delete_plan(d.id)
-                released_at = now()
-                db.execute(update(HostnameReservation).where(
-                    HostnameReservation.resource_id == d.id,
-                    HostnameReservation.status != 'released',
-                ).values(status='released', released_at=released_at))
-                db.execute(update(IPAllocation).where(
-                    IPAllocation.resource_id == d.id,
-                    IPAllocation.status != 'released',
-                ).values(status='released', released_at=released_at))
+                d.status = (
+                    (j.payload or {}).get('previous_status', d.status or 'failed')
+                    if j.operation == 'terraform.plan'
+                    else 'cancelled'
+                )
+                if was_waiting_approval:
+                    delete_plan(d.id)
+                if j.operation != 'terraform.plan':
+                    release_pre_execution_allocations(db, d.id)
     else:
         j.status = 'cancelling'
         if j.deployment_id:
