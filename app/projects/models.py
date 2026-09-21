@@ -74,3 +74,7 @@ class ProjectRoleGrant(Base):
     __tablename__ = 'project_role_grants'
     assignment_id: Mapped[str] = mapped_column(ForeignKey('project_role_assignments.id', ondelete='CASCADE'), primary_key=True)
     permission_id: Mapped[int] = mapped_column(ForeignKey('permissions.id', ondelete='CASCADE'), primary_key=True, index=True)
+
+
+# Register the additive context model for migrations and isolated domain tests.
+from app.projects.context_models import UserProjectContext  # noqa: E402, F401
