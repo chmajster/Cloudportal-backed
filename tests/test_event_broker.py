@@ -20,8 +20,9 @@ def test_custom_event_is_durable_and_fans_out_to_wildcard_webhook(client, header
     })
     assert hook.status_code == 201, hook.text
 
+    long_event_type = 'custom.vm.' + ('enriched_' * 9) + 'ready'
     response = client.post('/api/v1/events', headers=idem(headers), json={
-        'type': 'custom.vm.enriched',
+        'type': long_event_type,
         'subject_type': 'managed_vms',
         'subject_id': 'vm-42',
         'correlation_id': 'corr-42',
@@ -43,7 +44,7 @@ def test_custom_event_is_durable_and_fans_out_to_wildcard_webhook(client, header
         ).one()
         assert delivery.status == 'pending'
         assert delivery.payload['specversion'] == '1.0'
-        assert delivery.payload['type'] == 'custom.vm.enriched'
+        assert delivery.payload['type'] == long_event_type
         assert delivery.payload['data']['vm_id'] == 42
 
 
@@ -153,3 +154,48 @@ def test_audit_boundary_emits_safe_event(client, headers, monkeypatch):
     assert payload['resource'] == 'webhooks'
     serialized = str(rows[0]).lower()
     assert 'secret' not in serialized
+
+
+def test_after_sequence_is_lossless_ascending_cursor(client, headers):
+    event_type = 'custom.cursor.test'
+    events = []
+    for value in (1, 2, 3):
+        response = client.post('/api/v1/events', headers=idem(headers), json={
+            'type': event_type,
+            'payload': {'value': value},
+        })
+        assert response.status_code == 201, response.text
+        events.append(response.json())
+
+    response = client.get('/api/v1/events', headers=headers, params={
+        'event_type': event_type,
+        'after_sequence': events[0]['sequence'],
+        'limit': 2,
+    })
+    assert response.status_code == 200, response.text
+    rows = response.json()['items']
+    assert [row['sequence'] for row in rows] == [
+        events[1]['sequence'],
+        events[2]['sequence'],
+    ]
+    assert response.json()['next_after_sequence'] == events[2]['sequence']
+
+    invalid = client.get('/api/v1/events', headers=headers, params={
+        'after_sequence': events[0]['sequence'],
+        'offset': 1,
+    })
+    assert invalid.status_code == 422
+
+
+def test_custom_event_and_extension_config_reject_secret_fields(client, headers):
+    response = client.post('/api/v1/events', headers=idem(headers), json={
+        'type': 'custom.security.test',
+        'payload': {'nested': {'password': 'must-not-persist'}},
+    })
+    assert response.status_code == 422
+
+    response = client.put('/api/v1/extensions/core.webhook-bridge', headers=headers, json={
+        'is_enabled': True,
+        'config': {'api_key': 'must-not-persist'},
+    })
+    assert response.status_code == 422
