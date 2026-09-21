@@ -11,7 +11,12 @@ depends_on = None
 def upgrade():
     op.create_table(
         'event_records',
-        sa.Column('sequence', sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column(
+            'sequence',
+            sa.BigInteger().with_variant(sa.Integer(), 'sqlite'),
+            autoincrement=True,
+            nullable=False,
+        ),
         sa.Column('id', sa.String(length=36), nullable=False),
         sa.Column('type', sa.String(length=128), nullable=False),
         sa.Column('schema_version', sa.Integer(), nullable=False),
@@ -54,7 +59,11 @@ def upgrade():
         'extension_deliveries',
         sa.Column('id', sa.String(length=36), nullable=False),
         sa.Column('extension_name', sa.String(length=128), nullable=False),
-        sa.Column('event_sequence', sa.Integer(), nullable=False),
+        sa.Column(
+            'event_sequence',
+            sa.BigInteger().with_variant(sa.Integer(), 'sqlite'),
+            nullable=False,
+        ),
         sa.Column('materialization_key', sa.String(length=255), nullable=True),
         sa.Column('status', sa.String(length=16), nullable=False),
         sa.Column('attempts', sa.Integer(), nullable=False),
