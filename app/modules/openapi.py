@@ -3,7 +3,7 @@ from fastapi.routing import APIRoute
 
 _CREATION_RESOURCES = {
     'users', 'roles', 'tokens', 'credentials', 'providers', 'deployments', 'jobs',
-    'blueprints', 'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy', 'power',
+    'blueprints', 'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy', 'power', 'events',
 }
 
 
@@ -27,7 +27,7 @@ def decorate_router(router):
         if (is_creation or is_destroy) and route.path != '/auth/reset-password':
             required = (
                 route.path in {
-                    '/deployments', '/jobs', '/blueprints/{id}/execute',
+                    '/deployments', '/jobs', '/events', '/blueprints/{id}/execute',
                     '/deployments/{id}/destroy',
                     '/providers/{provider_id}/vms/{node}/{vmid}/power',
                 }
