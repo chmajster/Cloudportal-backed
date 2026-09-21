@@ -50,7 +50,15 @@ class EventPublishInput(BaseModel):
         Field(
             min_length=8,
             max_length=128,
-            pattern=r'^custom\.[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*    subject_id: Annotated[str, Field(max_length=255)] = ''
+            pattern=r'^custom\.[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*$',
+        ),
+    ]
+    payload: dict = Field(default_factory=dict)
+    subject_type: Annotated[
+        str,
+        Field(min_length=1, max_length=64, pattern=r'^[a-z0-9][a-z0-9_.-]{0,63}$'),
+    ] = 'custom'
+    subject_id: Annotated[str, Field(max_length=255)] = ''
     schema_version: int = Field(default=1, ge=1, le=1000)
     correlation_id: Annotated[str | None, Field(max_length=64)] = None
     causation_id: Annotated[str | None, Field(max_length=64)] = None
