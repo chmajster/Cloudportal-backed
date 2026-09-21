@@ -18,6 +18,7 @@ from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
 from app.inventory_sync import state_outputs, sync_deployment_inventory
+from app.jobs.lifecycle import has_released_allocations
 from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog,
                         ManagedResource, ManagedVM, Token, User, now)
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
@@ -1087,6 +1088,11 @@ def execute(job_id):
             if job.deployment_id:
                 context.deployment = db.get(Deployment, job.deployment_id)
                 context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
+                if job.operation == 'terraform.apply':
+                    if ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+                        raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
+                    if has_released_allocations(db, context.deployment.id):
+                        raise ExecutionFailed('Deployment allocations were released; execute the Blueprint again')
             if job.payload.get('ansible'):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
