@@ -23,7 +23,7 @@ from app.events.schemas import (
     validate_schema_document,
 )
 from app.models import EventConsumer, EventRecord, EventSchema, User
-from app.security.core import audit, require
+from app.security.core import audit, effective_permissions, require
 
 
 router = APIRouter(tags=['event-enterprise'])
@@ -144,6 +144,8 @@ def ensure_owner(db, user_id: int):
     user = db.get(User, user_id)
     if user is None or not user.is_active or user.is_locked:
         raise HTTPException(422, 'Consumer owner must be an active unlocked user')
+    if 'events.consume' not in effective_permissions(user):
+        raise HTTPException(422, 'Consumer owner must have events.consume permission')
     return user
 
 
