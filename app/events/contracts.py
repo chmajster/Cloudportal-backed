@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
-EventHandler = Callable[[Any, Any], None]
+EventHandler = Callable[[Any, Any, Any], None]
 HookHandler = Callable[[Any], Any]
 
 
