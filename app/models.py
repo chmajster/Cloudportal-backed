@@ -335,6 +335,53 @@ class ScheduledOperation(Timestamp, Base):
     last_error: Mapped[str | None] = mapped_column(String(500))
 
 
+class EventRecord(Base):
+    __tablename__ = "event_records"
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String(36), default=uid, unique=True, index=True)
+    type: Mapped[str] = mapped_column(String(128), index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    source: Mapped[str] = mapped_column(String(128), default="cloudportal.backend")
+    subject_type: Mapped[str] = mapped_column(String(64), default="system", index=True)
+    subject_id: Mapped[str] = mapped_column(String(255), default="", index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64))
+    request_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    token_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+class ExtensionState(Timestamp, Base):
+    __tablename__ = "extension_states"
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[str] = mapped_column(String(32))
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="healthy", index=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_event_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    updated_by: Mapped[int | None] = mapped_column(Integer)
+
+
+class ExtensionDelivery(Timestamp, Base):
+    __tablename__ = "extension_deliveries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    extension_name: Mapped[str] = mapped_column(String(128), index=True)
+    event_sequence: Mapped[int] = mapped_column(
+        ForeignKey("event_records.sequence", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    is_replay: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
 class WebhookEndpoint(Timestamp, Base):
     __tablename__ = "webhook_endpoints"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -350,6 +397,7 @@ class WebhookDelivery(Timestamp, Base):
     __tablename__ = "webhook_deliveries"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     endpoint_id: Mapped[str] = mapped_column(ForeignKey("webhook_endpoints.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[str | None] = mapped_column(String(36), index=True)
     event: Mapped[str] = mapped_column(String(64), index=True)
     resource_id: Mapped[str] = mapped_column(String(100), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
