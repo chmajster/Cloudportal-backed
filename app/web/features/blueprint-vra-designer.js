@@ -30,7 +30,6 @@
 
   const deepClone = value => JSON.parse(JSON.stringify(value));
   const qs = (root, selector) => root.querySelector(selector);
-  const qsa = (root, selector) => [...root.querySelectorAll(selector)];
 
   function el(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);
@@ -108,6 +107,15 @@
     }
   }
 
+  function parsePositiveIds(value) {
+    return String(value || '')
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean)
+      .map(Number)
+      .filter(id => Number.isInteger(id) && id > 0);
+  }
+
   function slugify(value) {
     return String(value || '')
       .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
@@ -127,7 +135,8 @@
       return result;
     }
     const provider = data.providers[0] || {};
-    const template = data.templates.find(value => value.provider === provider.type) || data.templates[0] || {};
+    const enabledTemplates = data.templates.filter(value => value.enabled !== false);
+    const template = enabledTemplates.find(value => value.provider === provider.type) || enabledTemplates[0] || {};
     const defaults = {};
     for (const [name, spec] of Object.entries(template.variables_schema?.properties || {})) {
       if (spec.default !== undefined && spec.default !== null) defaults[name] = spec.default;
@@ -549,10 +558,10 @@
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault(); save(); return;
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+      if (!editing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
         event.preventDefault(); undo(); return;
       }
-      if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey))) {
+      if (!editing && (event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey))) {
         event.preventDefault(); redo(); return;
       }
       if (event.key === 'Escape') {
@@ -864,13 +873,13 @@
         catch (error) { toast(error.message, 'error'); }
       }, { multiline: true }));
       body.append(textField('Allowed role IDs', (bp.allowed_role_ids || []).join(', '), value => mutate(() => {
-        bp.allowed_role_ids = value.split(',').map(Number).filter(Number.isFinite);
+        bp.allowed_role_ids = parsePositiveIds(value);
       })));
       body.append(textField('Allowed user IDs', (bp.allowed_user_ids || []).join(', '), value => mutate(() => {
-        bp.allowed_user_ids = value.split(',').map(Number).filter(Number.isFinite);
+        bp.allowed_user_ids = parsePositiveIds(value);
       })));
       body.append(textField('Manager role IDs', (bp.manager_role_ids || []).join(', '), value => mutate(() => {
-        bp.manager_role_ids = value.split(',').map(Number).filter(Number.isFinite);
+        bp.manager_role_ids = parsePositiveIds(value);
       })));
     }
 
