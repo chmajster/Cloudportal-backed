@@ -37,6 +37,11 @@ def upgrade():
             sa.BigInteger().with_variant(sa.Integer(), 'sqlite'),
             nullable=False,
         ),
+        sa.Column(
+            'last_checkpoint_sequence',
+            sa.BigInteger().with_variant(sa.Integer(), 'sqlite'),
+            nullable=True,
+        ),
         sa.Column('max_batch', sa.Integer(), nullable=False),
         sa.Column('is_active', sa.Boolean(), nullable=False),
         sa.Column('owner_user_id', sa.Integer(), nullable=False),
