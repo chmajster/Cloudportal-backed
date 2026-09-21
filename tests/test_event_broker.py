@@ -1,8 +1,12 @@
 import uuid
+from datetime import timedelta
+
+from sqlalchemy.dialects import postgresql
 
 from app.database import session
+from app.events.contracts import ExtensionSpec
 from app.events.service import dispatch_event_broker_once
-from app.models import EventRecord, ExtensionDelivery, WebhookDelivery
+from app.models import EventRecord, ExtensionDelivery, ExtensionState, WebhookDelivery, now
 
 
 def idem(headers):
@@ -26,7 +30,16 @@ def test_custom_event_is_durable_and_fans_out_to_wildcard_webhook(client, header
         'subject_type': 'managed_vms',
         'subject_id': 'vm-42',
         'correlation_id': 'corr-42',
-        'payload': {'vm_id': 42, 'state': 'ready'},
+        'payload': {
+            'vm_id': 42,
+            'state': 'ready',
+            'event': 'job.successful',
+            'type': 'job.successful',
+            'id': 'forged-id',
+            'source': 'forged-source',
+            'time': 'forged-time',
+            'created_at': 'forged-created-at',
+        },
     })
     assert response.status_code == 201, response.text
     event = response.json()
@@ -45,6 +58,12 @@ def test_custom_event_is_durable_and_fans_out_to_wildcard_webhook(client, header
         assert delivery.status == 'pending'
         assert delivery.payload['specversion'] == '1.0'
         assert delivery.payload['type'] == long_event_type
+        assert delivery.payload['event'] == long_event_type
+        assert delivery.payload['id'] == event['id']
+        assert delivery.payload['source'] == 'cloudportal.api'
+        assert delivery.payload['time'] == delivery.payload['created_at']
+        assert delivery.payload['time'] != 'forged-time'
+        assert delivery.payload['data']['event'] == 'job.successful'
         assert delivery.payload['data']['vm_id'] == 42
 
 
@@ -199,3 +218,86 @@ def test_custom_event_and_extension_config_reject_secret_fields(client, headers)
         'config': {'api_key': 'must-not-persist'},
     })
     assert response.status_code == 422
+
+
+def test_disabled_extension_does_not_starve_enabled_delivery(client, headers, monkeypatch):
+    import app.events.service as event_service
+
+    response = client.post('/api/v1/events', headers=idem(headers), json={
+        'type': 'custom.starvation.test',
+        'payload': {'value': 1},
+    })
+    assert response.status_code == 201, response.text
+    sequence = response.json()['sequence']
+
+    handled = []
+    disabled_spec = ExtensionSpec(
+        name='test.disabled',
+        version='1.0.0',
+        description='disabled test consumer',
+        event_patterns=('*',),
+        handler=lambda db, event: handled.append('disabled'),
+    )
+    enabled_spec = ExtensionSpec(
+        name='test.enabled',
+        version='1.0.0',
+        description='enabled test consumer',
+        event_patterns=('*',),
+        handler=lambda db, event: handled.append('enabled'),
+    )
+    specs = {
+        disabled_spec.name: disabled_spec,
+        enabled_spec.name: enabled_spec,
+    }
+    monkeypatch.setattr(event_service, 'extension_specs', lambda: tuple(specs.values()))
+    monkeypatch.setattr(event_service, 'extension_by_name', lambda name: specs.get(name))
+
+    with session() as db:
+        db.add(ExtensionState(name='test.disabled', version='1.0.0', is_enabled=False, status='disabled'))
+        db.add(ExtensionState(name='test.enabled', version='1.0.0', is_enabled=True, status='healthy'))
+        old = now() - timedelta(seconds=10)
+        for _ in range(100):
+            db.add(ExtensionDelivery(
+                extension_name='test.disabled',
+                event_sequence=sequence,
+                status='pending',
+                next_attempt_at=old,
+                is_replay=True,
+            ))
+        enabled = ExtensionDelivery(
+            extension_name='test.enabled',
+            event_sequence=sequence,
+            status='pending',
+            next_attempt_at=now() - timedelta(seconds=5),
+            is_replay=True,
+        )
+        db.add(enabled)
+        db.commit()
+        enabled_id = enabled.id
+
+    with session() as db:
+        assert event_service.deliver_extension_deliveries(db, batch_size=100) == 1
+        db.commit()
+
+    with session() as db:
+        assert db.get(ExtensionDelivery, enabled_id).status == 'delivered'
+        pending_disabled = db.query(ExtensionDelivery).filter(
+            ExtensionDelivery.extension_name == 'test.disabled',
+            ExtensionDelivery.status == 'pending',
+        ).count()
+        assert pending_disabled == 100
+    assert handled == ['enabled']
+
+
+def test_extension_cursor_is_bigint_on_postgresql():
+    column = ExtensionState.__table__.c.last_event_sequence
+    assert column.type.compile(dialect=postgresql.dialect()) == 'BIGINT'
+
+
+def test_events_openapi_requires_idempotency_key(client):
+    response = client.get('/openapi.json')
+    assert response.status_code == 200
+    parameters = response.json()['paths']['/api/v1/events']['post']['parameters']
+    header = next(item for item in parameters if item['name'] == 'Idempotency-Key')
+    assert header['in'] == 'header'
+    assert header['required'] is True
