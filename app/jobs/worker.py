@@ -615,12 +615,15 @@ def wait_for_proxmox_task(context, provider, node, upid, timeout=600):
 
 def health_check_vm(context, workspace):
     if context.deployment.provider != 'proxmox':
-        availability = provider_for(context.credential).execution_availability()
-        if not availability.get('ok'):
-            raise ExecutionFailed(
-                'Blueprint health_check failed: '
-                + str(availability.get('reason') or 'provider unavailable')
-            )
+        with session() as db:
+            resource = db.scalar(select(ManagedResource).where(
+                ManagedResource.deployment_id == context.deployment.id,
+                ManagedResource.lifecycle_status == 'active',
+            ))
+            if resource is None or not resource.external_id:
+                raise ExecutionFailed(
+                    'Blueprint health_check failed: managed resource was not synchronized'
+                )
         return True
 
     node, vm_id, provider = _workflow_vm_identity(context, workspace)
