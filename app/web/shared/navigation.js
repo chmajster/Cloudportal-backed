@@ -88,6 +88,13 @@
   window.uiNavigation = Object.freeze({ groups: GROUPS, paths: ROUTE_PATHS });
   window.uiNavigationGroup = route => groupForRoute(route)?.label || '';
   window.uiNavigationRank = route => groupForRoute(route)?.rank ?? 999;
+  window.uiNavigationOrder = route => {
+    const group = groupForRoute(route);
+    if (!group) return Number(route?.order ?? 999);
+    const parent = route?.navigationParent || route?.id;
+    const position = group.routes.indexOf(parent);
+    return position === -1 ? Number(route?.order ?? 999) : position;
+  };
   window.uiRoutePath = routePath;
   window.uiResolveView = resolveView;
   window.uiPageEyebrow = pageEyebrow;
