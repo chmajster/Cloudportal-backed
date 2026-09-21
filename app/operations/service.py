@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, exists, func, select
 
 from app.config import settings
 from app.database import session
@@ -28,6 +28,7 @@ from app.models import (
     Job,
     JobLog,
     ScheduledOperation,
+    Setting,
     WebhookDelivery,
     WebhookEndpoint,
     now,
@@ -426,13 +427,35 @@ def cleanup_retention_once(force=False):
                 ExtensionDelivery.status.in_(['pending', 'dead_letter']),
             )
         )
-        event_delete = delete(EventRecord).where(
+        event_conditions = [
             EventRecord.created_at < cutoffs['events'],
             ~protected_delivery,
-        )
+        ]
         if safe_sequence is not None:
-            event_delete = event_delete.where(EventRecord.sequence <= safe_sequence)
-        counts['events'] = db.execute(event_delete).rowcount or 0
+            event_conditions.append(EventRecord.sequence <= safe_sequence)
+
+        highest_deleted_sequence = db.scalar(
+            select(func.max(EventRecord.sequence)).where(*event_conditions)
+        )
+        counts['events'] = db.execute(
+            delete(EventRecord).where(*event_conditions)
+        ).rowcount or 0
+
+        retention_state = db.scalar(
+            select(Setting).where(Setting.key == 'event_retention').with_for_update()
+        )
+        if retention_state is None:
+            retention_state = Setting(key='event_retention', value={'floor_sequence': 0})
+            db.add(retention_state)
+            db.flush()
+        if highest_deleted_sequence is not None:
+            value = dict(retention_state.value or {})
+            try:
+                current_floor = int(value.get('floor_sequence', 0))
+            except (TypeError, ValueError):
+                current_floor = 0
+            value['floor_sequence'] = max(current_floor, int(highest_deleted_sequence))
+            retention_state.value = value
         counts['idempotency'] = db.execute(
             delete(Idempotency).where(Idempotency.created_at < cutoffs['idempotency'])
         ).rowcount or 0
