@@ -2,7 +2,7 @@ import json
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 
 from app.api.common import Limit, Offset, idempotent
@@ -23,6 +23,24 @@ from app.security.core import audit, require
 
 router = APIRouter(tags=['events'])
 
+SENSITIVE_EVENT_KEYS = {
+    'password', 'secret', 'token', 'access_token', 'refresh_token', 'api_key',
+    'private_key', 'token_secret', 'authorization', 'credential_secret',
+}
+
+
+def _reject_sensitive_keys(value, path='payload'):
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower().replace('-', '_')
+            if normalized in SENSITIVE_EVENT_KEYS or normalized.endswith('_password') or normalized.endswith('_secret'):
+                raise ValueError(f'Sensitive field is not allowed in event data: {path}.{key}')
+            _reject_sensitive_keys(nested, f'{path}.{key}')
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _reject_sensitive_keys(nested, f'{path}[{index}]')
+    return value
+
 
 class EventPublishInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -36,6 +54,12 @@ class EventPublishInput(BaseModel):
     causation_id: Annotated[str | None, Field(max_length=64)] = None
     metadata: dict = Field(default_factory=dict)
 
+    @model_validator(mode='after')
+    def no_secrets(self):
+        _reject_sensitive_keys(self.payload, 'payload')
+        _reject_sensitive_keys(self.metadata, 'metadata')
+        return self
+
 
 class EventReplayInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -46,6 +70,11 @@ class ExtensionUpdateInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     is_enabled: bool
     config: dict = Field(default_factory=dict)
+
+    @field_validator('config')
+    @classmethod
+    def non_secret_config(cls, value):
+        return _reject_sensitive_keys(value, 'config')
 
 
 def delivery_public(row, kind):
@@ -89,11 +118,18 @@ def events(
     if correlation_id:
         query = query.where(EventRecord.correlation_id == correlation_id)
     if after_sequence is not None:
+        if offset:
+            raise HTTPException(422, 'offset cannot be combined with after_sequence')
         query = query.where(EventRecord.sequence > after_sequence)
-    rows = db.scalars(
-        query.order_by(EventRecord.sequence.desc()).offset(offset).limit(limit)
-    ).all()
-    return {'items': [event_public(row) for row in rows]}
+        order = EventRecord.sequence.asc()
+    else:
+        order = EventRecord.sequence.desc()
+    rows = db.scalars(query.order_by(order).offset(offset).limit(limit)).all()
+    items = [event_public(row) for row in rows]
+    return {
+        'items': items,
+        'next_after_sequence': max((row.sequence for row in rows), default=after_sequence),
+    }
 
 
 @router.get('/events/stats')
@@ -126,8 +162,13 @@ def create_event(
     actor=Depends(require('events.publish')),
     db=Depends(get_db, scope='function'),
 ):
-    if len(json.dumps(data.payload, separators=(',', ':'), default=str).encode()) > 256 * 1024:
-        raise HTTPException(413, 'Event payload exceeds 256 KiB')
+    encoded_event_data = json.dumps(
+        {'payload': data.payload, 'metadata': data.metadata},
+        separators=(',', ':'),
+        default=str,
+    ).encode()
+    if len(encoded_event_data) > 256 * 1024:
+        raise HTTPException(413, 'Event payload and metadata exceed 256 KiB')
 
     def create():
         row = publish_event(
@@ -182,19 +223,31 @@ def event_deliveries(
     db=Depends(get_db, scope='function'),
 ):
     items = []
+    per_kind_offset = 0 if kind == 'all' else offset
+    per_kind_limit = limit + offset if kind == 'all' else limit
     if kind in {'extension', 'all'}:
         query = select(ExtensionDelivery)
         if status:
             query = query.where(ExtensionDelivery.status == status)
-        rows = db.scalars(query.order_by(ExtensionDelivery.created_at.desc()).offset(offset).limit(limit)).all()
+        rows = db.scalars(
+            query.order_by(ExtensionDelivery.created_at.desc())
+            .offset(per_kind_offset)
+            .limit(per_kind_limit)
+        ).all()
         items.extend(delivery_public(row, 'extension') for row in rows)
     if kind in {'webhook', 'all'}:
         query = select(WebhookDelivery)
         if status:
             query = query.where(WebhookDelivery.status == status)
-        rows = db.scalars(query.order_by(WebhookDelivery.created_at.desc()).offset(offset).limit(limit)).all()
+        rows = db.scalars(
+            query.order_by(WebhookDelivery.created_at.desc())
+            .offset(per_kind_offset)
+            .limit(per_kind_limit)
+        ).all()
         items.extend(delivery_public(row, 'webhook') for row in rows)
     items.sort(key=lambda item: item['created_at'], reverse=True)
+    if kind == 'all':
+        items = items[offset:offset + limit]
     return {'items': items[:limit]}
 
 
