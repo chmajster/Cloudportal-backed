@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.api.common import Limit, Offset, idempotent
 from app.database import get_db
 from app.events.registry import extension_by_name, extension_specs, hook_names
+from app.events.schemas import EventSchemaValidationError
 from app.events.service import (
     broker_stats,
     event_public,
@@ -181,22 +182,25 @@ def create_event(
         raise HTTPException(413, 'Event payload and metadata exceed 256 KiB')
 
     def create():
-        row = publish_event(
-            db,
-            data.type,
-            data.payload,
-            subject_type=data.subject_type,
-            subject_id=data.subject_id,
-            schema_version=data.schema_version,
-            source='cloudportal.api',
-            request_id=request.state.request_id,
-            user_id=actor.user_id,
-            token_id=actor.id,
-            correlation_id=data.correlation_id,
-            causation_id=data.causation_id,
-            metadata=data.metadata,
-        )
-        audit(db, request, 'event.published', 'events', row.id)
+        try:
+            row = publish_event(
+                db,
+                data.type,
+                data.payload,
+                subject_type=data.subject_type,
+                subject_id=data.subject_id,
+                schema_version=data.schema_version,
+                source='cloudportal.api',
+                request_id=request.state.request_id,
+                user_id=actor.user_id,
+                token_id=actor.id,
+                correlation_id=data.correlation_id,
+                causation_id=data.causation_id,
+                metadata=data.metadata,
+            )
+            audit(db, request, 'event.published', 'events', row.id)
+        except EventSchemaValidationError as exc:
+            raise HTTPException(422, str(exc)) from None
         return event_public(row)
 
     return idempotent(db, request, actor, data.model_dump(mode='json'), create, required=True)
