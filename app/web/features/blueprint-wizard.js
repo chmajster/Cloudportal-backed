@@ -827,13 +827,43 @@
           });
         });
 
+        const sshCredentialUsers = [];
+        const seenSshCredentialUsers = new Set();
+        (data.credentials || []).forEach(value => {
+          if (value.type !== 'ssh') return;
+          const username = String(value.username || '').trim();
+          if (!username || seenSshCredentialUsers.has(username)) return;
+          seenSshCredentialUsers.add(username);
+          sshCredentialUsers.push({
+            username,
+            credentialName: value.name || ('Credential #' + value.id),
+          });
+        });
+        const sshUsernameField = field('Użytkownik SSH', 'ssh_username', {
+          value: state.sshUsername || 'clouduser',
+          help: sshCredentialUsers.length
+            ? 'Możesz wpisać login ręcznie albo wybrać użytkownika z zapisanych Credentiali.'
+            : 'Brak użytkowników SSH w zapisanych Credentialach — wpisz login ręcznie.',
+        });
+        const sshUsernameInput = sshUsernameField.querySelector('input');
+        if (sshUsernameInput && sshCredentialUsers.length) {
+          const sshUsersListId = 'blueprint-wizard-ssh-credential-users';
+          sshUsernameInput.setAttribute('list', sshUsersListId);
+          sshUsernameInput.setAttribute('autocomplete', 'off');
+          sshUsernameField.append(node('datalist', { id: sshUsersListId },
+            ...sshCredentialUsers.map(value => node('option', {
+              value: value.username,
+              label: value.credentialName,
+            }))));
+        }
+
         const advanced = node('details', { class: 'advanced-options' },
           node('summary', { text: 'Zaawansowane parametry VM' }),
           node('div', { class: 'advanced-options-body form-grid' },
             field('Tagi Proxmox', 'tags', {
               value: state.tags, wide: true, placeholder: 'linux, production, web',
             }),
-            field('Użytkownik SSH', 'ssh_username', { value: state.sshUsername || 'clouduser' }),
+            sshUsernameField,
             field('Klucz publiczny SSH', 'ssh_public_key', {
               tag: 'textarea', value: state.sshPublicKey, wide: true,
             })));

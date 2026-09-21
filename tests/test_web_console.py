@@ -362,6 +362,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "QEMU Guest Agent niedostępny" in script
     assert "storage obsługującego snippets" in script
     assert "Credential ustawiany na VM" in script
+    assert "blueprint-wizard-ssh-credential-users" in script
+    assert "wybrać użytkownika z zapisanych Credentiali" in script
     assert "zainstaluj qemu-guest-agent przez cloud-init" in script
     assert "install_qemu_guest_agent" in script
     assert "cloud_init_snippet_storage" in script
