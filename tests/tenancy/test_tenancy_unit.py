@@ -313,3 +313,21 @@ def test_role_ids_are_strict_and_bounded(role_ids):
         MemberCreate(user_id=1, role_ids=role_ids)
     with pytest.raises(ValidationError):
         MemberRoles(role_ids=role_ids, expected_version=1)
+
+
+def test_authorization_lock_does_not_autoflush_pending_token_write(domain):
+    d = domain
+    from app.rbac.locking import governance_lock
+    token = d.db.get(Token, d.alice.token_id)
+    token.last_used_at = now()
+    flushed = []
+    def observe_flush(*_):
+        flushed.append(True)
+    event.listen(d.db, 'before_flush', observe_flush)
+    try:
+        assert governance_lock(d.db) is not None
+        assert not flushed, 'Token writes must not precede the governance lock'
+        d.db.flush()
+        assert flushed
+    finally:
+        event.remove(d.db, 'before_flush', observe_flush)

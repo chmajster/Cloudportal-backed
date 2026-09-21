@@ -96,3 +96,45 @@ def test_waiting_writer_rechecks_membership_after_revocation(system, monkeypatch
             assert future.result(timeout=10) == 'TENANT_NOT_FOUND'
     with session() as db:
         assert db.get(TenantMembership, (tenant_id, admin.user_id)) is None
+
+
+def test_pending_token_timestamp_does_not_deadlock_revocation(system):
+    admin, alice, tenant_id = prepare(system)
+    from sqlalchemy import event, update
+    from app.database import engine
+    from app.models import now
+    waiting = Event()
+    def observe_statement(connection, cursor, statement, parameters, context, executemany):
+        if (current_thread().name.startswith('pending-token')
+                and 'FROM settings' in statement and 'FOR UPDATE' in statement):
+            # This fires after any autoflush. Without no_autoflush around the
+            # governance lock, the writer would already hold the token row here.
+            waiting.set()
+    def write():
+        with session() as db:
+            db.execute(text("SET LOCAL lock_timeout = '5s'"))
+            token = db.get(Token, alice.token_id)
+            token.last_used_at = now()  # Same pending write as authenticate().
+            try:
+                service.member_create(db, alice, tenant_id, MemberCreate(user_id=admin.user_id))
+                db.commit()
+                return 'unexpected-success'
+            except HTTPException as error:
+                db.rollback()
+                return error.detail['code']
+    event.listen(engine(), 'before_cursor_execute', observe_statement)
+    try:
+        with session() as revoker:
+            revoker.execute(text("SET LOCAL lock_timeout = '3s'"))
+            governance_lock(revoker)
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix='pending-token') as pool:
+                future = pool.submit(write)
+                try:
+                    assert waiting.wait(timeout=5)
+                    revoker.execute(update(Token).where(Token.id == alice.token_id).values(revoked_at=now()))
+                    revoker.commit()
+                finally:
+                    revoker.rollback()
+                assert future.result(timeout=10) == 'AUTHENTICATION_REQUIRED'
+    finally:
+        event.remove(engine(), 'before_cursor_execute', observe_statement)

@@ -207,22 +207,26 @@ def _ensure_manager_remains(db, access):
         fail(409, 'TENANT_MANAGER_REQUIRED', 'Keep an active human tenant manager or ask a global administrator')
 
 
-def member_create(db, principal, tenant_id, data):
+def authorize_member_creation(db, principal, tenant_id, data):
     access = authorize(db, principal, tenant_id, 'tenants.members.manage', write=True, lock=True)
     # User identities are global in the current platform. A tenant-only manager
     # must not use member creation to probe the global directory by guessing IDs.
     if 'users.read' not in access.identity.global_permissions:
         fail(403, 'DIRECTORY_PERMISSION_REQUIRED', 'Adding an existing account requires global user-directory read permission')
+    if data.role_ids:
+        if 'tenants.roles.assign' not in access.permissions:
+            fail(403, 'SCOPED_PERMISSION_REQUIRED', 'Tenant role assignment permission is required')
+        _role_permissions(db, data.role_ids, access.permissions)
+    return access
+
+
+def member_create(db, principal, tenant_id, data):
+    access = authorize_member_creation(db, principal, tenant_id, data)
     user_exists = db.scalar(select(User.id).where(User.id == data.user_id, User.is_active.is_(True)))
     if user_exists is None:
         fail(422, 'MEMBER_NOT_ASSIGNABLE', 'The selected user cannot be assigned')
     if db.get(TenantMembership, (access.tenant.id, data.user_id)) is not None:
         fail(409, 'MEMBER_EXISTS', 'This user already has a tenant membership')
-    # Validate delegation before adding anything to the transaction.
-    if data.role_ids:
-        if 'tenants.roles.assign' not in access.permissions:
-            fail(403, 'SCOPED_PERMISSION_REQUIRED', 'Tenant role assignment permission is required')
-        _role_permissions(db, data.role_ids, access.permissions)
     member = TenantMembership(tenant_id=access.tenant.id, user_id=data.user_id,
                               status=data.status, created_by=access.identity.user_id)
     db.add(member)

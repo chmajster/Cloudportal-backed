@@ -8,7 +8,7 @@ from app.api.outputs import DeletedOutput
 from app.database import get_db
 from app.security.core import audit, authenticate
 from app.tenancy import service
-from app.tenancy.authorization import Principal, authorize, lock_authorization, require_global
+from app.tenancy.authorization import Principal, lock_authorization, require_global
 from app.tenancy.schemas import (MemberCreate, MemberOutput, MemberPage, MemberRoles, MemberStatus,
                                 MemberUpdate, RolePage, TenantAuditPage, TenantCreate, TenantOutput,
                                 TenantPage, TenantPermissions, TenantStatus, TenantUpdate)
@@ -72,7 +72,8 @@ def members(tenant_id: UUID, limit: Limit = 100, offset: Offset = 0, status: Mem
 def create_member(tenant_id: UUID, data: MemberCreate, request: Request,
                   actor=Depends(authenticate), db=Depends(get_db, scope='function')):
     principal = Principal.from_token(actor)
-    authorize(db, principal, tenant_id, 'tenants.members.manage', write=True, lock=True)
+    # Directory and role-grant checks also apply to idempotency replay.
+    service.authorize_member_creation(db, principal, tenant_id, data)
     def create():
         result = service.member_create(db, principal, tenant_id, data)
         audit(db, request, 'tenant.member.added', 'tenant_memberships', f'{tenant_id}:{data.user_id}')

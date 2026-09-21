@@ -148,3 +148,37 @@ def test_default_and_openapi_contracts(system):
     with session() as db:
         infrastructure = db.scalar(select(Role).where(Role.name == 'Infrastructure Administrator'))
         assert not any(permission.name.startswith('tenants.') for permission in infrastructure.permissions)
+
+
+def test_member_idempotency_replay_rechecks_directory_and_role_permissions(system):
+    client, headers, _ = system
+    own = tenant(client, headers)
+    alice, _ = new_user(client, headers, 'replay-member')
+    role_id = tenant_role(headers, client, 'Tenant Viewer')
+    key = str(uuid4())
+    body = {'user_id': alice['id'], 'role_ids': [role_id]}
+    path = f"/api/v1/tenants/{own['id']}/members"
+    replay_headers = headers | {'Idempotency-Key': key}
+    first = client.post(path, headers=replay_headers, json=body)
+    again = client.post(path, headers=replay_headers, json=body)
+    assert first.status_code == again.status_code == 201
+    assert first.json() == again.json()
+    from app.security.core import digest
+    plain = headers['Authorization'].removeprefix('Bearer ')
+    with session() as db:
+        token = db.scalar(select(Token).where(Token.token_hash == digest(plain)))
+        original = list(token.scopes)
+        token.scopes = [scope for scope in original if scope != 'users.read']
+        db.commit()
+    denied = client.post(path, headers=replay_headers, json=body)
+    assert denied.status_code == 403
+    assert denied.json()['detail']['code'] == 'DIRECTORY_PERMISSION_REQUIRED'
+    with session() as db:
+        token = db.scalar(select(Token).where(Token.token_hash == digest(plain)))
+        token.scopes = [scope for scope in original if scope != 'tenants.roles.assign']
+        db.commit()
+    denied = client.post(path, headers=replay_headers, json=body)
+    assert denied.status_code == 403
+    assert denied.json()['detail']['code'] == 'SCOPED_PERMISSION_REQUIRED'
+    with session() as db:
+        assert db.scalar(select(func.count()).select_from(Audit).where(Audit.action == 'tenant.member.added')) == 1
