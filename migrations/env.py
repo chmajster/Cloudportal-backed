@@ -1,6 +1,7 @@
 from alembic import context
 from app.database import Base, engine
 from app import models
+from app.tenancy import models as tenancy_models
 
 
 def run():

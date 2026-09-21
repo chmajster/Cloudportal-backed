@@ -61,4 +61,22 @@ Run each new domain's unit, API, migration and PostgreSQL concurrency tests as a
 
 ## Current implementation status
 
-Work in progress on the tenancy foundation. Update this section and the PR body with exact implemented paths, tests, migration head, shared files touched and remaining integration before handoff. All delivery slices above are acceptance targets, not completed features.
+Implemented on `feat/tenancy-governance-foundation` / PR #118:
+
+- Domain-owned Tenant, membership, scoped assignments and relational permission ceilings.
+- Tenant administration, SQL-filtered lists, scope permissions, membership/role administration and scoped audit APIs.
+- Protected Default tenant migration `7b31e28f49ac`, based on `c4f17b8d62a1`; legacy resource data unchanged.
+- Existing authentication, global RBAC, token ceilings, shared governance lock and audit/event broker reused.
+- Tenants browser feature with navigable forms, member/role views, pagination and audit.
+- Unit, migration, HTTP, Node UI and PostgreSQL concurrency tests; actual execution results belong in the PR.
+
+**Not yet implemented:** Project domain/Default Project, legacy resource backfill and full resource isolation,
+project switcher, quota/usage/reservations, leases/workers, placement/capacity reservation,
+expanded policy engine/simulation, provisioning/Blueprint/Catalog/Day-2 integration and complete production acceptance.
+No quota/placement/lease/policy enforcement is claimed by the tenancy CRUD endpoints.
+
+Next: deliver Projects on its own branch, then a cross-cutting resource-scoping integration PR.
+Read `docs/architecture/tenancy.md` before extending authorization. Keep tenant grants out of the
+existing global permission set, preserve API token ceilings, and extend the tenant deletion non-empty guard.
+New membership assignment requires global user-directory read permission until a safe invitation/
+eligible-user mechanism exists. Do not remove that check to enable user-ID enumeration.
