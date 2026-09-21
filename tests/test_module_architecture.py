@@ -11,6 +11,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'administration',
         'tenancy',
         'projects',
+        'resource-scope',
         'infrastructure',
         'proxmox-management',
         'automation',

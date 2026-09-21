@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, event, select, delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from app.resource_scope.permissions import RESOURCE_PERMISSIONS
 from app.database import Base
 from app.models import Permission, Role, RolePermission, Setting, Token, User, UserRole, now
 from app.tenancy import service as tenants
@@ -38,7 +39,7 @@ def domain():
         dbapi.execute('PRAGMA foreign_keys=ON')
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as db:
-        permissions = {name: Permission(name=name) for name in TENANCY_PERMISSIONS | {'users.read'}}
+        permissions = {name: Permission(name=name) for name in TENANCY_PERMISSIONS | RESOURCE_PERMISSIONS | {'users.read'}}
         admin_role = Role(name='arbitrary global label', permissions=list(permissions.values()))
         project_role = Role(name='arbitrary project label', permissions=[permissions[n] for n in PROJECT_DELEGABLE_PERMISSIONS])
         viewer_role = Role(name='reader', permissions=[permissions['projects.read']])
