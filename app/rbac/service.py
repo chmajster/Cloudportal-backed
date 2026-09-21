@@ -5,6 +5,8 @@ from app.security.core import effective_permissions
 from app.rbac.locking import governance_lock
 from app.tenancy.permissions import TENANCY_PERMISSION_ACTIONS, TENANCY_DEFAULT_ROLES
 
+from app.projects.permissions import PROJECT_DEFAULT_ROLES
+
 PERMISSIONS = {
     **{area: actions.split() for area, actions in {
         'users': 'read create update delete', 'roles': 'read create update delete assign',
@@ -39,12 +41,13 @@ def seed(db):
     db.flush()
     defaults = {
         'Administrator': ALL_PERMISSIONS,
-        'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates', 'tenants'}} | {'updates.read'}),
+        'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates', 'tenants', 'projects'}} | {'updates.read'}),
         'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update', 'events.read', 'extensions.read'},
         'Viewer': {'providers.read', 'deployments.read', 'deployments.read_all', 'jobs.read', 'jobs.read_all', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read'},
         'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'events.read', 'extensions.read', 'metrics.read', 'updates.read'},
         'Portal Service': {'portal.connect'},
         **TENANCY_DEFAULT_ROLES,
+        **PROJECT_DEFAULT_ROLES,
     }
     for name, permissions in defaults.items():
         role = db.scalar(select(Role).where(Role.name == name))

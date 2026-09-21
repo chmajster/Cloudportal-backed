@@ -1,6 +1,9 @@
 """Permission declarations shared with the existing RBAC catalog."""
 
+from app.projects.permissions import PROJECT_PERMISSION_ACTIONS, PROJECT_PERMISSIONS
+
 TENANCY_PERMISSION_ACTIONS = {
+    **PROJECT_PERMISSION_ACTIONS,
     'tenants': 'read create update delete admin members.read members.manage roles.assign audit.read'.split(),
 }
 TENANCY_PERMISSIONS = frozenset(

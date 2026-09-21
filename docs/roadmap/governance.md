@@ -70,13 +70,20 @@ Implemented on `feat/tenancy-governance-foundation` / PR #118:
 - Tenants browser feature with navigable forms, member/role views, pagination and audit.
 - Unit, migration, HTTP, Node UI and PostgreSQL concurrency tests; actual execution results belong in the PR.
 
-**Not yet implemented:** Project domain/Default Project, legacy resource backfill and full resource isolation,
-project switcher, quota/usage/reservations, leases/workers, placement/capacity reservation,
+**Projects extension:** domain identity, scoped memberships/role inheritance,
+Default/Default membership migration, validated server-side selection, project
+administration/eligible-user APIs and UI, migration/HTTP/concurrency tests.
+See `docs/architecture/projects.md`. Selecting a project does not yet scope the
+legacy infrastructure APIs.
+
+**Not yet implemented:** legacy resource backfill and full resource isolation,
+cross-application project switcher, quota/usage/reservations, leases/workers, placement/capacity reservation,
 expanded policy engine/simulation, provisioning/Blueprint/Catalog/Day-2 integration and complete production acceptance.
 No quota/placement/lease/policy enforcement is claimed by the tenancy CRUD endpoints.
 
-Next: deliver Projects on its own branch, then a cross-cutting resource-scoping integration PR.
+Next: verify the Projects extension in full CI, then deliver a cross-cutting
+resource-scoping integration PR.
 Read `docs/architecture/tenancy.md` before extending authorization. Keep tenant grants out of the
 existing global permission set, preserve API token ceilings, and extend the tenant deletion non-empty guard.
-New membership assignment requires global user-directory read permission until a safe invitation/
-eligible-user mechanism exists. Do not remove that check to enable user-ID enumeration.
+New tenant membership assignment requires global user-directory read permission until a safe invitation
+mechanism exists. Project membership uses the scoped eligible-member directory. Do not remove that check to enable user-ID enumeration.

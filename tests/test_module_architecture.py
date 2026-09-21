@@ -10,6 +10,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'auth',
         'administration',
         'tenancy',
+        'projects',
         'infrastructure',
         'proxmox-management',
         'automation',
@@ -36,6 +37,8 @@ def test_feature_registry_exposes_expected_router_contracts():
         return {getattr(route, 'path', '') for route in modules[name].router.routes}
 
     assert any(path.endswith('/auth/login') for path in paths('auth'))
+    assert '/projects' in paths('projects')
+    assert '/project-context' in paths('projects')
     assert '/tenants' in paths('tenancy')
     assert '/tenants/{tenant_id}/members' in paths('tenancy')
     assert '/providers' in paths('infrastructure')

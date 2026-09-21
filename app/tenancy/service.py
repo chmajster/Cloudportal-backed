@@ -13,6 +13,7 @@ from app.tenancy.authorization import (assert_version, authorize, fail, identity
                                        lock_authorization, require_global, visible_tenants)
 from app.tenancy.models import Tenant, TenantMembership, TenantRoleAssignment, TenantRoleGrant
 from app.tenancy.permissions import DELEGABLE_PERMISSIONS
+from app.projects.models import Project
 
 
 def tenant_output(tenant):
@@ -88,6 +89,8 @@ def tenant_delete(db, principal, tenant_id, expected_version):
         fail(409, 'SYSTEM_TENANT_PROTECTED', 'The Default tenant cannot be deleted')
     if db.scalar(select(exists().where(TenantMembership.tenant_id == tenant.id))):
         fail(409, 'TENANT_NOT_EMPTY', 'Remove tenant memberships before deleting the tenant')
+    if db.scalar(select(exists().where(Project.tenant_id == tenant.id, Project.deleted_at.is_(None)))):
+        fail(409, 'TENANT_NOT_EMPTY', 'Remove active projects before deleting the tenant')
     # Tombstone preserves identity and audit references. Projects/resource bindings
     # must extend this non-empty guard when their owning domains are integrated.
     tenant.status = 'disabled'
