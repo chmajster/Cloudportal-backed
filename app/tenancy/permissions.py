@@ -1,6 +1,6 @@
 """Permission declarations shared with the existing RBAC catalog."""
 
-from app.projects.permissions import PROJECT_PERMISSION_ACTIONS, PROJECT_PERMISSIONS
+from app.projects.permissions import PROJECT_PERMISSION_ACTIONS
 
 TENANCY_PERMISSION_ACTIONS = {
     **PROJECT_PERMISSION_ACTIONS,

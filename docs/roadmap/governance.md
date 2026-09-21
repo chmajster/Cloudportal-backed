@@ -59,7 +59,7 @@ pytest -q --tb=short
 
 Run each new domain's unit, API, migration and PostgreSQL concurrency tests as applicable. Record actual results and distinguish pre-existing failures from regressions. Provider-side acceptance requires a real configured test provider; unit tests alone cannot certify production readiness.
 
-## Current implementation status
+## Tenant foundation status (PR #118)
 
 Implemented on `feat/tenancy-governance-foundation` / PR #118:
 
@@ -70,20 +70,31 @@ Implemented on `feat/tenancy-governance-foundation` / PR #118:
 - Tenants browser feature with navigable forms, member/role views, pagination and audit.
 - Unit, migration, HTTP, Node UI and PostgreSQL concurrency tests; actual execution results belong in the PR.
 
-**Projects extension:** domain identity, scoped memberships/role inheritance,
-Default/Default membership migration, validated server-side selection, project
-administration/eligible-user APIs and UI, migration/HTTP/concurrency tests.
-See `docs/architecture/projects.md`. Selecting a project does not yet scope the
-legacy infrastructure APIs.
-
-**Not yet implemented:** legacy resource backfill and full resource isolation,
-cross-application project switcher, quota/usage/reservations, leases/workers, placement/capacity reservation,
+**Not implemented by PR #118:** Project domain/Default Project (now delivered in dependent PR #119),
+legacy resource backfill and full resource isolation,
+project switcher, quota/usage/reservations, leases/workers, placement/capacity reservation,
 expanded policy engine/simulation, provisioning/Blueprint/Catalog/Day-2 integration and complete production acceptance.
 No quota/placement/lease/policy enforcement is claimed by the tenancy CRUD endpoints.
 
-Next: verify the Projects extension in full CI, then deliver a cross-cutting
-resource-scoping integration PR.
+Projects is delivered on its own branch in PR #119; next is a cross-cutting resource-scoping integration PR.
 Read `docs/architecture/tenancy.md` before extending authorization. Keep tenant grants out of the
 existing global permission set, preserve API token ceilings, and extend the tenant deletion non-empty guard.
-New tenant membership assignment requires global user-directory read permission until a safe invitation
-mechanism exists. Project membership uses the scoped eligible-member directory. Do not remove that check to enable user-ID enumeration.
+New membership assignment requires global user-directory read permission until a safe invitation/
+eligible-user mechanism exists. Do not remove that check to enable user-ID enumeration.
+
+
+## Projects continuation (PR #119)
+
+Projects domain implemented on `feat/projects-scoped-governance`, stacked on #118:
+models and composite membership constraints, project-scoped role ceilings,
+tenant inheritance, SQL-filtered API collections, live context resolution,
+eligible tenant-member directory, navigable UI and audit/events. Additive
+migration `9a42d10e63bc` creates Default Project and default memberships for
+existing users without new role grants. Project and tenant deletion guards are
+integrated. See `docs/architecture/projects.md` and the PR for executed tests.
+
+Infrastructure is still governed by legacy access rules until slice 03 lands.
+Do not expose the administrative context resolver as proof of resource isolation.
+Next integration: resource ownership backfill, scoped DB queries, provider and
+credential assignment checks, every direct-ID/nested route and worker context,
+followed by quota/usage/reservation and governed operation pipelines.

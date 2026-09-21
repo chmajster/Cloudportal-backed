@@ -1,0 +1,67 @@
+name: Projects validation
+on:
+  pull_request:
+    paths:
+      - 'app/projects/**'
+      - 'app/tenancy/**'
+      - 'app/rbac/**'
+      - 'tests/projects/**'
+      - 'migrations/**'
+      - 'docs/architecture/projects.md'
+      - '.github/workflows/projects-validation.yml'
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cloudportal
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: cloudportal_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U cloudportal -d cloudportal_test"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://cloudportal:test-password@localhost:5432/cloudportal_test
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Resolve reproducible offline regression dependencies
+        run: |
+          python -m pip wheel -r requirements-dev.txt --wheel-dir /tmp/projects-runtime/wheels
+          python -m pip install --no-index --find-links=/tmp/projects-runtime/wheels -r requirements-dev.txt
+          git archive --format=tar.gz -o /tmp/projects-runtime/source.tar.gz HEAD
+          if ! command -v redis-server >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y redis-server
+          fi
+          mkdir -p /tmp/projects-runtime/redis-lib
+          cp -L "$(command -v redis-server)" /tmp/projects-runtime/redis-server
+          ldd "$(command -v redis-server)" | awk '/=> \// {print $3}' | while read -r lib; do
+            case "$(basename "$lib")" in
+              libc.so.*|libm.so.*|libpthread.so.*|librt.so.*|libdl.so.*) continue ;;
+            esac
+            cp -L "$lib" /tmp/projects-runtime/redis-lib/
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: projects-runtime-${{ github.sha }}
+          path: /tmp/projects-runtime
+          retention-days: 1
+      - run: python -m compileall -q app migrations scripts
+      - run: python scripts/check-module-boundaries.py
+      - run: find app/web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+      - run: pytest -q --tb=short

@@ -1,68 +1,75 @@
-"""PostgreSQL concurrency gates; never substitute SQLite locking semantics."""
-import os
+"""Concurrency gates require PostgreSQL; SQLite is never counted as a lock test."""
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier, Event, current_thread
+from threading import Barrier, Event
+import time
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select, text
-from app.database import session
-from app.models import Token
-from app.rbac.locking import governance_lock
-from app.security.core import digest
+from sqlalchemy import select, delete
+from app.database import engine, session
+from app.models import Token, RolePermission, Permission
 from app.projects import service
-from app.tenancy import authorization
-from app.tenancy.authorization import Principal
-from app.tenancy.models import TenantMembership
-from app.tenancy.schemas import MemberUpdate
-from .test_projects_api import setup_project
-
-pytestmark=pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL','').startswith('postgresql'),
-                             reason='Real PostgreSQL required')
+from app.projects.models import ProjectMembership
+from app.projects.schemas import ProjectUpdate
+from app.tenancy.authorization import Principal, lock_authorization
+from test_projects_api import create_tenant, create_project, add_member
+from conftest import new_user
 
 
-def principal(db,headers):
-    return Principal.from_token(db.scalar(select(Token).where(
-        Token.token_hash==digest(headers['Authorization'].removeprefix('Bearer ')))))
-
-
-def test_two_project_member_updates_have_exactly_one_winner(system):
-    _,headers,_,p,user,_=setup_project(system)
-    with session() as db: admin=principal(db,headers)
-    barrier=Barrier(2)
-    def change(_):
-        with session() as db:
-            db.execute(text("SET LOCAL lock_timeout = '5s'"));barrier.wait(timeout=5)
-            try:
-                result=service.member_update(db,admin,p['id'],user['id'],MemberUpdate(status='disabled',expected_version=1))
-                db.commit();return result['version']
-            except HTTPException as e:
-                db.rollback();return e.detail['code']
-    with ThreadPoolExecutor(max_workers=2) as pool: results=list(pool.map(change,range(2)))
-    assert results.count(2)==1 and results.count('VERSION_CONFLICT')==1
-
-
-def test_waiting_project_writer_rechecks_parent_membership(system,monkeypatch):
-    _,headers,t,p,user,h=setup_project(system)
-    with session() as db: actor=principal(db,h)
-    waiting=Event();original=authorization.governance_lock
-    def observed(db):
-        if current_thread().name.startswith('project-writer'): waiting.set()
-        return original(db)
-    monkeypatch.setattr(authorization,'governance_lock',observed)
-    def write():
-        with session() as db:
-            db.execute(text("SET LOCAL lock_timeout = '5s'"))
-            try:
-                service.member_update(db,actor,p['id'],user['id'],MemberUpdate(status='active',expected_version=1))
-                db.commit();return 'unexpected-success'
-            except HTTPException as e:
-                db.rollback();return e.detail['code']
+def test_concurrent_self_removal_retains_one_human_manager(system):
+    if engine().dialect.name != 'postgresql':
+        pytest.skip('PostgreSQL row-lock test')
+    client, headers, _ = system
+    t = create_tenant(client, headers, 'race'); p = create_project(client, headers, t['id'], 'race')
+    users = [new_user(client, headers, n)[0] for n in ('manager-a', 'manager-b')]
+    for u in users:
+        add_member(client, headers, t['id'], p['id'], u['id'])
     with session() as db:
-        governance_lock(db)
-        with ThreadPoolExecutor(max_workers=1,thread_name_prefix='project-writer') as pool:
-            future=pool.submit(write)
+        principals = [Principal.from_token(db.scalar(select(Token).where(Token.user_id == u['id'], Token.kind == 'session'))) for u in users]
+    barrier = Barrier(2)
+    def remove(principal):
+        with session() as db:
+            barrier.wait(timeout=10)
             try:
-                assert waiting.wait(timeout=5)
-                db.get(TenantMembership,(t['id'],user['id'])).status='disabled';db.commit()
-            finally: db.rollback()
-            assert future.result(timeout=10)=='PROJECT_NOT_FOUND'
+                service.member_delete(db, principal, p['id'], principal.user_id, 1)
+                db.commit(); return 'deleted'
+            except HTTPException as exc:
+                db.rollback(); return exc.detail['code']
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(remove, principals))
+    assert sorted(results) == ['PROJECT_MANAGER_REQUIRED', 'deleted']
+    with session() as db:
+        assert len(db.scalars(select(ProjectMembership).where(ProjectMembership.project_id == p['id'])).all()) == 1
+
+
+def test_role_revocation_while_waiting_for_governance_lock_is_rechecked(system):
+    if engine().dialect.name != 'postgresql':
+        pytest.skip('PostgreSQL row-lock test')
+    client, headers, _ = system
+    t = create_tenant(client, headers, 'revoke'); p = create_project(client, headers, t['id'], 'revoke')
+    u, _ = new_user(client, headers, 'waiting-manager')
+    membership = add_member(client, headers, t['id'], p['id'], u['id'])
+    with session() as db:
+        principal = Principal.from_token(db.scalar(select(Token).where(Token.user_id == u['id'], Token.kind == 'session')))
+    started = Event()
+    values = {k: p[k] for k in ('name', 'slug', 'description', 'status', 'labels', 'metadata', 'default_environment')}
+    def update():
+        with session() as db:
+            started.set()
+            try:
+                service.project_update(db, principal, p['id'], ProjectUpdate(**values, expected_version=1))
+                db.commit(); return 'updated'
+            except HTTPException as exc:
+                db.rollback(); return exc.detail['code']
+    with session() as holder, ThreadPoolExecutor(max_workers=1) as pool:
+        lock_authorization(holder)
+        future = pool.submit(update)
+        try:
+            assert started.wait(5)
+            time.sleep(.1)
+            assert not future.done()
+            permission_id = holder.scalar(select(Permission.id).where(Permission.name == 'projects.update'))
+            holder.execute(delete(RolePermission).where(RolePermission.role_id.in_(membership['role_ids']), RolePermission.permission_id == permission_id))
+            holder.commit()
+        finally:
+            holder.rollback()
+        assert future.result(timeout=10) == 'SCOPED_PERMISSION_REQUIRED'

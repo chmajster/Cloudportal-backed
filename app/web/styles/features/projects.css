@@ -1,9 +1,7 @@
-.projects-notice { padding: 1rem; border: 1px solid var(--border); border-radius: .6rem; }
-.projects-pagination { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
-.projects-overview { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 3fr); gap: .75rem 1rem; }
+.projects-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; margin-block: 1rem; }
+.projects-overview { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 3fr); gap: .5rem 1rem; }
 .projects-overview dd { margin: 0; overflow-wrap: anywhere; }
-.projects-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; }
-.projects-role-options { display: grid; gap: .65rem; margin: .75rem 0; }
-@media (max-width: 600px) { .projects-overview { grid-template-columns: 1fr; } }
-
-.projects-context { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.projects-json { overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; }
+.projects-notice { padding: .8rem 1rem; border: 1px solid var(--border); border-radius: .5rem; }
+.projects-roles { display: grid; gap: .5rem; }
+@media (max-width: 640px) { .projects-overview { grid-template-columns: 1fr; } }

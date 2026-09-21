@@ -3,8 +3,7 @@
 ## Delivery boundary
 
 This domain implements **tenant administration and tenant-scoped authorization**.
-The Projects extension is documented in `projects.md`. Neither slice claims
-isolation of existing deployments, VMs,
+It does **not** claim project support or isolation of existing deployments, VMs,
 credentials, providers, jobs, IPAM, Blueprints or Catalog. Those existing APIs
 still use their existing ownership/global-permission rules. The UI displays this
 limitation explicitly. Do not rely on this slice alone as a production
@@ -42,9 +41,8 @@ catalog and belongs to exactly one membership through a composite foreign key.
 Deleting a membership cascades its assignments and ceilings. Deleting a shared
 role revokes its scoped assignments through foreign keys. Tenant deletion is a
 soft tombstone, requires no memberships, preserves the unique slug and never
-removes infrastructure or global user identities. Deletion also rejects
-non-deleted Projects. The non-empty check must be extended when resource bindings
-are introduced.
+removes infrastructure or global user identities. The non-empty check must be
+extended when Projects and resource bindings are introduced.
 
 ## Authorization semantics
 
@@ -74,11 +72,6 @@ tenants.members.manage
 tenants.roles.assign
 tenants.audit.read
 ```
-
-Projects additionally contributes its permission catalog to tenant-scoped
-delegation, including tenant-level `projects.create` and `projects.admin`.
-Existing assignment-time ceilings still apply; adding these permissions to a
-role does not silently expand old delegations.
 
 `tenants.create`, `tenants.delete` and `tenants.admin` are platform-only. A role
 containing any non-delegable permission cannot be assigned through the tenant
@@ -223,7 +216,7 @@ stale-response guards. HTTP tests use real authentication, audit/event writes,
 OpenAPI and idempotency. PostgreSQL tests check simultaneous member revisions
 and a waiting writer after membership revocation; SQLite does not certify locks.
 
-Projects, project memberships, Default Project and validated execution context
-are documented in `projects.md`. The next implementation boundary is resource-scope
-enforcement across every existing entry point. Only after that gate should quota/placement/lease/policy enforcement
+Next implementation boundary: Projects, project memberships, Default Project,
+explicit execution context and resource-scope enforcement across every existing
+entry point. Only after that gate should quota/placement/lease/policy enforcement
 be wired into provisioning and advertised as an isolated private-cloud platform.

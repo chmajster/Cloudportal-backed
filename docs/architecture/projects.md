@@ -1,142 +1,140 @@
-# Projects and validated execution context
+# Projects and scoped execution context
 
-## Delivery boundary
+Projects is the next domain after tenant administration (PR #118). This domain
+provides real project administration isolation; it does **not by itself** turn
+legacy infrastructure APIs into a multi-tenant security boundary. Resource
+scoping, quota, placement, lease and policy integration are separate dependent
+slices in `docs/roadmap/governance.md`.
 
-Projects extend PR #118's tenant foundation. This slice implements project
-identity, membership, bounded scoped role inheritance, administration, a
-server-validated project selection and Default/Default membership migration.
-It does not attach existing deployments, VMs, credentials, providers, jobs,
-IPAM, Blueprints or Catalog to projects. Their existing access behavior remains
-unchanged until the resource-scoping integration lands. Selecting a project is
-not yet a filter or security boundary for those legacy infrastructure screens.
-No quota, placement, lease or policy enforcement is claimed by these APIs.
+## Model and ownership
 
-## Components and data
+`app/projects/` owns four tables, bounded Pydantic contracts, live authorization,
+transactional services and a thin router. `feature_projects.py` discovers the
+router automatically. `projects.js` and `projects.css` own browser behavior.
 
-`app/projects/` owns mappings, permission catalog, authorization, schemas,
-services and HTTP routes. `app/modules/feature_projects.py` registers routes
-without changing the composition root. Browser views/styles live in
-`app/web/features/projects.js` and `app/web/styles/features/projects.css`.
+A Project has UUID, tenant, tenant-unique slug, name, description, status,
+default environment, labels, bounded JSON metadata, creation/update timestamps,
+creator, system flag, tombstone and optimistic version. A composite unique key
+`(tenant_id, id)` supports parent-constrained foreign keys.
 
-Project identity includes UUID, immutable tenant_id, tenant-unique slug, name,
-description, status, labels, bounded metadata, default_environment, creator,
-timestamps and optimistic revision. Default Project is system-protected.
-Deletion retains an identity tombstone and requires no project memberships;
-resource integration must extend the non-empty guard before attaching objects.
-A tenant containing a non-deleted project cannot be deleted.
+Project memberships require an existing membership of the **same tenant**.
+Composite foreign keys prevent binding a member of tenant A to a project of
+B. Removing a tenant membership cascades project memberships and role ceilings.
+Disabling a tenant membership immediately suppresses project access without
+removing its administrative history.
 
-Five tables are added: projects, project_memberships,
-project_role_assignments, project_role_grants and user_project_contexts.
-Composite foreign keys enforce that a project member belongs to the same tenant
-and that role assignments reference that membership. Permission ceilings use
-existing Role and Permission rows; no secret or user identity is duplicated.
+Shared Role and Permission rows are reused. ProjectRoleGrant is the immutable
+assignment-time upper bound, intersected with live RolePermission rows. A later
+role expansion does not silently enlarge an existing delegation. A permission
+removal applies immediately. Reassignment requires the current actor to possess
+all permissions being delegated in this exact scope.
 
-## Permission semantics
+## Permission inheritance and global administration
 
-Global, tenant and project assignments remain separate. Project grants do not
-become global UserRole permissions and cannot authorize existing unscoped APIs.
-A global tenants.admin grant plus the requested operation permission crosses
-tenants. Other users need active tenant membership. Inside that tenant,
-projects.admin permits parent administration without per-project membership;
-it cannot be delegated through a project assignment. Otherwise active project
-membership is required. Inactive memberships immediately remove project access.
+Global UserRole rows are never replaced or populated by project membership.
+Tenant grants and project grants never appear as global `/auth/me` permissions.
+The existing API token scope list remains a ceiling on all these sources.
 
-Project-scoped grants are the intersection of the role's current permissions,
-the assignment-time relational ceiling, the project-delegable catalog and API
-token scopes. Effective project permissions also include permitted global and
-tenant grants, only inside the validated membership hierarchy. Role expansion
-never silently expands existing assignments; removal applies immediately.
+For ordinary project access, an active tenant membership is mandatory. Then:
 
-projects.create and projects.admin are tenant/global capabilities. The project
-catalog delegates read, update, delete, select, members.read, members.manage,
-roles.assign and audit.read. An assigned role containing any permission outside
-the actor's effective project scope is rejected in full. Project Administrator
-and Project Viewer are convenience seed roles, not authorization shortcuts.
-Existing API tokens are not silently expanded to include new permissions.
+- Explicit tenant-scoped project grants apply to all projects in that tenant.
+- Project-scoped grants apply only through an active membership of that project.
+- Existing global project permissions apply inside an active project membership.
+- A global `projects.admin` permission allows crossing project boundaries only
+  with the operation's own global permission. No username or role-label check is
+  used. Tenant-scoped `projects.admin` never becomes a global bypass.
 
-SQL visibility predicates are applied before row lookup, count and pagination.
-Foreign and absent project IDs return the same PROJECT_NOT_FOUND response.
-An explicitly supplied tenant/project pair must match. Tenant-disabled projects
-are hidden from scoped members. Suspended tenants/projects reject scoped writes;
-explicit parent/platform administrators can recover them as documented in code.
-Project status changes require parent administration. Updating memberships or
-roles checks expected_version and protects the last active human scoped manager,
-with explicit parent recovery. A less privileged manager cannot edit a member
-whose direct project grants exceed their own permissions.
+Ordinary tenant membership alone does not grant visibility of sibling projects.
+`projects.create` and `projects.admin` are delegable at tenant level, not project
+level. Creating a project does not manufacture an administrator role or new
+global privileges for its creator.
 
-## User directory boundary
+Tenant Administrator role definitions gain tenant-wide project administration.
+Existing assignment-time ceilings remain unchanged: an authorized administrator
+must explicitly reassign a role before an older delegation gains new project
+permissions. Infrastructure Administrator does not automatically gain project
+administration across tenants.
 
-A project manager can select only active members of the project's own tenant.
-The paginated eligible-members API never enumerates global or foreign-tenant
-identities. Adding a user to a tenant still requires the existing global
-users.read capability. Creating project membership does not grant tenant
-membership, global roles or provider access. Tenant membership removal cascades
-project membership and assignments; disabling it immediately hides projects.
+## Lifecycle, races and errors
 
-## Transactions and retries
+Active/suspended/disabled states follow the parent tenant. Suspended scope is
+read-only for scoped users. Disabled/tombstoned parents hide children. Explicit
+global project administration can recover disabled projects; changing a tenant
+still requires separate tenant administration permissions.
 
-The existing governance lock is acquired before parent tenant, project and member
-locks. Token, identity and membership authorization is rechecked after waiting.
-Mutations use caller-owned transactions and existing audit/business events.
-POST routes authorize before consulting the existing idempotency cache, including
-current role-delegation and eligible-member checks. PUT and DELETE revisions
-prevent stale updates. No long-running operation executes inside HTTP handlers.
+All writes acquire the existing governance authorization lock first, re-read
+current identity and grants, then lock the project/parent and membership. This
+preserves the token revocation lock order. Expected-version checks are required
+for updates/deletes and no-op updates consume a revision. Concurrent self-removal
+must leave an active human manager, considering project, inherited tenant and
+membership-bounded global grants. Explicit global administration provides recovery.
 
-## Active context contract
+List filtering and counts occur in SQL before pagination. Foreign and absent
+project identifiers share `404 PROJECT_NOT_FOUND`. A supplied tenant/project pair
+must agree. Permission failures in known scope use `SCOPED_PERMISSION_REQUIRED`;
+stale writes use `VERSION_CONFLICT`.
 
-GET/PUT/DELETE /api/v1/project-context stores a per-user server-side preference.
-PUT requires projects.select and projects.read, a matching tenant/project pair
-and expected_version (zero only for a never-created preference). The preference
-is not a grant. Every lookup or resolution checks current identity, membership,
-permissions and status. A revoked preference returns a controlled error rather
-than falling back to another tenant. Clearing a revoked preference remains
-possible without access to its old project. Clearing retains a nullable identity
-pair and increments the revision, preventing the select-clear-select ABA race.
-The database rejects a partially null pair.
+The eligible-member directory exposes only active members of the project's own
+tenant, not the global user directory. Guessing a foreign user ID does not reveal
+whether that user exists. Role selection is paginated and excludes even one
+permission outside the actor's delegable scope.
 
-The immutable ProjectScope result resolves explicit IDs, then a validated
-server preference, then Default/Default. Explicit tenant without project is an
-error. Queue submissions must copy the resolved IDs into durable operation data;
-workers must never consult a later browser preference. The next integration
-slice must apply this contract to all relevant existing request/worker paths.
+Tenant deletion now rejects non-deleted projects. Project deletion requires no
+memberships and retains a tombstone and slug; resource integration must add its
+non-empty guard before scoped infrastructure creation is enabled. No project
+administration API deletes provider-side infrastructure.
 
-## Migration and compatibility
+## Execution context and HTTP contracts
 
-New migration 8c42f39a50bd follows 7b31e28f49ac. It creates Default Project
-00000000-0000-0000-0000-000000000002 in Default Tenant
-00000000-0000-0000-0000-000000000001. Existing user identities receive missing
-Default tenant/project memberships without copying or adding global roles.
-Existing disabled tenant memberships stay disabled. Global account disable/lock
-continues to apply. Repeat upgrade does not duplicate system objects.
+`resolve_context` returns a frozen ExecutionContext with server-verified tenant,
+project, actor/token identity and immutable effective permissions. The public
+`POST /project-context/resolve` validates the selected pair for project read.
+Internal operational consumers must explicitly require the relevant operation
+permission and `write=True`; accepting a context response is never a permanent
+authorization grant. Re-resolve before a write or worker execution.
 
-Downgrade removes project-domain tables and its audit index. It intentionally
-retains Default tenant memberships, which may have been edited after upgrade.
-Existing user passwords, provider secrets and infrastructure rows are unchanged.
-No merged migration is edited.
+The router exposes `/projects`, `/projects/{id}`, `/permissions`, `/members`,
+`/members/{user_id}/roles`, `/eligible-members`, `/assignable-roles`, `/audit`,
+`/tenants/{tenant_id}/projects`, `/project-context/creation-scopes` and the context
+resolver. Collection limit is 1–200 with nonnegative offset. Responses include
+`items`, `total`, `limit`, `offset`. Inputs reject extra fields and reuse bounded
+metadata validation. APIs and response models appear in OpenAPI.
 
-## HTTP and browser surface
+Idempotent creates reauthorize **before replay**, including role/directory checks.
+Audit and durable business events use the existing transaction, not a new broker.
+Scoped audit omits IP/token fields and cannot expose foreign project events.
 
-The domain exposes project collections/details, tenant project collections,
-permissions, members, eligible-members, assignable-roles and scoped audit plus
-project-context and project-creation-tenants. List responses use items, total,
-limit and offset with the shared 200-row API cap. New routes and strict schemas
-are registered in OpenAPI. Metadata uses the existing bounded tenant validator.
+## Default migration and backward compatibility
 
-The Projects view uses navigable page surfaces, SQL-filtered lists, paginated
-tenant/member/role pickers, effective permissions, versioned mutations and scoped
-audit. The selected project is shown in the view and validated on the server.
-No localStorage scope authority, unsafe HTML rendering or browser prompt/confirm
-is introduced. Generation guards discard results after navigation/logout.
-A cross-application switcher and legacy infrastructure filtering remain pending.
+Migration `9a42d10e63bc`, parent `7b31e28f49ac`, creates the four domain tables and
+Default Project `00000000-0000-0000-0000-000000000002` in Default Tenant
+`00000000-0000-0000-0000-000000000001`.
 
-## Verification
+Existing users receive Default tenant/project memberships, without any new global
+role or project role grants. Existing tenant memberships are retained, including
+disabled ones. This prepares legacy resource scoping without moving/deleting
+existing deployments, credentials, encrypted secrets or passwords. The Default
+project cannot be renamed, disabled, moved or deleted. Downgrade removes only
+project domain tables and intentionally retains tenant memberships.
 
-Tests are in tests/projects/: unit/service isolation and revocation, composite
-foreign keys, safe delegation, context revisions including ABA, migration,
-Node browser harness, HTTP authentication/idempotency/OpenAPI/events and real
-PostgreSQL concurrent-update/revocation gates. The PostgreSQL tests intentionally
-do not claim SQLite as concurrency evidence. Record exact executions in the PR.
+## Verification boundary
 
-Required: module boundary check, all browser node --check, full pytest with
-PostgreSQL/Redis, and existing tenant regressions. Full browser/provider acceptance
-and resource-isolation/governance scenarios are not certified by these tests.
+Unit tests cover scope inheritance, SQL-filtered pagination, live token ceilings,
+role changes, parent/member revocation, protected defaults, frozen context,
+composite foreign keys and optimistic revisions. Migration tests preserve legacy
+identity/resource data. HTTP tests exercise real auth, idempotency, membership,
+audit/events and OpenAPI. PostgreSQL tests prove concurrent manager removal and
+revalidation after waiting for a lock. The Node harness tests safe text rendering
+and stale-result suppression; it is not a full browser E2E substitute.
+
+Record exact current-head results in the PR. Passing project tests does not prove
+that quota, resource/credential/provider isolation, leases or policy enforcement
+are complete.
+
+## Integration of PR #120
+
+The already merged #119 Projects schema, public administration API, scoped inheritance semantics and tests remain canonical. The alternative duplicate implementation in #120 has been reconciled rather than installed alongside it. Revision `9a42d10e63bc` is unchanged; its child `8c42f39a50bd` adds only `user_project_contexts`. Upgrade and downgrade preserve existing project identities, memberships, role grant ceilings, users and infrastructure. Do not deploy the superseded draft migration directly.
+
+GET/PUT/DELETE `/project-context` add an authenticated, versioned server preference. PUT requires `projects.select` and `projects.read` in the chosen project. Existing API token and assignment ceilings are not expanded. The existing explicit POST `/project-context/resolve` contract remains compatible. Internal `app.projects.context.resolve_scope` resolves explicit IDs, a live validated preference or Default/Default in that order; an inaccessible explicit or saved selection fails without fallback. Selection does not scope existing infrastructure APIs. Clearing a revoked preference is allowed after live authentication and retains the monotonic revision.
+
+The Projects UI exposes selection and clearing with safe text rendering and stale-navigation guards. It is not a global infrastructure switcher. Resource isolation, quotas, leases, placement and policy integration remain future work.

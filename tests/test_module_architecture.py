@@ -38,7 +38,6 @@ def test_feature_registry_exposes_expected_router_contracts():
 
     assert any(path.endswith('/auth/login') for path in paths('auth'))
     assert '/projects' in paths('projects')
-    assert '/project-context' in paths('projects')
     assert '/tenants' in paths('tenancy')
     assert '/tenants/{tenant_id}/members' in paths('tenancy')
     assert '/providers' in paths('infrastructure')

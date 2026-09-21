@@ -3,9 +3,8 @@ from sqlalchemy import select
 from app.models import Permission, Role, Setting, User
 from app.security.core import effective_permissions
 from app.rbac.locking import governance_lock
-from app.tenancy.permissions import TENANCY_PERMISSION_ACTIONS, TENANCY_DEFAULT_ROLES
-
 from app.projects.permissions import PROJECT_DEFAULT_ROLES
+from app.tenancy.permissions import TENANCY_PERMISSION_ACTIONS, TENANCY_DEFAULT_ROLES
 
 PERMISSIONS = {
     **{area: actions.split() for area, actions in {
