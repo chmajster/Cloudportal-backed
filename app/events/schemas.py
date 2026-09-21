@@ -9,9 +9,23 @@ class EventSchemaValidationError(ValueError):
     pass
 
 
+def _validate_refs(value, path='schema'):
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == '$ref' and isinstance(nested, str) and not nested.startswith('#'):
+                raise EventSchemaValidationError(
+                    f'External JSON Schema references are not allowed: {path}.$ref'
+                )
+            _validate_refs(nested, f'{path}.{key}')
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _validate_refs(nested, f'{path}[{index}]')
+
+
 def validate_schema_document(document: dict) -> None:
     if not isinstance(document, dict):
         raise EventSchemaValidationError('Event schema must be a JSON object')
+    _validate_refs(document)
     try:
         Draft202012Validator.check_schema(document)
     except SchemaError as exc:
