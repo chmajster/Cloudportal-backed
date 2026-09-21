@@ -427,7 +427,7 @@
     async function syncYamlFromModel() {
       try {
         const result = await api('/blueprint-designer/yaml/render', {
-          method: 'POST', body: JSON.stringify(state.blueprint),
+          method: 'POST', body: state.blueprint,
         });
         state.yaml = result.yaml;
         state.yamlDirty = false;
@@ -443,7 +443,7 @@
       const content = textarea?.value ?? state.yaml;
       try {
         const result = await api('/blueprint-designer/yaml/parse', {
-          method: 'POST', body: JSON.stringify({ yaml: content }),
+          method: 'POST', body: { yaml: content },
         });
         snapshot();
         state.blueprint = result.blueprint;
@@ -473,7 +473,7 @@
       }
       try {
         const result = await api('/blueprint-designer/yaml/render', {
-          method: 'POST', body: JSON.stringify(state.blueprint),
+          method: 'POST', body: state.blueprint,
         });
         state.yaml = result.yaml;
         state.yamlDirty = false;
@@ -497,7 +497,7 @@
       try {
         const result = await api(state.id ? '/blueprints/' + state.id : '/blueprints', {
           method: state.id ? 'PUT' : 'POST',
-          body: JSON.stringify(state.blueprint),
+          body: state.blueprint,
           headers: state.id ? undefined : { 'Idempotency-Key': crypto.randomUUID() },
         });
         state.id = result.id;
