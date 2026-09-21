@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 
 from app.events.registry import event_matches
 from app.events.service import event_public
-from app.models import EventConsumer, EventRecord, now
+from app.models import EventConsumer, EventRecord, Setting, now
 
 
 def consumer_public(db, row: EventConsumer) -> dict:
@@ -26,8 +26,13 @@ def consumer_public(db, row: EventConsumer) -> dict:
 
 
 def retained_event_floor(db) -> int:
-    earliest = db.scalar(select(func.min(EventRecord.sequence)))
-    return max(0, (earliest or 1) - 1)
+    state = db.get(Setting, 'event_retention')
+    if state is None:
+        return 0
+    try:
+        return max(0, int((state.value or {}).get('floor_sequence', 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def resolve_start_sequence(db, start_from: str, start_sequence: int | None) -> int:
