@@ -11,6 +11,7 @@ from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemS
                              HostnameGenerateInput, HostnameSchemeInput)
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
+from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
 from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
@@ -200,6 +201,23 @@ def require_blueprint_manager(row, actor):
         raise HTTPException(403, 'A dedicated manager role for this template is required')
 
 
+@router.post('/blueprint-designer/yaml/parse')
+def blueprint_yaml_parse(payload: dict[str, str], actor=Depends(require('blueprints.read'))):
+    model = parse_blueprint_yaml(payload.get('yaml', ''))
+    return {
+        'blueprint': model.model_dump(mode='json'),
+        'yaml': dump_blueprint_yaml(model),
+    }
+
+
+@router.post('/blueprint-designer/yaml/render')
+def blueprint_yaml_render(data: BlueprintInput, actor=Depends(require('blueprints.read'))):
+    return {
+        'blueprint': data.model_dump(mode='json'),
+        'yaml': dump_blueprint_yaml(data),
+    }
+
+
 @router.get('/blueprints', response_model=Items[BlueprintOutput])
 def blueprints(request: Request, available: bool = False, source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
                limit: Limit = 100, offset: Offset = 0, actor=Depends(require('blueprints.read')),
@@ -221,6 +239,20 @@ def blueprint(id: int, request: Request, source_header: Annotated[str | None, He
     if source != 'backend' and not can_manage and not available_to(row, actor, source):
         raise HTTPException(404, 'Blueprint not found')
     return blueprint_public(row)
+
+
+@router.get('/blueprints/{id}/yaml')
+def blueprint_yaml(id: int, request: Request,
+                   source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
+                   actor=Depends(require('blueprints.read')), db=Depends(get_db, scope='function')):
+    row = find(db, Blueprint, id)
+    source = portal_source(source_header)
+    can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
+    if source != 'backend' and not can_manage and not available_to(row, actor, source):
+        raise HTTPException(404, 'Blueprint not found')
+    public = blueprint_public(row)
+    payload = {name: public[name] for name in BlueprintInput.model_fields}
+    return {'yaml': dump_blueprint_yaml(payload, version=row.version)}
 
 
 @router.post('/blueprints', status_code=201, response_model=BlueprintOutput)
