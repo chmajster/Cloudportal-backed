@@ -20,6 +20,12 @@ def _require_mapping(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise HTTPException(422, f'{label} contains unsupported fields: ' + ', '.join(unknown))
+
+
 def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
     if 'spec' not in document and 'kind' not in document and 'apiVersion' not in document:
         return document
@@ -31,10 +37,19 @@ def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
     if kind != KIND:
         raise HTTPException(422, f'Unsupported YAML kind: {kind}')
 
+    _reject_unknown_keys(document, {'apiVersion', 'kind', 'metadata', 'spec'}, 'document')
     metadata = _require_mapping(document.get('metadata', {}), 'metadata')
     spec = _require_mapping(document.get('spec', {}), 'spec')
     access = _require_mapping(spec.get('access', {}), 'spec.access')
     governance = _require_mapping(spec.get('governance', {}), 'spec.governance')
+    _reject_unknown_keys(metadata, {'name', 'slug', 'displayName', 'description', 'annotations'}, 'metadata')
+    _reject_unknown_keys(
+        spec,
+        {'active', 'visibility', 'access', 'variables', 'deployment', 'workflow', 'governance'},
+        'spec',
+    )
+    _reject_unknown_keys(access, {'allowedRoleIds', 'allowedUserIds', 'managerRoleIds'}, 'spec.access')
+    _reject_unknown_keys(governance, {'requiresApproval', 'recoveryPolicy'}, 'spec.governance')
 
     return {
         'slug': metadata.get('slug') or metadata.get('name'),
