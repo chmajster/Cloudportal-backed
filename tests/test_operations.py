@@ -101,14 +101,10 @@ def test_schedule_materializes_durable_job_and_rechecks_user(client, headers, mo
             Job.deployment_id == created['id'],
             Job.id != job_id,
         ).order_by(Job.created_at.desc()).first()
-        assert next_job is not None
-        next_id = next_job.id
-
-    execute(next_id)
-    with session() as db:
-        failed = db.get(Job, next_id)
-        assert failed.status == 'failed'
-        assert failed.error == 'Scheduled job owner is disabled or locked'
+        assert next_job is None
+        row = db.get(ScheduledOperation, schedule['id'])
+        assert row.is_active is False
+        assert row.last_error == 'Schedule owner is disabled or locked'
 
 
 def test_signed_webhook_delivery_and_secret_redaction(client, headers, monkeypatch):
