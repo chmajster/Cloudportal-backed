@@ -16,7 +16,22 @@ from app.models import (
 )
 
 
-EVENT_TYPE_RE = re.compile(r'^[a-z0-9][a-z0-9_.-]{1,127}    db,
+EVENT_TYPE_RE = re.compile(r'^[a-z0-9][a-z0-9_.-]{1,127}$')
+
+
+def _snapshot_webhook_endpoint_ids(db, event_type: str) -> list[str]:
+    endpoints = db.scalars(
+        select(WebhookEndpoint).where(WebhookEndpoint.is_active.is_(True))
+    ).all()
+    return [
+        endpoint.id
+        for endpoint in endpoints
+        if event_matches(endpoint.events or (), event_type)
+    ]
+
+
+def publish_event(
+    db,
     event_type: str,
     payload: dict,
     *,
