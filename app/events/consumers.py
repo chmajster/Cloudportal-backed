@@ -25,16 +25,22 @@ def consumer_public(db, row: EventConsumer) -> dict:
     }
 
 
+def retained_event_floor(db) -> int:
+    earliest = db.scalar(select(func.min(EventRecord.sequence)))
+    return max(0, (earliest or 1) - 1)
+
+
 def resolve_start_sequence(db, start_from: str, start_sequence: int | None) -> int:
     latest = db.scalar(select(func.max(EventRecord.sequence))) or 0
+    floor = retained_event_floor(db)
     if start_from == 'latest':
         return latest
     if start_from == 'earliest':
-        return 0
+        return floor
     if start_from == 'sequence':
         if start_sequence is None:
             raise ValueError('start_sequence is required when start_from=sequence')
-        if start_sequence < 0 or start_sequence > latest:
+        if start_sequence < floor or start_sequence > latest:
             raise ValueError('start_sequence is outside the retained event range')
         return start_sequence
     raise ValueError('Unsupported consumer start position')
@@ -43,6 +49,10 @@ def resolve_start_sequence(db, start_from: str, start_sequence: int | None) -> i
 def poll_consumer(db, row: EventConsumer, requested_limit: int | None = None) -> dict:
     if not row.is_active:
         raise ValueError('Event consumer is disabled')
+
+    floor = retained_event_floor(db)
+    if row.cursor_sequence < floor:
+        raise ValueError('Consumer cursor is behind retained event floor; reset required')
 
     limit = min(requested_limit or row.max_batch, row.max_batch, 500)
     scan_window = min(max(limit * 20, 1000), 10000)
@@ -68,6 +78,7 @@ def poll_consumer(db, row: EventConsumer, requested_limit: int | None = None) ->
         'consumer_id': row.id,
         'cursor_sequence': row.cursor_sequence,
         'checkpoint_sequence': checkpoint,
+        'retained_floor_sequence': floor,
         'items': matched,
         'has_scanned_events': bool(events),
         'scan_window': scan_window,
