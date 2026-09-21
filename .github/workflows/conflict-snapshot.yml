@@ -1,0 +1,27 @@
+name: Conflict integration snapshot
+on:
+  push:
+    branches: [feat/projects-scoped-context]
+    paths: [.github/workflows/conflict-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bundle tracked history only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git bundle create "$RUNNER_TEMP/integration.bundle" --all
+          git bundle verify "$RUNNER_TEMP/integration.bundle"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conflict-integration-source
+          path: ${{ runner.temp }}/integration.bundle
+          retention-days: 1
