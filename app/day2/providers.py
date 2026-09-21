@@ -11,10 +11,10 @@ from app.providers.proxmox import ProxmoxProvider
 from app.providers.registry import provider_for
 
 
-_DISK_KEY = re.compile(r'^(?:scsi|virtio|sata|ide)\\d{1,2}$')
-_NIC_KEY = re.compile(r'^net\\d{1,2}$')
-_UNUSED_KEY = re.compile(r'^unused\\d{1,2}$')
-_SIZE = re.compile(r'(?:^|,)size=([0-9]+(?:\\.[0-9]+)?)([KMGT])(?:,|$)', re.I)
+_DISK_KEY = re.compile(r'^(?:scsi|virtio|sata|ide)\d{1,2}$')
+_NIC_KEY = re.compile(r'^net\d{1,2}$')
+_UNUSED_KEY = re.compile(r'^unused\d{1,2}$')
+_SIZE = re.compile(r'(?:^|,)size=([0-9]+(?:\.[0-9]+)?)([KMGT])(?:,|$)', re.I)
 
 
 @dataclass(slots=True)
@@ -42,6 +42,8 @@ def _parse_options(value):
         if '=' in part:
             key, item = part.split('=', 1)
             result[key] = item
+            if part == parts[0] and key in {'virtio', 'e1000', 'e1000e', 'rtl8139', 'vmxnet3'}:
+                result['model'] = key
         elif part:
             result.setdefault('model', part)
     return result
@@ -156,7 +158,7 @@ class ProxmoxDay2Adapter:
                 'device': device,
                 'size_gib': _size_gib(raw),
                 'storage': storage,
-                'bus': re.sub(r'\\d+$', '', device),
+                'bus': re.sub(r'\d+$', '', device),
                 'format': opts.get('format'),
                 'boot': device in str(config.get('boot') or ''),
                 'provider_id': volume or device,
@@ -216,12 +218,12 @@ class ProxmoxDay2Adapter:
             mac = current_opts.get(model)
         head = model + (('=' + mac) if mac else '')
         parts = [head, 'bridge=' + params['bridge']]
-        vlan = params.get('vlan')
+        vlan = params.get('vlan', current_opts.get('tag'))
         if vlan is not None:
             parts.append('tag=' + str(int(vlan)))
-        if params.get('firewall'):
+        if params.get('firewall', str(current_opts.get('firewall', '0')) == '1'):
             parts.append('firewall=1')
-        if params.get('link_up') is False:
+        if params.get('link_up', str(current_opts.get('link_down', '0')) != '1') is False:
             parts.append('link_down=1')
         return ','.join(parts)
 
@@ -238,7 +240,7 @@ class ProxmoxDay2Adapter:
         if 'user' in params:
             values['ciuser'] = params['user']
         if 'ssh_public_keys' in params:
-            values['sshkeys'] = '\\n'.join(params.get('ssh_public_keys') or [])
+            values['sshkeys'] = '\n'.join(params.get('ssh_public_keys') or [])
         if any(key in params for key in ('ipv4', 'ipv6', 'gateway')):
             parts = []
             if params.get('ipv4'):
@@ -276,6 +278,8 @@ class ProxmoxDay2Adapter:
                 values['memory'] = int(params['memory_mb'])
             return self.provider.update_vm_config(node, vm_id, **values)
         if action == 'add_disk':
+            if params['device'] in self.configuration(target):
+                raise failure('VALIDATION_FAILED', message='Selected disk slot is already in use', status_code=422)
             parts = [f"{params['storage']}:{int(params['size_gib'])}"]
             if params.get('format'):
                 parts.append('format=' + params['format'])
@@ -360,9 +364,9 @@ class ProxmoxDay2Adapter:
             status = self.provider.task_status(node, task) or {}
             if status.get('status') == 'stopped':
                 exit_status = status.get('exitstatus')
-                if exit_status not in {None, 'OK'}:
+                if exit_status != 'OK':
                     raise failure('PROVIDER_ERROR', message='Provider task failed', details={'exit_status': str(exit_status)[:128]})
-                return {'provider_task_id': task, 'provider_task_status': exit_status or 'OK'}
+                return {'provider_task_id': task, 'provider_task_status': exit_status}
             if time.monotonic() - started > timeout:
                 raise failure('TIMEOUT')
             time.sleep(1)

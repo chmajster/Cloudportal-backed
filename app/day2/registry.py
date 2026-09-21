@@ -95,7 +95,7 @@ ACTIONS = (
     ActionDefinition(
         'add_disk', 'Dodaj dysk', 'storage', 'Dodaje dysk do VM.', 'day2.disk.add',
         object_schema({
-            'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\\d{1,2}$'},
+            'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'},
             'size_gib': {'type': 'integer', 'minimum': 1, 'maximum': 65536},
             'storage': SLUG,
             'format': {'type': 'string', 'enum': ['raw', 'qcow2']},
@@ -107,24 +107,24 @@ ACTIONS = (
     ActionDefinition(
         'resize_disk', 'Powiększ dysk', 'storage', 'Powiększa istniejący dysk; zmniejszanie jest zabronione.', 'day2.disk.resize',
         object_schema({
-            'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\\d{1,2}$'},
+            'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'},
             'new_size_gib': {'type': 'integer', 'minimum': 1, 'maximum': 65536},
         }, ('device', 'new_size_gib')), mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
         'detach_disk', 'Odłącz dysk', 'storage', 'Odłącza dysk bez deklarowania jego usunięcia.', 'day2.disk.delete',
-        object_schema({'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\\d{1,2}$'}}, ('device',)),
+        object_schema({'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'}}, ('device',)),
         destructive=True, mutates_configuration=True,
     ),
     ActionDefinition(
         'delete_disk', 'Usuń dysk', 'storage', 'Trwale usuwa wskazany odłączony dysk.', 'day2.disk.delete',
-        object_schema({'device': {'type': 'string', 'pattern': r'^unused\\d{1,2}$'}, 'confirmation': TEXT}, ('device', 'confirmation')),
+        object_schema({'device': {'type': 'string', 'pattern': r'^unused\d{1,2}$'}, 'confirmation': TEXT}, ('device', 'confirmation')),
         destructive=True, requires_confirmation=True, approval_default=True, mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
         'add_nic', 'Dodaj interfejs', 'network', 'Dodaje interfejs sieciowy.', 'day2.network.manage',
         object_schema({
-            'device': {'type': 'string', 'pattern': r'^net\\d{1,2}$'},
+            'device': {'type': 'string', 'pattern': r'^net\d{1,2}$'},
             'bridge': SLUG,
             'vlan': {'type': ['integer', 'null'], 'minimum': 1, 'maximum': 4094},
             'model': {'type': 'string', 'enum': ['virtio', 'e1000', 'e1000e', 'rtl8139', 'vmxnet3']},
@@ -136,7 +136,7 @@ ACTIONS = (
     ActionDefinition(
         'edit_nic', 'Edytuj interfejs', 'network', 'Aktualizuje konfigurację interfejsu.', 'day2.network.manage',
         object_schema({
-            'device': {'type': 'string', 'pattern': r'^net\\d{1,2}$'},
+            'device': {'type': 'string', 'pattern': r'^net\d{1,2}$'},
             'bridge': SLUG,
             'vlan': {'type': ['integer', 'null'], 'minimum': 1, 'maximum': 4094},
             'model': {'type': 'string', 'enum': ['virtio', 'e1000', 'e1000e', 'rtl8139', 'vmxnet3']},
@@ -147,7 +147,7 @@ ACTIONS = (
     ),
     ActionDefinition(
         'detach_nic', 'Odłącz interfejs', 'network', 'Usuwa konfigurację wskazanego NIC z VM.', 'day2.network.manage',
-        object_schema({'device': {'type': 'string', 'pattern': r'^net\\d{1,2}$'}}, ('device',)),
+        object_schema({'device': {'type': 'string', 'pattern': r'^net\d{1,2}$'}}, ('device',)),
         destructive=True, mutates_configuration=True,
     ),
     ActionDefinition(
@@ -206,7 +206,7 @@ ACTIONS = (
     ),
     ActionDefinition(
         'move_storage', 'Przenieś dysk', 'storage', 'Przenosi wolumen do innego storage.', 'day2.migrate',
-        object_schema({'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\\d{1,2}$'}, 'target_storage': SLUG, 'delete_source': {'type': 'boolean'}}, ('device', 'target_storage')),
+        object_schema({'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'}, 'target_storage': SLUG, 'delete_source': {'type': 'boolean'}}, ('device', 'target_storage')),
         mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(

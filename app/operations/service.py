@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, func, select
 
 from app.config import settings
 from app.database import session
@@ -21,9 +21,14 @@ from app.models import (
     Idempotency,
     IPAllocation,
     Deployment,
+    EventConsumer,
+    EventRecord,
+    ExtensionDelivery,
+    ExtensionState,
     Job,
     JobLog,
     ScheduledOperation,
+    Setting,
     WebhookDelivery,
     WebhookEndpoint,
     now,
@@ -175,22 +180,26 @@ def materialize_scheduled_jobs():
 
 
 def queue_webhook_event(db, event, resource_id, data):
-    endpoints = db.scalars(
-        select(WebhookEndpoint).where(WebhookEndpoint.is_active.is_(True))
-    ).all()
-    payload = {
-        'event': event,
-        **data,
-        'created_at': now().isoformat() + 'Z',
-    }
-    for endpoint in endpoints:
-        if event in (endpoint.events or []):
-            db.add(WebhookDelivery(
-                endpoint_id=endpoint.id,
-                event=event,
-                resource_id=str(resource_id),
-                payload=payload,
-            ))
+    # Backward-compatible entry point used across jobs/recovery/system alerts.
+    # The event is now persisted transactionally; webhook fan-out happens through
+    # the core.webhook-bridge extension in the dispatcher.
+    from app.events.service import publish_event
+
+    subject_type = event.split('.', 1)[0]
+    request_id = None
+    for key in ('job', 'recovery'):
+        value = data.get(key) if isinstance(data, dict) else None
+        if isinstance(value, dict) and value.get('request_id'):
+            request_id = str(value['request_id'])
+            break
+    return publish_event(
+        db,
+        event,
+        data,
+        subject_type=subject_type,
+        subject_id=str(resource_id),
+        request_id=request_id,
+    )
 
 
 def queue_job_webhooks(db, job):
@@ -373,11 +382,15 @@ def cleanup_retention_once(force=False):
         'job_logs': current - timedelta(days=settings().retention_job_logs_days),
         'audit': current - timedelta(days=settings().retention_audit_days),
         'webhooks': current - timedelta(days=settings().retention_webhook_deliveries_days),
+        'events': current - timedelta(days=settings().retention_events_days),
         'idempotency': current - timedelta(days=settings().retention_idempotency_days),
         'released': current - timedelta(days=settings().retention_released_allocations_days),
     }
     counts = {}
     with session() as db:
+        from app.events.service import sync_extension_states
+        sync_extension_states(db)
+
         counts['job_logs'] = db.execute(
             delete(JobLog).where(JobLog.timestamp < cutoffs['job_logs'])
         ).rowcount or 0
@@ -390,6 +403,59 @@ def cleanup_retention_once(force=False):
                 WebhookDelivery.created_at < cutoffs['webhooks'],
             )
         ).rowcount or 0
+
+        consumer_cursor = db.scalar(
+            select(EventConsumer.cursor_sequence)
+            .where(EventConsumer.is_active.is_(True))
+            .order_by(EventConsumer.cursor_sequence.asc())
+            .limit(1)
+        )
+        extension_cursor = db.scalar(
+            select(ExtensionState.last_event_sequence)
+            .where(ExtensionState.is_enabled.is_(True))
+            .order_by(ExtensionState.last_event_sequence.asc())
+            .limit(1)
+        )
+        cursor_candidates = [
+            value for value in (consumer_cursor, extension_cursor) if value is not None
+        ]
+        safe_sequence = min(cursor_candidates) if cursor_candidates else None
+
+        protected_delivery = exists(
+            select(ExtensionDelivery.id).where(
+                ExtensionDelivery.event_sequence == EventRecord.sequence,
+                ExtensionDelivery.status.in_(['pending', 'dead_letter']),
+            )
+        )
+        event_conditions = [
+            EventRecord.created_at < cutoffs['events'],
+            ~protected_delivery,
+        ]
+        if safe_sequence is not None:
+            event_conditions.append(EventRecord.sequence <= safe_sequence)
+
+        highest_deleted_sequence = db.scalar(
+            select(func.max(EventRecord.sequence)).where(*event_conditions)
+        )
+        counts['events'] = db.execute(
+            delete(EventRecord).where(*event_conditions)
+        ).rowcount or 0
+
+        retention_state = db.scalar(
+            select(Setting).where(Setting.key == 'event_retention').with_for_update()
+        )
+        if retention_state is None:
+            retention_state = Setting(key='event_retention', value={'floor_sequence': 0})
+            db.add(retention_state)
+            db.flush()
+        if highest_deleted_sequence is not None:
+            value = dict(retention_state.value or {})
+            try:
+                current_floor = int(value.get('floor_sequence', 0))
+            except (TypeError, ValueError):
+                current_floor = 0
+            value['floor_sequence'] = max(current_floor, int(highest_deleted_sequence))
+            retention_state.value = value
         counts['idempotency'] = db.execute(
             delete(Idempotency).where(Idempotency.created_at < cutoffs['idempotency'])
         ).rowcount or 0

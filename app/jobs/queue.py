@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.blueprint_settings import blueprint_execution_settings
 from app.database import session
+from app.events.service import dispatch_event_broker_once
 from app.inventory_sync import repair_inventory_from_states
 from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
@@ -254,9 +255,12 @@ def dispatch_once():
                 d.active_job_id, d.status = None, 'failed'
             db.add(JobLog(job_id=job.id, message=job.error))
             queue_job_webhooks(db, job)
+        from app.day2.reconciliation import reconcile_finished_jobs
+        reconcile_finished_jobs(db)
         db.commit()
     reconcile_proxmox_tasks_once()
     queue_system_alert_webhooks_once()
+    dispatch_event_broker_once()
     deliver_webhooks_once()
     cleanup_retention_once()
     redis_client().set('cp:dispatcher:heartbeat', 'alive', ex=30)

@@ -9,12 +9,17 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'web-ui',
         'auth',
         'administration',
+        'tenancy',
+        'projects',
         'infrastructure',
         'proxmox-management',
         'automation',
         'inventory',
+        'day2',
         'ipam',
         'operations',
+        'event-enterprise',
+        'events',
         'health',
         'updates',
     ]
@@ -33,10 +38,16 @@ def test_feature_registry_exposes_expected_router_contracts():
         return {getattr(route, 'path', '') for route in modules[name].router.routes}
 
     assert any(path.endswith('/auth/login') for path in paths('auth'))
+    assert '/projects' in paths('projects')
+    assert '/tenants' in paths('tenancy')
+    assert '/tenants/{tenant_id}/members' in paths('tenancy')
     assert '/providers' in paths('infrastructure')
     assert '/blueprints' in paths('automation')
     assert '/ipam/pools' in paths('ipam')
     assert '/webhooks' in paths('operations')
+    assert '/event-schemas' in paths('event-enterprise')
+    assert '/event-consumers' in paths('event-enterprise')
+    assert '/events' in paths('events')
     assert '/health' in paths('health')
     assert '/updates/status' in paths('updates')
     assert '/manifest.json' in paths('web-ui')

@@ -382,7 +382,7 @@ def _validate_action_specific(db, target, credential, adapter, action, params):
         if action.id == 'update_credentials' and params.get('operation') != 'create_user':
             raise failure('ACTION_NOT_SUPPORTED', message='This credential operation has no approved catalog playbook yet', status_code=409)
     if action.id == 'create_snapshot' and params.get('quiesce'):
-        warnings.append('Explicit filesystem quiesce is not exposed by the Proxmox adapter')
+        raise failure('ACTION_NOT_SUPPORTED', message='Explicit filesystem quiesce is not exposed by the Proxmox adapter')
     return warnings
 
 
@@ -445,7 +445,11 @@ def _lock_row(db, resource_id):
 def acquire_resource_lock(db, resource_id, action_request_id, timeout_seconds):
     row = _lock_row(db, resource_id)
     current = now()
-    if row is not None and row.expires_at <= current:
+    if row is not None and row.expires_at <= current and row.action_request_id != action_request_id:
+        previous = db.get(Day2ActionRequest, row.action_request_id)
+        if (previous is None or previous.status not in {'SUCCEEDED', 'SUCCEEDED_WITH_WARNING', 'FAILED', 'CANCELLED'}
+                or (previous.result or {}).get('reconciliation_required')):
+            raise failure('RESOURCE_LOCKED', message='Expired execution lease requires reconciliation before reuse')
         db.delete(row)
         db.flush()
         row = None
@@ -567,7 +571,16 @@ def create_action(db, request, actor, target, credential, action_id, params, rea
     return row, validation
 
 
+def _lock_action_job(db, row):
+    # Match the worker's job -> request lock order and discard stale API snapshots.
+    if row.job_id:
+        db.scalar(select(Job).where(Job.id == row.job_id).with_for_update())
+    return db.scalar(select(Day2ActionRequest).where(Day2ActionRequest.id == row.id)
+                     .execution_options(populate_existing=True).with_for_update())
+
+
 def approve_action(db, request, actor, row, permissions):
+    row = _lock_action_job(db, row)
     if 'day2.approve' not in permissions and 'day2.admin' not in permissions:
         raise failure('PERMISSION_DENIED', status_code=403, details={'permission': 'day2.approve'})
     if row.status != 'WAITING_APPROVAL' or row.approval_state != 'pending':
@@ -593,8 +606,9 @@ def approve_action(db, request, actor, row, permissions):
 
 
 def cancel_action(db, request, actor, row):
+    row = _lock_action_job(db, row)
     action = get_action(row.action)
-    if row.status in {'SUCCEEDED', 'FAILED', 'CANCELLED'}:
+    if row.status in {'SUCCEEDED', 'SUCCEEDED_WITH_WARNING', 'FAILED', 'CANCELLED'}:
         raise failure('INVALID_STATE', message='Completed Day-2 action cannot be cancelled')
     job = db.get(Job, row.job_id) if row.job_id else None
     if row.status in {'WAITING_APPROVAL', 'QUEUED'}:

@@ -24,7 +24,7 @@ def configuration_diff(current: Mapping | None, requested: Mapping | None) -> di
     before = dict(current or {})
     after = dict(requested or {})
     changes = {}
-    for key in sorted(set(before) | set(after)):
+    for key in sorted(after):
         old = before.get(key)
         new = after.get(key)
         if old != new:

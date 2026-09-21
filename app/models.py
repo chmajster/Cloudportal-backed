@@ -335,6 +335,92 @@ class ScheduledOperation(Timestamp, Base):
     last_error: Mapped[str | None] = mapped_column(String(500))
 
 
+class EventRecord(Base):
+    __tablename__ = "event_records"
+    sequence: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite'), primary_key=True, autoincrement=True
+    )
+    id: Mapped[str] = mapped_column(String(36), default=uid, unique=True, index=True)
+    type: Mapped[str] = mapped_column(String(128), index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    source: Mapped[str] = mapped_column(String(128), default="cloudportal.backend")
+    subject_type: Mapped[str] = mapped_column(String(64), default="system", index=True)
+    subject_id: Mapped[str] = mapped_column(String(255), default="", index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    routing_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    causation_id: Mapped[str | None] = mapped_column(String(64))
+    request_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    token_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+class EventSchema(Timestamp, Base):
+    __tablename__ = "event_schemas"
+    __table_args__ = (UniqueConstraint("event_type", "version"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    schema_json: Mapped[dict] = mapped_column(JSON)
+    compatibility: Mapped[str] = mapped_column(String(16), default="none")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class EventConsumer(Timestamp, Base):
+    __tablename__ = "event_consumers"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    event_patterns: Mapped[list] = mapped_column(JSON, default=list)
+    cursor_sequence: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite'), default=0, index=True
+    )
+    last_checkpoint_sequence: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite')
+    )
+    max_batch: Mapped[int] = mapped_column(Integer, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_acked_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ExtensionState(Timestamp, Base):
+    __tablename__ = "extension_states"
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[str] = mapped_column(String(32))
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="healthy", index=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_event_sequence: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite'), default=0
+    )
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    updated_by: Mapped[int | None] = mapped_column(Integer)
+
+
+class ExtensionDelivery(Timestamp, Base):
+    __tablename__ = "extension_deliveries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    extension_name: Mapped[str] = mapped_column(String(128), index=True)
+    event_sequence: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite'),
+        ForeignKey("event_records.sequence", ondelete="CASCADE"),
+        index=True,
+    )
+    materialization_key: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    is_replay: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
 class WebhookEndpoint(Timestamp, Base):
     __tablename__ = "webhook_endpoints"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -350,8 +436,9 @@ class WebhookDelivery(Timestamp, Base):
     __tablename__ = "webhook_deliveries"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     endpoint_id: Mapped[str] = mapped_column(ForeignKey("webhook_endpoints.id", ondelete="CASCADE"), index=True)
-    event: Mapped[str] = mapped_column(String(64), index=True)
-    resource_id: Mapped[str] = mapped_column(String(100), index=True)
+    event_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    event: Mapped[str] = mapped_column(String(128), index=True)
+    resource_id: Mapped[str] = mapped_column(String(255), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

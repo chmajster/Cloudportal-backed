@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 from sqlalchemy import select, update
 
+from app.access import ensure_inventory_resource_access, ensure_inventory_vm_access
 from app.api.schemas import AnsibleInput, Inventory
 from app.database import session
 from app.day2.errors import Day2Failure, failure
@@ -89,11 +90,14 @@ def _execution_permissions(db, job, request):
     if token is None or token.user is None:
         raise failure('PERMISSION_DENIED', message='Day-2 job authorization no longer exists', status_code=403)
     user = token.user
+    if user.id != job.created_by or request.requested_by != job.created_by or request.job_id != job.id:
+        raise failure('PERMISSION_DENIED', message='Day-2 authorization identity mismatch', status_code=403)
     if not user.is_active or user.is_locked or (user.locked_until is not None and user.locked_until > now()):
         raise failure('PERMISSION_DENIED', message='Day-2 job owner is disabled or locked', status_code=403)
     if token.kind == 'session':
         active_family = db.scalar(select(Token.id).where(
             Token.family == token.family,
+            Token.user_id == user.id,
             Token.kind == 'refresh',
             Token.revoked_at.is_(None),
             Token.expires_at > now(),
@@ -106,8 +110,17 @@ def _execution_permissions(db, job, request):
     if token.kind == 'api':
         permissions &= set(token.scopes)
     required = get_action(request.action).permission
-    if required not in permissions:
+    if required not in permissions or 'day2.view' not in permissions:
         raise failure('PERMISSION_DENIED', message='Day-2 permission has been revoked', status_code=403, details={'permission': required})
+    _, _, resource = load_target(db, request.resource_id)
+    access_request = SimpleNamespace(state=SimpleNamespace(permissions=permissions))
+    try:
+        if isinstance(resource, ManagedVM):
+            ensure_inventory_vm_access(db, access_request, token, resource)
+        else:
+            ensure_inventory_resource_access(db, access_request, token, resource)
+    except HTTPException:
+        raise failure('PERMISSION_DENIED', message='Resource access was revoked', status_code=403) from None
     return user, permissions
 
 
@@ -192,7 +205,7 @@ def _fail_before_execution(job_id, code, message):
         job.status = 'failed'
         job.error = str(message)[:500]
         job.heartbeat_at = now()
-        if request is not None:
+        if request is not None and request.job_id == job.id:
             request.status = 'FAILED'
             request.finished_at = now()
             request.error_code = code
@@ -228,6 +241,8 @@ def execute(job_id):
     error_message = None
     result = {}
     warnings = []
+    provider_submitted = False
+    provider_confirmed = False
 
     try:
         with session() as db:
@@ -246,13 +261,17 @@ def execute(job_id):
                 job.error = 'Day-2 action request is missing'
                 db.commit()
                 return
+            if request.job_id != job.id or request.status != 'QUEUED' or request.approval_state not in {'not_required', 'approved'}:
+                raise failure('INVALID_STATE', message='Day-2 action is not approved and queued for this job')
             request.status = 'RUNNING'
             request.started_at = now()
             user, permissions = _execution_permissions(db, job, request)
             target, credential, _ = load_target(db, request.resource_id)
             refresh_resource_lock(db, target.resource_id, request.id, day2_settings(db)['resource_lock_timeout'])
             adapter = day2_provider(credential)
-            validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions)
+            validation = validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions)
+            if validation['approval_required'] and request.approval_state != 'approved':
+                raise failure('APPROVAL_REQUIRED', message='Approval policy changed before Day-2 execution')
             context = Day2Context(job, request, day2_settings(db)['action_timeout'])
             db.add(JobLog(job_id=job.id, message='day2.started: ' + request.action))
             db.add(Audit(
@@ -292,8 +311,10 @@ def execute(job_id):
             result['platform_metadata'] = metadata
         else:
             context.stage('day2.provider.request:' + action)
+            provider_submitted = True
             task = adapter.execute(target, action, params)
             task_result = adapter.wait_task(target, task, context.check, timeout=context.timeout)
+            provider_confirmed = True
             result.update(task_result)
             if action == 'migrate_vm':
                 target.node = params['target_node']
@@ -352,8 +373,11 @@ def execute(job_id):
         request.finished_at = now()
         request.error_code = error_code
         request.error_message = error_message
+        uncertain = provider_submitted and not provider_confirmed
         request.result = {
             **result,
+            'reconciliation_required': uncertain,
+            'provider_task_id': result.get('provider_task_id') or (task if isinstance(task, str) else None),
             'status': final_status,
             'resource_id': request.resource_id,
             'action': request.action,
@@ -364,7 +388,8 @@ def execute(job_id):
         job.status = 'successful' if final_status in {'SUCCEEDED', 'SUCCEEDED_WITH_WARNING'} else ('cancelled' if final_status == 'CANCELLED' else 'failed')
         job.error = error_message
         job.heartbeat_at = now()
-        release_resource_lock(db, request.resource_id, request.id)
+        if not uncertain:
+            release_resource_lock(db, request.resource_id, request.id)
         db.add(JobLog(job_id=job.id, message='day2.' + final_status.lower() + (': ' + error_message if error_message else '')))
         db.add(Audit(
             user_id=job.created_by, token_id=job.token_id, ip=job.ip, source=job.source,

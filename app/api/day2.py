@@ -39,6 +39,12 @@ def _permissions(request):
     return set(getattr(request.state, 'permissions', set()))
 
 
+def _require_action(request, action_id):
+    permission = get_action(action_id).permission
+    if permission not in _permissions(request):
+        raise failure('PERMISSION_DENIED', status_code=403, details={'permission': permission})
+
+
 def _owned_action(db, id, actor, request):
     row = db.get(Day2ActionRequest, id)
     if row is None:
@@ -89,6 +95,7 @@ def execute_resource_action(resource_id: str, action_id: str, data: Day2ExecuteI
                             actor=Depends(require('day2.view')), db=Depends(get_db, scope='function')):
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
+        _require_action(request, action_id)
         payload = {'resource_id': resource_id, 'action': action_id.lower(), **data.model_dump(mode='json')}
 
         def create():
@@ -273,6 +280,7 @@ def retry_day2_action(id: str, request: Request, actor=Depends(require('day2.ret
         if previous.status != 'FAILED':
             raise failure('INVALID_STATE', message='Only failed Day-2 actions can be retried')
         target, credential, _ = resolve_target(db, previous.resource_id, request, actor)
+        _require_action(request, previous.action)
         payload = {'retry_of': previous.id, 'attempt': previous.attempt + 1}
 
         def create():
@@ -298,10 +306,14 @@ def retry_day2_action(id: str, request: Request, actor=Depends(require('day2.ret
 def bulk_day2_actions(data: Day2BulkInput, request: Request, actor=Depends(require('day2.view')),
                       db=Depends(get_db, scope='function')):
     try:
+        _require_action(request, data.action)
         config = day2_settings(db)
         resource_ids = list(dict.fromkeys(data.resource_ids))
         if len(resource_ids) > config['max_bulk_action_size']:
             raise failure('VALIDATION_FAILED', message='Bulk action exceeds the configured maximum size', status_code=422)
+        # Reauthorize every resource before an idempotent response can be replayed.
+        for resource_id in resource_ids:
+            resolve_target(db, resource_id, request, actor)
         payload = data.model_dump(mode='json')
 
         def create():
@@ -315,12 +327,13 @@ def bulk_day2_actions(data: Day2BulkInput, request: Request, actor=Depends(requi
             waiting = False
             for resource_id in resource_ids:
                 try:
-                    target, credential, _ = resolve_target(db, resource_id, request, actor)
-                    child, validation = create_action(
-                        db, request, actor, target, credential, data.action, data.parameters, data.reason, _permissions(request)
-                    )
-                    waiting = waiting or validation['approval_required']
-                    children.append({'resource_id': resource_id, 'action_request_id': child.id, 'job_id': child.job_id, 'status': child.status})
+                    with db.begin_nested():
+                        target, credential, _ = resolve_target(db, resource_id, request, actor)
+                        child, validation = create_action(
+                            db, request, actor, target, credential, data.action, data.parameters, data.reason, _permissions(request)
+                        )
+                        waiting = waiting or validation['approval_required']
+                        children.append({'resource_id': resource_id, 'action_request_id': child.id, 'job_id': child.job_id, 'status': child.status})
                 except Day2Failure as error:
                     errors.append({'resource_id': resource_id, 'code': error.code, 'message': error.message})
             bulk.status = 'WAITING_APPROVAL' if waiting else ('PARTIAL' if errors else 'QUEUED')

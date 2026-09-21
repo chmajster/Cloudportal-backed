@@ -13,6 +13,10 @@ from app.database import session
 from app.models import (
     Credential,
     Deployment,
+    EventConsumer,
+    EventRecord,
+    EventSchema,
+    ExtensionDelivery,
     IPAllocation,
     Job,
     ManagedResource,
@@ -196,6 +200,41 @@ def prometheus_metrics():
                 {'status': delivery_status},
             )
 
+        event_count = db.scalar(select(func.count()).select_from(EventRecord)) or 0
+        event_sequence = db.scalar(select(func.max(EventRecord.sequence))) or 0
+        _metric(lines, 'cloudportal_events_total', event_count)
+        _metric(lines, 'cloudportal_event_sequence', event_sequence)
+
+        active_schemas = db.scalar(
+            select(func.count()).select_from(EventSchema).where(EventSchema.is_active.is_(True))
+        ) or 0
+        _metric(lines, 'cloudportal_event_schemas_active', active_schemas)
+
+        consumers = db.scalars(
+            select(EventConsumer).where(EventConsumer.is_active.is_(True))
+        ).all()
+        _metric(lines, 'cloudportal_event_consumers_active', len(consumers))
+        for consumer in consumers:
+            _metric(
+                lines,
+                'cloudportal_event_consumer_lag',
+                max(0, event_sequence - consumer.cursor_sequence),
+                {'consumer': consumer.name},
+            )
+
+        for extension_name, delivery_status, count in _group_counts(
+            db,
+            ExtensionDelivery,
+            ExtensionDelivery.extension_name,
+            ExtensionDelivery.status,
+        ):
+            _metric(
+                lines,
+                'cloudportal_extension_deliveries_total',
+                count,
+                {'extension': extension_name, 'status': delivery_status},
+            )
+
     return '\n'.join(lines) + '\n'
 
 
@@ -284,4 +323,31 @@ def alerts(actor=Depends(require('metrics.read'))):
                 'count': failed_webhooks,
                 'message': f'{failed_webhooks} webhook deliveries exhausted retries',
             })
+        dead_extensions = db.scalar(
+            select(func.count()).select_from(ExtensionDelivery).where(
+                ExtensionDelivery.status == 'dead_letter'
+            )
+        ) or 0
+        if dead_extensions:
+            result.append({
+                'severity': 'warning',
+                'code': 'extension_dead_letters',
+                'count': dead_extensions,
+                'message': f'{dead_extensions} extension deliveries are in the dead-letter queue',
+            })
+        latest_event_sequence = db.scalar(select(func.max(EventRecord.sequence))) or 0
+        lagging_consumers = db.scalars(
+            select(EventConsumer).where(EventConsumer.is_active.is_(True))
+        ).all()
+        for consumer in lagging_consumers:
+            lag = max(0, latest_event_sequence - consumer.cursor_sequence)
+            if lag >= settings().event_consumer_lag_warning:
+                result.append({
+                    'severity': 'warning',
+                    'code': 'event_consumer_lag',
+                    'resource_id': consumer.id,
+                    'consumer': consumer.name,
+                    'lag': lag,
+                    'message': f'Event consumer {consumer.name} is {lag} events behind',
+                })
     return {'items': result}

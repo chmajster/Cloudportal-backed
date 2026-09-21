@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -24,7 +24,7 @@ class Day2ResourceStateInput(Input):
 
 class Day2SettingsInput(Input):
     enable_day2_actions: bool = True
-    default_approval_policy: str = 'destructive'
+    default_approval_policy: Literal['none', 'destructive', 'all'] = 'destructive'
     action_approval: dict[str, bool] = Field(default_factory=dict)
     environment_policies: dict[str, dict] = Field(default_factory=dict)
     approval_bypass_permissions: Annotated[list[str], Field(max_length=50)] = Field(default_factory=list)

@@ -2,6 +2,8 @@ from alembic import context
 from app.database import Base, engine
 from app import models
 from app.day2 import models as day2_models  # noqa: F401 - register Day-2 tables in metadata
+from app.tenancy import models as tenancy_models
+from app.projects import models as project_models
 
 
 def run():

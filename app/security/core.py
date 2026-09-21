@@ -276,8 +276,42 @@ def require(permission):
 
 def audit(db, request, action, resource='', resource_id=None, result='success', user_id=None):
     actor = getattr(request.state, 'actor', None)
-    db.add(Audit(user_id=user_id if user_id is not None else actor.user_id if actor else None,
-                 token_id=actor.id if actor else None, ip=request.client.host if request.client else '',
-                 source=getattr(request.state, 'source', 'API'),
-                 action=action, resource=resource, resource_id=str(resource_id) if resource_id is not None else None,
-                 result=result, request_id=request.state.request_id))
+    effective_user_id = user_id if user_id is not None else actor.user_id if actor else None
+    effective_token_id = actor.id if actor else None
+    resource_id_text = str(resource_id) if resource_id is not None else None
+    db.add(Audit(
+        user_id=effective_user_id,
+        token_id=effective_token_id,
+        ip=request.client.host if request.client else '',
+        source=getattr(request.state, 'source', 'API'),
+        action=action,
+        resource=resource,
+        resource_id=resource_id_text,
+        result=result,
+        request_id=request.state.request_id,
+    ))
+
+    # Audit is already the common transaction boundary for state-changing API
+    # operations. Mirror only safe metadata into the event log: never request
+    # bodies, credentials, tokens or exception text.
+    from app.events.service import EVENT_TYPE_RE, publish_event
+    if EVENT_TYPE_RE.fullmatch(action):
+        publish_event(
+            db,
+            action,
+            {
+                'audit': {
+                    'action': action,
+                    'resource': resource,
+                    'resource_id': resource_id_text,
+                    'result': result,
+                }
+            },
+            subject_type=resource or 'system',
+            subject_id=resource_id_text or '',
+            source='cloudportal.audit',
+            request_id=request.state.request_id,
+            correlation_id=request.state.request_id,
+            user_id=effective_user_id,
+            token_id=effective_token_id,
+        )

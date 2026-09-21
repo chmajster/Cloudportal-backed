@@ -2,6 +2,9 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from app.models import Permission, Role, Setting, User
 from app.security.core import effective_permissions
+from app.rbac.locking import governance_lock
+from app.projects.permissions import PROJECT_DEFAULT_ROLES
+from app.tenancy.permissions import TENANCY_PERMISSION_ACTIONS, TENANCY_DEFAULT_ROLES
 
 PERMISSIONS = {
     **{area: actions.split() for area, actions in {
@@ -21,10 +24,12 @@ PERMISSIONS = {
                  'tags.manage metadata.manage migrate clone rebuild delete cancel retry approve admin override_protection'),
         'schedules': 'read create update delete',
         'webhooks': 'read create update delete',
+        'events': 'read publish replay consume manage', 'extensions': 'read manage',
         'metrics': 'read',
         'tokens': 'read create revoke', 'settings': 'read update', 'updates': 'read execute update', 'portal': 'connect',
     }.items()}
 }
+PERMISSIONS.update(TENANCY_PERMISSION_ACTIONS)
 ALL_PERMISSIONS = {f'{area}.{action}' for area, actions in PERMISSIONS.items() for action in actions}
 
 
@@ -44,11 +49,13 @@ def seed(db):
     }
     defaults = {
         'Administrator': ALL_PERMISSIONS,
-        'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates'}} | {'updates.read'}),
-        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update'} | day2_operator,
+        'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates', 'tenants', 'projects'}} | {'updates.read'}),
+        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update', 'events.read', 'extensions.read'} | day2_operator,
         'Viewer': {'providers.read', 'deployments.read', 'deployments.read_all', 'jobs.read', 'jobs.read_all', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'day2.view'},
-        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'metrics.read', 'updates.read', 'day2.view'},
+        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'events.read', 'extensions.read', 'metrics.read', 'updates.read', 'day2.view'},
         'Portal Service': {'portal.connect'},
+        **TENANCY_DEFAULT_ROLES,
+        **PROJECT_DEFAULT_ROLES,
     }
     for name, permissions in defaults.items():
         role = db.scalar(select(Role).where(Role.name == name))
@@ -70,10 +77,6 @@ def permissions_from_names(db, names):
     if not set(names) <= ALL_PERMISSIONS:
         raise HTTPException(422, 'Unknown permission')
     return db.scalars(select(Permission).where(Permission.name.in_(set(names)))).all()
-
-
-def governance_lock(db):
-    db.scalar(select(Setting).where(Setting.key == 'governance').with_for_update())
 
 
 def ensure_admin_remains(db):

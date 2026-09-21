@@ -1,0 +1,7 @@
+.tenancy-notice { padding: 1rem; border: 1px solid var(--border); border-radius: .6rem; }
+.tenancy-pagination { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
+.tenancy-overview { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 3fr); gap: .75rem 1rem; }
+.tenancy-overview dd { margin: 0; overflow-wrap: anywhere; }
+.tenancy-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; }
+.tenancy-role-options { display: grid; gap: .65rem; margin: .75rem 0; }
+@media (max-width: 600px) { .tenancy-overview { grid-template-columns: 1fr; } }
