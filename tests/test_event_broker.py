@@ -10,7 +10,6 @@ def idem(headers):
 
 
 def test_custom_event_is_durable_and_fans_out_to_wildcard_webhook(client, headers, monkeypatch):
-    monkeypatch.setattr('app.config.settings', __import__('app.config', fromlist=['settings']).settings)
     from app.config import settings
     monkeypatch.setattr(settings(), 'webhook_allowed_hosts', ['hooks.example.test'])
 
