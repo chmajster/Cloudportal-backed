@@ -277,19 +277,19 @@ def test_password_change_invalidates_outstanding_reset_token(client, headers):
 def test_blueprint_execution_global_settings(client, headers):
     defaults = client.get('/api/v1/settings/blueprints', headers=headers)
     assert defaults.status_code == 200, defaults.text
-    assert defaults.json() == {'auto_approve_for_executors': True}
+    assert defaults.json() == {'auto_approve_for_executors': True, 'approval_timeout_hours': 48}
 
     disabled = client.put(
         '/api/v1/settings/blueprints',
         headers=headers,
-        json={'auto_approve_for_executors': False},
+        json={'auto_approve_for_executors': False, 'approval_timeout_hours': 12},
     )
     assert disabled.status_code == 200, disabled.text
-    assert disabled.json() == {'auto_approve_for_executors': False}
+    assert disabled.json() == {'auto_approve_for_executors': False, 'approval_timeout_hours': 12}
 
     reloaded = client.get('/api/v1/settings/blueprints', headers=headers)
-    assert reloaded.json() == {'auto_approve_for_executors': False}
+    assert reloaded.json() == {'auto_approve_for_executors': False, 'approval_timeout_hours': 12}
 
     with session() as db:
         raw = db.get(Setting, 'blueprint_execution').value
-        assert raw == {'auto_approve_for_executors': False}
+        assert raw == {'auto_approve_for_executors': False, 'approval_timeout_hours': 12}

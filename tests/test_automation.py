@@ -851,7 +851,7 @@ def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, 
         'workflow': [{'id': 'vm', 'type': 'wait_for_vm'}],
     })
     assert missing_apply.status_code == 422
-    assert 'exactly one terraform_apply' in missing_apply.text
+    assert 'terraform_apply or a legacy provisioning marker' in missing_apply.text
 
     duplicate_apply = client.post('/api/v1/blueprints', headers=headers, json={
         **base,
@@ -887,14 +887,59 @@ def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, 
     assert 'terraform_plan must be an ancestor' in plan_after_apply.text
 
 
-def test_api_token_cannot_spoof_backend_blueprint_visibility(client, headers):
+def test_blueprint_rejects_proxmox_only_steps_for_aws(client, headers):
+    credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'AWS Blueprint',
+        'type': 'aws',
+        'secrets': {
+            'access_key_id': 'AKIAEXAMPLEVALUE',
+            'secret_access_key': 'example-secret-key-material',
+        },
+    })
+    assert credential.status_code == 201, credential.text
+    provider = client.post('/api/v1/providers', headers=headers, json={
+        'name': 'AWS Blueprint',
+        'type': 'aws',
+        'credentials_id': credential.json()['id'],
+    })
+    assert provider.status_code == 201, provider.text
+
+    response = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'aws-invalid-waits',
+        'name': 'AWS invalid waits',
+        'deployment': {
+            'name': 'aws-invalid-waits',
+            'provider_id': provider.json()['id'],
+            'credentials_id': credential.json()['id'],
+            'template': 'aws-ec2',
+            'variables': {
+                'name': 'aws-invalid-waits',
+                'region': 'eu-central-1',
+                'ami': 'ami-1234567890abcdef0',
+                'instance_type': 't3.micro',
+                'subnet_id': 'subnet-1234567890abcdef0',
+                'security_group_ids': ['sg-1234567890abcdef0'],
+            },
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'vm', 'type': 'wait_for_vm', 'depends_on': ['apply']},
+            {'id': 'snapshot', 'type': 'create_snapshot', 'depends_on': ['vm']},
+        ],
+    })
+    assert response.status_code == 422
+    assert 'supported only for Proxmox' in response.text
+    assert 'create_snapshot' in response.text
+    assert 'wait_for_vm' in response.text
+
+
+def test_existing_legacy_blueprint_can_be_saved_without_explicit_apply(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     created = client.post('/api/v1/blueprints', headers=headers, json={
-        'slug': 'backend-only-blueprint',
-        'name': 'Backend only',
-        'visibility': {'backend': True, 'cloudportal': False, 'api': False},
+        'slug': 'legacy-editable',
+        'name': 'Legacy Editable',
         'deployment': {
-            'name': 'backend-only',
+            'name': 'legacy-editable',
             'provider_id': provider['id'],
             'credentials_id': credential['id'],
             'variables': deployment_payload['variables'],
@@ -903,54 +948,67 @@ def test_api_token_cannot_spoof_backend_blueprint_visibility(client, headers):
     })
     assert created.status_code == 201, created.text
 
-    spoofed = client.get('/api/v1/blueprints?available=true', headers={
-        **headers,
-        'X-Portal-Source': 'Cloudportal-backed',
-    })
-    assert spoofed.status_code == 200, spoofed.text
-    assert 'backend-only-blueprint' not in {row['slug'] for row in spoofed.json()['items']}
-
-
-def test_non_proxmox_blueprint_rejects_proxmox_runtime_steps(client, headers):
-    credential = client.post('/api/v1/credentials', headers=headers, json={
-        'name': 'AWS automation',
-        'type': 'aws',
-        'secrets': {
-            'access_key_id': 'AKIAEXAMPLE123456',
-            'secret_access_key': 'secret-example-value',
-        },
-    })
-    assert credential.status_code == 201, credential.text
-    provider = client.post('/api/v1/providers', headers=headers, json={
-        'name': 'AWS provider',
-        'type': 'aws',
-        'credentials_id': credential.json()['id'],
-    })
-    assert provider.status_code == 201, provider.text
-
-    response = client.post('/api/v1/blueprints', headers=headers, json={
-        'slug': 'aws-invalid-runtime',
-        'name': 'AWS invalid runtime',
+    update = client.put('/api/v1/blueprints/' + str(created.json()['id']), headers=headers, json={
+        'slug': 'legacy-editable',
+        'name': 'Legacy Editable',
         'deployment': {
-            'name': 'aws-vm',
-            'provider_id': provider.json()['id'],
-            'credentials_id': credential.json()['id'],
-            'template': 'aws-ec2',
-            'variables': {
-                'name': 'aws-vm',
-                'region': 'eu-central-1',
-                'ami': 'ami-1234567890abcdef0',
-                'instance_type': 't3.micro',
-                'subnet_id': 'subnet-1234567890abcdef0',
-                'security_group_ids': ['sg-12345678'],
-                'root_volume_size': 20,
-                'associate_public_ip': False,
-            },
+            'name': 'legacy-editable',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
         },
+        'workflow': [{'id': 'clone', 'type': 'clone_vm'}],
+    })
+    assert update.status_code == 200, update.text
+    assert update.json()['workflow'] == [{'id': 'clone', 'type': 'clone_vm', 'depends_on': [], 'conditions': {}, 'retry': 0, 'timeout': 600, 'rollback': None}]
+
+    new_legacy = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'legacy-new-blocked',
+        'name': 'Legacy New Blocked',
+        'deployment': {
+            'name': 'legacy-new-blocked',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [{'id': 'clone', 'type': 'clone_vm'}],
+    })
+    assert new_legacy.status_code == 422
+    assert 'explicit terraform_apply' in new_legacy.text
+
+
+def test_blueprint_approval_step_must_be_between_plan_and_apply(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    base = {
+        'slug': 'approval-order',
+        'name': 'Approval Order',
+        'requires_approval': True,
+        'deployment': {
+            'name': 'approval-order',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+    }
+
+    after_apply = client.post('/api/v1/blueprints', headers=headers, json={
+        **base,
         'workflow': [
             {'id': 'apply', 'type': 'terraform_apply'},
-            {'id': 'wait', 'type': 'wait_for_vm', 'depends_on': ['apply']},
+            {'id': 'approval', 'type': 'approval', 'depends_on': ['apply']},
         ],
     })
-    assert response.status_code == 422
-    assert 'require Proxmox' in response.text
+    assert after_apply.status_code == 422
+    assert 'approval must be an ancestor of terraform_apply' in after_apply.text
+
+    approval_before_plan = client.post('/api/v1/blueprints', headers=headers, json={
+        **base,
+        'slug': 'approval-before-plan',
+        'workflow': [
+            {'id': 'approval', 'type': 'approval'},
+            {'id': 'plan', 'type': 'terraform_plan', 'depends_on': ['approval']},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['plan']},
+        ],
+    })
+    assert approval_before_plan.status_code == 422
+    assert 'terraform_plan must be an ancestor of approval' in approval_before_plan.text

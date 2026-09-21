@@ -61,7 +61,7 @@ async function blueprintsView() {
       { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
         ? (item.manager_role_ids || []).map(id => roleNames.get(Number(id)) || ('Rola #' + id)).join(', ')
         : badge('Bez roli dedykowanej', 'warning') },
-      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Wymaga akceptacji', 'warning') : badge('Bez akceptacji', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
+      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Approval wg polityki globalnej', 'warning') : badge('Bez approval', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
@@ -864,9 +864,9 @@ async function blueprintForm(item = null) {
       ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
       ['run_ansible_playbook', 'Uruchom Ansible'], ['create_snapshot', 'Utwórz snapshot'],
       ['health_check', 'Health check'], ['condition', 'Warunek'], ['approval', 'Akceptacja'],
-      ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'],
-      ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
+      ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'], ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
     ];
+    let workflowProvider = templates.find(template => template.id === (item?.deployment?.template || 'proxmox-vm'))?.provider || 'proxmox'; const workflowChoices = currentType => window.BlueprintProvisioningGuards.workflowChoicesForProvider(workflowTypes, workflowProvider, currentType);
     const addWorkflowStep = (step = {}) => {
       workflowCounter += 1;
       const advanced = node('details', { class: 'advanced-options wide' },
@@ -893,8 +893,7 @@ async function blueprintForm(item = null) {
         node('div', { class: 'form-grid' },
           field('ID kroku', 'workflow_id', { required: true, value: step.id || '', placeholder: 'np. apply' }),
           selectField('Akcja', 'workflow_type',
-            (workflowTypes.some(([value]) => value === step.type) || !step.type ? workflowTypes
-              : [[step.type, 'Legacy marker: ' + step.type], ...workflowTypes]).map(([value, label]) => ({ value, label })),
+            workflowChoices(step.type).map(([value, label]) => ({ value, label })),
             step.type || 'terraform_apply', { required: true }),
           field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), wide: true, help: 'Kilka ID oddziel przecinkami.' }),
           advanced));
@@ -1036,6 +1035,7 @@ async function blueprintForm(item = null) {
     const refreshDeploymentTemplate = () => {
       saveDeploymentVariables();
       const template = currentTemplate();
+      workflowProvider = template.provider;
       currentTemplateId = template.id;
       const matches = providers.filter(value => value.type === template.provider).map(value => ({ id: value.id, label: value.name }));
       refill(providerField.querySelector('select'), matches,

@@ -215,6 +215,10 @@ async function settingsView() {
         blueprintSettings.auto_approve_for_executors
           ? 'Uruchamia bez pytania o approval'
           : 'Tworzy request oczekujący na approval'
+      ),
+      settingsValue(
+        'Timeout ręcznego approval',
+        String(blueprintSettings.approval_timeout_hours || 48) + ' h'
       )),
     allowed('settings.update')
       ? node('div', { class: 'settings-card-actions' },
@@ -227,13 +231,42 @@ async function settingsView() {
                 method: 'PUT',
                 body: {
                   auto_approve_for_executors: !blueprintSettings.auto_approve_for_executors,
+                  approval_timeout_hours: blueprintSettings.approval_timeout_hours || 48,
                 },
               });
               toast('Polityka wykonywania Blueprintów została zapisana.');
               settingsView();
             },
             blueprintSettings.auto_approve_for_executors ? 'danger' : 'primary'
-          ))
+          ),
+          button('Zmień timeout', () => {
+            const body = field('Timeout approval (h)', 'approval_timeout_hours', {
+              type: 'number',
+              min: 1,
+              max: 720,
+              required: true,
+              value: blueprintSettings.approval_timeout_hours || 48,
+              help: 'Po tym czasie ręczny request approval zostanie automatycznie anulowany.',
+            });
+            openModal({
+              title: 'Timeout approval Blueprintów',
+              eyebrow: 'Globalna polityka Blueprintów',
+              body,
+              submitLabel: 'Zapisz timeout',
+              onSubmit: async data => {
+                await api('/settings/blueprints', {
+                  method: 'PUT',
+                  body: {
+                    auto_approve_for_executors: blueprintSettings.auto_approve_for_executors,
+                    approval_timeout_hours: Number(data.get('approval_timeout_hours')),
+                  },
+                });
+                toast('Timeout approval zapisany.');
+                navigate('settings');
+              },
+            });
+          })
+        )
       : null
   );
 

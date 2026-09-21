@@ -1,23 +1,33 @@
+from datetime import timedelta
+
 from app.blueprint_settings import blueprint_execution_settings
 from app.models import JobLog, now
 
 
+def blueprint_snapshot(job, deployment=None):
+    payload = dict((job.payload or {}).get('blueprint') or {})
+    if payload:
+        return payload
+    if deployment is None:
+        return {}
+    return dict(((deployment.workflow or {}).get('blueprint') or {}))
+
+
 def blueprint_requires_approval(job, deployment=None):
-    if job.operation != 'terraform.apply':
-        return False
-    payload_blueprint = ((job.payload or {}).get('blueprint') or {})
-    deployment_blueprint = (((deployment.workflow or {}).get('blueprint') or {}) if deployment else {})
-    blueprint = payload_blueprint or deployment_blueprint
-    return bool(blueprint.get('requires_approval'))
+    return job.operation == 'terraform.apply' and bool(
+        blueprint_snapshot(job, deployment).get('requires_approval')
+    )
 
 
 def gate_job_for_approval(db, job, deployment=None):
-    """Apply one fresh approval decision to every Blueprint terraform.apply job."""
-    if not blueprint_requires_approval(job, deployment):
+    """Apply the current global approval policy to every Blueprint terraform.apply job."""
+    blueprint = blueprint_snapshot(job, deployment)
+    if job.operation != 'terraform.apply' or not blueprint.get('requires_approval'):
         return False
 
+    config = blueprint_execution_settings(db)
     payload = dict(job.payload or {})
-    if blueprint_execution_settings(db)['auto_approve_for_executors']:
+    if config['auto_approve_for_executors']:
         payload['_approval'] = {
             'status': 'approved',
             'approved_by': job.created_by,
@@ -32,12 +42,30 @@ def gate_job_for_approval(db, job, deployment=None):
         return True
 
     payload['_approval'] = {'status': 'pending'}
+    has_runtime_approval = any(
+        str(step.get('type')) == 'approval'
+        for step in (blueprint.get('steps') or [])
+    )
+    if has_runtime_approval:
+        db.add(JobLog(
+            job_id=job.id,
+            message='workflow.approval.deferred: approval nastąpi w zadanym kroku DAG',
+        ))
+    else:
+        expires_at = now() + timedelta(hours=config['approval_timeout_hours'])
+        payload['_approval'].update({
+            'requested_at': now().isoformat(),
+            'expires_at': expires_at.isoformat(),
+        })
+        job.status = 'waiting_approval'
+        if deployment is not None and deployment.active_job_id == job.id:
+            deployment.status = 'waiting_approval'
+        db.add(JobLog(
+            job_id=job.id,
+            message=(
+                'workflow.approval.pending: oczekiwanie na zatwierdzenie; '
+                f'expires_at={expires_at.isoformat()}'
+            ),
+        ))
     job.payload = payload
-    job.status = 'waiting_approval'
-    if deployment is not None and deployment.active_job_id == job.id:
-        deployment.status = 'waiting_approval'
-    db.add(JobLog(
-        job_id=job.id,
-        message='workflow.approval.pending: oczekiwanie na zatwierdzenie',
-    ))
     return True

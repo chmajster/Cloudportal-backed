@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from sqlalchemy import text
 
 from app.database import session
-from app.models import TerraformState, now
+from app.models import TerraformPlan, TerraformState, now
 from app.security.core import decrypt_blob, encrypt_blob
 
 
@@ -96,3 +96,57 @@ def persist_state(deployment_id: str, workspace):
             row.updated_at = now()
         db.commit()
     return True
+
+
+def persist_plan(deployment_id: str, workspace):
+    source = workspace / 'execution.tfplan'
+    if not source.exists():
+        raise RuntimeError('Terraform plan is missing')
+    raw = source.read_bytes()
+    if len(raw) > MAX_STATE_BYTES:
+        raise RuntimeError('Terraform plan exceeds the safety limit')
+    digest = hashlib.sha256(raw).hexdigest()
+    encrypted = encrypt_blob(raw, f'terraform-plan:{deployment_id}')
+    with session() as db:
+        row = db.get(TerraformPlan, deployment_id)
+        if row is None:
+            row = TerraformPlan(
+                deployment_id=deployment_id,
+                encrypted_plan=encrypted,
+                plan_sha256=digest,
+            )
+            db.add(row)
+        else:
+            row.encrypted_plan = encrypted
+            row.plan_sha256 = digest
+            row.updated_at = now()
+        db.commit()
+    return digest
+
+
+def restore_plan(deployment_id: str, workspace, expected_sha256: str | None = None):
+    with session() as db:
+        row = db.get(TerraformPlan, deployment_id)
+        if row is None:
+            return False
+        raw = decrypt_blob(row.encrypted_plan, f'terraform-plan:{deployment_id}')
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != row.plan_sha256:
+            raise RuntimeError('Stored Terraform plan integrity check failed')
+        if expected_sha256 and digest != expected_sha256:
+            raise RuntimeError('Stored Terraform plan does not match approved checksum')
+    workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = workspace / 'execution.tfplan'
+    temporary = workspace / '.execution.tfplan.restore'
+    temporary.write_bytes(raw)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+    return True
+
+
+def delete_plan(deployment_id: str):
+    with session() as db:
+        row = db.get(TerraformPlan, deployment_id)
+        if row is not None:
+            db.delete(row)
+            db.commit()

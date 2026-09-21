@@ -125,6 +125,7 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
     blocked = client.delete(f"/api/v1/inventory/vms/{inventory['id']}", headers=headers)
     assert blocked.status_code == 409
 
+
     apply = client.post('/api/v1/jobs', headers=idem(headers), json={
         'operation': 'terraform.apply',
         'deployment_id': deployment['id'],

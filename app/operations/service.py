@@ -38,6 +38,8 @@ def required_operation_permissions(operation, deployment=None):
         if deployment and (deployment.workflow or {}).get('ansible'):
             permissions.add('ansible.execute')
         blueprint = (deployment.workflow or {}).get('blueprint', {}) if deployment else {}
+        if blueprint:
+            permissions.add('blueprints.execute')
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
             permissions.add('deployments.destroy')
         workflow_types = {str(step.get('type')) for step in (blueprint.get('steps') or [])}
@@ -119,6 +121,18 @@ def materialize_scheduled_jobs():
             if deployment.active_job_id:
                 schedule.last_error = 'Deployment is busy; scheduled operation postponed'
                 schedule.next_run_at = current_time + timedelta(seconds=60)
+                continue
+
+            permissions = scheduler_user_permissions(db, schedule.created_by)
+            if permissions is None:
+                schedule.is_active = False
+                schedule.last_error = 'Schedule owner is disabled or locked'
+                continue
+            try:
+                ensure_operation_permissions(permissions, schedule.operation, deployment)
+            except HTTPException:
+                schedule.is_active = False
+                schedule.last_error = 'Schedule owner no longer has required execution permissions'
                 continue
 
             job = Job(

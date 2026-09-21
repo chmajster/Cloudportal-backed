@@ -81,8 +81,7 @@ locals {
 
 output "vm_id" { value = proxmox_virtual_environment_vm.vm.vm_id }
 output "primary_ip" {
-  # For DHCP guests the provider can report addresses from multiple guest
-  # interfaces without identifying the management NIC. Leave this unset and
-  # let the worker's guest-agent discovery select net0 by MAC.
+  # DHCP address selection is performed by the worker using QEMU Guest Agent
+  # and the MAC address of net0. The provider can expose unrelated interfaces.
   value = local.configured_primary_ip
 }

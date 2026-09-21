@@ -1,25 +1,34 @@
 import uuid
 import json
+import hashlib
 import os
 import socket
 import time
 import ipaddress
 from datetime import timedelta
 from types import SimpleNamespace
+from pathlib import Path
 from sqlalchemy import select, update
 from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
+from app.blueprint_settings import blueprint_execution_settings
 from app.config import settings
 from app.database import session
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
 from app.inventory_sync import state_outputs, sync_deployment_inventory
-from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReservation, IPAllocation,
-                        Job, JobLog, ManagedResource, ManagedVM, Token, User, now)
+from app.jobs.lifecycle import has_released_allocations
+from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog,
+                        ManagedResource, ManagedVM, Token, User, now)
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
+from app.terraform.state import delete_plan, persist_plan, restore_plan
+
+
+class ApprovalPending(Exception):
+    pass
 
 
 class Context:
@@ -68,7 +77,6 @@ def _validate_blueprint_authorization(db, job, user, permissions):
     blueprint_snapshot = (job.payload or {}).get('blueprint') or {}
     if job.operation != 'terraform.apply' or not blueprint_snapshot:
         return
-
     if 'blueprints.execute' not in permissions:
         raise ExecutionFailed('Blueprint execution permission has been revoked')
 
@@ -105,7 +113,6 @@ def validate_authorization(db, job):
         token = db.get(Token, job.token_id)
         if not token or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
             raise ExecutionFailed('Job authorization has been revoked')
-        user = token.user
         if token.kind == 'session':
             # Normal refresh rotates the access token. Authorize the surviving session family,
             # while logout, replay detection and password changes revoke the whole family.
@@ -116,6 +123,7 @@ def validate_authorization(db, job):
                 raise ExecutionFailed('Job session has ended')
         elif token.kind != 'api' or token.revoked_at:
             raise ExecutionFailed('Job authorization has been revoked')
+        user = token.user
         permissions = effective_permissions(token.user)
         if token.kind == 'api':
             if token.expires_at and token.expires_at <= now():
@@ -538,6 +546,36 @@ def wait_for_ssh(context, workspace, timeout):
     raise ExecutionFailed('Timed out waiting for SSH' + (f': {last_error}' if last_error else ''))
 
 
+def wait_for_tcp_addresses(context, addresses, port, timeout, label):
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while time.monotonic() < deadline:
+        context.check()
+        for address in addresses:
+            try:
+                with socket.create_connection((address, port), timeout=2):
+                    return address
+            except OSError as exc:
+                last_error = exc
+        time.sleep(2)
+    raise ExecutionFailed(
+        f'Timed out waiting for {label}'
+        + (f': {last_error}' if last_error else '')
+    )
+
+
+def wait_for_ansible_transport(context, workspace, timeout=600, addresses=None):
+    addresses = list(addresses or wait_for_ip(context, workspace, timeout=timeout))
+    credential_type = getattr(context.ansible_credential, 'type', None)
+    if credential_type == 'ssh':
+        address = wait_for_tcp_addresses(context, addresses, 22, timeout, 'SSH')
+        return [address]
+    if credential_type == 'winrm':
+        address = wait_for_tcp_addresses(context, addresses, 5986, timeout, 'WinRM HTTPS')
+        return [address]
+    raise ExecutionFailed('Unsupported Ansible transport credential')
+
+
 def release_blueprint_ip(context):
     with session() as db:
         active_vm = db.scalar(select(ManagedVM.id).where(
@@ -639,15 +677,25 @@ def run_blueprint_workflow(context, executor):
     if unsupported:
         raise ExecutionFailed('Unsupported Blueprint workflow steps: ' + ', '.join(unsupported))
 
+    saved_runtime = dict((context.job.payload or {}).get('_workflow_runtime') or {})
+    completed_steps = {
+        str(value) for value in (saved_runtime.get('completed_steps') or [])
+    }
+    saved_plan_ready = bool(saved_runtime.get('plan_ready'))
+    saved_workspace = (
+        settings().data_dir / 'workspaces' / context.deployment.workspace
+        if saved_plan_ready else None
+    )
     runtime = {
-        'workspace': None,
+        'workspace': saved_workspace,
         'inventory_synced': False,
         'addresses': None,
         'applied': False,
         'ansible_ran': False,
         'prepared': [],
-        'step_states': {},
-        'plan_ready': False,
+        'step_states': {step_id: 'completed' for step_id in completed_steps},
+        'plan_ready': saved_plan_ready,
+        'plan_sha256': saved_runtime.get('plan_sha256'),
     }
 
     by_id = {str(step.get('id')): step for step in steps}
@@ -714,16 +762,37 @@ def run_blueprint_workflow(context, executor):
         finally:
             context.step_deadline = previous_deadline
 
+    def verify_saved_plan():
+        if not runtime['plan_ready']:
+            return
+        workspace = runtime['workspace']
+        if workspace is None:
+            raise ExecutionFailed('Approved Terraform plan workspace is unavailable')
+        expected = runtime.get('plan_sha256')
+        try:
+            restored = restore_plan(context.deployment.id, workspace, expected_sha256=expected)
+        except RuntimeError as exc:
+            raise ExecutionFailed(str(exc)) from None
+        if not restored:
+            raise ExecutionFailed('Approved Terraform plan is unavailable; generate and approve a new plan')
+        plan_path = workspace / 'execution.tfplan'
+        actual = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+        if not expected or actual != expected:
+            raise ExecutionFailed('Approved Terraform plan checksum mismatch; generate and approve a new plan')
+
     def apply_and_sync(reason='explicit'):
         context.stage('workflow.terraform_apply')
         if reason != 'explicit':
             context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
+        verify_saved_plan()
         context.apply_saved_terraform_plan = bool(runtime['plan_ready'])
         try:
             workspace = executor.execute('terraform.apply', context)
         finally:
             context.apply_saved_terraform_plan = False
         runtime['plan_ready'] = False
+        runtime['plan_sha256'] = None
+        delete_plan(context.deployment.id)
         runtime['workspace'] = workspace
         runtime['applied'] = True
         context.stage('inventory.synchronizing')
@@ -749,9 +818,71 @@ def run_blueprint_workflow(context, executor):
             return apply_and_sync(step_type)
         raise ExecutionFailed(f'Workflow step {step_type} requires terraform_apply')
 
+    def pause_for_approval(step_id):
+        workspace = runtime.get('workspace')
+        plan_sha256 = None
+        if runtime['plan_ready']:
+            plan_path = workspace / 'execution.tfplan' if workspace else None
+            if not plan_path or not plan_path.exists():
+                raise ExecutionFailed('Terraform plan disappeared before approval')
+            plan_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+
+        with session() as db:
+            current = db.scalar(select(Job).where(Job.id == context.job.id).with_for_update())
+            if current is None:
+                raise ExecutionFailed('Job disappeared before approval pause')
+            config = blueprint_execution_settings(db)
+            expires_at = now() + timedelta(hours=config['approval_timeout_hours'])
+            payload = dict(current.payload or {})
+            payload['_approval'] = {
+                'status': 'pending',
+                'step_id': step_id,
+                'requested_at': now().isoformat(),
+                'expires_at': expires_at.isoformat(),
+            }
+            payload['_workflow_runtime'] = {
+                'completed_steps': sorted(
+                    key for key, value in runtime['step_states'].items()
+                    if value == 'completed'
+                ),
+                'plan_ready': bool(runtime['plan_ready']),
+                'plan_sha256': plan_sha256,
+                'approval_step': step_id,
+            }
+            current.payload = payload
+            current.status = 'waiting_approval'
+            current.error = None
+            current.heartbeat_at = None
+            if current.deployment_id:
+                deployment = db.get(Deployment, current.deployment_id)
+                if deployment is not None:
+                    deployment.status = 'waiting_approval'
+                    deployment.active_job_id = current.id
+            db.add(JobLog(
+                job_id=current.id,
+                message=f'workflow.approval.pending: step={step_id}; expires_at={expires_at.isoformat()}',
+            ))
+            db.add(Audit(
+                user_id=current.created_by,
+                token_id=current.token_id,
+                ip=current.ip,
+                source=current.source,
+                action='workflow.approval.pending',
+                resource='jobs',
+                resource_id=current.id,
+                result='waiting_approval',
+                request_id=current.request_id,
+            ))
+            db.commit()
+        raise ApprovalPending(step_id)
+
     for step in steps:
         step_id = str(step.get('id'))
         step_type = str(step.get('type'))
+
+        if runtime['step_states'].get(step_id) == 'completed':
+            context.log(f'workflow.step.resumed: {step_id}:{step_type}: already completed')
+            continue
 
         if step_id in rollback_targets:
             runtime['step_states'][step_id] = 'rollback_only'
@@ -805,6 +936,13 @@ def run_blueprint_workflow(context, executor):
                     finally:
                         context.keep_terraform_plan = False
                     runtime['plan_ready'] = True
+                    try:
+                        runtime['plan_sha256'] = persist_plan(
+                            context.deployment.id,
+                            runtime['workspace'],
+                        )
+                    except RuntimeError as exc:
+                        raise ExecutionFailed(str(exc)) from None
                 elif step_type == 'terraform_apply':
                     apply_and_sync()
                 elif step_type == 'terraform_destroy':
@@ -825,10 +963,12 @@ def run_blueprint_workflow(context, executor):
                         raise ExecutionFailed(
                             'Workflow requests Ansible but deployment has no Ansible configuration'
                         )
-                    if runtime['addresses'] is None:
-                        runtime['addresses'] = wait_for_ip(
-                            context, workspace_for(step_type), timeout=timeout
-                        )
+                    runtime['addresses'] = wait_for_ansible_transport(
+                        context,
+                        workspace_for(step_type),
+                        timeout=timeout,
+                        addresses=runtime['addresses'],
+                    )
                     context.ansible.inventory = Inventory(hosts=runtime['addresses'])
                     AnsibleExecutor().execute('ansible.execute', context)
                     runtime['ansible_ran'] = True
@@ -847,7 +987,10 @@ def run_blueprint_workflow(context, executor):
                         )
                     approval = (context.job.payload or {}).get('_approval') or {}
                     if approval.get('status') != 'approved':
-                        raise ExecutionFailed('Blueprint execution has not been approved')
+                        pause_for_approval(step_id)
+                    approved_step = approval.get('step_id')
+                    if approved_step and approved_step != step_id:
+                        raise ExecutionFailed('Blueprint approval belongs to a different workflow step')
                     context.log(
                         f"workflow.approval.satisfied: {step_id} "
                         f"approved_by={approval.get('approved_by')}"
@@ -869,6 +1012,8 @@ def run_blueprint_workflow(context, executor):
                 runtime['step_states'][step_id] = 'completed'
                 context.stage(f'workflow.step.completed:{step_id}:{step_type}')
                 break
+            except ApprovalPending:
+                raise
             except Cancelled:
                 raise
             except Exception as exc:
@@ -908,10 +1053,11 @@ def run_blueprint_workflow(context, executor):
 
     if context.ansible and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
-        if runtime['addresses'] is None:
-            runtime['addresses'] = wait_for_ip(
-                context, workspace_for('ansible compatibility')
-            )
+        runtime['addresses'] = wait_for_ansible_transport(
+            context,
+            workspace_for('ansible compatibility'),
+            addresses=runtime['addresses'],
+        )
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
 
@@ -942,6 +1088,11 @@ def execute(job_id):
             if job.deployment_id:
                 context.deployment = db.get(Deployment, job.deployment_id)
                 context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
+                if job.operation == 'terraform.apply':
+                    if ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+                        raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
+                    if has_released_allocations(db, context.deployment.id):
+                        raise ExecutionFailed('Deployment allocations were released; execute the Blueprint again')
             if job.payload.get('ansible'):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
@@ -985,11 +1136,14 @@ def execute(job_id):
                     else:
                         context.log(f"inventory.resource.registered: {inventory['external_id']}")
                     if context.ansible:
-                        context.ansible.inventory = Inventory(hosts=wait_for_ip(context, workspace))
+                        addresses = wait_for_ansible_transport(context, workspace)
+                        context.ansible.inventory = Inventory(hosts=addresses)
                         AnsibleExecutor().execute('ansible.execute', context)
         else:
             AnsibleExecutor().execute(job.operation, context)
         context.check()
+    except ApprovalPending:
+        return
     except Cancelled:
         status, error = 'cancelled', 'Cancellation requested; inspect deployment state before retrying'
     except ExecutionFailed as exc:

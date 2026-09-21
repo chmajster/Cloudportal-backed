@@ -2,9 +2,8 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
-from app.access import (deployment_predicate, ensure_deployment_access, ensure_job_access, job_predicate)
 from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
                              SSHHostKeyOutput, SSHKeyBootstrapOutput)
@@ -19,10 +18,11 @@ from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
 from app.jobs.approval import gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
-from app.models import Blueprint, Credential, Deployment, Job, JobLog, Provider, now
+from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
 from app.security.core import audit, require
+from app.terraform.state import delete_plan
 
 router = APIRouter(tags=['infrastructure'])
 DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace state_location variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
@@ -387,24 +387,19 @@ def validate_ansible(db, data):
 
 def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
     check_job_permissions(request, operation)
+    blueprint = ((payload or {}).get('blueprint') or {}) if isinstance(payload, dict) else {}
+    if not blueprint and deployment and operation == 'terraform.apply':
+        blueprint = ((deployment.workflow or {}).get('blueprint') or {})
+    if blueprint and operation == 'terraform.apply' and 'blueprints.execute' not in request.state.permissions:
+        raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
     if deployment and deployment.workflow.get('ansible') and operation == 'terraform.apply' and 'ansible.execute' not in request.state.permissions:
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
     if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
         raise HTTPException(409, 'Deployment is busy or destroyed')
     if deployment and operation == 'terraform.apply' and has_released_allocations(db, deployment.id):
-        raise HTTPException(
-            409,
-            'Deployment allocations were released; execute the Blueprint again',
-        )
-    if (
-        deployment
-        and operation == 'terraform.apply'
-        and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only')
-    ):
-        raise HTTPException(
-            409,
-            'Adopted deployment is plan-only; terraform.apply is disabled for this imported VM',
-        )
+        raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
+    if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+        raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
     job_payload = dict(payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}))
     if deployment:
         job_payload['previous_status'] = deployment.status
@@ -456,16 +451,13 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
 
 
 @router.get('/deployments', response_model=Items[DeploymentOutput])
-def deployments(request: Request, limit: Limit = 100, offset: Offset = 0,
-                actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
-    predicate = deployment_predicate(request, actor)
-    return {'items': [deployment_public(d) for d in paginate(db, Deployment, offset, limit, predicate)]}
+def deployments(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
+    return {'items': [deployment_public(d) for d in paginate(db, Deployment, offset, limit)]}
 
 
 @router.get('/deployments/{id}', response_model=DeploymentOutput)
-def deployment(id: str, request: Request, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
-    row = ensure_deployment_access(request, actor, find(db, Deployment, id))
-    return deployment_public(row)
+def deployment(id: str, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
+    return deployment_public(find(db, Deployment, id))
 
 
 @router.post('/deployments/{id}/destroy', status_code=202, response_model=JobOutput)
@@ -473,7 +465,8 @@ def deployment(id: str, request: Request, actor=Depends(require('deployments.rea
 def destroy_deployment(id: str, request: Request, actor=Depends(require('deployments.destroy')), db=Depends(get_db, scope='function')):
     def create():
         d = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
-        ensure_deployment_access(request, actor, d)
+        if not d:
+            raise HTTPException(404, 'Deployment not found')
         return job_public(new_job(db, request, actor, 'terraform.destroy', d))
     return idempotent(db, request, actor, {'id': id}, create, required=True)
 
@@ -487,21 +480,20 @@ def create_job(data: JobInput, request: Request, actor=Depends(require('jobs.exe
         d = None
         if data.deployment_id:
             d = db.scalar(select(Deployment).where(Deployment.id == data.deployment_id).with_for_update())
-            ensure_deployment_access(request, actor, d)
+            if not d:
+                raise HTTPException(404, 'Deployment not found')
         return job_public(new_job(db, request, actor, data.operation, d, {'ansible': data.ansible.model_dump()} if data.ansible else None))
     return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 
 @router.get('/jobs', response_model=Items[JobOutput])
-def jobs(request: Request, limit: Limit = 100, offset: Offset = 0,
-         actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
-    predicate = job_predicate(request, actor)
-    return {'items': [job_public(j) for j in paginate(db, Job, offset, limit, predicate)]}
+def jobs(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
+    return {'items': [job_public(j) for j in paginate(db, Job, offset, limit)]}
 
 
 @router.get('/jobs/{id}', response_model=JobOutput)
-def job(id: str, request: Request, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
-    return job_public(ensure_job_access(request, actor, find(db, Job, id)))
+def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
+    return job_public(find(db, Job, id))
 
 
 @router.post('/jobs/{id}/approve', response_model=JobOutput)
@@ -517,11 +509,20 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
         raise HTTPException(409, 'Job does not require Blueprint approval')
 
     payload = dict(job.payload or {})
-    payload['_approval'] = {
+    approval = dict(payload.get('_approval') or {})
+    expires_at = approval.get('expires_at')
+    if expires_at:
+        try:
+            if datetime.fromisoformat(expires_at) <= now():
+                raise HTTPException(409, 'Approval request has expired')
+        except ValueError:
+            raise HTTPException(409, 'Approval request expiry is invalid') from None
+    approval.update({
         'status': 'approved',
         'approved_by': actor.user_id,
         'approved_at': now().isoformat(),
-    }
+    })
+    payload['_approval'] = approval
     job.payload = payload
     job.status = 'queued'
     if job.deployment_id:
@@ -537,11 +538,15 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
 @router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)
 def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
     original = db.scalar(select(Job).where(Job.id == id).with_for_update())
-    ensure_job_access(request, actor, original)
+    if original is None:
+        raise HTTPException(404, 'Job not found')
     if original.status not in {'failed', 'cancelled'}:
         raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
     check_job_permissions(request, original.operation)
     payload = dict(original.payload or {})
+    payload.pop('_approval', None)
+    payload.pop('_workflow_runtime', None)
+    payload.pop('_provider_wait', None)
     if original.operation == 'ansible.execute' and payload.get('ansible'):
         from app.api.schemas import AnsibleInput
         validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))
@@ -552,8 +557,7 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
             deployment = db.scalar(select(Deployment).where(Deployment.id == original.deployment_id).with_for_update())
             if deployment is None:
                 raise HTTPException(404, 'Deployment not found')
-        payload.pop('_approval', None)
-        payload.pop('_provider_wait', None)
+            delete_plan(deployment.id)
         new = new_job(
             db,
             request,
@@ -578,9 +582,9 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
 
 
 @router.get('/jobs/{id}/logs', response_model=JobLogsOutput)
-def logs(id: str, request: Request, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
+def logs(id: str, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
          actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
-    j = ensure_job_access(request, actor, find(db, Job, id))
+    j = find(db, Job, id)
     rows = db.scalars(select(JobLog).where(JobLog.job_id == id, JobLog.id > after).order_by(JobLog.id).limit(limit)).all()
     return {'request_id': j.request_id, 'status': j.status, 'items': [public(r, 'id timestamp message') for r in rows], 'next_after': rows[-1].id if rows else after}
 
@@ -588,12 +592,14 @@ def logs(id: str, request: Request, after: Annotated[int, Query(ge=0)] = 0, limi
 @router.post('/jobs/{id}/cancel', response_model=JobOutput)
 def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')), db=Depends(get_db, scope='function')):
     j = db.scalar(select(Job).where(Job.id == id).with_for_update())
-    ensure_job_access(request, actor, j)
+    if j is None:
+        raise HTTPException(404, 'Job not found')
     if j.status in {'successful', 'failed', 'cancelled'}:
         raise HTTPException(409, 'Job already finished')
     if j.cancel_requested and j.status == 'cancelling':
         return job_public(j)
 
+    was_waiting_approval = j.status == 'waiting_approval'
     j.cancel_requested = True
     db.add(JobLog(job_id=j.id, message='job.cancel_requested: żądanie anulowania przyjęte'))
 
@@ -601,9 +607,7 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
         j.status = 'cancelled'
         j.error = 'Cancellation requested before execution'
         if j.deployment_id:
-            d = db.scalar(select(Deployment).where(
-                Deployment.id == j.deployment_id
-            ).with_for_update())
+            d = db.scalar(select(Deployment).where(Deployment.id == j.deployment_id).with_for_update())
             if d is not None and d.active_job_id == j.id:
                 d.active_job_id = None
                 d.status = (
@@ -611,6 +615,8 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
                     if j.operation == 'terraform.plan'
                     else 'cancelled'
                 )
+                if was_waiting_approval:
+                    delete_plan(d.id)
                 if j.operation != 'terraform.plan':
                     release_pre_execution_allocations(db, d.id)
     else:

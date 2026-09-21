@@ -185,9 +185,9 @@ def test_proxmox_destroy_waits_for_provider_reconnect(client, headers, monkeypat
     assert destroy.status_code == 202, destroy.text
 
     cfg = settings()
-    cfg.provider_offline_queue_enabled = True
-    cfg.provider_retry_base_seconds = 5
-    cfg.provider_retry_max_seconds = 5
+    monkeypatch.setattr(cfg, 'provider_offline_queue_enabled', True)
+    monkeypatch.setattr(cfg, 'provider_retry_base_seconds', 5)
+    monkeypatch.setattr(cfg, 'provider_retry_max_seconds', 5)
     probes = iter([
         {'ok': False, 'retryable': True, 'reason': 'unreachable'},
         {'ok': True, 'retryable': False, 'reason': None},
@@ -210,6 +210,13 @@ def test_proxmox_destroy_waits_for_provider_reconnect(client, headers, monkeypat
     assert waiting['status'] == 'queued'
     assert waiting['provider_waiting'] is True
     assert operations == []
+
+    with session() as db:
+        job = db.get(Job, destroy.json()['id'])
+        payload = dict(job.payload)
+        payload['_provider_wait']['next_attempt_at'] = '2000-01-01T00:00:00'
+        job.payload = payload
+        db.commit()
 
     execute(destroy.json()['id'])
     finished = client.get('/api/v1/jobs/' + destroy.json()['id'], headers=headers).json()

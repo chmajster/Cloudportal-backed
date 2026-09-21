@@ -21,7 +21,7 @@ def _task_key(upid):
 def track_proxmox_task(*, provider_id, node, upid, action, created_by,
                        vm_id=None, target_node=None, target_vm_id=None, name=None):
     if not upid:
-        return
+        return False
     payload = {
         'provider_id': int(provider_id),
         'node': str(node),
@@ -37,8 +37,7 @@ def track_proxmox_task(*, provider_id, node, upid, action, created_by,
         redis_client().setex(_task_key(upid), TASK_TTL_SECONDS, json.dumps(payload))
         return True
     except Exception:
-        # The provider mutation already started. Never turn a tracking outage into
-        # a 5xx that could make the caller repeat a non-idempotent Proxmox action.
+        # Mutation has already started; tracking failure must not trigger a retry.
         return False
 
 
@@ -74,11 +73,7 @@ def _apply_success(db, adapter, item):
             'destroyed_at': None,
         }
         if existing is None:
-            db.add(ManagedVM(
-                provider_id=provider_id,
-                vm_id=identity,
-                **values,
-            ))
+            db.add(ManagedVM(provider_id=provider_id, vm_id=identity, **values))
         else:
             for key, value in values.items():
                 setattr(existing, key, value)
@@ -102,23 +97,25 @@ def _apply_success(db, adapter, item):
         row.lifecycle_status = 'destroyed'
         row.destroyed_at = now()
     elif action == 'template':
-        # A converted template is no longer an actionable VM inventory entry.
         db.delete(row)
 
 
 def reconcile_proxmox_tasks_once(limit=100):
-    redis = redis_client()
-    keys = list(redis.scan_iter(match=TASK_PREFIX + '*', count=limit))[:limit]
+    try:
+        redis = redis_client()
+        keys = list(redis.scan_iter(match=TASK_PREFIX + '*', count=limit))[:limit]
+    except Exception:
+        return {'checked': 0, 'completed': 0}
     if not keys:
         return {'checked': 0, 'completed': 0}
 
     checked = completed = 0
     with session() as db:
         for key in keys:
-            raw = redis.get(key)
-            if not raw:
-                continue
             try:
+                raw = redis.get(key)
+                if not raw:
+                    continue
                 item = json.loads(raw)
                 provider = db.get(Provider, int(item['provider_id']))
                 if provider is None or provider.type != 'proxmox':
@@ -138,7 +135,7 @@ def reconcile_proxmox_tasks_once(limit=100):
                 redis.delete(key)
                 completed += 1
             except Exception:
-                # Keep the record for the next dispatcher pass; reconciliation is retryable.
+                # Keep the record for the next dispatcher pass.
                 continue
         db.commit()
     return {'checked': checked, 'completed': completed}
