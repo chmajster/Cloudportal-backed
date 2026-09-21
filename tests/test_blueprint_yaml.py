@@ -74,3 +74,25 @@ def test_yaml_parser_reports_schema_validation_errors():
 
     assert exc.value.status_code == 422
     assert 'dependency' in exc.value.detail.lower()
+
+
+def test_yaml_parser_rejects_unknown_security_sensitive_fields():
+    bad_access = dump_blueprint_yaml(BASE_BLUEPRINT).replace(
+        'allowedRoleIds: []',
+        'allowedRoleId: []',
+    )
+    with pytest.raises(HTTPException) as exc:
+        parse_blueprint_yaml(bad_access)
+    assert exc.value.status_code == 422
+    assert 'unsupported fields' in exc.value.detail
+    assert 'allowedRoleId' in exc.value.detail
+
+    bad_spec = dump_blueprint_yaml(BASE_BLUEPRINT).replace(
+        'active: true',
+        'activ: false',
+    )
+    with pytest.raises(HTTPException) as exc:
+        parse_blueprint_yaml(bad_spec)
+    assert exc.value.status_code == 422
+    assert 'unsupported fields' in exc.value.detail
+    assert 'activ' in exc.value.detail
