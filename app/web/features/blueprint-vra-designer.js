@@ -462,8 +462,43 @@
       }
     }
 
+    function validateReferences() {
+      const errors = [];
+      const deployment = state.blueprint.deployment || {};
+      const provider = data.providers.find(value => String(value.id) === String(deployment.provider_id));
+      const template = data.templates.find(value => value.id === deployment.template);
+      const originalTemplate = item?.deployment?.template || null;
+      if (!provider) errors.push('Wybrany provider nie istnieje lub nie jest dostępny.');
+      if (provider && String(deployment.credentials_id) !== String(provider.credentials_id)) {
+        errors.push('Credential Blueprintu musi być credentialem wybranego providera.');
+      }
+      if (!template) errors.push('Wybrany template nie istnieje w katalogu.');
+      if (provider && template && template.provider !== provider.type) {
+        errors.push('Template nie jest zgodny z typem wybranego providera.');
+      }
+      if (template?.enabled === false && deployment.template !== originalTemplate) {
+        errors.push('Nie można wybrać wyłączonego template dla nowego lub zmienianego Blueprintu.');
+      }
+      const workflowTypes = new Set((state.blueprint.workflow || []).map(step => step.type));
+      if (!state.id && !workflowTypes.has('terraform_apply')) {
+        errors.push('Nowy Blueprint musi zawierać krok Terraform apply.');
+      }
+      const proxmoxOnly = new Set([
+        'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+        'run_ansible_playbook', 'create_snapshot', 'health_check',
+      ]);
+      if (provider && provider.type !== 'proxmox') {
+        const invalid = [...workflowTypes].filter(type => proxmoxOnly.has(type));
+        if (invalid.length) errors.push('Wybrany provider nie obsługuje kroków: ' + invalid.join(', ') + '.');
+        if (deployment.ansible) errors.push('Post-provisioning Ansible wymaga providera Proxmox.');
+      }
+      return errors;
+    }
+
     async function validateServer() {
       const local = validateGraph(state.blueprint);
+      const referenceErrors = validateReferences();
+      local.errors.push(...referenceErrors);
       state.validation = local;
       if (local.errors.length) {
         state.serverValidation = { ok: false, message: local.errors[0] };
