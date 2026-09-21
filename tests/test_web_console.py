@@ -45,7 +45,16 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert manifest['shared'] == sorted(manifest['shared'])
     assert manifest['scripts'] == sorted(manifest['scripts'])
     assert manifest['styles'] == sorted(manifest['styles'])
-    assert manifest['shared'] == ['shared/icons.js', 'shared/page-surfaces.js', 'shared/platforms.js']
+    assert manifest['shared'] == [
+        'shared/http.js',
+        'shared/icons.js',
+        'shared/navigation.js',
+        'shared/page-layout.js',
+        'shared/page-surfaces.js',
+        'shared/platforms.js',
+        'shared/polling.js',
+        'shared/status.js',
+    ]
     assert {
         'features/dashboard.js',
         'features/identity.js',
@@ -184,7 +193,21 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.my-resource-grid' in stylesheet
     assert 'function navigationGroup(' in core
     assert 'function navigationGroupRank(' in core
+    assert 'function navigationRouteRank(' in core
     assert "group === 'Operacje' ? 1" in core
+    assert "window.uiResolveView" in core
+    assert "window.uiRoutePath" in core
+    assert "window.uiNavigationOrder" in script
+    assert "window.cloudportalHttp" in script
+    assert "window.pollingService" in script
+    assert "window.uiStatusMeta" in script
+    assert "window.uiPageHeading" in script
+    assert "'my-resources': '/resources'" in script
+    assert "'blueprints': '/blueprints'" in script or "blueprints: '/blueprints'" in script
+    assert "'Administracja'" in script
+    assert '.page-heading' in stylesheet
+    assert '.filter-bar' in stylesheet
+    assert '.ui-tabs' in stylesheet
     assert "'aria-current': exact ? 'page' : null" in core
     assert "appIcon('search')" in core
     assert "appIcon('refresh')" in core

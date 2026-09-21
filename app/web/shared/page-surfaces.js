@@ -8,7 +8,8 @@
   let surfaceSequence = 0;
 
   function surfaceRoute(view, token) {
-    return '#' + view + '/page/' + token;
+    const base = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(view) : '/' + view;
+    return '#' + base + '/page/' + token;
   }
 
   function surfaceBaseView(value = location.hash.slice(1)) {
@@ -103,7 +104,8 @@
     if (!activeSurface) return false;
     const current = teardownSurface();
     if (current && history.state?.cloudportalPageSurface) {
-      history.replaceState(null, '', '#' + current.returnView);
+      const path = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(current.returnView) : current.returnView;
+      history.replaceState(null, '', '#' + path);
     }
     return true;
   }
@@ -121,7 +123,8 @@
 
     if (event.state?.cloudportalPageSurface) {
       const view = event.state.returnView || surfaceBaseView();
-      history.replaceState(null, '', '#' + view);
+      const path = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(view) : view;
+      history.replaceState(null, '', '#' + path);
       navigate(view);
     }
   }

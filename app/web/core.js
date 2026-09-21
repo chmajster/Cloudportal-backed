@@ -260,55 +260,20 @@ function clearSession() {
 }
 
 async function refreshSession() {
-  if (!state.session?.refresh_token) throw new ApiError(401, { detail: 'Sesja wygasła.' });
-  if (state.refreshPromise) return state.refreshPromise;
-  state.refreshPromise = (async () => {
-    const response = await fetch(`${API}/auth/refresh`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Request-ID': crypto.randomUUID() },
-      body: JSON.stringify({ refresh_token: state.session.refresh_token }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new ApiError(response.status, data);
-    saveSession(data);
-    state.identity = { user: data.user, roles: data.roles, permissions: data.permissions, token_type: 'session' };
-    return data;
-  })().finally(() => { state.refreshPromise = null; });
-  return state.refreshPromise;
+  if (!window.cloudportalHttp) throw new Error('Warstwa HTTP nie została załadowana.');
+  return window.cloudportalHttp.refreshSession();
 }
 
 async function api(path, options = {}, canRefresh = true) {
-  const method = options.method || 'GET';
-  const headers = { 'X-Request-ID': crypto.randomUUID(), 'X-Portal-Source': 'Cloudportal-backed', ...(options.headers || {}) };
-  if (options.auth !== false && state.session?.access_token) headers.Authorization = `Bearer ${state.session.access_token}`;
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (options.idempotent) headers['Idempotency-Key'] = crypto.randomUUID();
-  const response = await fetch(`${API}${path}`, {
-    method, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
-  if (response.status === 401 && canRefresh && options.auth !== false && state.session?.refresh_token) {
-    try { await refreshSession(); }
-    catch (error) { showLogin('Sesja wygasła. Zaloguj się ponownie.'); throw error; }
-    return api(path, options, false);
-  }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok && !(options.allow || []).includes(response.status)) throw new ApiError(response.status, data);
-  return data;
+  if (!window.cloudportalHttp) throw new Error('Warstwa HTTP nie została załadowana.');
+  return window.cloudportalHttp.request(path, options, canRefresh);
 }
 
 async function apiText(path, canRefresh = true) {
-  const headers = { 'X-Request-ID': crypto.randomUUID(), 'X-Portal-Source': 'Cloudportal-backed' };
-  if (state.session?.access_token) headers.Authorization = `Bearer ${state.session.access_token}`;
-  const response = await fetch(`${API}${path}`, { headers });
-  if (response.status === 401 && canRefresh && state.session?.refresh_token) {
-    await refreshSession();
-    return apiText(path, false);
-  }
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, data);
-  }
-  return response.text();
+  if (!window.cloudportalHttp) throw new Error('Warstwa HTTP nie została załadowana.');
+  return window.cloudportalHttp.text(path, canRefresh);
 }
+
 function allowed(permission) {
   return !permission || Boolean(state.identity?.permissions?.includes(permission));
 }
@@ -347,6 +312,8 @@ function short(value, length = 12) {
 }
 function badge(text, kind = '') { return node('span', { class: `badge ${kind}`, text }); }
 function statusKind(status) {
+  const shared = typeof window.uiStatusKind === 'function' ? window.uiStatusKind(status) : null;
+  if (shared) return shared;
   if (['ok', 'active', 'successful', 'configured'].includes(status)) return 'ok';
   if (['queued', 'running', 'cancelling', 'degraded', 'waiting_provider'].includes(status)) return 'warning';
   if (['failed', 'locked', 'revoked', 'inactive'].includes(status)) return 'danger';
@@ -354,6 +321,7 @@ function statusKind(status) {
 }
 function button(label, onClick, kind = 'ghost', disabled = false) { return node('button', { type: 'button', class: `button small ${kind}`, onClick, disabled }, label); }
 function heading(description, actions = []) {
+  if (typeof window.uiPageHeading === 'function') return window.uiPageHeading(description, actions);
   return node('div', { class: 'page-actions' }, node('p', { text: description }), node('div', { class: 'action-group' }, actions));
 }
 function loading() { dom.content.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner', 'aria-label': 'Ładowanie' }))); }
@@ -658,6 +626,8 @@ const OPERATION_LABELS = {
 };
 
 function statusLabel(value) {
+  const shared = typeof window.uiStatusLabel === 'function' ? window.uiStatusLabel(value) : null;
+  if (shared) return shared;
   const key = String(value || '').toLowerCase();
   return STATUS_LABELS[key] || value || '—';
 }
@@ -1077,13 +1047,25 @@ function showApp() {
   navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'dashboard');
   if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
 }
-function navigationGroup(route) { const order = Number(route.order ?? 1000); return order <= 0 ? '' : order <= 40 ? 'Dostęp' : order <= 100 ? 'Infrastruktura' : order <= 140 ? 'Operacje' : 'System'; }
-function navigationGroupRank(route) { const group = navigationGroup(route); return group === '' ? 0 : group === 'Operacje' ? 1 : group === 'Dostęp' ? 2 : group === 'Infrastruktura' ? 3 : 4; }
+function navigationGroup(route) {
+  if (typeof window.uiNavigationGroup === 'function') return window.uiNavigationGroup(route);
+  const order = Number(route.order ?? 1000);
+  return order <= 0 ? '' : order <= 40 ? 'Dostęp' : order <= 100 ? 'Infrastruktura' : order <= 140 ? 'Operacje' : 'System';
+}
+function navigationGroupRank(route) {
+  if (typeof window.uiNavigationRank === 'function') return window.uiNavigationRank(route);
+  const group = navigationGroup(route);
+  return group === '' ? 0 : group === 'Operacje' ? 1 : group === 'Dostęp' ? 2 : group === 'Infrastruktura' ? 3 : 4;
+}
+function navigationRouteRank(route) {
+  if (typeof window.uiNavigationOrder === 'function') return window.uiNavigationOrder(route);
+  return Number(route.order ?? 1000);
+}
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
   const visibleRoutes = routes.filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
-    .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || a.order - b.order || a.id.localeCompare(b.id));
+    .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || navigationRouteRank(a) - navigationRouteRank(b) || a.id.localeCompare(b.id));
   let previousGroup = null;
   visibleRoutes.forEach(route => {
     const group = navigationGroup(route);
@@ -1101,17 +1083,20 @@ function renderNavigation() {
 
 async function navigate(view) {
   view = typeof window.surfaceBaseView === 'function' ? window.surfaceBaseView(view) : String(view || '').split('/page/')[0];
+  if (typeof window.uiResolveView === 'function') view = window.uiResolveView(view);
   if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
   const available = routes.filter(item => allowed(item.permission) && (!state.identity.user.must_change_password || item.id === 'account'));
   const route = available.find(item => item.id === view) || available[0];
   state.view = route.id;
-  location.hash = route.id;
+  location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(route.id) : route.id;
   dom.pageTitle.textContent = route.label;
-  dom.pageEyebrow.textContent = route.id === 'dashboard'
-    ? 'Stan systemu'
-    : route.navigationParent
-      ? (routes.find(item => item.id === route.navigationParent)?.label || 'Narzędzia')
-      : 'Zarządzanie lokalne';
+  dom.pageEyebrow.textContent = typeof window.uiPageEyebrow === 'function'
+    ? window.uiPageEyebrow(route)
+    : route.id === 'dashboard'
+      ? 'Stan systemu'
+      : route.navigationParent
+        ? (routes.find(item => item.id === route.navigationParent)?.label || 'Narzędzia')
+        : 'Zarządzanie lokalne';
   dom.navigation.querySelectorAll('.nav-link').forEach(item => {
     const exact = item.dataset.route === route.id;
     item.classList.toggle('active', exact || route.navigationParent === routes.find(candidate => candidate.id === item.dataset.route)?.id);
