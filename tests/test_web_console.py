@@ -319,6 +319,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerExtension('blueprint-vra-designer'" in script
     assert "body: JSON.stringify(state.blueprint)" not in script
     assert "body: state.blueprint" in script
+    assert "path.addEventListener('click', event => event.stopPropagation())" in script
+    assert "value.provider === selectedProvider?.type" in script
+    assert "String(value.id) === String(selectedProvider?.credentials_id)" in script
+    assert "Credential Blueprintu musi być credentialem wybranego providera." in script
+    assert "Template nie jest zgodny z typem wybranego providera." in script
     assert "parsePositiveIds" in script
     assert "!editing && (event.ctrlKey || event.metaKey)" in script
     assert "'Podstawy', 'Podstawowe informacje'" in script
