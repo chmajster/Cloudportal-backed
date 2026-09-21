@@ -14,6 +14,7 @@ from app.database import session
 from app.inventory_sync import repair_inventory_from_states
 from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
+from app.providers.task_reconcile import reconcile_proxmox_tasks_once
 from app.security.core import redis_client
 from app.terraform.state import delete_plan
 
@@ -253,6 +254,7 @@ def dispatch_once():
             db.add(JobLog(job_id=job.id, message=job.error))
             queue_job_webhooks(db, job)
         db.commit()
+    reconcile_proxmox_tasks_once()
     queue_system_alert_webhooks_once()
     deliver_webhooks_once()
     cleanup_retention_once()
