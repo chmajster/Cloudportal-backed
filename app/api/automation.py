@@ -16,7 +16,8 @@ from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
-from app.security.core import audit, require
+from app.security.core import audit
+from app.resource_scope.http import require
 from app.vm_classification import vm_classification_settings
 
 

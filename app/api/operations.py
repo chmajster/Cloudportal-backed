@@ -13,7 +13,8 @@ from app.operations.service import (
     new_webhook_secret,
     validate_webhook_url,
 )
-from app.security.core import audit, require
+from app.security.core import audit
+from app.resource_scope.http import require
 
 
 router = APIRouter(tags=['operations'])

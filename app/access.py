@@ -4,6 +4,13 @@ from sqlalchemy import select
 from app.models import Deployment, Job, ManagedResource, ManagedVM
 
 
+def ensure_request_scope(request, row):
+    scope = getattr(request.state, 'resource_scope', None)
+    if row is not None and scope is not None and (row.tenant_id, row.project_id) != (scope.tenant_id, scope.project_id):
+        raise HTTPException(404, 'Resource not found')
+    return row
+
+
 def request_permissions(request):
     return set(getattr(request.state, 'permissions', set()))
 
@@ -33,6 +40,7 @@ def inventory_resource_predicate(request, actor):
 
 
 def ensure_deployment_access(request, actor, deployment):
+    ensure_request_scope(request, deployment)
     if deployment is None:
         raise HTTPException(404, 'Deployment not found')
     if 'deployments.read_all' in request_permissions(request) or deployment.created_by == actor.user_id:
@@ -41,6 +49,7 @@ def ensure_deployment_access(request, actor, deployment):
 
 
 def ensure_job_access(request, actor, job):
+    ensure_request_scope(request, job)
     if job is None:
         raise HTTPException(404, 'Job not found')
     if 'jobs.read_all' in request_permissions(request) or job.created_by == actor.user_id:
@@ -53,6 +62,7 @@ def managed_vm_for_access(db, request, actor, provider_id, vm_id, *, node=None, 
         ManagedVM.provider_id == provider_id,
         ManagedVM.vm_id == int(vm_id),
     ))
+    ensure_request_scope(request, row)
     permission = 'vms.manage_all' if manage else 'vms.read_all'
     if permission in request_permissions(request):
         return row
@@ -78,6 +88,7 @@ def ensure_not_terraform_managed(row, action):
 
 
 def ensure_inventory_vm_access(db, request, actor, row):
+    ensure_request_scope(request, row)
     if row is None:
         raise HTTPException(404, 'Resource not found')
     if 'inventory.read_all' in request_permissions(request) or row.created_by == actor.user_id:
@@ -90,6 +101,7 @@ def ensure_inventory_vm_access(db, request, actor, row):
 
 
 def ensure_inventory_resource_access(db, request, actor, row):
+    ensure_request_scope(request, row)
     if row is None:
         raise HTTPException(404, 'Resource not found')
     if 'inventory.read_all' in request_permissions(request) or row.created_by == actor.user_id:

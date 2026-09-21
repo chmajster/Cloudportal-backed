@@ -141,6 +141,8 @@ class ProviderOutput(Output):
 
 
 class JobOutput(Output):
+    tenant_id: str
+    project_id: str
     id: str
     deployment_id: str | None
     operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'terraform.import', 'ansible.execute']
@@ -160,6 +162,8 @@ class JobOutput(Output):
 
 
 class DeploymentOutput(Output):
+    tenant_id: str
+    project_id: str
     id: str
     name: str
     provider_id: int

@@ -43,7 +43,7 @@ def tenant_project_permissions(db, actor, tenant_id):
         TenantMembership.status == 'active'))
     if active is None:
         return frozenset()
-    return actor.restrict(db.scalars(live_grants(tenant_id, actor.user_id))) & PROJECT_PERMISSIONS
+    return actor.restrict(db.scalars(live_grants(tenant_id, actor.user_id))) & (PROJECT_PERMISSIONS | PROJECT_DELEGABLE_PERMISSIONS)
 
 
 def effective_permissions(db, actor, project):
@@ -56,7 +56,7 @@ def effective_permissions(db, actor, project):
         ProjectMembership.project_id == project.id, ProjectMembership.user_id == actor.user_id,
         ProjectMembership.status == 'active', tenant_member))
     grants = frozenset(db.scalars(project_grants(project.id, actor.user_id))) if member is not None else frozenset()
-    global_here = actor.global_permissions & PROJECT_PERMISSIONS if member is not None or global_admin else frozenset()
+    global_here = actor.global_permissions & (PROJECT_PERMISSIONS | PROJECT_DELEGABLE_PERMISSIONS) if member is not None or global_admin else frozenset()
     return actor.restrict(global_here | inherited | grants), inherited, global_admin
 
 

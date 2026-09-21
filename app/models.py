@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
+from app.resource_scope.columns import ResourceScope, scope_constraints
 
 
 def now():
@@ -111,8 +112,9 @@ class Provider(Timestamp, Base):
     credentials_id: Mapped[int] = mapped_column(ForeignKey("credentials.id"))
 
 
-class Deployment(Timestamp, Base):
+class Deployment(ResourceScope, Timestamp, Base):
     __tablename__ = "deployments"
+    __table_args__ = scope_constraints("deployments")
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(100))
     provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"))
@@ -130,8 +132,9 @@ class Deployment(Timestamp, Base):
     executor: Mapped[str] = mapped_column(String(20), default="terraform")
 
 
-class Job(Timestamp, Base):
+class Job(ResourceScope, Timestamp, Base):
     __tablename__ = "jobs"
+    __table_args__ = scope_constraints("jobs")
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     deployment_id: Mapped[str | None] = mapped_column(ForeignKey("deployments.id"))
     operation: Mapped[str] = mapped_column(String(32))
@@ -191,8 +194,9 @@ class Setting(Base):
     value: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
-class HostnameScheme(Timestamp, Base):
+class HostnameScheme(ResourceScope, Timestamp, Base):
     __tablename__ = "hostname_schemes"
+    __table_args__ = scope_constraints("hostname_schemes")
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     pattern: Mapped[str] = mapped_column(String(255))
@@ -202,8 +206,9 @@ class HostnameScheme(Timestamp, Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
-class HostnameReservation(Timestamp, Base):
+class HostnameReservation(ResourceScope, Timestamp, Base):
     __tablename__ = "hostname_reservations"
+    __table_args__ = scope_constraints("hostname_reservations")
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     scheme_id: Mapped[int] = mapped_column(ForeignKey("hostname_schemes.id"), index=True)
     hostname: Mapped[str] = mapped_column(String(253), unique=True, index=True)
@@ -220,8 +225,9 @@ class BlueprintManagerRole(Base):
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True, unique=True)
 
 
-class Blueprint(Timestamp, Base):
+class Blueprint(ResourceScope, Timestamp, Base):
     __tablename__ = "blueprints"
+    __table_args__ = scope_constraints("blueprints")
     id: Mapped[int] = mapped_column(primary_key=True)
     slug: Mapped[str] = mapped_column(String(63), unique=True)
     name: Mapped[str] = mapped_column(String(100))
@@ -241,8 +247,9 @@ class Blueprint(Timestamp, Base):
 
 
 
-class IPPool(Timestamp, Base):
+class IPPool(ResourceScope, Timestamp, Base):
     __tablename__ = "ip_pools"
+    __table_args__ = scope_constraints("ip_pools")
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     cidr: Mapped[str] = mapped_column(String(64), unique=True)
@@ -254,8 +261,9 @@ class IPPool(Timestamp, Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
-class IPAllocation(Timestamp, Base):
+class IPAllocation(ResourceScope, Timestamp, Base):
     __tablename__ = "ip_allocations"
+    __table_args__ = scope_constraints("ip_allocations")
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     pool_id: Mapped[int] = mapped_column(ForeignKey("ip_pools.id"), index=True)
     address: Mapped[str] = mapped_column(String(45), index=True)
@@ -269,9 +277,9 @@ class IPAllocation(Timestamp, Base):
 
 
 
-class ManagedVM(Timestamp, Base):
+class ManagedVM(ResourceScope, Timestamp, Base):
     __tablename__ = "managed_vms"
-    __table_args__ = (UniqueConstraint("provider_id", "vm_id"),)
+    __table_args__ = (UniqueConstraint("provider_id", "vm_id"), *scope_constraints("managed_vms"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"), index=True)
     deployment_id: Mapped[str | None] = mapped_column(ForeignKey("deployments.id"), unique=True)
@@ -303,8 +311,9 @@ class TerraformPlan(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
 
-class ManagedResource(Timestamp, Base):
+class ManagedResource(ResourceScope, Timestamp, Base):
     __tablename__ = "managed_resources"
+    __table_args__ = scope_constraints("managed_resources")
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     deployment_id: Mapped[str] = mapped_column(ForeignKey("deployments.id", ondelete="CASCADE"), unique=True, index=True)
     provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"), index=True)
@@ -320,8 +329,9 @@ class ManagedResource(Timestamp, Base):
 
 
 
-class ScheduledOperation(Timestamp, Base):
+class ScheduledOperation(ResourceScope, Timestamp, Base):
     __tablename__ = "scheduled_operations"
+    __table_args__ = scope_constraints("scheduled_operations")
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(100))
     deployment_id: Mapped[str] = mapped_column(ForeignKey("deployments.id", ondelete="CASCADE"), index=True)

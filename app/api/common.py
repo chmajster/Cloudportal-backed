@@ -45,6 +45,10 @@ def idempotent(db, request, actor, payload, create, *, required=False):
         key = str(uuid.UUID(key))
     except ValueError:
         raise HTTPException(400, 'Idempotency-Key must be a UUID') from None
+    scope = getattr(request.state, 'resource_scope', None)
+    from app.resource_scope.authorization import DEFAULT_SCOPE
+    if scope is not None and scope != DEFAULT_SCOPE:
+        payload = {'scope': [scope.tenant_id, scope.project_id], 'request': payload}
     fingerprint = hmac.new(encryption_key(), json.dumps(payload, sort_keys=True, separators=(',', ':'), default=str).encode(), hashlib.sha256).hexdigest()
     row = Idempotency(user_id=actor.user_id, path=request.url.path, key=key, fingerprint=fingerprint)
     try:
@@ -57,6 +61,9 @@ def idempotent(db, request, actor, payload, create, *, required=False):
             raise HTTPException(409, 'Idempotency-Key was used for a different request')
         if row.response is None:
             raise HTTPException(409, 'Request still in progress')
+        if scope is not None:
+            from app.resource_scope.service import validate_replay
+            return validate_replay(db, request.url.path, row.response)
         return row.response
     result = create()
     # Never persist plaintext token/reset secrets in idempotency records.
