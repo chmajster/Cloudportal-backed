@@ -105,7 +105,12 @@ def sync_extension_states(db):
     for spec in extension_specs():
         state = states.get(spec.name)
         if state is None:
-            state = ExtensionState(name=spec.name, version=spec.version)
+            latest_sequence = db.scalar(select(func.max(EventRecord.sequence))) or 0
+            state = ExtensionState(
+                name=spec.name,
+                version=spec.version,
+                last_event_sequence=0 if spec.replay_existing_events else latest_sequence,
+            )
             db.add(state)
             db.flush()
             states[spec.name] = state
