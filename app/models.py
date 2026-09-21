@@ -377,6 +377,9 @@ class EventConsumer(Timestamp, Base):
     cursor_sequence: Mapped[int] = mapped_column(
         BigInteger().with_variant(Integer, 'sqlite'), default=0, index=True
     )
+    last_checkpoint_sequence: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite')
+    )
     max_batch: Mapped[int] = mapped_column(Integer, default=100)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
