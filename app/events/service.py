@@ -167,9 +167,14 @@ def deliver_extension_deliveries(db, batch_size: int = 100):
     states = sync_extension_states(db)
     deliveries = db.scalars(
         select(ExtensionDelivery)
+        .join(
+            ExtensionState,
+            ExtensionState.name == ExtensionDelivery.extension_name,
+        )
         .where(
             ExtensionDelivery.status == 'pending',
             ExtensionDelivery.next_attempt_at <= current,
+            ExtensionState.is_enabled.is_(True),
         )
         .order_by(ExtensionDelivery.next_attempt_at, ExtensionDelivery.created_at)
         .with_for_update(skip_locked=True)
