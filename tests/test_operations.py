@@ -191,3 +191,58 @@ def test_webhook_rejects_non_allowlisted_host(client, headers, monkeypatch):
         'events': ['job.successful'],
     })
     assert response.status_code == 422
+
+
+def test_scheduled_blueprint_apply_waits_for_approval(client, headers):
+    setting = client.put(
+        '/api/v1/settings/blueprints',
+        headers=headers,
+        json={'auto_approve_for_executors': False, 'approval_timeout_hours': 48},
+    )
+    assert setting.status_code == 200, setting.text
+
+    created = deployment(client, headers)
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        initial = db.get(Job, dep.active_job_id)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        dep.workflow = {
+            'blueprint': {
+                'id': None,
+                'requires_approval': True,
+                'steps': [{'id': 'apply', 'type': 'terraform_apply'}],
+            },
+        }
+        db.commit()
+
+    response = client.post('/api/v1/schedules', headers=headers, json={
+        'name': 'approved-apply',
+        'deployment_id': created['id'],
+        'operation': 'terraform.apply',
+        'next_run_at': (now() + timedelta(hours=1)).isoformat() + 'Z',
+    })
+    assert response.status_code == 201, response.text
+
+    with session() as db:
+        schedule = db.get(ScheduledOperation, response.json()['id'])
+        schedule.next_run_at = now() - timedelta(seconds=1)
+        db.commit()
+
+    materialize_scheduled_jobs()
+
+    with session() as db:
+        job = db.query(Job).filter(
+            Job.source == 'Scheduler',
+            Job.deployment_id == created['id'],
+            Job.operation == 'terraform.apply',
+        ).one()
+        assert job.status == 'waiting_approval'
+        assert job.payload['_approval']['status'] == 'pending'
+        deployment_row = db.get(Deployment, created['id'])
+        assert deployment_row.status == 'waiting_approval'
+        job_id = job.id
+
+    execute(job_id)
+    assert client.get('/api/v1/jobs/' + job_id, headers=headers).json()['status'] == 'waiting_approval'
