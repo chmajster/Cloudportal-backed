@@ -36,8 +36,8 @@ def retained_event_floor(db) -> int:
 
 
 def resolve_start_sequence(db, start_from: str, start_sequence: int | None) -> int:
-    latest = db.scalar(select(func.max(EventRecord.sequence))) or 0
     floor = retained_event_floor(db)
+    latest = max(db.scalar(select(func.max(EventRecord.sequence))) or 0, floor)
     if start_from == 'latest':
         return latest
     if start_from == 'earliest':
@@ -96,7 +96,7 @@ def ack_consumer(db, row: EventConsumer, sequence: int) -> EventConsumer:
     floor = retained_event_floor(db)
     if row.cursor_sequence < floor:
         raise ValueError('Consumer cursor is behind retained event floor; reset required')
-    latest = db.scalar(select(func.max(EventRecord.sequence))) or 0
+    latest = max(db.scalar(select(func.max(EventRecord.sequence))) or 0, floor)
     if sequence < row.cursor_sequence:
         raise ValueError('ACK sequence cannot move the cursor backwards')
     if sequence > latest:
