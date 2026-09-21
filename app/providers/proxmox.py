@@ -613,12 +613,34 @@ class ProxmoxProvider(InfrastructureProvider):
         )
         return data is not None
 
+    def _primary_nic_mac(self, node, vm_id):
+        try:
+            config = self.vm_config(node, vm_id) or {}
+        except Exception:
+            return None
+        raw = str(config.get('net0') or '')
+        match = re.search(
+            r'(?:^|,)(?:virtio|e1000|e1000e|rtl8139|vmxnet3)=([0-9A-Fa-f:]{17})(?=,|$)',
+            raw,
+        )
+        return match.group(1).lower() if match else None
+
     def guest_addresses(self, node, vm_id):
         data = self._get(
             f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/network-get-interfaces'
         )
+        interfaces = list(data.get('result', []))
+        primary_mac = self._primary_nic_mac(node, vm_id)
+        if primary_mac:
+            primary_interfaces = [
+                interface for interface in interfaces
+                if str(interface.get('hardware-address') or '').lower() == primary_mac
+            ]
+            if primary_interfaces:
+                interfaces = primary_interfaces
+
         addresses = []
-        for interface in data.get('result', []):
+        for interface in interfaces:
             for record in interface.get('ip-addresses', []):
                 try:
                     address = ipaddress.ip_address(record['ip-address'])
