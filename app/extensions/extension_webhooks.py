@@ -1,10 +1,26 @@
+from sqlalchemy import select
 from app.events.contracts import ExtensionSpec
 from app.events.registry import event_matches
 from app.models import WebhookDelivery, WebhookEndpoint
 
 
-def webhook_bridge(db, event):
-    endpoints = db.query(WebhookEndpoint).filter(WebhookEndpoint.is_active.is_(True)).all()
+def webhook_bridge(db, event, delivery):
+    if delivery.is_replay:
+        endpoints = db.scalars(
+            select(WebhookEndpoint).where(WebhookEndpoint.is_active.is_(True))
+        ).all()
+        endpoints = [
+            endpoint for endpoint in endpoints
+            if event_matches(endpoint.events or (), event.type)
+        ]
+    else:
+        endpoint_ids = list((event.routing_json or {}).get('webhook_endpoint_ids') or [])
+        if not endpoint_ids:
+            return
+        endpoints = db.scalars(
+            select(WebhookEndpoint).where(WebhookEndpoint.id.in_(endpoint_ids))
+        ).all()
+
     payload = event.payload or {}
     event_time = event.created_at.isoformat() + 'Z'
     envelope = {
@@ -29,14 +45,13 @@ def webhook_bridge(db, event):
         'event': event.type,
     }
     for endpoint in endpoints:
-        if event_matches(endpoint.events or (), event.type):
-            db.add(WebhookDelivery(
-                endpoint_id=endpoint.id,
-                event_id=event.id,
-                event=event.type,
-                resource_id=event.subject_id or event.id,
-                payload=envelope,
-            ))
+        db.add(WebhookDelivery(
+            endpoint_id=endpoint.id,
+            event_id=event.id,
+            event=event.type,
+            resource_id=event.subject_id or event.id,
+            payload=envelope,
+        ))
 
 
 EXTENSIONS = (
