@@ -77,6 +77,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/search.js',
         'features/settings.js',
         'features/tenancy.js',
+        'features/projects.js',
         'features/tools.js',
         'features/updates.js',
     } == set(manifest['scripts'])
@@ -90,6 +91,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/tools.css',
         'styles/features/settings.css',
         'styles/features/tenancy.css',
+        'styles/features/projects.css',
         'styles/features/page-surfaces.css',
         'styles/features/updates.css',
     } <= set(manifest['styles'])
