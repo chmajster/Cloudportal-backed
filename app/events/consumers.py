@@ -12,6 +12,7 @@ def consumer_public(db, row: EventConsumer) -> dict:
         'name': row.name,
         'event_patterns': row.event_patterns,
         'cursor_sequence': row.cursor_sequence,
+        'last_checkpoint_sequence': row.last_checkpoint_sequence,
         'lag': max(0, latest - row.cursor_sequence),
         'max_batch': row.max_batch,
         'is_active': row.is_active,
@@ -62,6 +63,7 @@ def poll_consumer(db, row: EventConsumer, requested_limit: int | None = None) ->
                 break
 
     row.last_polled_at = now()
+    row.last_checkpoint_sequence = checkpoint
     return {
         'consumer_id': row.id,
         'cursor_sequence': row.cursor_sequence,
@@ -80,6 +82,8 @@ def ack_consumer(db, row: EventConsumer, sequence: int) -> EventConsumer:
         raise ValueError('ACK sequence cannot move the cursor backwards')
     if sequence > latest:
         raise ValueError('ACK sequence is beyond the latest event')
+    if row.last_checkpoint_sequence is None or sequence > row.last_checkpoint_sequence:
+        raise ValueError('ACK sequence exceeds the last polled checkpoint')
     row.cursor_sequence = sequence
     row.last_acked_at = now()
     return row
@@ -89,4 +93,5 @@ def reset_consumer(db, row: EventConsumer, start_from: str, sequence: int | None
     row.cursor_sequence = resolve_start_sequence(db, start_from, sequence)
     row.last_acked_at = None
     row.last_polled_at = None
+    row.last_checkpoint_sequence = None
     return row
