@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, exists, select
 
 from app.config import settings
 from app.database import session
@@ -21,6 +21,10 @@ from app.models import (
     Idempotency,
     IPAllocation,
     Deployment,
+    EventConsumer,
+    EventRecord,
+    ExtensionDelivery,
+    ExtensionState,
     Job,
     JobLog,
     ScheduledOperation,
@@ -377,6 +381,7 @@ def cleanup_retention_once(force=False):
         'job_logs': current - timedelta(days=settings().retention_job_logs_days),
         'audit': current - timedelta(days=settings().retention_audit_days),
         'webhooks': current - timedelta(days=settings().retention_webhook_deliveries_days),
+        'events': current - timedelta(days=settings().retention_events_days),
         'idempotency': current - timedelta(days=settings().retention_idempotency_days),
         'released': current - timedelta(days=settings().retention_released_allocations_days),
     }
@@ -394,6 +399,37 @@ def cleanup_retention_once(force=False):
                 WebhookDelivery.created_at < cutoffs['webhooks'],
             )
         ).rowcount or 0
+
+        consumer_cursor = db.scalar(
+            select(EventConsumer.cursor_sequence)
+            .where(EventConsumer.is_active.is_(True))
+            .order_by(EventConsumer.cursor_sequence.asc())
+            .limit(1)
+        )
+        extension_cursor = db.scalar(
+            select(ExtensionState.last_event_sequence)
+            .where(ExtensionState.is_enabled.is_(True))
+            .order_by(ExtensionState.last_event_sequence.asc())
+            .limit(1)
+        )
+        cursor_candidates = [
+            value for value in (consumer_cursor, extension_cursor) if value is not None
+        ]
+        safe_sequence = min(cursor_candidates) if cursor_candidates else None
+
+        protected_delivery = exists(
+            select(ExtensionDelivery.id).where(
+                ExtensionDelivery.event_sequence == EventRecord.sequence,
+                ExtensionDelivery.status.in_(['pending', 'dead_letter']),
+            )
+        )
+        event_delete = delete(EventRecord).where(
+            EventRecord.created_at < cutoffs['events'],
+            ~protected_delivery,
+        )
+        if safe_sequence is not None:
+            event_delete = event_delete.where(EventRecord.sequence <= safe_sequence)
+        counts['events'] = db.execute(event_delete).rowcount or 0
         counts['idempotency'] = db.execute(
             delete(Idempotency).where(Idempotency.created_at < cutoffs['idempotency'])
         ).rowcount or 0
