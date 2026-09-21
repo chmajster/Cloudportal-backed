@@ -348,6 +348,7 @@ class EventRecord(Base):
     subject_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    routing_json: Mapped[dict] = mapped_column(JSON, default=dict)
     correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
     causation_id: Mapped[str | None] = mapped_column(String(64))
     request_id: Mapped[str | None] = mapped_column(String(36), index=True)
