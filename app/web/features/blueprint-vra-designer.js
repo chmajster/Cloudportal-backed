@@ -664,7 +664,11 @@
             d: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`,
             class: 'vra-edge',
           });
-          path.addEventListener('dblclick', () => removeConnection(dep, step.id));
+          path.addEventListener('click', event => event.stopPropagation());
+          path.addEventListener('dblclick', event => {
+            event.stopPropagation();
+            removeConnection(dep, step.id);
+          });
           svg.append(path);
         }
       }
@@ -820,14 +824,23 @@
     function renderBlueprintInspector(body) {
       const bp = state.blueprint;
       const deployment = bp.deployment || (bp.deployment = {});
+      const selectedProvider = data.providers.find(value => String(value.id) === String(deployment.provider_id)) || null;
       const providerChoices = data.providers.map(value => ({ value: value.id, label: value.name + ' [' + value.type + ']' }));
       const visibleTemplates = data.templates.filter(value =>
-        value.enabled !== false || (state.id && value.id === deployment.template));
+        value.provider === selectedProvider?.type
+        && (value.enabled !== false || (state.id && value.id === deployment.template)));
       const templateChoices = visibleTemplates.map(value => ({
         value: value.id,
         label: value.name + ' [' + value.provider + ']' + (value.enabled === false ? ' — wyłączony' : ''),
       }));
-      const credentialChoices = data.credentials.map(value => ({ value: value.id, label: value.name + ' [' + value.type + ']' }));
+      const providerCredential = data.credentials.find(value =>
+        String(value.id) === String(selectedProvider?.credentials_id)) || null;
+      const credentialChoices = selectedProvider?.credentials_id ? [{
+        value: selectedProvider.credentials_id,
+        label: providerCredential
+          ? providerCredential.name + ' [' + providerCredential.type + ']'
+          : 'Credential #' + selectedProvider.credentials_id,
+      }] : [];
 
       body.append(textField('Nazwa', bp.name, value => mutate(() => {
         bp.name = value; if (!bp.slug || bp.slug === 'new-blueprint') bp.slug = slugify(value);
@@ -850,16 +863,29 @@
         const provider = data.providers.find(item => String(item.id) === String(value));
         deployment.provider_id = Number(value);
         if (provider?.credentials_id) deployment.credentials_id = Number(provider.credentials_id);
-        const template = data.templates.find(item => item.provider === provider?.type);
-        if (template) deployment.template = template.id;
+        const template = data.templates.find(item => item.provider === provider?.type && item.enabled !== false);
+        deployment.template = template?.id || '';
       })));
       else body.append(textField('Provider ID', deployment.provider_id, value => mutate(() => { deployment.provider_id = Number(value); }), { type: 'number' }));
 
-      if (credentialChoices.length) body.append(selectField('Credential', deployment.credentials_id, credentialChoices, value => mutate(() => { deployment.credentials_id = Number(value); })));
-      else body.append(textField('Credential ID', deployment.credentials_id, value => mutate(() => { deployment.credentials_id = Number(value); }), { type: 'number' }));
+      if (credentialChoices.length) {
+        if (String(deployment.credentials_id) !== String(selectedProvider.credentials_id)) {
+          deployment.credentials_id = Number(selectedProvider.credentials_id);
+        }
+        body.append(selectField('Credential providera', deployment.credentials_id, credentialChoices, () => {}));
+      } else {
+        body.append(el('div', { class: 'vra-empty' },
+          el('strong', { text: 'Brak credentiala providera' }),
+          el('span', { text: 'Wybrany provider nie ma przypisanego credentiala wymaganego do wdrożenia.' })));
+      }
 
-      if (templateChoices.length) body.append(selectField('Template', deployment.template, templateChoices, value => mutate(() => { deployment.template = value; })));
-      else body.append(textField('Template', deployment.template, value => mutate(() => { deployment.template = value; })));
+      if (templateChoices.length) {
+        body.append(selectField('Template', deployment.template, templateChoices, value => mutate(() => { deployment.template = value; })));
+      } else {
+        body.append(el('div', { class: 'vra-empty' },
+          el('strong', { text: 'Brak zgodnego template' }),
+          el('span', { text: 'Dla wybranego providera nie ma aktywnego template infrastruktury.' })));
+      }
 
       body.append(textField('Deployment name', deployment.name || '', value => mutate(() => { deployment.name = value; }), { placeholder: '{{ hostname }}' }));
       body.append(selectField('Executor', deployment.executor || 'terraform', [
