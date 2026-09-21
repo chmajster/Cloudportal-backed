@@ -5,7 +5,7 @@ from app.database import session
 from app.events.service import publish_event, sync_extension_states
 from app.models import EventConsumer, EventRecord, ExtensionDelivery, ExtensionState, now
 from app.operations.service import cleanup_retention_once
-from tests.conftest import new_user
+from conftest import new_user
 
 
 def idem(headers):
