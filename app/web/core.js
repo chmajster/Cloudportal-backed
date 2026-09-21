@@ -347,6 +347,8 @@ function short(value, length = 12) {
 }
 function badge(text, kind = '') { return node('span', { class: `badge ${kind}`, text }); }
 function statusKind(status) {
+  const shared = typeof window.uiStatusKind === 'function' ? window.uiStatusKind(status) : null;
+  if (shared) return shared;
   if (['ok', 'active', 'successful', 'configured'].includes(status)) return 'ok';
   if (['queued', 'running', 'cancelling', 'degraded', 'waiting_provider'].includes(status)) return 'warning';
   if (['failed', 'locked', 'revoked', 'inactive'].includes(status)) return 'danger';
@@ -354,6 +356,7 @@ function statusKind(status) {
 }
 function button(label, onClick, kind = 'ghost', disabled = false) { return node('button', { type: 'button', class: `button small ${kind}`, onClick, disabled }, label); }
 function heading(description, actions = []) {
+  if (typeof window.uiPageHeading === 'function') return window.uiPageHeading(description, actions);
   return node('div', { class: 'page-actions' }, node('p', { text: description }), node('div', { class: 'action-group' }, actions));
 }
 function loading() { dom.content.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner', 'aria-label': 'Ładowanie' }))); }
@@ -658,6 +661,8 @@ const OPERATION_LABELS = {
 };
 
 function statusLabel(value) {
+  const shared = typeof window.uiStatusLabel === 'function' ? window.uiStatusLabel(value) : null;
+  if (shared) return shared;
   const key = String(value || '').toLowerCase();
   return STATUS_LABELS[key] || value || '—';
 }
@@ -1077,8 +1082,16 @@ function showApp() {
   navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'dashboard');
   if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
 }
-function navigationGroup(route) { const order = Number(route.order ?? 1000); return order <= 0 ? '' : order <= 40 ? 'Dostęp' : order <= 100 ? 'Infrastruktura' : order <= 140 ? 'Operacje' : 'System'; }
-function navigationGroupRank(route) { const group = navigationGroup(route); return group === '' ? 0 : group === 'Operacje' ? 1 : group === 'Dostęp' ? 2 : group === 'Infrastruktura' ? 3 : 4; }
+function navigationGroup(route) {
+  if (typeof window.uiNavigationGroup === 'function') return window.uiNavigationGroup(route);
+  const order = Number(route.order ?? 1000);
+  return order <= 0 ? '' : order <= 40 ? 'Dostęp' : order <= 100 ? 'Infrastruktura' : order <= 140 ? 'Operacje' : 'System';
+}
+function navigationGroupRank(route) {
+  if (typeof window.uiNavigationRank === 'function') return window.uiNavigationRank(route);
+  const group = navigationGroup(route);
+  return group === '' ? 0 : group === 'Operacje' ? 1 : group === 'Dostęp' ? 2 : group === 'Infrastruktura' ? 3 : 4;
+}
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
@@ -1101,17 +1114,20 @@ function renderNavigation() {
 
 async function navigate(view) {
   view = typeof window.surfaceBaseView === 'function' ? window.surfaceBaseView(view) : String(view || '').split('/page/')[0];
+  if (typeof window.uiResolveView === 'function') view = window.uiResolveView(view);
   if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
   const available = routes.filter(item => allowed(item.permission) && (!state.identity.user.must_change_password || item.id === 'account'));
   const route = available.find(item => item.id === view) || available[0];
   state.view = route.id;
-  location.hash = route.id;
+  location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(route.id) : route.id;
   dom.pageTitle.textContent = route.label;
-  dom.pageEyebrow.textContent = route.id === 'dashboard'
-    ? 'Stan systemu'
-    : route.navigationParent
-      ? (routes.find(item => item.id === route.navigationParent)?.label || 'Narzędzia')
-      : 'Zarządzanie lokalne';
+  dom.pageEyebrow.textContent = typeof window.uiPageEyebrow === 'function'
+    ? window.uiPageEyebrow(route)
+    : route.id === 'dashboard'
+      ? 'Stan systemu'
+      : route.navigationParent
+        ? (routes.find(item => item.id === route.navigationParent)?.label || 'Narzędzia')
+        : 'Zarządzanie lokalne';
   dom.navigation.querySelectorAll('.nav-link').forEach(item => {
     const exact = item.dataset.route === route.id;
     item.classList.toggle('active', exact || route.navigationParent === routes.find(candidate => candidate.id === item.dataset.route)?.id);
