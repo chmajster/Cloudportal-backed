@@ -61,6 +61,14 @@
     return node;
   }
 
+  function svgEl(tag, attrs = {}) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value !== undefined && value !== null) node.setAttribute(key, String(value));
+    }
+    return node;
+  }
+
   function iconButton(label, title, handler, kind = '') {
     return el('button', { type: 'button', class: 'vra-tool ' + kind, title, onclick: handler }, label);
   }
@@ -651,7 +659,7 @@
           const x2 = target.x;
           const y2 = target.y + 44;
           const bend = Math.max(55, Math.abs(x2 - x1) / 2);
-          const path = el('path', {
+          const path = svgEl('path', {
             d: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`,
             class: 'vra-edge',
           });
@@ -671,7 +679,7 @@
         class: 'vra-graph-viewport ' + (state.grid ? 'grid' : ''),
         style: `width:${extents.width}px;height:${extents.height}px;transform:scale(${state.zoom});transform-origin:0 0;`,
       });
-      const svg = el('svg', { class: 'vra-edge-layer', width: extents.width, height: extents.height });
+      const svg = svgEl('svg', { class: 'vra-edge-layer', width: extents.width, height: extents.height });
       viewport.append(svg);
 
       for (const step of state.blueprint.workflow) {
