@@ -863,8 +863,8 @@ class WebhookEndpointInput(Input):
             normalized = str(item).strip().lower()
             valid = (
                 normalized == '*'
-                or re.fullmatch(r'[a-z0-9][a-z0-9_.-]{0,126}', normalized)
-                or re.fullmatch(r'[a-z0-9][a-z0-9_.-]{0,124}\.\*', normalized)
+                or re.fullmatch(r'[a-z0-9][a-z0-9_.-]{1,127}', normalized)
+                or re.fullmatch(r'[a-z0-9][a-z0-9_.-]{0,125}\.\*', normalized)
             )
             if not valid:
                 raise ValueError('Webhook event must be an event name, prefix wildcard such as job.* or *')
