@@ -316,6 +316,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Lista patternów hostname odświeżona." in script
     assert "registerExtension('blueprint-wizard-network'" in script
     assert "registerExtension('blueprint-wizard'" in script
+    assert "registerExtension('blueprint-vra-designer'" in script
+    assert "body: JSON.stringify(state.blueprint)" not in script
+    assert "body: state.blueprint" in script
+    assert "parsePositiveIds" in script
+    assert "!editing && (event.ctrlKey || event.metaKey)" in script
     assert "'Podstawy', 'Podstawowe informacje'" in script
     assert "'Platforma', 'Platforma i źródło VM'" in script
     assert "'VM', 'Parametry VM'" in script
