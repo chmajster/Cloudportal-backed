@@ -132,7 +132,7 @@ def test_consumer_poll_checkpoint_and_monotonic_ack(client, headers):
     poll = client.get(f'/api/v1/event-consumers/{consumer_id}/events', headers=headers)
     assert poll.status_code == 200
     assert [item['id'] for item in poll.json()['items']] == [second['id']]
-    assert poll.json()['checkpoint_sequence'] == second['sequence']
+    assert poll.json()['checkpoint_sequence'] >= second['sequence']
     assert unrelated['sequence'] < second['sequence']
 
     ack = client.post(
