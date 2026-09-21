@@ -73,12 +73,36 @@ def upgrade():
 
     with op.batch_alter_table('webhook_deliveries') as batch:
         batch.add_column(sa.Column('event_id', sa.String(length=36), nullable=True))
+        batch.alter_column(
+            'event',
+            existing_type=sa.String(length=64),
+            type_=sa.String(length=128),
+            existing_nullable=False,
+        )
+        batch.alter_column(
+            'resource_id',
+            existing_type=sa.String(length=100),
+            type_=sa.String(length=255),
+            existing_nullable=False,
+        )
         batch.create_index('ix_webhook_deliveries_event_id', ['event_id'])
 
 
 def downgrade():
     with op.batch_alter_table('webhook_deliveries') as batch:
         batch.drop_index('ix_webhook_deliveries_event_id')
+        batch.alter_column(
+            'event',
+            existing_type=sa.String(length=128),
+            type_=sa.String(length=64),
+            existing_nullable=False,
+        )
+        batch.alter_column(
+            'resource_id',
+            existing_type=sa.String(length=255),
+            type_=sa.String(length=100),
+            existing_nullable=False,
+        )
         batch.drop_column('event_id')
 
     op.drop_table('extension_deliveries')
