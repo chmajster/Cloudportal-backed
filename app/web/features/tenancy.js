@@ -21,7 +21,7 @@
 
   function foundationNotice() {
     return node('p', { class: 'tenancy-notice', role: 'note', text:
-      'Etap fundamentu governance: uprawnienia poniżej dotyczą zarządzania tenantami. Istniejące VM, deploymenty, projekty i credentials nie są jeszcze izolowane przez ten moduł.' });
+      'Etap fundamentu governance: uprawnienia poniżej dotyczą zarządzania tenantami. Istniejące VM, deploymenty i credentials nie są jeszcze izolowane przez ten moduł.' });
   }
 
   async function tenantsView() {
@@ -55,6 +55,7 @@
     const actions = [];
     if (permits('tenants.update') && editable) actions.push(action('Edytuj', () => tenantForm(item, scope)));
     if (permits('tenants.members.read')) actions.push(action('Członkowie', () => membersView(item.id, scope)));
+    if (permits('projects.read')) actions.push(action('Projekty', () => document.dispatchEvent(new CustomEvent('cloudportal:tenant-projects', { detail: { tenantId: item.id } }))));
     if (permits('tenants.audit.read')) actions.push(action('Historia audytu', () => auditView(item.id)));
     if (!item.is_system && scope.global_administration && permits('tenants.delete')) {
       actions.push(action('Usuń tenant', () => openModal({
