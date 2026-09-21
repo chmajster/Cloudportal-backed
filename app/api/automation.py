@@ -1,12 +1,10 @@
 import re
-from datetime import timedelta
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
 from app.catalog_control import require_catalog_item_enabled
-from app.blueprint_settings import blueprint_execution_settings
 from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
                              HostnameReservationOutput, HostnameSchemeOutput, Items, VMClassificationSettingsOutput)
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
@@ -15,7 +13,7 @@ from app.automation.service import (available_to, blueprint_public, can_manage_b
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
-                        IPPool, JobLog, Provider, Role, User, now)
+                        IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
 from app.security.core import audit, require
 from app.vm_classification import vm_classification_settings
@@ -344,48 +342,6 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         job = new_job(db, request, actor, 'terraform.apply', deployment,
                       {'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
                        'blueprint': deployment.workflow['blueprint']})
-        if row.requires_approval:
-            approval_settings = blueprint_execution_settings(db)
-            payload = dict(job.payload or {})
-            if approval_settings['auto_approve_for_executors']:
-                payload['_approval'] = {
-                    'status': 'approved',
-                    'approved_by': actor.user_id,
-                    'approved_at': now().isoformat(),
-                    'automatic': True,
-                }
-                db.add(JobLog(
-                    job_id=job.id,
-                    message='workflow.approval.auto: blueprints.execute uprawnia do automatycznej akceptacji',
-                ))
-            else:
-                has_runtime_approval = any(
-                    str(step.get('type')) == 'approval' for step in (row.workflow or [])
-                )
-                payload['_approval'] = {'status': 'pending'}
-                if has_runtime_approval:
-                    db.add(JobLog(
-                        job_id=job.id,
-                        message='workflow.approval.deferred: approval nastąpi w zadanym kroku DAG',
-                    ))
-                else:
-                    expires_at = now() + timedelta(
-                        hours=approval_settings['approval_timeout_hours']
-                    )
-                    payload['_approval'].update({
-                        'requested_at': now().isoformat(),
-                        'expires_at': expires_at.isoformat(),
-                    })
-                    job.status = 'waiting_approval'
-                    deployment.status = 'waiting_approval'
-                    db.add(JobLog(
-                        job_id=job.id,
-                        message=(
-                            'workflow.approval.pending: oczekiwanie na zatwierdzenie; '
-                            f'expires_at={expires_at.isoformat()}'
-                        ),
-                    ))
-            job.payload = payload
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
         if ip_allocation:

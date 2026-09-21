@@ -10,13 +10,15 @@ from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from websockets.asyncio.client import connect as websocket_connect
 from pydantic import Field, model_validator
+from sqlalchemy import select
 
 from app.api.common import find, idempotent
 from app.api.schemas import Input, Name, Slug
 from app.config import settings
 from app.database import get_db, session as db_session
-from app.models import Credential, Provider
+from app.models import Credential, ManagedVM, Provider
 from app.providers.registry import provider_for
+from app.providers.task_reconcile import track_proxmox_task
 from app.security.core import audit, redis_client, require
 
 
@@ -137,6 +139,21 @@ def task_result(task):
     return {'task': task} if task else {'task': None}
 
 
+def managed_vm_record(db, provider_id, vmid):
+    return db.scalar(select(ManagedVM).where(
+        ManagedVM.provider_id == int(provider_id),
+        ManagedVM.vm_id == int(vmid),
+    ))
+
+
+def ensure_not_terraform_managed(row, action):
+    if row is not None and row.management_mode == 'terraform' and row.lifecycle_status == 'active':
+        raise HTTPException(
+            409,
+            f'Active Terraform-managed VM cannot be {action} directly; use its deployment workflow',
+        )
+
+
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/status')
 def vm_status(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('vms.read')),
               db=Depends(get_db, scope='function')):
@@ -189,6 +206,7 @@ def delete_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSHOT
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/snapshots/{snapname}/rollback', status_code=202)
 def rollback_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSHOT, request: Request,
                       actor=Depends(require('snapshots.rollback')), db=Depends(get_db, scope='function')):
+    ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'rolled back to a snapshot')
     payload = {'snapname': snapname}
     def execute():
         task = adapter(db, provider_id).rollback_snapshot(node, vmid, snapname)
@@ -223,6 +241,7 @@ def backup_vm(provider_id: int, node: NODE, vmid: VMID, data: BackupVMInput, req
 @router.post('/providers/{provider_id}/restore/{node}', status_code=202)
 def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Request,
                actor=Depends(require('backups.restore')), db=Depends(get_db, scope='function')):
+    ensure_not_terraform_managed(managed_vm_record(db, provider_id, data.vm_id), 'restored over directly')
     source_storage = data.archive.split(':', 1)[0]
     provider = adapter(db, provider_id)
     available = provider.backups(node, source_storage)
@@ -233,6 +252,8 @@ def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Requ
         task = provider.restore_vm(
             node, vm_id=data.vm_id, archive=data.archive, storage=data.storage, unique=data.unique
         )
+        track_proxmox_task(provider_id=provider_id, node=node, upid=task, action='restore',
+                           target_node=node, target_vm_id=data.vm_id, created_by=actor.user_id)
         audit(db, request, 'vm.restore_started', 'vms', f'{provider_id}:{node}:{data.vm_id}')
         return task_result(task)
     return idempotent(db, request, actor, data.model_dump(), execute, required=True)
@@ -241,8 +262,11 @@ def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Requ
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/template', status_code=202)
 def convert_to_template(provider_id: int, node: NODE, vmid: VMID, request: Request,
                         actor=Depends(require('vms.template')), db=Depends(get_db, scope='function')):
+    ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'converted to a template')
     def execute():
         task = adapter(db, provider_id).convert_to_template(node, vmid)
+        track_proxmox_task(provider_id=provider_id, node=node, upid=task, action='template',
+                           vm_id=vmid, created_by=actor.user_id)
         audit(db, request, 'vm.converted_to_template', 'vms', f'{provider_id}:{node}:{vmid}')
         return task_result(task)
     return idempotent(db, request, actor, {}, execute, required=True)
@@ -262,6 +286,9 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
             storage=data.storage,
             pool=data.pool,
         )
+        track_proxmox_task(provider_id=provider_id, node=node, upid=task, action='clone',
+                           vm_id=vmid, target_node=data.target or node, target_vm_id=data.new_vm_id,
+                           name=data.name, created_by=actor.user_id)
         audit(db, request, 'vm.cloned', 'vms', f'{provider_id}:{node}:{vmid}->{data.new_vm_id}')
         return task_result(task)
     return idempotent(db, request, actor, data.model_dump(), execute, required=True)
@@ -270,6 +297,7 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
 @router.put('/providers/{provider_id}/vms/{node}/{vmid}/disk', status_code=202)
 def resize_disk(provider_id: int, node: NODE, vmid: VMID, data: ResizeDiskInput, request: Request,
                 actor=Depends(require('vms.update')), db=Depends(get_db, scope='function')):
+    ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'resized directly')
     def execute():
         task = adapter(db, provider_id).resize_disk(
             node, vmid, disk=data.disk, grow_gib=data.grow_gib
@@ -282,12 +310,18 @@ def resize_disk(provider_id: int, node: NODE, vmid: VMID, data: ResizeDiskInput,
 @router.put('/providers/{provider_id}/vms/{node}/{vmid}/config', status_code=202)
 def update_vm_config(provider_id: int, node: NODE, vmid: VMID, data: VMConfigInput, request: Request,
                      actor=Depends(require('vms.update')), db=Depends(get_db, scope='function')):
+    managed = managed_vm_record(db, provider_id, vmid)
+    ensure_not_terraform_managed(managed, 'reconfigured directly')
     payload = data.model_dump(exclude_none=True)
     def execute():
         values = dict(payload)
         if 'onboot' in values:
             values['onboot'] = int(values['onboot'])
         task = adapter(db, provider_id).update_vm_config(node, vmid, **values)
+        track_proxmox_task(provider_id=provider_id, node=node, upid=task, action='config',
+                           vm_id=vmid, name=values.get('name'), created_by=actor.user_id)
+        if not task and managed is not None and values.get('name'):
+            managed.name = str(values['name'])
         audit(db, request, 'vm.config_updated', 'vms', f'{provider_id}:{node}:{vmid}')
         return task_result(task)
     return idempotent(db, request, actor, payload, execute, required=True)
@@ -296,6 +330,7 @@ def update_vm_config(provider_id: int, node: NODE, vmid: VMID, data: VMConfigInp
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/migrate', status_code=202)
 def migrate_vm(provider_id: int, node: NODE, vmid: VMID, data: MigrateVMInput, request: Request,
                actor=Depends(require('vms.migrate')), db=Depends(get_db, scope='function')):
+    ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'migrated directly')
     def execute():
         task = adapter(db, provider_id).migrate_vm(
             node,
@@ -304,6 +339,8 @@ def migrate_vm(provider_id: int, node: NODE, vmid: VMID, data: MigrateVMInput, r
             online=data.online,
             with_local_disks=data.with_local_disks,
         )
+        track_proxmox_task(provider_id=provider_id, node=node, upid=task, action='migrate',
+                           vm_id=vmid, target_node=data.target, created_by=actor.user_id)
         audit(db, request, 'vm.migrated', 'vms', f'{provider_id}:{node}:{vmid}->{data.target}')
         return task_result(task)
     return idempotent(db, request, actor, data.model_dump(), execute, required=True)
@@ -314,6 +351,7 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
               purge: Annotated[bool, Query()] = False,
               destroy_unreferenced_disks: Annotated[bool, Query()] = False,
               actor=Depends(require('vms.delete')), db=Depends(get_db, scope='function')):
+    ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'deleted directly')
     payload = {'purge': purge, 'destroy_unreferenced_disks': destroy_unreferenced_disks}
     def execute():
         task = adapter(db, provider_id).delete_vm(
@@ -322,6 +360,8 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
             purge=purge,
             destroy_unreferenced_disks=destroy_unreferenced_disks,
         )
+        track_proxmox_task(provider_id=provider_id, node=node, upid=task, action='delete',
+                           vm_id=vmid, created_by=actor.user_id)
         audit(db, request, 'vm.deleted', 'vms', f'{provider_id}:{node}:{vmid}')
         return task_result(task)
     return idempotent(db, request, actor, payload, execute, required=True)

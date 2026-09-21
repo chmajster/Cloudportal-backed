@@ -18,7 +18,9 @@ from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
 from app.inventory_sync import state_outputs, sync_deployment_inventory
-from app.models import Audit, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, Token, now
+from app.jobs.lifecycle import has_released_allocations
+from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog,
+                        ManagedResource, ManagedVM, Token, User, now)
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
@@ -71,10 +73,41 @@ class Context:
             db.commit()
 
 
+def _validate_blueprint_authorization(db, job, user, permissions):
+    blueprint_snapshot = (job.payload or {}).get('blueprint') or {}
+    if job.operation != 'terraform.apply' or not blueprint_snapshot:
+        return
+    if 'blueprints.execute' not in permissions:
+        raise ExecutionFailed('Blueprint execution permission has been revoked')
+
+    blueprint_id = blueprint_snapshot.get('id')
+    if blueprint_id is None:
+        return
+    blueprint = db.get(Blueprint, int(blueprint_id))
+    if blueprint is None or not blueprint.is_active:
+        raise ExecutionFailed('Blueprint is no longer active or available')
+
+    role_ids = {role.id for role in user.roles}
+    if (
+        blueprint.allowed_role_ids or blueprint.allowed_user_ids
+    ) and user.id not in blueprint.allowed_user_ids and not (role_ids & set(blueprint.allowed_role_ids)):
+        raise ExecutionFailed('Blueprint access has been revoked')
+
+    source = {
+        'CloudPortal': 'cloudportal',
+        'Cloudportal-backed': 'backend',
+        'API': 'api',
+        'Scheduler': 'backend',
+    }.get(job.source, 'api')
+    if not (blueprint.visibility or {}).get(source, False):
+        raise ExecutionFailed('Blueprint is no longer visible to this execution source')
+
+
 def validate_authorization(db, job):
     if job.source in {'Scheduler', 'Recovery'} and job.token_id is None:
         permissions = scheduler_user_permissions(db, job.created_by)
-        if permissions is None:
+        user = db.get(User, job.created_by)
+        if permissions is None or user is None:
             raise ExecutionFailed('Scheduled job owner is disabled or locked')
     else:
         token = db.get(Token, job.token_id)
@@ -90,6 +123,7 @@ def validate_authorization(db, job):
                 raise ExecutionFailed('Job session has ended')
         elif token.kind != 'api' or token.revoked_at:
             raise ExecutionFailed('Job authorization has been revoked')
+        user = token.user
         permissions = effective_permissions(token.user)
         if token.kind == 'api':
             if token.expires_at and token.expires_at <= now():
@@ -116,6 +150,7 @@ def validate_authorization(db, job):
         needed.add('ansible.execute')
     if not needed <= permissions:
         raise ExecutionFailed('Job permissions have been revoked')
+    _validate_blueprint_authorization(db, job, user, permissions)
 
 
 def ensure_runtime_credential(credential):
@@ -581,12 +616,15 @@ def wait_for_proxmox_task(context, provider, node, upid, timeout=600):
 
 def health_check_vm(context, workspace):
     if context.deployment.provider != 'proxmox':
-        availability = provider_for(context.credential).execution_availability()
-        if not availability.get('ok'):
-            raise ExecutionFailed(
-                'Blueprint health_check failed: '
-                + str(availability.get('reason') or 'provider unavailable')
-            )
+        with session() as db:
+            resource = db.scalar(select(ManagedResource).where(
+                ManagedResource.deployment_id == context.deployment.id,
+                ManagedResource.lifecycle_status == 'active',
+            ))
+            if resource is None or not resource.external_id:
+                raise ExecutionFailed(
+                    'Blueprint health_check failed: managed resource was not synchronized'
+                )
         return True
 
     node, vm_id, provider = _workflow_vm_identity(context, workspace)
@@ -1050,12 +1088,17 @@ def execute(job_id):
             if job.deployment_id:
                 context.deployment = db.get(Deployment, job.deployment_id)
                 context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
+                if job.operation == 'terraform.apply':
+                    if ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+                        raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
+                    if has_released_allocations(db, context.deployment.id):
+                        raise ExecutionFailed('Deployment allocations were released; execute the Blueprint again')
             if job.payload.get('ansible'):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
         if (
             settings().provider_offline_queue_enabled
-            and job.operation == 'terraform.apply'
+            and job.operation in {'terraform.apply', 'terraform.destroy'}
             and context.deployment is not None
             and context.deployment.provider == 'proxmox'
         ):
@@ -1066,7 +1109,7 @@ def execute(job_id):
                     return
                 reason = availability.get('reason') or 'configuration'
                 raise ExecutionFailed(
-                    'Proxmox is reachable but cannot be used for provisioning; '
+                    'Proxmox is reachable but cannot be used for Terraform execution; '
                     f'check credentials, TLS and provider configuration ({reason})'
                 )
             clear_provider_wait(job.id)
@@ -1113,18 +1156,21 @@ def execute(job_id):
         if current.cancel_requested and status == 'successful':
             status, error = 'cancelled', 'Cancellation requested at completion; inspect deployment state'
         current.status, current.error = status, error
+        owns_deployment = False
         if current.deployment_id:
             deployment = db.get(Deployment, current.deployment_id)
-            deployment.active_job_id = None
-            if context.rollback_destroyed:
-                deployment.status = 'destroyed'
-            else:
-                deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
-            if current.operation == 'terraform.plan' and status == 'successful':
-                deployment.status = current.payload.get('previous_status', 'failed')
-            if current.operation == 'terraform.import' and status == 'successful':
-                deployment.status = 'imported'
-            if deployment.status == 'destroyed':
+            owns_deployment = deployment is not None and deployment.active_job_id == current.id
+            if owns_deployment:
+                deployment.active_job_id = None
+                if current.operation == 'terraform.plan':
+                    deployment.status = current.payload.get('previous_status', deployment.status or 'failed')
+                elif context.rollback_destroyed:
+                    deployment.status = 'destroyed'
+                else:
+                    deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
+                if current.operation == 'terraform.import' and status == 'successful':
+                    deployment.status = 'imported'
+            if owns_deployment and deployment.status == 'destroyed':
                 deployment.destroyed_at = now()
                 released_at = now()
                 db.execute(update(HostnameReservation).where(
@@ -1152,7 +1198,7 @@ def execute(job_id):
             and not context.rollback_destroyed
         ):
             deployment = db.get(Deployment, current.deployment_id)
-            if deployment is not None and deployment.active_job_id is None:
+            if owns_deployment and deployment is not None and deployment.active_job_id is None:
                 recovery = Job(
                     id=str(uuid.uuid4()),
                     operation='terraform.destroy',

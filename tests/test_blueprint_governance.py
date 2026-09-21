@@ -435,3 +435,100 @@ def test_waiting_approval_expires_and_removes_plan(client, headers, monkeypatch,
     assert deployment['active_job_id'] is None
     with session() as db:
         assert db.get(TerraformPlan, launched.json()['id']) is None
+
+
+def test_manual_blueprint_apply_cannot_bypass_central_approval(client, headers):
+    setting = client.put(
+        '/api/v1/settings/blueprints',
+        headers=headers,
+        json={'auto_approve_for_executors': False, 'approval_timeout_hours': 48},
+    )
+    assert setting.status_code == 200, setting.text
+
+    credential, provider = infrastructure(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
+        credential,
+        provider,
+        slug='manual-apply-approval',
+        name='Manual apply approval',
+        requires_approval=True,
+    ))
+    assert created.status_code == 201, created.text
+
+    launched = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(headers),
+        json={},
+    )
+    assert launched.status_code == 202, launched.text
+
+    with session() as db:
+        initial = db.get(Job, launched.json()['job']['id'])
+        deployment = db.get(Deployment, launched.json()['id'])
+        initial.status = 'failed'
+        deployment.active_job_id = None
+        deployment.status = 'failed'
+        db.commit()
+
+    manual = client.post('/api/v1/jobs', headers=idem(headers), json={
+        'operation': 'terraform.apply',
+        'deployment_id': launched.json()['id'],
+    })
+    assert manual.status_code == 202, manual.text
+    assert manual.json()['status'] == 'waiting_approval'
+
+    with session() as db:
+        job = db.get(Job, manual.json()['id'])
+        approval = (job.payload or {}).get('_approval') or {}
+        assert approval['status'] == 'pending'
+        assert approval['expires_at']
+
+
+def test_worker_revalidates_blueprint_before_execution(client, headers, monkeypatch):
+    setting = client.put(
+        '/api/v1/settings/blueprints',
+        headers=headers,
+        json={'auto_approve_for_executors': False, 'approval_timeout_hours': 48},
+    )
+    assert setting.status_code == 200, setting.text
+
+    credential, provider = infrastructure(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
+        credential,
+        provider,
+        slug='revoked-before-run',
+        name='Revoked before run',
+        requires_approval=True,
+    ))
+    assert created.status_code == 201, created.text
+
+    launched = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(headers),
+        json={},
+    )
+    assert launched.status_code == 202, launched.text
+    job_id = launched.json()['job']['id']
+    assert launched.json()['job']['status'] == 'waiting_approval'
+
+    disabled = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}/enabled",
+        headers=headers,
+        json={'enabled': False},
+    )
+    assert disabled.status_code == 200, disabled.text
+
+    approved = client.post(f'/api/v1/jobs/{job_id}/approve', headers=headers)
+    assert approved.status_code == 200, approved.text
+
+    monkeypatch.setattr(
+        TerraformExecutor,
+        'execute',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('Terraform must not run')),
+    )
+    execute(job_id)
+
+    with session() as db:
+        job = db.get(Job, job_id)
+        assert job.status == 'failed'
+        assert 'no longer active' in job.error

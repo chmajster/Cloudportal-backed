@@ -168,7 +168,7 @@ def test_running_cancel_is_visible_and_orphan_is_finalized(client, headers):
     with session() as db:
         job = db.get(Job, d['job']['id'])
         job.status = 'running'
-        job.heartbeat_at = now() - timedelta(seconds=30)
+        job.heartbeat_at = now() - timedelta(seconds=120)
         dep = db.get(Deployment, d['id'])
         dep.status = 'running'
         db.commit()
@@ -729,3 +729,57 @@ def test_regular_deployment_ansible_uses_ip_inventory(client, headers, monkeypat
     result = client.get('/api/v1/jobs/' + created.json()['job']['id'], headers=headers).json()
     assert result['status'] == 'successful'
     assert observed == {'operation': 'ansible.execute', 'hosts': ['192.0.2.70']}
+
+
+def _finish_initial_deployment_job(deployment_body):
+    with session() as db:
+        dep = db.get(Deployment, deployment_body['id'])
+        initial = db.get(Job, dep.active_job_id)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        db.commit()
+
+
+def test_old_worker_cannot_clear_newer_active_job(client, headers, monkeypatch, tmp_path):
+    created = deployment(client, headers)
+    _finish_initial_deployment_job(created)
+
+    first = client.post('/api/v1/jobs', headers={
+        **headers, 'Idempotency-Key': str(uuid.uuid4())
+    }, json={'operation': 'terraform.plan', 'deployment_id': created['id']})
+    assert first.status_code == 202, first.text
+
+    holder = {}
+
+    def finish_after_new_job(self, operation, context):
+        with session() as db:
+            dep = db.get(Deployment, created['id'])
+            newer = Job(
+                operation='terraform.plan',
+                deployment_id=dep.id,
+                payload={'previous_status': 'successful'},
+                status='queued',
+                created_by=context.job.created_by,
+                token_id=context.job.token_id,
+                request_id=str(uuid.uuid4()),
+                ip='127.0.0.1',
+                source='API',
+            )
+            db.add(newer)
+            db.flush()
+            dep.active_job_id = newer.id
+            dep.status = 'queued'
+            holder['job_id'] = newer.id
+            db.commit()
+        return tmp_path
+
+    monkeypatch.setattr(TerraformExecutor, 'execute', finish_after_new_job)
+    execute(first.json()['id'])
+
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        old = db.get(Job, first.json()['id'])
+        assert old.status == 'successful'
+        assert dep.active_job_id == holder['job_id']
+        assert dep.status == 'queued'

@@ -166,3 +166,61 @@ def test_provider_offline_retry_limit_becomes_terminal_failure(client, headers, 
     assert terminal['provider_retry_attempts'] == 0
     assert terminal['provider_next_retry_at'] is None
     assert 'retry attempts' in terminal['error']
+
+
+def test_proxmox_destroy_waits_for_provider_reconnect(client, headers, monkeypatch, tmp_path):
+    deployment = _deployment(client, headers)
+    with session() as db:
+        dep = db.get(Deployment, deployment['id'])
+        initial = db.get(Job, dep.active_job_id)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        db.commit()
+
+    destroy = client.post(
+        '/api/v1/deployments/' + deployment['id'] + '/destroy',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    )
+    assert destroy.status_code == 202, destroy.text
+
+    cfg = settings()
+    monkeypatch.setattr(cfg, 'provider_offline_queue_enabled', True)
+    monkeypatch.setattr(cfg, 'provider_retry_base_seconds', 5)
+    monkeypatch.setattr(cfg, 'provider_retry_max_seconds', 5)
+    probes = iter([
+        {'ok': False, 'retryable': True, 'reason': 'unreachable'},
+        {'ok': True, 'retryable': False, 'reason': None},
+    ])
+
+    class Provider:
+        def execution_availability(self):
+            return next(probes)
+
+    monkeypatch.setattr('app.jobs.worker.provider_for', lambda credential: Provider())
+    operations = []
+    monkeypatch.setattr(
+        TerraformExecutor,
+        'execute',
+        lambda self, operation, context: operations.append(operation) or tmp_path,
+    )
+
+    execute(destroy.json()['id'])
+    waiting = client.get('/api/v1/jobs/' + destroy.json()['id'], headers=headers).json()
+    assert waiting['status'] == 'queued'
+    assert waiting['provider_waiting'] is True
+    assert operations == []
+
+    with session() as db:
+        job = db.get(Job, destroy.json()['id'])
+        payload = dict(job.payload)
+        payload['_provider_wait']['next_attempt_at'] = '2000-01-01T00:00:00'
+        job.payload = payload
+        db.commit()
+
+    execute(destroy.json()['id'])
+    finished = client.get('/api/v1/jobs/' + destroy.json()['id'], headers=headers).json()
+    assert finished['status'] == 'successful'
+    assert operations == ['terraform.destroy']
+    current = client.get('/api/v1/deployments/' + deployment['id'], headers=headers).json()
+    assert current['status'] == 'destroyed'

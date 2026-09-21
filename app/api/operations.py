@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent
 from app.api.schemas import ScheduledOperationInput, WebhookEndpointInput
 from app.database import get_db
+from app.jobs.lifecycle import has_released_allocations
 from app.models import Deployment, ScheduledOperation, WebhookDelivery, WebhookEndpoint, now
 from app.operations.service import (
     ensure_operation_permissions,
@@ -35,6 +36,10 @@ def validate_schedule_target(db, request, data):
     deployment = find(db, Deployment, data.deployment_id)
     if deployment.status == 'destroyed':
         raise HTTPException(409, 'Cannot schedule an operation for a destroyed deployment')
+    if data.operation == 'terraform.apply' and has_released_allocations(db, deployment.id):
+        raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
+    if data.operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+        raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
     ensure_operation_permissions(request.state.permissions, data.operation, deployment)
     return deployment
 
