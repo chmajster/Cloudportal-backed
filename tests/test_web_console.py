@@ -63,6 +63,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/catalog.js',
         'features/blueprint-provisioning-guards.js',
         'features/blueprint-runtime-apmid.js',
+        'features/blueprint-vra-designer.js',
         'features/blueprint-wizard-core.js',
         'features/blueprint-wizard-hostname.js',
         'features/blueprint-wizard-network.js',
@@ -82,6 +83,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/identity.css',
         'styles/features/credentials.css',
         'styles/features/blueprints.css',
+        'styles/features/blueprint-vra-designer.css',
         'styles/features/inventory.css',
         'styles/features/dashboard.css',
         'styles/features/tools.css',
@@ -678,6 +680,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.hostname-generator-info' in stylesheet
     assert '.blueprint-run-summary' in stylesheet
     assert '.blueprint-wizard-shell' in stylesheet
+    assert '.vra-designer-shell' in stylesheet
+    assert '.vra-graph-viewport' in stylesheet
+    assert '.vra-yaml-editor' in stylesheet
     assert '.blueprint-wizard-steps' in stylesheet
     assert '.blueprint-wizard-select-card' in stylesheet
     assert '.blueprint-wizard-dual-fieldset' in stylesheet
