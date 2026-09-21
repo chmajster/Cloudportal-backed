@@ -234,7 +234,8 @@ def dispatch_once():
                 existing.delete()
             except NoSuchJobError:
                 pass
-            q.enqueue('app.jobs.worker.execute', job.id, job_id=job.id,
+            worker_target = 'app.day2.worker.execute' if job.operation.startswith('day2.') else 'app.jobs.worker.execute'
+            q.enqueue(worker_target, job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)
             job.dispatched_at = now()
         reconcile_cancelled_jobs(db)
@@ -254,6 +255,8 @@ def dispatch_once():
                 d.active_job_id, d.status = None, 'failed'
             db.add(JobLog(job_id=job.id, message=job.error))
             queue_job_webhooks(db, job)
+        from app.day2.reconciliation import reconcile_finished_jobs
+        reconcile_finished_jobs(db)
         db.commit()
     reconcile_proxmox_tasks_once()
     queue_system_alert_webhooks_once()
