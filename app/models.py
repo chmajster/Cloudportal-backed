@@ -363,7 +363,9 @@ class ExtensionState(Timestamp, Base):
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     status: Mapped[str] = mapped_column(String(16), default="healthy", index=True)
     config: Mapped[dict] = mapped_column(JSON, default=dict)
-    last_event_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    last_event_sequence: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, 'sqlite'), default=0
+    )
     failure_count: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(String(500))
     updated_by: Mapped[int | None] = mapped_column(Integer)
