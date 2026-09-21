@@ -54,6 +54,10 @@ def publish_event(
     """
     if not EVENT_TYPE_RE.fullmatch(event_type):
         raise ValueError('Invalid event type')
+
+    from app.events.schemas import validate_event_payload
+    validate_event_payload(db, event_type, schema_version, payload or {})
+
     row = EventRecord(
         id=str(uuid.uuid4()),
         type=event_type,
