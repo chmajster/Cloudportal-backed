@@ -236,14 +236,14 @@ def test_disabled_extension_does_not_starve_enabled_delivery(client, headers, mo
         version='1.0.0',
         description='disabled test consumer',
         event_patterns=('*',),
-        handler=lambda db, event: handled.append('disabled'),
+        handler=lambda db, event, delivery: handled.append('disabled'),
     )
     enabled_spec = ExtensionSpec(
         name='test.enabled',
         version='1.0.0',
         description='enabled test consumer',
         event_patterns=('*',),
-        handler=lambda db, event: handled.append('enabled'),
+        handler=lambda db, event, delivery: handled.append('enabled'),
     )
     specs = {
         disabled_spec.name: disabled_spec,
@@ -301,3 +301,49 @@ def test_events_openapi_requires_idempotency_key(client):
     header = next(item for item in parameters if item['name'] == 'Idempotency-Key')
     assert header['in'] == 'header'
     assert header['required'] is True
+
+
+def test_webhook_normal_delivery_uses_event_time_subscription_snapshot(client, headers, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings(), 'webhook_allowed_hosts', ['hooks.example.test'])
+
+    published = client.post('/api/v1/events', headers=idem(headers), json={
+        'type': 'custom.snapshot.test',
+        'payload': {'value': 1},
+    })
+    assert published.status_code == 201, published.text
+    event = published.json()
+
+    hook = client.post('/api/v1/webhooks', headers=idem(headers), json={
+        'name': 'Late subscriber',
+        'url': 'https://hooks.example.test/late',
+        'events': ['custom.*'],
+    })
+    assert hook.status_code == 201, hook.text
+    endpoint_id = hook.json()['id']
+
+    dispatch_event_broker_once()
+
+    with session() as db:
+        normal = db.query(WebhookDelivery).filter(
+            WebhookDelivery.event_id == event['id'],
+            WebhookDelivery.endpoint_id == endpoint_id,
+        ).all()
+        assert normal == []
+
+    replay = client.post(
+        f"/api/v1/events/{event['id']}/replay",
+        headers=headers,
+        json={'target': 'webhooks'},
+    )
+    assert replay.status_code == 202, replay.text
+    assert replay.json()['deliveries_created'] == 1
+
+    dispatch_event_broker_once()
+
+    with session() as db:
+        replayed = db.query(WebhookDelivery).filter(
+            WebhookDelivery.event_id == event['id'],
+            WebhookDelivery.endpoint_id == endpoint_id,
+        ).all()
+        assert len(replayed) == 1
