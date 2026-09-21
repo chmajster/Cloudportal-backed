@@ -25,6 +25,7 @@ def upgrade():
         sa.Column('subject_id', sa.String(length=255), nullable=False),
         sa.Column('payload', sa.JSON(), nullable=False),
         sa.Column('metadata_json', sa.JSON(), nullable=False),
+        sa.Column('routing_json', sa.JSON(), nullable=False),
         sa.Column('correlation_id', sa.String(length=64), nullable=True),
         sa.Column('causation_id', sa.String(length=64), nullable=True),
         sa.Column('request_id', sa.String(length=36), nullable=True),
