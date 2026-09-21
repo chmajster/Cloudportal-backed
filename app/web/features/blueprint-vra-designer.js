@@ -6,19 +6,9 @@
       ['terraform_plan', 'Terraform plan', 'Plan infrastruktury'],
       ['terraform_apply', 'Terraform apply', 'Utworzenie / zmiana zasobów'],
       ['terraform_destroy', 'Terraform destroy', 'Usunięcie zasobów'],
-      ['create_vm', 'Create VM', 'Natywne utworzenie VM'],
-      ['clone_vm', 'Clone VM', 'Klonowanie z obrazu'],
-      ['configure_vm', 'Configure VM', 'Konfiguracja parametrów VM'],
-      ['cloud_init', 'Cloud-init', 'Konfiguracja systemu gościa'],
-      ['start_vm', 'Start VM', 'Uruchomienie maszyny'],
       ['create_snapshot', 'Snapshot', 'Punkt przywracania'],
-      ['set_tags', 'Set tags', 'Tagi platformy'],
     ] },
-    { group: 'Sieć i gotowość', items: [
-      ['generate_hostname', 'Generate hostname', 'Nadanie nazwy hosta'],
-      ['allocate_ip', 'Allocate IP', 'Rezerwacja adresu IPAM'],
-      ['release_ip', 'Release IP', 'Zwolnienie adresu IPAM'],
-      ['set_hostname', 'Set hostname', 'Ustawienie nazwy w systemie'],
+    { group: 'Gotowość maszyny', items: [
       ['wait_for_vm', 'Wait for VM', 'Oczekiwanie na VM'],
       ['wait_for_agent', 'Wait for agent', 'Oczekiwanie na guest agent'],
       ['wait_for_ip', 'Wait for IP', 'Oczekiwanie na adres IP'],
@@ -176,7 +166,7 @@
   function normalizeStep(step) {
     return {
       id: String(step.id || 'step').slice(0, 63),
-      type: STEP_TYPES.includes(step.type) ? step.type : 'condition',
+      type: String(step.type || 'condition'),
       depends_on: Array.isArray(step.depends_on) ? [...new Set(step.depends_on.map(String))] : [],
       conditions: step.conditions && typeof step.conditions === 'object' && !Array.isArray(step.conditions) ? deepClone(step.conditions) : {},
       retry: Math.max(0, Math.min(10, Number(step.retry || 0))),
@@ -793,9 +783,9 @@
         el('div', {}, el('strong', { text: meta?.label || step.type }), el('span', { text: meta?.description || '' }))));
 
       body.append(textField('ID kroku', step.id, value => renameStep(step, value)));
-      body.append(selectField('Typ', step.type, STEP_TYPES.map(type => ({
-        value: type, label: TYPE_META.get(type)?.label || type,
-      })), value => mutate(() => { step.type = value; })));
+      const typeChoices = STEP_TYPES.map(type => ({ value: type, label: TYPE_META.get(type)?.label || type }));
+      if (!STEP_TYPES.includes(step.type)) typeChoices.unshift({ value: step.type, label: 'Legacy / YAML: ' + step.type });
+      body.append(selectField('Typ', step.type, typeChoices, value => mutate(() => { step.type = value; })));
       body.append(textField('Zależy od', (step.depends_on || []).join(', '), value => mutate(() => {
         step.depends_on = [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))];
       }), { help: 'ID kroków oddzielone przecinkami.' }));
