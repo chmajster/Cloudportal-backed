@@ -20,4 +20,5 @@ class ExtensionSpec:
     description: str
     event_patterns: tuple[str, ...] = ()
     handler: EventHandler | None = None
+    replay_existing_events: bool = False
     hooks: dict[str, HookHandler] = field(default_factory=dict)
