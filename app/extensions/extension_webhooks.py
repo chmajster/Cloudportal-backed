@@ -18,6 +18,7 @@ def webhook_bridge(db, event):
         'correlation_id': event.correlation_id,
         'causation_id': event.causation_id,
         'request_id': event.request_id,
+        'data': event.payload or {},
         # Preserve the legacy webhook shape while adding CloudEvents-compatible metadata.
         'event': event.type,
         **(event.payload or {}),
