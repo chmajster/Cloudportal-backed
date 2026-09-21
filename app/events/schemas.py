@@ -12,9 +12,9 @@ class EventSchemaValidationError(ValueError):
 def _validate_refs(value, path='schema'):
     if isinstance(value, dict):
         for key, nested in value.items():
-            if key == '$ref' and isinstance(nested, str) and not nested.startswith('#'):
+            if key in {'$ref', '$dynamicRef'} and isinstance(nested, str) and not nested.startswith('#'):
                 raise EventSchemaValidationError(
-                    f'External JSON Schema references are not allowed: {path}.$ref'
+                    f'External JSON Schema references are not allowed: {path}.{key}'
                 )
             _validate_refs(nested, f'{path}.{key}')
     elif isinstance(value, list):
