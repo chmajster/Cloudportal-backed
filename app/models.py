@@ -374,6 +374,7 @@ class ExtensionDelivery(Timestamp, Base):
     event_sequence: Mapped[int] = mapped_column(
         ForeignKey("event_records.sequence", ondelete="CASCADE"), index=True
     )
+    materialization_key: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     is_replay: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
