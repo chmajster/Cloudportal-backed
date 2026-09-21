@@ -1,5 +1,9 @@
 import uuid
 
+from app.database import session
+from app.models import ManagedVM
+from app.providers.task_reconcile import reconcile_proxmox_tasks_once, track_proxmox_task
+
 from conftest import new_user
 
 
@@ -132,3 +136,118 @@ def test_vm_rbac_separates_read_from_power(client, headers, monkeypatch):
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
     assert client.get(base + '/status', headers=viewer).status_code == 200
     assert client.post(base + '/power', headers=viewer, json={'action': 'start'}).status_code == 403
+
+
+def test_guest_addresses_prefer_primary_proxmox_nic(monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+
+    def fake_get(path):
+        if path.endswith('/config'):
+            return {
+                'net0': 'virtio=AA:BB:CC:DD:EE:01,bridge=vmbr20',
+                'net1': 'virtio=AA:BB:CC:DD:EE:02,bridge=vmbr30',
+            }
+        if path.endswith('/agent/network-get-interfaces'):
+            return {
+                'result': [
+                    {
+                        'name': 'docker0',
+                        'hardware-address': '02:42:ac:11:00:01',
+                        'ip-addresses': [{'ip-address': '172.17.0.1'}],
+                    },
+                    {
+                        'name': 'eth1',
+                        'hardware-address': 'aa:bb:cc:dd:ee:02',
+                        'ip-addresses': [{'ip-address': '10.30.0.25'}],
+                    },
+                    {
+                        'name': 'eth0',
+                        'hardware-address': 'aa:bb:cc:dd:ee:01',
+                        'ip-addresses': [
+                            {'ip-address': 'fe80::1'},
+                            {'ip-address': '192.0.2.25'},
+                        ],
+                    },
+                ],
+            }
+        raise AssertionError('unexpected Proxmox path: ' + path)
+
+    monkeypatch.setattr(provider, '_get', fake_get)
+    assert provider.guest_addresses('pve01', 101) == ['192.0.2.25']
+
+
+def test_terraform_managed_vm_blocks_raw_mutations(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = resources(client, headers)
+    with session() as db:
+        db.add(ManagedVM(
+            provider_id=provider['id'],
+            node='pve01',
+            vm_id=303,
+            name='terraform-vm',
+            management_mode='terraform',
+            lifecycle_status='active',
+            created_by=1,
+        ))
+        db.commit()
+
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'delete_vm',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('raw delete must not run')),
+    )
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'migrate_vm',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('raw migrate must not run')),
+    )
+
+    base = f"/api/v1/providers/{provider['id']}/vms/pve01/303"
+    deleted = client.delete(base, headers=idem(headers))
+    assert deleted.status_code == 409
+    migrated = client.post(base + '/migrate', headers=idem(headers), json={
+        'target': 'pve02', 'online': True, 'with_local_disks': True,
+    })
+    assert migrated.status_code == 409
+
+
+def test_proxmox_task_reconciliation_registers_clone(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = resources(client, headers)
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'task_status',
+        lambda self, node, upid: {'status': 'stopped', 'exitstatus': 'OK'},
+    )
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'vm_status',
+        lambda self, node, vmid: {'vmid': vmid, 'node': node, 'name': 'clone-vm'},
+    )
+
+    track_proxmox_task(
+        provider_id=provider['id'],
+        node='pve01',
+        upid='UPID:clone-reconcile',
+        action='clone',
+        created_by=1,
+        vm_id=101,
+        target_node='pve02',
+        target_vm_id=404,
+        name='clone-vm',
+    )
+    result = reconcile_proxmox_tasks_once()
+    assert result['completed'] >= 1
+
+    with session() as db:
+        row = db.query(ManagedVM).filter(
+            ManagedVM.provider_id == provider['id'],
+            ManagedVM.vm_id == 404,
+        ).one()
+        assert row.node == 'pve02'
+        assert row.name == 'clone-vm'
+        assert row.management_mode == 'external'
