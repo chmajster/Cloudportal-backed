@@ -51,10 +51,7 @@ async function blueprintsView() {
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
   const canQuickProxmox = canDesignBlueprint && allowed('hostnames.read') && allowed('ipam.read');
   const actions = [];
-  if (allowed('blueprints.create') && canDesignBlueprint) {
-    actions.push(button('Nowy Blueprint — kreator', () => window.BlueprintWizard.open(), 'primary'));
-    if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open()));
-  }
+  if (allowed('blueprints.create') && canDesignBlueprint) { actions.push(button('Nowy Blueprint — kreator', () => window.BlueprintWizard.open(), 'primary')); if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open())); }
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
       { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
@@ -72,10 +69,7 @@ async function blueprintsView() {
       if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
       if (allowed('blueprints.update') && canManage && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
-      if (allowed('blueprints.update') && canManage && canDesignBlueprint && window.BlueprintVRADesigner) {
-        result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item)));
-      }
-      if (allowed('blueprints.update') && canManage && canDesignBlueprint) result.push(button('Edytuj klasycznie', () => blueprintForm(item)));
+      if (allowed('blueprints.update') && canManage && canDesignBlueprint) { if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item))); result.push(button('Edytuj klasycznie', () => blueprintForm(item))); }
       if (allowed('blueprints.delete') && canManage) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
