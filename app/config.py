@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     retention_audit_days: int = Field(default=365, ge=1, le=3650)
     retention_webhook_deliveries_days: int = Field(default=30, ge=1, le=3650)
     retention_events_days: int = Field(default=90, ge=1, le=3650)
+    event_consumer_lag_warning: int = Field(default=10000, ge=1, le=1000000000)
     retention_idempotency_days: int = Field(default=7, ge=1, le=3650)
     retention_released_allocations_days: int = Field(default=90, ge=1, le=3650)
 
