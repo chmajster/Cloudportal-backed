@@ -491,6 +491,31 @@ docker_compose() {
   docker_compose_for "$release" "$docker_env" "$@"
 }
 
+docker_rollback_candidate() {
+  local candidate_release=$1 candidate_env=$2 previous_release=$3 previous_workers=$4
+  local tls_changed=$5 tls_backup_dir=$6 had_previous_tls=$7
+
+  ui_warn 'Przywracam ostatni aktywny stan Docker po nieudanej walidacji kandydata.'
+
+  if ((tls_changed)); then
+    rm -rf "$docker_tls"
+    install -d -m 0700 "$docker_tls"
+    if ((had_previous_tls)); then
+      cp -a "$tls_backup_dir/." "$docker_tls/"
+      ui_info 'Przywrócono poprzedni materiał TLS.'
+    fi
+  fi
+
+  if [[ -n "$previous_release" && -f "$previous_release/docker-compose.yml" && -r "$docker_env" ]]; then
+    docker_compose_for "$previous_release" "$docker_env" up -d --remove-orphans --scale "worker=${previous_workers:-1}" || true
+    if ((tls_changed)); then
+      docker_compose_for "$previous_release" "$docker_env" restart proxy || true
+    fi
+  else
+    docker_compose_for "$candidate_release" "$candidate_env" down --remove-orphans >/dev/null 2>&1 || true
+  fi
+}
+
 docker_status() {
   CURRENT_STAGE='status Docker'
   ui_header 'Cloudportal-backed — status Docker'
@@ -614,8 +639,10 @@ docker_prepare_github_curl() {
 docker_install() {
   ui_header 'Cloudportal-backed — instalacja Docker'
   local stages=6 release_sha effective_tarball_url candidate_sha release docker_tls_stage
-  local docker_tls_changed=0
+  local candidate_env previous_release tls_backup_dir=''
+  local docker_tls_changed=0 had_previous_tls=0
   docker_tmp_dir=''
+  previous_release=$(docker_current_release)
   local previous_docker_host='' previous_docker_port='' previous_docker_workers=''
   if [[ -r "$docker_env" ]]; then
     previous_docker_host=$(sed -n 's/^CP_PUBLIC_HOST=//p' "$docker_env" | tail -n 1)
@@ -667,19 +694,21 @@ docker_install() {
   release=$(mktemp -d "$docker_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-${release_sha:0:12}-XXXXXX")
   cp -a "$docker_tmp_dir/source/." "$release/"
   chmod -R go-w "$release"
-  ln -sfn "$release" "$docker_root/current"
-  ui_ok "Przygotowano release: $release"
+  ui_ok "Przygotowano kandydata release: $release"
 
   ui_stage 3 "$stages" 'Konfiguracja i sekrety'
   local postgres_password=''
   if [[ -r "$docker_env" ]]; then
     postgres_password=$(sed -n 's/^CP_POSTGRES_PASSWORD=//p' "$docker_env" | tail -n 1)
+  elif [[ -r "$docker_pending_env" ]]; then
+    postgres_password=$(sed -n 's/^CP_POSTGRES_PASSWORD=//p' "$docker_pending_env" | tail -n 1)
   fi
   if [[ -z "$postgres_password" ]]; then
     postgres_password=$(openssl rand -hex 32)
   fi
   umask 077
-  cat > "$docker_env" <<EOF
+  candidate_env="$docker_pending_env"
+  cat > "$candidate_env" <<EOF
 CP_POSTGRES_PASSWORD=$postgres_password
 CP_BUILD_COMMIT=$release_sha
 CP_HTTPS_PORT=$backend_port
@@ -687,7 +716,7 @@ CP_TLS_DIR=$docker_tls
 CP_PUBLIC_HOST=$backend_host
 CP_WORKER_COUNT=$workers
 EOF
-  chmod 0600 "$docker_env"
+  chmod 0600 "$candidate_env"
   unset postgres_password
 
   docker_tls_stage="$docker_tmp_dir/tls-stage"
@@ -753,30 +782,42 @@ EOF
       fi
     fi
   fi
-  ui_ok "Konfiguracja Docker: $docker_env"
+  ui_ok "Konfiguracja kandydata Docker: $candidate_env"
 
   ui_stage 4 "$stages" 'Budowa obrazu'
-  docker_compose build
+  docker_compose_for "$release" "$candidate_env" build
   ui_ok 'Obraz Cloudportal został zbudowany.'
 
   ui_stage 5 "$stages" 'Migracje i bootstrap'
   ui_info 'Uruchamiam migracje i bootstrap administratora. Nowy token, jeżeli powstanie, zostanie pokazany tylko przez bootstrap.'
-  docker_compose run --rm bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
+  docker_compose_for "$release" "$candidate_env" run --rm bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
   ui_ok 'Migracje i bootstrap zakończone.'
 
   if ((docker_tls_changed)); then
+    tls_backup_dir="$docker_tmp_dir/tls-backup"
+    if [[ -f "$docker_tls/server.crt" || -f "$docker_tls/server.key" || -f "$docker_tls/source" || -f "$docker_tls/host" ]]; then
+      install -d -m 0700 "$tls_backup_dir"
+      cp -a "$docker_tls/." "$tls_backup_dir/"
+      had_previous_tls=1
+    fi
     install -d -m 0700 "$docker_tls"
     install -m 0600 "$docker_tls_stage/server.crt" "$docker_tls/server.crt"
     install -m 0600 "$docker_tls_stage/server.key" "$docker_tls/server.key"
     install -m 0600 "$docker_tls_stage/source" "$docker_tls/source"
     install -m 0600 "$docker_tls_stage/host" "$docker_tls/host"
-    ui_ok 'Nowy materiał TLS został aktywowany po udanym przygotowaniu release.'
+    ui_ok 'Nowy materiał TLS został przygotowany do walidacji kandydata.'
   fi
 
   ui_stage 6 "$stages" 'Start stacka i healthcheck'
-  docker_compose up -d --remove-orphans --scale "worker=$workers"
-  if ((docker_tls_changed)); then
-    docker_compose restart proxy
+  if ! docker_compose_for "$release" "$candidate_env" up -d --remove-orphans --scale "worker=$workers"; then
+    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
+    ui_fail 'Nie udało się uruchomić kandydata Docker; poprzedni aktywny release pozostaje źródłem prawdy.'
+    exit 1
+  fi
+  if ((docker_tls_changed)) && ! docker_compose_for "$release" "$candidate_env" restart proxy; then
+    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
+    ui_fail 'Nie udało się przeładować proxy z nowym TLS; przywrócono poprzedni stan.'
+    exit 1
   fi
   local ready=0
   local docker_tls_source=''
@@ -793,12 +834,17 @@ EOF
     sleep 2
   done
   ((ready == 1)) || {
-    ui_fail 'Docker stack wystartował, ale HTTPS healthcheck nie przeszedł.'
-    docker_compose ps || true
-    docker_compose logs --tail=100 api proxy || true
+    ui_fail 'Kandydat Docker wystartował, ale HTTPS healthcheck nie przeszedł.'
+    docker_compose_for "$release" "$candidate_env" ps || true
+    docker_compose_for "$release" "$candidate_env" logs --tail=100 api proxy || true
+    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
     exit 1
   }
-  ui_ok 'Healthcheck HTTPS zakończony pomyślnie.'
+  ui_ok 'Healthcheck HTTPS kandydata zakończony pomyślnie.'
+
+  mv -f "$candidate_env" "$docker_env"
+  ln -sfn "$release" "$docker_root/current"
+  ui_ok 'Kandydat został aktywowany jako bieżący release Docker.'
 
   ui_header 'Podsumowanie'
   ui_ok 'Instalacja Docker Cloudportal-backed zakończona.'
