@@ -24,12 +24,33 @@ def test_installer_colors_only_when_stdout_is_interactive():
     assert 'NO_COLOR=1' in INSTALLER
 
 
+def test_installer_has_docker_mode_with_status_uninstall_and_secure_config():
+    assert '--docker) docker_mode=1' in INSTALLER
+    assert 'docker_install_cloudportal()' in INSTALLER
+    assert 'docker_show_status()' in INSTALLER
+    assert 'docker_uninstall_cloudportal()' in INSTALLER
+    assert 'docker compose -p cloudportal-backed' in INSTALLER
+    assert 'docker compose version' in INSTALLER
+    assert 'CP_POSTGRES_PASSWORD=%s' in INSTALLER
+    assert 'openssl rand -hex 32' in INSTALLER
+    assert 'install -m 0600 "$temp_dir/docker.env" "$docker_root/.env"' in INSTALLER
+    assert '--cacert "$docker_root/tls/server.crt"' in INSTALLER
+    assert 'docker_compose_for "$release_dir" up -d --remove-orphans --scale "worker=$workers"' in INSTALLER
+    assert 'docker_validate_tls_pair()' in INSTALLER
+    assert 'mktemp -d "$docker_root/.tls-stage.XXXXXXXX"' in INSTALLER
+    assert 'cmp -s "$staged_cert" "$tls_dir/server.crt"' in INSTALLER
+    assert "docker_compose_for \"$release_dir\" restart proxy" in INSTALLER
+    assert 'docker_proxy_owns_port()' in INSTALLER
+    assert 'Port HTTPS $backend_port jest zajęty przez inny proces lub usługę' in INSTALLER
+
 def test_installer_has_preflight_status_help_and_uninstall_modes():
     assert 'preflight_checks()' in INSTALLER
     assert 'Połączenie HTTPS z api.github.com' in INSTALLER
     assert 'Wolne miejsce:' in INSTALLER
     assert '--status) status_mode=1' in INSTALLER
-    assert '--force-uninstall|--uninstall) force_uninstall=1' in INSTALLER
+    assert '--uninstall) uninstall_mode=1' in INSTALLER
+    assert '--force-uninstall) uninstall_mode=1; assume_yes=1' in INSTALLER
+    assert '--yes|-y) assume_yes=1' in INSTALLER
     assert '--help|-h) usage; exit 0' in INSTALLER
     assert 'show_status()' in INSTALLER
 
@@ -56,27 +77,8 @@ def test_help_is_plain_text_without_ansi_sequences():
     assert '--status' in result.stdout
     assert '--uninstall' in result.stdout
     assert '--non-interactive' in result.stdout
+    assert '--yes, -y' in result.stdout
     assert '--docker' in result.stdout
-
-
-def test_installer_has_docker_mode_with_status_uninstall_and_secure_config():
-    assert '--docker) docker_mode=1' in INSTALLER
-    assert 'docker_install_cloudportal()' in INSTALLER
-    assert 'docker_show_status()' in INSTALLER
-    assert 'docker_uninstall_cloudportal()' in INSTALLER
-    assert 'docker compose -p cloudportal-backed' in INSTALLER
-    assert 'docker compose version' in INSTALLER
-    assert 'CP_POSTGRES_PASSWORD=%s' in INSTALLER
-    assert 'openssl rand -hex 32' in INSTALLER
-    assert 'install -m 0600 "$temp_dir/docker.env" "$docker_root/.env"' in INSTALLER
-    assert '--cacert "$docker_root/tls/server.crt"' in INSTALLER
-    assert 'docker_compose_for "$release_dir" up -d --remove-orphans --scale "worker=$workers"' in INSTALLER
-    assert 'docker_validate_tls_pair()' in INSTALLER
-    assert 'mktemp -d "$docker_root/.tls-stage.XXXXXXXX"' in INSTALLER
-    assert 'cmp -s "$staged_cert" "$tls_dir/server.crt"' in INSTALLER
-    assert "docker_compose_for \"$release_dir\" restart proxy" in INSTALLER
-    assert 'docker_proxy_owns_port()' in INSTALLER
-    assert 'Port HTTPS $backend_port jest zajęty przez inny proces lub usługę' in INSTALLER
 
 
 
