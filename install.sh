@@ -472,7 +472,7 @@ docker_uninstall() {
   if ((purge_data)); then
     local project_volumes=()
     mapfile -t project_volumes < <(docker volume ls -q --filter "label=com.docker.compose.project=$docker_project" 2>/dev/null || true)
-    if (('${#project_volumes[@]}')); then
+    if ((${#project_volumes[@]})); then
       docker volume rm "${project_volumes[@]}" >/dev/null
     fi
     rm -rf "$docker_config"
