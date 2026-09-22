@@ -153,7 +153,40 @@ Anulowanie kończy grupę procesów i zachowuje state. Joby mają jawny retry li
 
 ## Uruchomienie w Docker Compose
 
-Alternatywa dla instalacji systemd. Wersja aplikacji jest skróconym SHA commita użytego do budowy obrazu. Przygotuj `.env` z losowym, URL-safe `CP_POSTGRES_PASSWORD`, pliki `tls/server.crt` i `tls/server.key`, wykonaj `export CP_BUILD_COMMIT=$(git rev-parse HEAD)`, następnie:
+Instalator obsługuje natywny tryb Docker Compose przez parametr `--docker`. Na serwerze musi być dostępny Docker Engine oraz Compose v2 (`docker compose`). Tryb Docker nie wymaga systemd dla aplikacji i nie instaluje PostgreSQL, Redis ani Nginx na hoście — uruchamia je w kontenerach.
+
+Przykład instalacji:
+
+```bash
+sudo ./install.sh --docker --non-interactive \
+  --host cloud.example.com \
+  --port 8443 \
+  --workers 2
+```
+
+Dla prywatnego repozytorium można użyć tych samych opcji `--github-token-file` lub `--github-config`, co przy instalacji systemd. `--ref` wybiera branch, tag albo commit. `--cert-file` i `--cert-key` instalują własny certyfikat TLS; bez nich instalator tworzy zarządzany certyfikat self-signed dla wartości `--host`.
+
+Instalator automatycznie:
+- pobiera wskazaną wersję repozytorium do wersjonowanego katalogu pod `/opt/cloudportal-backed-docker/releases`,
+- tworzy chroniony plik `/opt/cloudportal-backed-docker/.env` z losowym hasłem PostgreSQL i zachowuje go przy reinstalacji,
+- waliduje Docker Compose przed startem,
+- buduje obraz, wykonuje migracje/bootstrap i uruchamia API, dispatcher oraz żądaną liczbę workerów,
+- publikuje wyłącznie port TLS podany przez `--port`,
+- wykonuje końcowy healthcheck HTTPS bez wyłączania weryfikacji TLS.
+
+Obsługa:
+
+```bash
+sudo ./install.sh --docker --status
+sudo ./install.sh --docker --uninstall
+sudo ./install.sh --docker --uninstall --purge-data
+```
+
+Zwykłe `--uninstall` zatrzymuje kontenery i usuwa runtime/obrazy lokalne, ale zachowuje wolumeny danych, TLS i konfigurację instalatora. `--purge-data` usuwa także wolumeny PostgreSQL/Redis oraz katalog `/opt/cloudportal-backed-docker`.
+
+Opcje backupu instalatora systemd (`--enable-backups`, `--disable-backups`, `--backup-retention-days`) nie są obsługiwane w trybie Docker. Backup Docker powinien być realizowany jako jawna polityka backupu wolumenu/bazy.
+
+Ręczne uruchomienie Compose pozostaje dostępne dla operatorów, którzy nie chcą używać instalatora. Przygotuj `.env` z losowym, URL-safe `CP_POSTGRES_PASSWORD`, ustaw `CP_HTTPS_PORT` oraz `CP_BUILD_COMMIT`, dodaj `tls/server.crt` i `tls/server.key`, a następnie:
 
 ```bash
 docker compose build
@@ -161,7 +194,7 @@ docker compose run --rm bootstrap
 docker compose up -d
 ```
 
-`bootstrap` jest jednorazowym interaktywnym kontenerem usuwanym po wyświetleniu tokena. API i worker działają jako UID 10001, z read-only root filesystem, wyłączonymi capabilities i no-new-privileges. PostgreSQL/Redis/API nie publikują portów hosta; jedyny port hosta to TLS Nginx 8443. Nie podłączaj niezaufanych kontenerów do sieci backend.
+`bootstrap` jest jednorazowym kontenerem usuwanym po zakończeniu. API i worker działają jako UID 10001, z read-only root filesystem, wyłączonymi capabilities i no-new-privileges. PostgreSQL/Redis/API nie publikują portów hosta; jedyny port hosta to TLS Nginx. Nie podłączaj niezaufanych kontenerów do sieci backend.
 
 ## Testy i obsługa
 
