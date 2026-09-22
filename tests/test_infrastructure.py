@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import session
 from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
+from app.quotas.models import QuotaAllocation, QuotaReservation
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
 from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, workspace_lock
@@ -210,6 +211,15 @@ def test_inventory_reconcile_recovers_vm_from_persisted_state(client, headers, t
     repaired = client.post('/api/v1/inventory/reconcile', headers=headers)
     assert repaired.status_code == 200, repaired.text
     assert repaired.json()['repaired_count'] == 1
+    with session() as db:
+        job = db.get(Job, d['job']['id'])
+        reservation = db.get(QuotaReservation, job.payload['_quota_reservation_id'])
+        assert reservation.status == 'committed'
+        allocation = db.scalar(select(QuotaAllocation).where(
+            QuotaAllocation.subject_type == 'deployment',
+            QuotaAllocation.subject_id == d['id'],
+        ))
+        assert allocation is not None and allocation.dimensions['vm_count'] == 1
 
     inventory = client.get('/api/v1/inventory/vms?management_mode=terraform', headers=headers).json()['items']
     row = next(item for item in inventory if item['deployment_id'] == d['id'])
