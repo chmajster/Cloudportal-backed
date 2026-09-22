@@ -19,6 +19,10 @@ from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
 from app.inventory_sync import state_outputs, sync_deployment_inventory
 from app.jobs.lifecycle import has_released_allocations
+from app.quotas.service import (account_confirmed_absent, commit_job_reservation,
+                                mark_job_reservation_uncertain, prepare_job_reservation,
+                                release_job_reservation)
+from app.resource_scope.authorization import Scope
 from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog,
                         ManagedResource, ManagedVM, Token, User, now)
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
@@ -39,6 +43,7 @@ class Context:
         self.step_deadline = None
         self.blueprint_workflow_completed = False
         self.rollback_destroyed = False
+        self.quota_provider_submitted = False
         self.deployment = self.credential = self.ansible = self.ansible_credential = None
 
     def check(self):
@@ -814,6 +819,7 @@ def run_blueprint_workflow(context, executor):
             context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
         verify_saved_plan()
         context.apply_saved_terraform_plan = bool(runtime['plan_ready'])
+        context.quota_provider_submitted = True
         try:
             workspace = executor.execute('terraform.apply', context)
         finally:
@@ -825,6 +831,11 @@ def run_blueprint_workflow(context, executor):
         runtime['applied'] = True
         context.stage('inventory.synchronizing')
         inventory = register_managed_inventory(context, workspace)
+        with session() as quota_db:
+            quota_job = quota_db.get(Job, context.job.id)
+            if quota_job is not None:
+                commit_job_reservation(quota_db, quota_job)
+                quota_db.commit()
         runtime['inventory_synced'] = True
         if inventory['vm_id'] is not None:
             context.log(f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}")
@@ -1151,12 +1162,24 @@ def execute(job_id):
                 if not context.blueprint_workflow_completed:
                     raise ExecutionFailed('Blueprint workflow did not complete')
             else:
+                if job.operation in {'terraform.apply', 'terraform.destroy'}:
+                    context.quota_provider_submitted = True
                 workspace = executor.execute(job.operation, context)
                 if job.operation == 'terraform.import':
                     register_adopted_resource(context)
+                    with session() as quota_db:
+                        quota_job = quota_db.get(Job, job.id)
+                        if quota_job is not None:
+                            commit_job_reservation(quota_db, quota_job)
+                            quota_db.commit()
                 if job.operation == 'terraform.apply':
                     context.stage('inventory.synchronizing')
                     inventory = register_managed_inventory(context, workspace)
+                    with session() as quota_db:
+                        quota_job = quota_db.get(Job, job.id)
+                        if quota_job is not None:
+                            commit_job_reservation(quota_db, quota_job)
+                            quota_db.commit()
                     if inventory['vm_id'] is not None:
                         context.log(
                             f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}"
@@ -1167,10 +1190,22 @@ def execute(job_id):
                         addresses = wait_for_ansible_transport(context, workspace)
                         context.ansible.inventory = Inventory(hosts=addresses)
                         AnsibleExecutor().execute('ansible.execute', context)
+                if job.operation == 'terraform.destroy':
+                    with session() as quota_db:
+                        quota_job = quota_db.get(Job, job.id)
+                        if quota_job is not None:
+                            commit_job_reservation(quota_db, quota_job)
+                            quota_db.commit()
         else:
             AnsibleExecutor().execute(job.operation, context)
         context.check()
     except ApprovalPending:
+        if not context.quota_provider_submitted:
+            with session() as quota_db:
+                quota_job = quota_db.get(Job, job.id)
+                if quota_job is not None:
+                    release_job_reservation(quota_db, quota_job)
+                    quota_db.commit()
         return
     except Cancelled:
         status, error = 'cancelled', 'Cancellation requested; inspect deployment state before retrying'
@@ -1183,6 +1218,12 @@ def execute(job_id):
         current = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
         if current.cancel_requested and status == 'successful':
             status, error = 'cancelled', 'Cancellation requested at completion; inspect deployment state'
+        if status == 'successful':
+            commit_job_reservation(db, current)
+        elif context.quota_provider_submitted:
+            mark_job_reservation_uncertain(db, current)
+        else:
+            release_job_reservation(db, current)
         current.status, current.error = status, error
         owns_deployment = False
         if current.deployment_id:
@@ -1199,6 +1240,11 @@ def execute(job_id):
                 if current.operation == 'terraform.import' and status == 'successful':
                     deployment.status = 'imported'
             if owns_deployment and deployment.status == 'destroyed':
+                if context.rollback_destroyed or current.source == 'Recovery':
+                    account_confirmed_absent(
+                        db, Scope(deployment.tenant_id, deployment.project_id),
+                        'deployment', deployment.id, f'confirmed-absent:{current.id}', current.created_by,
+                    )
                 deployment.destroyed_at = now()
                 released_at = now()
                 db.execute(update(HostnameReservation).where(
@@ -1240,6 +1286,7 @@ def execute(job_id):
                 )
                 db.add(recovery)
                 db.flush()
+                prepare_job_reservation(db, recovery, deployment)
                 deployment.active_job_id = recovery.id
                 deployment.status = 'recovery_queued'
                 queue_webhook_event(db, 'recovery.queued', recovery.id, {

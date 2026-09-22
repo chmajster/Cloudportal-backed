@@ -5,6 +5,7 @@ from app.day2 import models as day2_models  # noqa: F401 - register Day-2 tables
 from app.tenancy import models as tenancy_models
 from app.projects import models as project_models
 from app.resource_scope import models as resource_scope_models
+from app.quotas import models as quota_models
 
 
 def run():

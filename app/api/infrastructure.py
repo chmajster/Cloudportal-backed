@@ -18,6 +18,7 @@ from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
 from app.jobs.approval import gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
+from app.quotas.service import prepare_job_reservation, release_job_reservation
 from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
@@ -417,6 +418,8 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         deployment.active_job_id = job.id
         deployment.status = 'queued'
     gate_job_for_approval(db, job, deployment)
+    if job.status == 'queued':
+        prepare_job_reservation(db, job, deployment)
     audit(db, request, 'job.created', 'jobs', job.id)
     return job
 
@@ -528,11 +531,11 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
     })
     payload['_approval'] = approval
     job.payload = payload
+    deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
+    prepare_job_reservation(db, job, deployment)
     job.status = 'queued'
-    if job.deployment_id:
-        deployment = db.get(Deployment, job.deployment_id)
-        if deployment is not None and deployment.active_job_id == job.id:
-            deployment.status = 'queued'
+    if deployment is not None and deployment.active_job_id == job.id:
+        deployment.status = 'queued'
     db.add(JobLog(job_id=job.id, message=f'workflow.approval.approved: user={actor.user_id}'))
     audit(db, request, 'blueprint.execution.approved', 'jobs', job.id)
     db.flush()
@@ -551,6 +554,8 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
     payload.pop('_approval', None)
     payload.pop('_workflow_runtime', None)
     payload.pop('_provider_wait', None)
+    payload.pop('_quota_checked', None)
+    payload.pop('_quota_reservation_id', None)
     if original.operation == 'ansible.execute' and payload.get('ansible'):
         from app.api.schemas import AnsibleInput
         validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))
@@ -623,6 +628,7 @@ def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')),
                     delete_plan(d.id)
                 if j.operation != 'terraform.plan':
                     release_pre_execution_allocations(db, d.id)
+        release_job_reservation(db, j)
     else:
         j.status = 'cancelling'
         if j.deployment_id:

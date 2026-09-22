@@ -25,6 +25,7 @@ from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.models import Audit, Credential, Deployment, Job, JobLog, ManagedVM, Token, User, now
 from app.operations.service import queue_job_webhooks, queue_webhook_event
+from app.quotas.service import commit_job_reservation, mark_job_reservation_uncertain, release_job_reservation
 from app.security.core import effective_permissions
 
 
@@ -233,6 +234,7 @@ def _fail_before_execution(job_id, code, message):
                 'duration_ms': 0,
             }
             release_resource_lock(db, request.resource_id, request.id)
+            release_job_reservation(db, job)
             db.add(Audit(
                 user_id=job.created_by, token_id=job.token_id, ip=job.ip, source=job.source,
                 action='day2.failed', resource='day2_actions', resource_id=request.id,
@@ -283,7 +285,7 @@ def execute(job_id):
             target, credential, _ = load_target(db, request.resource_id)
             refresh_resource_lock(db, target.resource_id, request.id, day2_settings(db)['resource_lock_timeout'])
             adapter = day2_provider(credential)
-            validation = validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions)
+            validation = validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions, quota_check=False)
             if validation['approval_required'] and request.approval_state != 'approved':
                 raise failure('APPROVAL_REQUIRED', message='Approval policy changed before Day-2 execution')
             context = Day2Context(job, request, day2_settings(db)['action_timeout'])
@@ -388,6 +390,12 @@ def execute(job_id):
         request.error_code = error_code
         request.error_message = error_message
         uncertain = provider_submitted and not provider_confirmed
+        if provider_confirmed:
+            commit_job_reservation(db, job)
+        elif uncertain:
+            mark_job_reservation_uncertain(db, job)
+        else:
+            release_job_reservation(db, job)
         request.result = {
             **result,
             'reconciliation_required': uncertain,

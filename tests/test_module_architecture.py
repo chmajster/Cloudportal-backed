@@ -12,6 +12,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'tenancy',
         'projects',
         'resource-scope',
+        'quotas',
         'infrastructure',
         'proxmox-management',
         'automation',
@@ -42,6 +43,7 @@ def test_feature_registry_exposes_expected_router_contracts():
     assert '/projects' in paths('projects')
     assert '/tenants' in paths('tenancy')
     assert '/tenants/{tenant_id}/members' in paths('tenancy')
+    assert '/quotas' in paths('quotas')
     assert '/providers' in paths('infrastructure')
     assert '/blueprints' in paths('automation')
     assert '/ipam/pools' in paths('ipam')

@@ -14,6 +14,7 @@ from app.config import settings
 from app.database import session
 from app.jobs.approval import gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations
+from app.quotas.service import prepare_job_reservation
 from app.models import (
     Audit,
     Credential,
@@ -165,6 +166,20 @@ def materialize_scheduled_jobs():
             deployment.active_job_id = job.id
             deployment.status = 'queued'
             gate_job_for_approval(db, job, deployment)
+            if job.status == 'queued':
+                try:
+                    with db.begin_nested():
+                        prepare_job_reservation(db, job, deployment)
+                except HTTPException as error:
+                    job.status = 'failed'
+                    job.error = 'Scheduled operation rejected by quota policy'
+                    deployment.active_job_id = None
+                    deployment.status = job.payload.get('previous_status', deployment.status)
+                    schedule.last_error = (
+                        error.detail.get('message', 'Quota policy rejected the scheduled operation')
+                        if isinstance(error.detail, dict) else 'Quota policy rejected the scheduled operation'
+                    )
+                    continue
             schedule.last_run_at = current_time
             schedule.last_error = None
             if schedule.interval_seconds:
