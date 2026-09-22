@@ -38,6 +38,14 @@ async function inventoryView() {
 function inventoryVmActions(item) {
   const actions = [];
   if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('Szczegóły', () => showVmDetailsPage(item), 'primary'));
+  const canRecreate = item.lifecycle_status === 'active'
+    && item.management_mode === 'terraform'
+    && item.deployment_id
+    && allowed('deployments.destroy')
+    && allowed('deployments.create')
+    && allowed('jobs.execute')
+    && allowed('terraform.execute');
+  if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
   if (allowed('inventory.update')) actions.push(button('Odśwież stan', async () => {
     await api(`/inventory/vms/${item.id}/reconcile`, { method: 'POST' });
     toast('Stan zasobu odświeżony.');
@@ -194,6 +202,23 @@ function storageLabel(storage) {
   return parts.join(' · ');
 }
 
+function recreateVm(item) {
+  const name = item.name || ('VM ' + item.vm_id);
+  confirmAction(
+    'Odtwórz VM od zera',
+    `VM „${name}” zostanie usunięta i utworzona ponownie z aktualnej definicji Terraform. Dane zapisane na dyskach tej VM mogą zostać bezpowrotnie utracone. Potwierdzić odtworzenie?`,
+    async () => {
+      const job = await api('/deployments/' + encodeURIComponent(item.deployment_id) + '/recreate', {
+        method: 'POST',
+        idempotent: true,
+        body: {},
+      });
+      toast('Odtworzenie VM zostało zlecone jako zadanie ' + short(job.id, 18) + '.');
+      await navigate('inventory');
+    },
+  );
+}
+
 function vmDetailActions(item) {
   const base = vmBase(item);
   const actions = [];
@@ -226,6 +251,13 @@ function vmDetailActions(item) {
       return false;
     },
   )));
+  const canRecreate = item.management_mode === 'terraform'
+    && item.deployment_id
+    && allowed('deployments.destroy')
+    && allowed('deployments.create')
+    && allowed('jobs.execute')
+    && allowed('terraform.execute');
+  if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
   if (allowed('vms.delete')) actions.push(button('Usuń VM', () => deleteVm(item), 'danger'));
   return actions;
 }
@@ -782,5 +814,6 @@ async function cloneVm(item) {
 
 registerCommand('inventory.openVm', showVmDetailsPage);
 registerCommand('inventory.consoleVm', showVmConsole);
+registerCommand('inventory.recreateVm', recreateVm);
 registerView({ id: 'inventory', label: 'Moje zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
 })();

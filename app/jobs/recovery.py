@@ -103,6 +103,10 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
     payload.pop('_quota_checked', None)
     payload.pop('_quota_reservation_id', None)
     payload.pop('_state_recovery', None)
+    # Persisted-state evidence means the replacement apply already reached the
+    # provider. A recovery job must converge and finish post-apply work, not
+    # destructively replace the VM a second time.
+    payload.pop('_recreate', None)
     runtime = dict(payload.get('_workflow_runtime') or {})
     runtime.pop('current_step', None)
     if runtime:

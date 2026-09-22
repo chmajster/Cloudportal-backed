@@ -13,7 +13,8 @@ from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User
 from app.quotas.models import QuotaAllocation, QuotaReservation
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
-from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, workspace_lock
+from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, terraform_plan_command, workspace_lock
+from app.deployments.recreate import recreate_resource_address
 from app.jobs.worker import execute
 from app.jobs.queue import reconcile_cancelled_jobs, reconcile_persisted_inventory, reconcile_stale_jobs
 from app.terraform.state import persist_state
@@ -72,6 +73,44 @@ def test_idempotency_and_concurrent_apply(client,headers):
     with session() as db:
         assert len(db.scalars(select(Deployment)).all())==1
         assert len(db.scalars(select(Job)).all())==1
+
+def test_recreate_deployment_queues_idempotent_replace_apply(client, headers):
+    created = deployment(client, headers)
+    cancelled = client.post('/api/v1/jobs/' + created['job']['id'] + '/cancel', headers=headers)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()['status'] == 'cancelled'
+
+    key = str(uuid.uuid4())
+    auth = {**headers, 'Idempotency-Key': key}
+    first = client.post('/api/v1/deployments/' + created['id'] + '/recreate', headers=auth, json={})
+    second = client.post('/api/v1/deployments/' + created['id'] + '/recreate', headers=auth, json={})
+
+    assert first.status_code == 202, first.text
+    assert second.status_code == 202, second.text
+    assert second.json()['id'] == first.json()['id']
+    assert first.json()['operation'] == 'terraform.apply'
+
+    with session() as db:
+        job = db.get(Job, first.json()['id'])
+        dep = db.get(Deployment, created['id'])
+        assert job.payload['_recreate'] is True
+        assert job.payload['previous_status'] == 'cancelled'
+        assert dep.active_job_id == job.id
+        assert dep.status == 'queued'
+
+
+def test_recreate_plan_targets_only_approved_template_resource():
+    address = recreate_resource_address('proxmox-vm')
+    assert address == 'proxmox_virtual_environment_vm.vm'
+
+    command = terraform_plan_command('terraform', 'terraform.apply', address)
+    assert '-replace=proxmox_virtual_environment_vm.vm' in command
+    assert '-destroy' not in command
+
+    destroy = terraform_plan_command('terraform', 'terraform.destroy', address)
+    assert '-destroy' in destroy
+    assert not any(argument.startswith('-replace=') for argument in destroy)
+
 
 
 def test_token_idempotency_does_not_store_plaintext(client,headers):
@@ -241,6 +280,9 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
 
     with session() as db:
         job = db.get(Job, d['job']['id'])
+        payload = dict(job.payload or {})
+        payload['_recreate'] = True
+        job.payload = payload
         job.status = 'running'
         job.heartbeat_at = now() - timedelta(seconds=settings().execution_timeout + 181)
         dep = db.get(Deployment, d['id'])
@@ -267,6 +309,7 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
         assert resumed.payload['_auto_resume']['from_persisted_state'] is True
         assert resumed.payload['_auto_resume']['authorization_source'] == original.source
         assert resumed.payload['_auto_resume']['count'] == 1
+        assert '_recreate' not in resumed.payload
         assert '_quota_checked' not in resumed.payload
         assert '_quota_reservation_id' not in resumed.payload
         assert dep.active_job_id == resumed.id
@@ -715,6 +758,8 @@ def test_openapi_describes_public_response_contract(client):
         assert forbidden not in schema['components']['schemas'][model]['properties']
     parameters = schema['paths']['/api/v1/deployments']['post']['parameters']
     assert any(p['name'] == 'Idempotency-Key' and p['required'] for p in parameters)
+    recreate_parameters = schema['paths']['/api/v1/deployments/{id}/recreate']['post']['parameters']
+    assert any(p['name'] == 'Idempotency-Key' and p['required'] for p in recreate_parameters)
 
 
 def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):

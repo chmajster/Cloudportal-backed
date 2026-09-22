@@ -17,6 +17,7 @@ from app.credentials.service import credential_in_use, credential_public, save_s
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
+from app.deployments.recreate import recreate_job_payload
 from app.jobs.approval import gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
 from app.quotas.service import prepare_job_reservation, release_job_reservation
@@ -448,6 +449,21 @@ def deployments(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('d
 @router.get('/deployments/{id}', response_model=DeploymentOutput)
 def deployment(id: str, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
     return deployment_public(find(db, Deployment, id))
+
+
+@router.post('/deployments/{id}/recreate', status_code=202, response_model=JobOutput)
+def recreate_deployment(id: str, request: Request, actor=Depends(require('deployments.destroy')),
+                        db=Depends(get_db, scope='function')):
+    def create():
+        deployment = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
+        if deployment is None:
+            raise HTTPException(404, 'Deployment not found')
+        payload = recreate_job_payload(deployment)
+        job = new_job(db, request, actor, 'terraform.apply', deployment, payload)
+        audit(db, request, 'deployment.recreate_requested', 'deployments', deployment.id)
+        return job_public(job)
+
+    return idempotent(db, request, actor, {'id': id, 'action': 'recreate'}, create, required=True)
 
 
 @router.post('/deployments/{id}/destroy', status_code=202, response_model=JobOutput)

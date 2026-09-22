@@ -120,6 +120,16 @@ function managedVmCard(item, providerNames, deploymentById, onSelectionChange = 
   if (canConsole) {
     actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
   }
+  const canRecreate = item.management_mode === 'terraform'
+    && item.deployment_id
+    && hasCommand('inventory.recreateVm')
+    && allowed('deployments.destroy')
+    && allowed('deployments.create')
+    && allowed('jobs.execute')
+    && allowed('terraform.execute');
+  if (canRecreate) {
+    actions.push(button('Odtwórz od zera', () => runCommand('inventory.recreateVm', item), 'danger'));
+  }
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   if (deployment) actions.push(button('Wdrożenie', () => showDeploymentDetails(deployment), 'ghost'));
 
