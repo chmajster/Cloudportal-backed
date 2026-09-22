@@ -142,6 +142,14 @@ def _backfill_confirmed_deployments():
         sa.column('id'), sa.column('tenant_id'), sa.column('project_id'),
         sa.column('provider'), sa.column('variables'), sa.column('status'), sa.column('destroyed_at'),
     )
+    managed_vms = sa.table(
+        'managed_vms',
+        sa.column('deployment_id'), sa.column('lifecycle_status'), sa.column('destroyed_at'),
+    )
+    managed_resources = sa.table(
+        'managed_resources',
+        sa.column('deployment_id'), sa.column('lifecycle_status'), sa.column('destroyed_at'),
+    )
     allocation = sa.table(
         'quota_allocations',
         sa.column('id'), sa.column('tenant_id'), sa.column('project_id'),
@@ -158,9 +166,23 @@ def _backfill_confirmed_deployments():
         sa.column('id'), sa.column('tenant_id'), sa.column('project_id'), sa.column('dimension'),
         sa.column('used'), sa.column('reserved'), sa.column('created_at'), sa.column('updated_at'),
     )
+    active_vm = sa.exists().where(
+        managed_vms.c.deployment_id == deployments.c.id,
+        managed_vms.c.lifecycle_status == 'active',
+        managed_vms.c.destroyed_at.is_(None),
+    )
+    active_resource = sa.exists().where(
+        managed_resources.c.deployment_id == deployments.c.id,
+        managed_resources.c.lifecycle_status == 'active',
+        managed_resources.c.destroyed_at.is_(None),
+    )
     rows = connection.execute(sa.select(deployments).where(
         deployments.c.destroyed_at.is_(None),
-        deployments.c.status.in_(('successful', 'imported')),
+        sa.or_(
+            deployments.c.status.in_(('successful', 'imported')),
+            active_vm,
+            active_resource,
+        ),
     )).mappings().all()
     tenant_totals = {}
     project_totals = {}
