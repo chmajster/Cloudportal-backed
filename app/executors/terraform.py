@@ -10,6 +10,7 @@ from app.catalog import resolve_template_source, template_definition, template_i
 from app.config import settings
 from app.credentials.ssh import public_key_from_private_key
 from app.database import session
+from app.deployments.recreate import recreate_resource_address
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
 from app.models import Credential, now
 from app.security.core import decrypt_secret
@@ -134,6 +135,13 @@ class TerraformExecutor(Executor):
             definition, source = template_definition(deployment.template)
         except Exception:
             raise ExecutionFailed('Unapproved Terraform template') from None
+        recreate_address = None
+        if operation in {'terraform.plan', 'terraform.apply'} and bool((context.job.payload or {}).get('_recreate')):
+            try:
+                recreate_address = recreate_resource_address(deployment.template)
+            except Exception:
+                raise ExecutionFailed('Approved Terraform template does not support full resource recreation') from None
+            context.log('terraform.recreate.target: ' + recreate_address)
         secret = decrypt_secret(credential)
         env = execution_environment(workspace)
         plugin_cache = settings().data_dir / (self.binary + '-plugin-cache')
@@ -282,6 +290,8 @@ class TerraformExecutor(Executor):
                             plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
                             if operation == 'terraform.destroy':
                                 plan.append('-destroy')
+                            elif recreate_address:
+                                plan.append('-replace=' + recreate_address)
                             run_process(plan, workspace, env, context, sensitive_values)
                         if operation != 'terraform.plan':
                             context.stage(operation)
