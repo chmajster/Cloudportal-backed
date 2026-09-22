@@ -128,20 +128,15 @@ def test_blueprint_workflow_implicit_apply_preserves_legacy_clone_only_workflow(
     assert any('implicit terraform_apply' in value for value in context.logs)
 
 
-def test_blueprint_auto_resume_skips_confirmed_terraform_apply(monkeypatch, tmp_path):
+def test_blueprint_resume_uses_completed_apply_checkpoint(monkeypatch, tmp_path):
     steps = [
         {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
         {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
     context.blueprint_workflow_completed = False
-    context.job.payload['_auto_resume'] = {
-        'skip_provider_apply': True,
-        'inventory_reconciled': True,
-        'count': 1,
-    }
     context.job.payload['_workflow_runtime'] = {
-        'completed_steps': ['apply'],
+        'completed_steps': [],
         'provider_applied': True,
         'inventory_synced': True,
         'plan_ready': False,
@@ -165,6 +160,7 @@ def test_blueprint_auto_resume_skips_confirmed_terraform_apply(monkeypatch, tmp_
     assert workspace == restored
     assert executor.operations == []
     assert observed == [restored]
+    assert any('provider apply checkpoint already completed' in value for value in context.logs)
     assert context.blueprint_workflow_completed is True
 
 
