@@ -75,22 +75,23 @@ def _confirmed_provider_apply(db, job: Job) -> bool:
     auto_resume = dict(payload.get('_auto_resume') or {})
     if auto_resume.get('skip_provider_apply') is True:
         return True
-
-    evidence = dict(payload.get('_state_recovery') or {})
-    if (
-        evidence.get('source_job_id') != job.id
-        or evidence.get('deployment_id') != job.deployment_id
-    ):
-        return False
     if not _active_inventory_exists(db, job.deployment_id):
         return False
 
     reservation = job_reservation(db, job)
-    if reservation is None:
-        return True
+    if reservation is not None:
+        return (
+            reservation.status == 'committed'
+            and reservation.reconciliation_required is False
+        )
+
+    # Legacy/no-reservation path still requires explicit evidence produced while
+    # this exact job owned the deployment. Never infer an update apply from VM
+    # presence alone.
+    evidence = dict(payload.get('_state_recovery') or {})
     return (
-        reservation.status == 'committed'
-        and reservation.reconciliation_required is False
+        evidence.get('source_job_id') == job.id
+        and evidence.get('deployment_id') == job.deployment_id
     )
 
 
