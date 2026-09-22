@@ -508,6 +508,7 @@ def persist_workflow_runtime(context, runtime):
             'plan_sha256': runtime.get('plan_sha256'),
             'provider_applied': bool(runtime.get('applied')),
             'inventory_synced': bool(runtime.get('inventory_synced')),
+            'ansible_ran': bool(runtime.get('ansible_ran')),
         })
         payload['_workflow_runtime'] = saved
         current.payload = payload
@@ -772,12 +773,20 @@ def run_blueprint_workflow(context, executor):
             settings().data_dir / 'workspaces' / context.deployment.workspace
             if saved_plan_ready else None
         )
+    explicit_ansible_completed = any(
+        str(step.get('type')) == 'run_ansible_playbook'
+        and str(step.get('id')) in completed_steps
+        for step in steps
+    )
     runtime = {
         'workspace': saved_workspace,
         'inventory_synced': bool(saved_runtime.get('inventory_synced')),
         'addresses': None,
         'applied': provider_applied,
-        'ansible_ran': False,
+        'ansible_ran': bool(
+            saved_runtime.get('ansible_ran')
+            or explicit_ansible_completed
+        ),
         'prepared': [],
         'step_states': {step_id: 'completed' for step_id in completed_steps},
         'plan_ready': saved_plan_ready,
@@ -941,6 +950,7 @@ def run_blueprint_workflow(context, executor):
                 'plan_sha256': plan_sha256,
                 'provider_applied': bool(runtime['applied']),
                 'inventory_synced': bool(runtime['inventory_synced']),
+                'ansible_ran': bool(runtime['ansible_ran']),
                 'approval_step': step_id,
             }
             current.payload = payload
