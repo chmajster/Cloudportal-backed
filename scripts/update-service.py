@@ -515,7 +515,15 @@ def _database_clone_details(database_url: str) -> dict:
 
 def _url_with_database(database_url: str, database: str) -> str:
     parsed = urlsplit(database_url)
-    return urlunsplit((parsed.scheme, parsed.netloc, "/" + database, parsed.query, parsed.fragment))
+    # urlunsplit() collapses postgresql+psycopg:///db to
+    # postgresql+psycopg:/db when netloc is empty. SQLAlchemy requires the
+    # triple-slash form for a local database URL.
+    value = f"{parsed.scheme}://{parsed.netloc}/{database}"
+    if parsed.query:
+        value += "?" + parsed.query
+    if parsed.fragment:
+        value += "#" + parsed.fragment
+    return value
 
 
 def _scratch_redis_url(redis_url: str) -> str:
