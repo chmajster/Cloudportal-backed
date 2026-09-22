@@ -519,8 +519,14 @@ EOF
   ui_stage 6 "$stages" 'Start stacka i healthcheck'
   docker_compose up -d --remove-orphans --scale "worker=$workers"
   local ready=0
+  local docker_tls_source=''
+  local docker_health_curl=(-fsS --connect-timeout 2 --max-time 5)
+  [[ -r "$docker_tls/source" ]] && docker_tls_source=$(tr -d '\r\n' < "$docker_tls/source")
+  if [[ "$docker_tls_source" == managed-self-signed ]]; then
+    docker_health_curl+=(--cacert "$docker_tls/server.crt")
+  fi
   for ((attempt=1; attempt<=45; attempt++)); do
-    if curl -fsS --connect-timeout 2 --max-time 5 --cacert "$docker_tls/server.crt"         --resolve "$backend_host:$backend_port:127.0.0.1"         "https://$backend_host:$backend_port/api/v1/health" >/dev/null 2>&1; then
+    if curl "${docker_health_curl[@]}" --resolve "$backend_host:$backend_port:127.0.0.1" "https://$backend_host:$backend_port/api/v1/health" >/dev/null 2>&1; then
       ready=1
       break
     fi
