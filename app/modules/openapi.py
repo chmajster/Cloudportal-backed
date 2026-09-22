@@ -29,6 +29,7 @@ def decorate_router(router):
                 route.path in {
                     '/deployments', '/jobs', '/events', '/blueprints/{id}/execute',
                     '/deployments/{id}/destroy',
+                    '/deployments/{id}/recreate',
                     '/providers/{provider_id}/vms/{node}/{vmid}/power',
                 }
                 or is_destroy
