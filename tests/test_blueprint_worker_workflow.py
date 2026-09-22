@@ -164,6 +164,41 @@ def test_blueprint_resume_uses_completed_apply_checkpoint(monkeypatch, tmp_path)
     assert context.blueprint_workflow_completed is True
 
 
+def test_blueprint_resume_does_not_repeat_completed_ansible(monkeypatch, tmp_path):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'ansible', 'type': 'run_ansible_playbook', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
+        {'id': 'health', 'type': 'health_check', 'depends_on': ['ansible'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.blueprint_workflow_completed = False
+    context.ansible = SimpleNamespace(inventory=None)
+    context.job.payload['_workflow_runtime'] = {
+        'completed_steps': ['apply', 'ansible'],
+        'provider_applied': True,
+        'inventory_synced': True,
+        'plan_ready': False,
+        'plan_sha256': None,
+    }
+    restored = tmp_path / 'restored-ansible-workspace'
+    restored.mkdir()
+
+    monkeypatch.setattr(worker, 'restore_recovery_workspace', lambda _context: restored)
+    monkeypatch.setattr(worker, 'persist_workflow_runtime', lambda _context, _runtime: None)
+    monkeypatch.setattr(worker, 'health_check_vm', lambda _context, _workspace: True)
+    monkeypatch.setattr(
+        worker.AnsibleExecutor,
+        'execute',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('completed Ansible step must not run again')
+        ),
+    )
+
+    worker.run_blueprint_workflow(context, FakeExecutor())
+
+    assert context.blueprint_workflow_completed is True
+
+
 def test_unknown_workflow_step_fails_explicitly():
     context = FakeContext([
         {'id': 'mystery', 'type': 'not-supported', 'depends_on': [], 'retry': 0, 'timeout': 30},
