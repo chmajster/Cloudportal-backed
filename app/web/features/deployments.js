@@ -63,24 +63,6 @@ function productsPanel(blueprints, canUseProducts) {
     body);
 }
 
-function productResourceTabs(active) {
-  return node('div', { class: 'product-resource-tabs', role: 'tablist', 'aria-label': 'Produkty i zasoby' },
-    node('button', {
-      type: 'button',
-      class: 'product-resource-tab' + (active === 'products' ? ' active' : ''),
-      role: 'tab',
-      'aria-selected': String(active === 'products'),
-      onClick: () => navigate('deployments'),
-    }, 'Produkty'),
-    node('button', {
-      type: 'button',
-      class: 'product-resource-tab' + (active === 'resources' ? ' active' : ''),
-      role: 'tab',
-      'aria-selected': String(active === 'resources'),
-      onClick: () => navigate('my-resources'),
-    }, 'Moje zasoby'));
-}
-
 async function deploymentsView() {
   const canUseProducts = allowed('blueprints.read')
     && allowed('blueprints.execute')
@@ -102,7 +84,6 @@ async function deploymentsView() {
   );
 
   dom.content.replaceChildren(
-    productResourceTabs('products'),
     heading('Wybierz gotowy produkt i utwórz nową maszynę lub usługę. Lista istniejących zasobów znajduje się w zakładce „Moje zasoby”.'),
     productsPanel(products, canUseProducts)
   );
@@ -295,7 +276,6 @@ async function myResourcesView(repairInventory = true) {
 
   dom.content.replaceChildren(
     node('div', { class: 'my-resources-page-head' },
-      productResourceTabs('resources'),
       node('p', {
         class: 'my-resources-intro',
         text: 'Zasoby i wdrożenia dostępne dla zalogowanego użytkownika. Wejście w VM otwiera panel sterowania zgodny z jego uprawnieniami.',
