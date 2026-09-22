@@ -1,11 +1,14 @@
 from fastapi import HTTPException
 
 from app.database import session
+from app.models import Deployment
 from app.projects.permissions import DEFAULT_PROJECT_ID
 from app.quotas.models import ProjectQuotaUsage, QuotaAllocation, QuotaReservation
 from app.quotas.service import (
     QuotaDelta,
     commit_reservation,
+    deployment_dimensions,
+    deployment_unresolved_dimensions,
     mark_uncertain,
     quota_snapshot,
     reconcile_reservation,
@@ -89,3 +92,24 @@ def test_uncertain_reservation_holds_capacity_until_explicit_reconciliation(syst
         assert row.status == 'released'
         assert item(quota_snapshot(db, SCOPE), 'vm_count')['project_reserved'] == 0
         db.commit()
+
+
+
+def test_provider_dimension_normalization_is_explicit_and_fail_closed():
+    proxmox = Deployment(provider='proxmox', variables={'cpu': 4, 'memory': 8192, 'disk': 80})
+    vmware = Deployment(provider='vmware', variables={'cpu': 6, 'memory': 12288, 'disk': 120})
+    aws = Deployment(provider='aws', variables={'instance_type': 't3.large', 'root_volume_size': 40})
+    azure = Deployment(provider='azure', variables={'vm_size': 'Standard_B2s', 'os_disk_size_gb': 64})
+    openstack = Deployment(provider='openstack', variables={'flavor_name': 'm1.medium'})
+
+    assert deployment_dimensions(proxmox) == {'vm_count': 1, 'vcpu': 4, 'memory_mb': 8192, 'disk_gib': 80}
+    assert deployment_dimensions(vmware) == {'vm_count': 1, 'vcpu': 6, 'memory_mb': 12288, 'disk_gib': 120}
+    assert deployment_dimensions(aws) == {'vm_count': 1, 'disk_gib': 40}
+    assert deployment_dimensions(azure) == {'vm_count': 1, 'disk_gib': 64}
+    assert deployment_dimensions(openstack) == {'vm_count': 1}
+
+    assert deployment_unresolved_dimensions(proxmox) == set()
+    assert deployment_unresolved_dimensions(vmware) == set()
+    assert deployment_unresolved_dimensions(aws) == {'vcpu', 'memory_mb'}
+    assert deployment_unresolved_dimensions(azure) == {'vcpu', 'memory_mb'}
+    assert deployment_unresolved_dimensions(openstack) == {'vcpu', 'memory_mb', 'disk_gib'}
