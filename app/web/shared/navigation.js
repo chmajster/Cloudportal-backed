@@ -3,7 +3,7 @@
 (() => {
   const CLIENT_NAVIGATION_ROUTES = Object.freeze([
     'deployments',
-    'inventory',
+    'my-resources',
     'providers',
     'jobs',
     'blueprints',
