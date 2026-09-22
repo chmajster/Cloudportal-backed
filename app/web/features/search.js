@@ -97,7 +97,7 @@ async function loadIndex(force = false) {
   const accessibleRoutes = routes
     .filter(route => allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'));
   const index = accessibleRoutes
-    .filter(route => route.navigation !== false && (typeof window.uiNavigationVisible !== 'function' || window.uiNavigationVisible(route)))
+    .filter(navigationRouteVisible)
     .map(route => ({
       kind: 'Widok',
       route: route.id,
