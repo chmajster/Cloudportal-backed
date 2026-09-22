@@ -2,10 +2,12 @@
 from datetime import datetime
 from typing import Literal
 
-from app.api.outputs import Output
+from pydantic import BaseModel, ConfigDict
 
 
-class CredentialOutput(Output):
+class CredentialOutput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     id: int
     name: str
     type: str
@@ -23,7 +25,9 @@ class CredentialOutput(Output):
     secret: Literal['********']
 
 
-class SSHKeyBootstrapOutput(Output):
+class SSHKeyBootstrapOutput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     credential: CredentialOutput
     public_key: str
     fingerprint: str
