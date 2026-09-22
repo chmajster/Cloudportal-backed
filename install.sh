@@ -44,7 +44,7 @@ Tryby:
   --force-uninstall           Zgodnościowy alias: --uninstall --yes.
   --check-platform            Sprawdź obsługę systemu bez wykonywania instalacji.
   --gui, -gui                 Interaktywny interfejs dialog.
-  --non-interactive           Instalacja bez pytań.
+  --non-interactive           Tryb bez pytań; przy --uninstall wymaga także --yes.
 
 Konfiguracja:
   --host HOST                 Host/DNS backendu.
@@ -178,15 +178,31 @@ case "$ID:$VERSION_ID" in
     key_value_command=valkey-server
     ;;
   *)
-    echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2
-    drain_script_input
-    exit 1
+    if ((uninstall_mode || status_mode)); then
+      os_family=unknown
+      python_command=python3
+      key_value_package=unknown
+      key_value_command=unknown
+      ui_warn "System $ID $VERSION_ID nie jest wspierany do instalacji; tryb status/deinstalacji będzie kontynuowany."
+    else
+      echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2
+      drain_script_input
+      exit 1
+    fi
     ;;
 esac
 case "$(uname -m)" in
   x86_64) arch=amd64;;
   aarch64|arm64) arch=arm64;;
-  *) ui_fail "Nieobsługiwana architektura: $(uname -m). Obsługiwane: amd64/arm64."; exit 1;;
+  *)
+    if ((uninstall_mode || status_mode)); then
+      arch=$(uname -m)
+      ui_warn "Architektura $arch nie jest wspierana do instalacji; tryb status/deinstalacji będzie kontynuowany."
+    else
+      ui_fail "Nieobsługiwana architektura: $(uname -m). Obsługiwane: amd64/arm64."
+      exit 1
+    fi
+    ;;
 esac
 if ((check_platform)); then
   ui_header 'Pretest platformy'
@@ -536,6 +552,35 @@ preflight_checks() {
   }
 }
 
+uninstall_preflight() {
+  local failed=0 command
+  for command in systemctl flock awk grep ps readlink pkill rm id; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+      ui_fail "Deinstalacja wymaga komendy: $command"
+      failed=1
+    fi
+  done
+
+  if ((purge_data)); then
+    for command in runuser psql dropdb dropuser; do
+      if ! command -v "$command" >/dev/null 2>&1; then
+        ui_fail "Pełny purge wymaga komendy PostgreSQL/systemowej: $command"
+        failed=1
+      fi
+    done
+    id postgres >/dev/null 2>&1 || {
+      ui_fail 'Pełny purge wymaga lokalnego użytkownika systemowego postgres.'
+      failed=1
+    }
+  fi
+
+  ((failed == 0)) || {
+    ui_fail 'Pretest deinstalacji nie przeszedł. Nic nie zostało usunięte.'
+    return 1
+  }
+  ui_ok 'Pretest deinstalacji zakończony.'
+}
+
 confirm_uninstall() {
   ((assume_yes)) && return 0
 
@@ -690,13 +735,12 @@ uninstall_cloudportal() {
   ui_stage 3 4 'Polityka danych'
   if ((purge_data)); then
     ui_warn 'PURGE DATA: usuwam lokalną bazę Cloudportal, konfigurację, dane i backupy.'
-    if command -v runuser >/dev/null 2>&1 && command -v dropdb >/dev/null 2>&1 \
-        && command -v dropuser >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
-      runuser -u postgres -- dropdb --force --if-exists cloudportal >/dev/null 2>&1 || true
-      runuser -u postgres -- dropuser --if-exists cloudportal >/dev/null 2>&1 || true
-    else
-      ui_warn 'Nie znaleziono lokalnych narzędzi PostgreSQL; nie można potwierdzić automatycznego usunięcia bazy/roli.'
+    if ! systemctl is-active --quiet postgresql.service 2>/dev/null; then
+      ui_info 'Uruchamiam PostgreSQL na czas bezpiecznego usunięcia bazy Cloudportal.'
+      systemctl start postgresql.service
     fi
+    runuser -u postgres -- dropdb --force --if-exists cloudportal >/dev/null
+    runuser -u postgres -- dropuser --if-exists cloudportal >/dev/null
     rm -rf "$config" "$data" /var/backups/cloudportal-backed
     userdel cloudportal >/dev/null 2>&1 || true
     ui_ok 'Konfiguracja, dane, backupy i użytkownik systemowy zostały usunięte.'
@@ -734,6 +778,7 @@ if ((uninstall_mode)); then
   else
     ui_info 'Runtime i integracje systemowe zostaną usunięte; baza, konfiguracja i dane zostaną zachowane.'
   fi
+  uninstall_preflight
   confirm_uninstall
   uninstall_cloudportal
   drain_script_input
