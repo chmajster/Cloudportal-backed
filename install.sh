@@ -253,10 +253,10 @@ lock_holder_pid=''
 
 stop_cloudportal_application() {
   ui_info 'Zatrzymuję usługi aplikacyjne Cloudportal...'
-  if ((update_in_progress && uninstall_mode == 0)); then
+  if ((update_in_progress)); then
     ui_info 'Serwis updatera pozostaje aktywny na czas aktualizacji.'
   else
-    systemctl stop cloudportal-updater.timer cloudportal-updater.service >/dev/null 2>&1 || true
+    systemctl stop cloudportal-updater.service >/dev/null 2>&1 || true
   fi
   systemctl stop cloudportal-backup.timer cloudportal-backup.service >/dev/null 2>&1 || true
   systemctl stop cloudportal-dispatcher.service cloudportal-api.service >/dev/null 2>&1 || true
@@ -672,7 +672,9 @@ uninstall_cloudportal() {
   ui_stage 1 4 'Blokada i zatrzymanie usług'
   ui_info 'Przejmuję blokadę instalatora i zatrzymuję usługi Cloudportal.'
   acquire_install_lock
+  update_in_progress=0
   stop_cloudportal_application
+  systemctl stop cloudportal-updater.timer cloudportal-updater.service >/dev/null 2>&1 || true
 
   if id cloudportal >/dev/null 2>&1; then
     pkill -TERM -u cloudportal >/dev/null 2>&1 || true
