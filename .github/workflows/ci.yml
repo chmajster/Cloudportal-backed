@@ -83,6 +83,7 @@ jobs:
           unset REPOSITORY_READ_TOKEN
           sudo ./install.sh --non-interactive --host localhost --enable-backups --backup-retention-days 2 --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-install-output 2>&1
           sudo python3 scripts/installer-smoke.py
+          sudo --preserve-env=GITHUB_SHA python3 scripts/update-preflight-smoke.py
           sudo systemctl start cloudportal-backup.service
           sudo test -s "$(sudo find /var/backups/cloudportal-backed -mindepth 2 -maxdepth 2 -name database.dump -type f | head -n 1)"
           sudo systemctl is-enabled --quiet cloudportal-backup.timer

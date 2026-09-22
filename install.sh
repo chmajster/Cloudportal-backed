@@ -896,6 +896,7 @@ data.setdefault('require_ci', True)
 data.setdefault('ci_workflow', 'Backend CI')
 data.setdefault('ci_wait_minutes', 45)
 data.setdefault('candidate_validation', True)
+data.setdefault('runtime_preflight', True)
 data['ref'] = sys.argv[2]
 if sys.argv[3]:
     data['github_token_file'] = sys.argv[3]

@@ -11,6 +11,8 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tarfile
@@ -22,7 +24,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 CONFIG_DIR = Path(os.environ.get("CP_UPDATER_CONFIG_DIR", "/etc/cloudportal-backed"))
@@ -78,6 +80,7 @@ def default_settings() -> dict:
         "ci_workflow": "Backend CI",
         "ci_wait_minutes": 45,
         "candidate_validation": True,
+        "runtime_preflight": True,
     }
 
 
@@ -483,6 +486,337 @@ def validate_candidate(target_sha: str, settings: dict) -> None:
     )
 
 
+def _database_clone_details(database_url: str) -> dict:
+    parsed = urlsplit(database_url)
+    if not parsed.scheme.startswith("postgresql"):
+        raise RuntimeError("Runtime preflight obsługuje tylko PostgreSQL")
+    query = parse_qs(parsed.query)
+    host = (query.get("host") or [parsed.hostname or ""])[0]
+    if host not in {"", "/var/run/postgresql", "/run/postgresql"}:
+        raise RuntimeError(
+            "Runtime preflight wymaga lokalnego PostgreSQL na socket; "
+            "dla zewnętrznej bazy auto-update jest blokowany zamiast ryzykować wdrożenie bez testu."
+        )
+    username = parsed.username or "cloudportal"
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,62}", username):
+        raise RuntimeError("Nieprawidłowa lokalna rola PostgreSQL w CP_DATABASE_URL")
+    port = parsed.port
+    database = parsed.path.lstrip("/")
+    if not database:
+        raise RuntimeError("CP_DATABASE_URL nie zawiera nazwy bazy")
+    return {
+        "parsed": parsed,
+        "host": host,
+        "port": port,
+        "username": username,
+        "database": database,
+    }
+
+
+def _url_with_database(database_url: str, database: str) -> str:
+    parsed = urlsplit(database_url)
+    # urlunsplit() collapses postgresql+psycopg:///db to
+    # postgresql+psycopg:/db when netloc is empty. SQLAlchemy requires the
+    # triple-slash form for a local database URL.
+    value = f"{parsed.scheme}://{parsed.netloc}/{database}"
+    if parsed.query:
+        value += "?" + parsed.query
+    if parsed.fragment:
+        value += "#" + parsed.fragment
+    return value
+
+
+def _scratch_redis_url(redis_url: str) -> str:
+    parsed = urlsplit(redis_url)
+    current = parsed.path.lstrip("/")
+    try:
+        current_db = int(current or "0")
+    except ValueError:
+        current_db = 0
+    scratch_db = 15 if current_db != 15 else 14
+    return urlunsplit((parsed.scheme, parsed.netloc, "/" + str(scratch_db), parsed.query, parsed.fragment))
+
+
+def _postgres_connection_args(details: dict) -> list[str]:
+    args = []
+    if details.get("host"):
+        args.extend(["--host", str(details["host"])])
+    if details.get("port"):
+        args.extend(["--port", str(details["port"])])
+    return args
+
+
+def _run_runtime_command(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict | None = None,
+    label: str,
+    timeout: int = 300,
+) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Runtime preflight przekroczył limit czasu: {label}") from exc
+    if result.returncode == 0:
+        return result.stdout or ""
+    for line in (result.stdout or "").splitlines()[-60:]:
+        append_output("runtime-preflight: " + line)
+    raise RuntimeError(f"Runtime preflight nie przeszedł: {label} (kod {result.returncode})")
+
+
+def _free_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _candidate_health_payload(port: int) -> dict | None:
+    request = Request(
+        f"http://127.0.0.1:{port}/api/v1/health",
+        headers={"Accept": "application/json", "User-Agent": "cloudportal-updater-preflight/1"},
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            raw = response.read()
+    except HTTPError as exc:
+        if exc.code != 503:
+            return None
+        raw = exc.read()
+    except (URLError, TimeoutError, OSError):
+        return None
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _candidate_core_healthy(payload: dict) -> bool:
+    checks = payload.get("checks")
+    if not isinstance(checks, dict):
+        return False
+    # Dispatcher/workers are intentionally not started in preflight because the
+    # cloned production database can contain queued jobs with real provider
+    # credentials. Starting executors would risk touching infrastructure.
+    required = ("api", "database", "queue", "terraform", "ansible", "disk", "encryption")
+    return all(bool(checks.get(name)) for name in required)
+
+
+def validate_candidate_runtime(target_sha: str, backup_dir: Path, settings: dict) -> None:
+    if not bool(settings.get("runtime_preflight", True)):
+        append_output("Runtime candidate preflight disabled in updater settings.")
+        return
+
+    backend = parse_kv(CONFIG_DIR / "backend.env")
+    database_url = str(backend.get("CP_DATABASE_URL") or "")
+    redis_url = str(backend.get("CP_REDIS_URL") or "")
+    if not database_url or not redis_url:
+        raise RuntimeError("Brak CP_DATABASE_URL lub CP_REDIS_URL; runtime preflight zablokowany")
+
+    details = _database_clone_details(database_url)
+    runuser = shutil.which("runuser")
+    createdb = shutil.which("createdb")
+    dropdb = shutil.which("dropdb")
+    pg_restore = shutil.which("pg_restore")
+    if not all((runuser, createdb, dropdb, pg_restore)):
+        raise RuntimeError("Brak runuser/createdb/dropdb/pg_restore wymaganych do bezpiecznego runtime preflight")
+
+    dump = backup_dir / "database.dump"
+    if not dump.is_file():
+        raise RuntimeError("Backup przed aktualizacją nie zawiera database.dump")
+
+    scratch_db = f"cloudportal_preflight_{os.getpid()}_{int(time.time())}"
+    scratch_url = _url_with_database(database_url, scratch_db)
+    scratch_redis = _scratch_redis_url(redis_url)
+    pg_conn = _postgres_connection_args(details)
+    database_created = False
+    process = None
+
+    event(
+        "runtime_preflight",
+        16,
+        "Testowanie migracji i API kandydata na kopii aktualnej bazy; produkcja pozostaje bez zmian.",
+    )
+
+    with tempfile.TemporaryDirectory(prefix="cloudportal-runtime-preflight-") as temp:
+        root = Path(temp)
+        os.chmod(root, 0o755)
+        archive = root / "candidate.tar.gz"
+        source = root / "source"
+        venv = root / "venv"
+        data_dir = root / "data"
+        source.mkdir()
+        data_dir.mkdir()
+        download_candidate_archive(target_sha, archive, settings)
+        extract_candidate_archive(archive, source)
+
+        _run_runtime_command(
+            [sys.executable, "-m", "venv", str(venv)],
+            label="utworzenie izolowanego venv",
+            timeout=300,
+        )
+        _run_runtime_command(
+            ["chown", "-R", "cloudportal:cloudportal", str(source), str(venv), str(data_dir)],
+            label="uprawnienia izolowanego środowiska",
+            timeout=120,
+        )
+        _run_runtime_command(
+            [
+                runuser, "-u", "cloudportal", "--",
+                str(venv / "bin" / "pip"), "install", "--disable-pip-version-check",
+                "-r", str(source / "requirements.txt"),
+            ],
+            cwd=source,
+            label="instalacja zależności kandydata",
+            timeout=1200,
+        )
+
+        scratch_dump = root / "database.dump"
+        shutil.copy2(dump, scratch_dump)
+        os.chmod(scratch_dump, 0o600)
+        _run_runtime_command(
+            ["chown", "cloudportal:cloudportal", str(scratch_dump)],
+            label="uprawnienia tymczasowej kopii backupu",
+            timeout=60,
+        )
+
+        admin_create = [
+            runuser, "-u", "postgres", "--", createdb,
+            "--owner", details["username"], *pg_conn, scratch_db,
+        ]
+        _run_runtime_command(admin_create, label="utworzenie tymczasowej bazy", timeout=120)
+        database_created = True
+
+        try:
+            restore_command = [
+                runuser, "-u", details["username"], "--", pg_restore,
+                "--no-owner", "--no-privileges", "--exit-on-error",
+                *pg_conn, "--dbname", scratch_db, str(scratch_dump),
+            ]
+            _run_runtime_command(
+                restore_command,
+                label="odtworzenie backupu do tymczasowej bazy",
+                timeout=1800,
+            )
+
+            candidate_env = os.environ.copy()
+            candidate_env.update(backend)
+            candidate_env.update({
+                "CP_DATABASE_URL": scratch_url,
+                "CP_REDIS_URL": scratch_redis,
+                "CP_DATA_DIR": str(data_dir),
+                "CP_WORKER_COUNT": "1",
+                "CP_ALLOW_HTTP": "true",
+            })
+
+            flush_code = (
+                "import os; from redis import Redis; "
+                "Redis.from_url(os.environ['CP_REDIS_URL']).flushdb()"
+            )
+            _run_runtime_command(
+                [runuser, "-u", "cloudportal", "--", str(venv / "bin" / "python"), "-c", flush_code],
+                cwd=source,
+                env=candidate_env,
+                label="wyczyszczenie izolowanej kolejki Redis",
+                timeout=60,
+            )
+            _run_runtime_command(
+                [runuser, "-u", "cloudportal", "--", str(venv / "bin" / "alembic"), "upgrade", "head"],
+                cwd=source,
+                env=candidate_env,
+                label="migracje kandydata na kopii produkcyjnej bazy",
+                timeout=900,
+            )
+
+            port = _free_loopback_port()
+            log_path = root / "candidate-api.log"
+            with log_path.open("w+", encoding="utf-8") as log:
+                process = subprocess.Popen(
+                    [
+                        runuser, "-u", "cloudportal", "--",
+                        str(venv / "bin" / "uvicorn"), "app.main:app",
+                        "--host", "127.0.0.1", "--port", str(port),
+                    ],
+                    cwd=str(source),
+                    env=candidate_env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
+                )
+                payload = None
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        break
+                    payload = _candidate_health_payload(port)
+                    if payload is not None and _candidate_core_healthy(payload):
+                        break
+                    time.sleep(1)
+
+                if payload is None or not _candidate_core_healthy(payload):
+                    log.flush()
+                    log.seek(0)
+                    for line in log.read().splitlines()[-80:]:
+                        append_output("runtime-preflight-api: " + line)
+                    checks = payload.get("checks") if isinstance(payload, dict) else None
+                    raise RuntimeError(
+                        "Kandydat nie przeszedł izolowanego healthchecku"
+                        + (f": {checks}" if checks else "")
+                    )
+        finally:
+            if process is not None and process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    process.wait(timeout=10)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            try:
+                candidate_env
+            except UnboundLocalError:
+                candidate_env = None
+            if candidate_env is not None:
+                try:
+                    _run_runtime_command(
+                        [runuser, "-u", "cloudportal", "--", str(venv / "bin" / "python"), "-c", flush_code],
+                        cwd=source,
+                        env=candidate_env,
+                        label="sprzątanie izolowanej kolejki Redis",
+                        timeout=60,
+                    )
+                except Exception as exc:
+                    append_output("runtime-preflight cleanup warning: " + str(exc))
+            if database_created:
+                try:
+                    _run_runtime_command(
+                        [runuser, "-u", "postgres", "--", dropdb, "--if-exists", *pg_conn, scratch_db],
+                        label="usunięcie tymczasowej bazy",
+                        timeout=120,
+                    )
+                except Exception as exc:
+                    append_output("runtime-preflight cleanup warning: " + str(exc))
+
+    event(
+        "runtime_preflight_ok",
+        18,
+        "Migracje i API kandydata działają na kopii aktualnej bazy. Można rozpocząć właściwą aktualizację.",
+        runtime_preflight="success",
+    )
+
+
 def _service_active(unit: str) -> bool:
     return subprocess.run(
         ["systemctl", "is-active", "--quiet", unit],
@@ -740,11 +1074,10 @@ def download_installer(ref: str, target: Path) -> None:
     os.chmod(target, 0o700)
 
 
-def pre_update_backup() -> None:
+def pre_update_backup() -> Path:
     backup = Path("/usr/local/sbin/cloudportal-backup")
     if not backup.exists():
-        append_output("Pre-update backup command is not installed; continuing without automatic backup.")
-        return
+        raise RuntimeError("Pre-update backup command is not installed; refusing unsafe update")
     result = subprocess.run(
         [str(backup)],
         stdout=subprocess.PIPE,
@@ -753,10 +1086,16 @@ def pre_update_backup() -> None:
         timeout=1800,
         check=False,
     )
-    for line in result.stdout.splitlines():
+    lines = result.stdout.splitlines()
+    for line in lines:
         append_output(line)
     if result.returncode != 0:
         raise RuntimeError("Pre-update PostgreSQL backup failed")
+    for line in reversed(lines):
+        candidate = Path(line.strip())
+        if candidate.is_absolute() and (candidate / "database.dump").is_file() and (candidate / "metadata.json").is_file():
+            return candidate
+    raise RuntimeError("Pre-update backup finished without a verifiable backup directory")
 
 
 def run_update(ref: str | None = None, automatic: bool = False) -> None:
@@ -796,10 +1135,11 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
         wait_for_required_ci(target_sha, settings)
         validate_candidate(target_sha, settings)
 
-        event("backup", 15, "Tworzenie backupu PostgreSQL przed aktualizacją.")
-        pre_update_backup()
+        event("backup", 14, "Tworzenie backupu PostgreSQL przed izolowanym testem migracji.")
+        backup_dir = pre_update_backup()
+        validate_candidate_runtime(target_sha, backup_dir, settings)
 
-        event("download", 18, "Pobieranie instalatora dokładnie dla zweryfikowanego commita.")
+        event("download", 19, "Pobieranie instalatora dokładnie dla zweryfikowanego commita.")
         with tempfile.TemporaryDirectory(prefix="cloudportal-update-") as temp:
             installer = Path(temp) / "install.sh"
             # Pin both installer and source download to the immutable SHA that
@@ -850,6 +1190,7 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
             finished_at=utcnow(),
             ci_status="success" if bool(settings.get("require_ci", True)) else "disabled",
             candidate_validation="success" if bool(settings.get("candidate_validation", True)) else "disabled",
+            runtime_preflight="success" if bool(settings.get("runtime_preflight", True)) else "disabled",
         )
         event("complete", 100, "Aktualizacja zakończona pomyślnie po wszystkich bramkach bezpieczeństwa.", status="success")
     except Exception as exc:

@@ -64,3 +64,8 @@ def test_updater_install_preserves_moving_channel_while_source_is_sha_pinned():
     assert '"$updater_config" "$release_ref"' in INSTALLER
     assert "data.setdefault('require_ci', True)" in INSTALLER
     assert "data.setdefault('candidate_validation', True)" in INSTALLER
+
+
+
+def test_installer_enables_runtime_preflight_by_default():
+    assert "data.setdefault('runtime_preflight', True)" in INSTALLER
