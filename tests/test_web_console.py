@@ -356,6 +356,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'account-permissions-panel' in script
     assert 'Skuteczne uprawnienia' in script
     assert 'Ochrona dostępu' in script
+    assert 'Wpisz hasło, którym zalogowałeś się do Cloudportal.' in script
+    assert 'Obecne hasło jest nieprawidłowe.' in script
+    assert 'Zmiana hasła wymaga ponownego zalogowania.' in script
+    assert "['Current password required', 'Current password is incorrect']" in script
     assert 'function discoverVmOptions(' in script
     assert 'function storageLabel(' in script
     assert 'function hostnameValueFields(' in script
