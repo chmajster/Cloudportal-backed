@@ -930,6 +930,15 @@ async function blueprintForm(item = null) {
     let deploymentVariablesReady = false;
 
     const currentTemplate = () => templates.find(template => template.id === templateField.querySelector('select').value) || templates[0];
+    const guestCredentialField = selectField('Credential ustawiany na VM', 'deployment_guest_credential_id',
+      [{ value: '', label: 'Nie twórz użytkownika z credentiala' }, ...window.BlueprintProvisioningGuards.guestCredentialChoices(credentials)],
+      deployment.guest_credential_id || '', { wide: true,
+        help: 'Wybrany credential SSH zostanie użyty przez cloud-init do ustawienia konta w VM. Może zawierać hasło, klucz prywatny albo oba. Klucz prywatny nie jest kopiowany do VM; używany jest tylko wyliczony z niego klucz publiczny.' });
+    const syncGuestCredentialField = () => {
+      const supported = currentTemplate()?.id === 'proxmox-vm';
+      guestCredentialField.hidden = !supported;
+      if (!supported) guestCredentialField.querySelector('select').value = '';
+    };
     const refill = (select, values, placeholder, selectedValue) => {
       select.replaceChildren(node('option', { value: '', text: placeholder }));
       values.forEach(value => select.append(node('option', {
@@ -1048,6 +1057,7 @@ async function blueprintForm(item = null) {
         templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
       });
       deploymentVariablesReady = true;
+      syncGuestCredentialField();
       renderBlueprintAnsible();
     };
     templateField.querySelector('select').addEventListener('change', refreshDeploymentTemplate);
@@ -1153,10 +1163,7 @@ async function blueprintForm(item = null) {
           credentialField,
           selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
           deploymentHostnameSchemeField,
-          selectField('Credential ustawiany na VM', 'deployment_guest_credential_id',
-            [{ value: '', label: 'Nie twórz użytkownika z credentiala' }, ...window.BlueprintProvisioningGuards.guestCredentialChoices(credentials)],
-            deployment.guest_credential_id || '', { wide: true,
-              help: 'Wybrany credential SSH zostanie użyty przez cloud-init do ustawienia konta w VM. Może zawierać hasło, klucz prywatny albo oba. Klucz prywatny nie jest kopiowany do VM; używany jest tylko wyliczony z niego klucz publiczny.' }),
+          guestCredentialField,
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
           ansibleSection)),
