@@ -80,7 +80,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/projects.js',
         'features/tools.js',
         'features/updates.js',
-    } == set(manifest['scripts'])
+    } <= set(manifest['scripts'])
+    # Automatic discovery must serve every domain file, including future additions.
+    from pathlib import Path
+    expected_scripts = {'features/' + path.name for path in Path('app/web/features').glob('*.js')}
+    assert set(manifest['scripts']) == expected_scripts
     assert {
         'styles/features/identity.css',
         'styles/features/credentials.css',

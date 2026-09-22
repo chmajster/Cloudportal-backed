@@ -130,3 +130,11 @@ and stale-result suppression; it is not a full browser E2E substitute.
 Record exact current-head results in the PR. Passing project tests does not prove
 that quota, resource/credential/provider isolation, leases or policy enforcement
 are complete.
+
+## Integration of PR #120
+
+The already merged #119 Projects schema, public administration API, scoped inheritance semantics and tests remain canonical. The alternative duplicate implementation in #120 has been reconciled rather than installed alongside it. Revision `9a42d10e63bc` is unchanged; its child `8c42f39a50bd` adds only `user_project_contexts`. Upgrade and downgrade preserve existing project identities, memberships, role grant ceilings, users and infrastructure. Do not deploy the superseded draft migration directly.
+
+GET/PUT/DELETE `/project-context` add an authenticated, versioned server preference. PUT requires `projects.select` and `projects.read` in the chosen project. Existing API token and assignment ceilings are not expanded. The existing explicit POST `/project-context/resolve` contract remains compatible. Internal `app.projects.context.resolve_scope` resolves explicit IDs, a live validated preference or Default/Default in that order; an inaccessible explicit or saved selection fails without fallback. Selection does not scope existing infrastructure APIs. Clearing a revoked preference is allowed after live authentication and retains the monotonic revision.
+
+The Projects UI exposes selection and clearing with safe text rendering and stale-navigation guards. It is not a global infrastructure switcher. Resource isolation, quotas, leases, placement and policy integration remain future work.

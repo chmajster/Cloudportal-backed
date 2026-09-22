@@ -729,7 +729,27 @@ class ProxmoxProvider(InfrastructureProvider):
             },
         )
 
+    def delete_vm_config_key(self, node, vm_id, key):
+        return self._put(
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/config',
+            {'delete': key},
+        )
 
+    def move_disk(self, node, vm_id, *, disk, storage, delete_source=True):
+        return self._post(
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/move_disk',
+            {'disk': disk, 'storage': storage, 'delete': int(delete_source)},
+        )
+
+    def delete_storage_volume(self, node, storage, volume):
+        return self._delete(
+            f'/nodes/{quote(node, safe="")}/storage/{quote(storage, safe="")}/content/{quote(volume, safe="")}'
+        )
+
+    def stop_task(self, node, upid):
+        return self._delete(
+            f'/nodes/{quote(node, safe="")}/tasks/{quote(upid, safe="")}'
+        )
 
     def backups(self, node, storage, vm_id=None):
         rows = self._get(

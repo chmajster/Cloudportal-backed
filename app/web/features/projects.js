@@ -31,14 +31,16 @@
     if (listStatus) query.set('status', listStatus);
     if (tenantFilter) query.set('tenant_id', tenantFilter);
     const [page, scopes] = await Promise.all([api('/projects?' + query), api('/project-context/creation-scopes?limit=1')]);
-    if (current !== generation || state.view !== 'projects') return;
+    const valid = () => current === generation && state.view === 'projects';
+    const selection = globalThis.CPProjectContext ? await globalThis.CPProjectContext.panel(projectsView, valid) : null;
+    if (!valid()) return;
     const filter = selectField('Status', 'project_status', [{ value: '', label: 'Wszystkie dostępne' }, ...statuses], listStatus);
     filter.querySelector('select').addEventListener('change', event => {
       listStatus = event.target.value; listOffset = 0; projectsView().catch(error => toast(error.message, 'error'));
     });
     const actions = scopes.total ? [action('Nowy projekt', () => projectForm(), 'primary')] : [];
     if (tenantFilter) actions.push(action('Wszystkie dostępne tenanty', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
-    dom.content.replaceChildren(heading('Projekty, członkostwa i uprawnienia w kontekście Tenant / Project.', actions), notice(), filter,
+    dom.content.replaceChildren(heading('Projekty, członkostwa i uprawnienia w kontekście Tenant / Project.', actions), notice(), selection, filter,
       table([
         { label: 'Projekt', value: row => node('strong', { text: row.name }) },
         { label: 'Tenant ID', value: row => row.tenant_id },
@@ -56,6 +58,8 @@
     if (current !== generation || state.view !== 'projects') return;
     const permits = p => scope.permissions.includes(p);
     const actions = [];
+    if (permits('projects.select') && globalThis.CPProjectContext) actions.push(action('Wybierz kontekst',
+      () => globalThis.CPProjectContext.choose(item, () => current === generation && state.view === 'projects')));
     if (permits('projects.update')) actions.push(action('Edytuj', () => projectForm(item, scope)));
     if (permits('projects.members.read')) actions.push(action('Członkowie', () => members(id)));
     if (permits('projects.audit.read')) actions.push(action('Audyt', () => history(id)));

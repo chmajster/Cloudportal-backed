@@ -16,6 +16,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'proxmox-management',
         'automation',
         'inventory',
+        'day2',
         'ipam',
         'operations',
         'event-enterprise',

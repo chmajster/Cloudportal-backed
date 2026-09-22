@@ -167,6 +167,8 @@ def default_references(db, _context):
     new_rows = db.info.pop('_new_scope_references', [])
     touched = db.info.pop('_touch_scope_projects', set())
     scope = db.info.get('resource_scope', DEFAULT_SCOPE)
+    # Insert assignments in this flush transaction, not a later ORM flush: a
+    # caller may create a VM immediately after flushing its new provider.
     # Registration runs only at creation, never during login. Revoked memberships
     # and allowlist entries cannot be silently recreated by authentication.
     for row in new_rows:
@@ -178,12 +180,12 @@ def default_references(db, _context):
                 tenant_id=DEFAULT_TENANT_ID, project_id=DEFAULT_PROJECT_ID, user_id=row.id, status='active'))
         elif isinstance(row, m.Credential):
             touched.add(scope.project_id)
-            db.add(ProjectCredentialAccess(tenant_id=scope.tenant_id, project_id=scope.project_id,
-                                           credential_id=row.id))
+            db.connection().execute(ProjectCredentialAccess.__table__.insert().values(
+                tenant_id=scope.tenant_id, project_id=scope.project_id, credential_id=row.id))
         elif isinstance(row, m.Provider):
             touched.add(scope.project_id)
-            db.add(ProjectProviderAccess(tenant_id=scope.tenant_id, project_id=scope.project_id,
-                                         provider_id=row.id))
+            db.connection().execute(ProjectProviderAccess.__table__.insert().values(
+                tenant_id=scope.tenant_id, project_id=scope.project_id, provider_id=row.id))
 
     if touched:
         db.execute(update(Project).where(Project.id.in_(touched)).values(
