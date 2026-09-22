@@ -367,8 +367,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "hostname_values" in script
     assert "ipam_pool_id" in script
     assert "guest_credential_id" in script
-    assert "Credential dostępu do VM" in script
+    assert "Credential ustawiany na VM" in script
     assert "supports_cloud_init_ssh_key === true" in script
+    assert "supports_cloud_init_password === true" in script
     assert "requiredExecutionPermissions" in script
     assert "'jobs.execute'" in script
     assert "'terraform.execute'" in script
@@ -378,7 +379,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'ipam.release'" in script
     assert "Brak uprawnień do uruchomienia" in script
     assert script.count("workflowNeedsTags(") >= 2
-    assert "Brak credentiali SSH zawierających klucz prywatny" in script
+    assert "Brak credentiali SSH z hasłem lub kluczem prywatnym" in script
     assert "QEMU Guest Agent niedostępny" in script
     assert "storage obsługującego snippets" in script
     assert "Credential ustawiany na VM" in script
