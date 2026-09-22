@@ -56,6 +56,21 @@ def test_help_is_plain_text_without_ansi_sequences():
     assert '--status' in result.stdout
     assert '--uninstall' in result.stdout
     assert '--non-interactive' in result.stdout
+    assert '--docker' in result.stdout
+
+
+def test_installer_has_docker_mode_with_status_uninstall_and_secure_config():
+    assert '--docker) docker_mode=1' in INSTALLER
+    assert 'docker_install_cloudportal()' in INSTALLER
+    assert 'docker_show_status()' in INSTALLER
+    assert 'docker_uninstall_cloudportal()' in INSTALLER
+    assert 'docker compose -p cloudportal-backed' in INSTALLER
+    assert 'docker compose version' in INSTALLER
+    assert 'CP_POSTGRES_PASSWORD=%s' in INSTALLER
+    assert 'openssl rand -hex 32' in INSTALLER
+    assert 'install -m 0600 "$temp_dir/docker.env" "$docker_root/.env"' in INSTALLER
+    assert '--cacert "$docker_root/tls/server.crt"' in INSTALLER
+    assert 'docker_compose_for "$release_dir" up -d --remove-orphans --scale "worker=$workers"' in INSTALLER
 
 
 
