@@ -165,6 +165,54 @@ def test_novnc_asset_retries_with_auth_only_when_required(system, monkeypatch):
     ]
 
 
+def test_novnc_asset_retries_original_url_with_auth_after_redirect(system, monkeypatch):
+    import app.providers.proxmox as proxmox_module
+    from app.providers.proxmox import ProxmoxProvider
+
+    calls = []
+
+    class Response:
+        content = b'export default class RFB {}'
+        headers = {'content-type': 'text/javascript'}
+
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if 300 <= self.status_code:
+                request = proxmox_module.httpx.Request('GET', 'https://pve.example.com:8006/novnc/core/rfb.js')
+                response = proxmox_module.httpx.Response(self.status_code, request=request)
+                raise proxmox_module.httpx.HTTPStatusError('upstream redirect', request=request, response=response)
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def get(self, url, headers=None):
+            calls.append((url, headers))
+            return Response(302 if len(calls) == 1 else 200)
+
+    monkeypatch.setattr(proxmox_module.httpx, 'Client', Client)
+    provider = object.__new__(ProxmoxProvider)
+    provider.endpoint = 'https://pve.example.com:8006/api2/json'
+    provider.verify_ssl = True
+    monkeypatch.setattr(provider, 'console_auth_headers', lambda: {'Authorization': 'PVEAPIToken=redacted'})
+
+    body, _ = provider.novnc_asset('core/rfb.js')
+
+    assert body == b'export default class RFB {}'
+    assert calls == [
+        ('https://pve.example.com:8006/novnc/core/rfb.js', None),
+        ('https://pve.example.com:8006/novnc/core/rfb.js', {'Authorization': 'PVEAPIToken=redacted'}),
+    ]
+
+
 def test_console_websocket_url_supports_http(system):
     from app.providers.proxmox import ProxmoxProvider
 
