@@ -21,6 +21,10 @@ In the PR description, record what is finished, what remains, which shared files
 
 See `docs/architecture/modularity.md` for the full architecture rules.
 
+## Pull request completion policy
+
+When a pull request is complete, its required validation is green, and there are no unresolved blocking review findings, merge it into `main` instead of leaving a ready PR open. Do not wait for separate merge confirmation unless the user explicitly asks to keep the PR open or to avoid merging. If CI or required validation fails, fix the failure first and rerun validation before merging. Never merge a known failing or incomplete PR solely to close the task.
+
 ## Bash terminal UI standard
 
 For user-facing Bash scripts, use the same terminal interface pattern as `install.sh` unless the script is intentionally machine-only.
