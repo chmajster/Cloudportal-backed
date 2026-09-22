@@ -284,49 +284,100 @@ docker_certificate_key_matches() {
   [[ -n "$cert_public" && "$cert_public" == "$key_public" ]]
 }
 
-docker_prepare_tls() {
-  local tls_dir="$docker_root/tls" regenerate=0 san
-  install -d -m 0700 "$tls_dir"
-  if [[ -n "$cert_file" ]]; then
-    install -m 0600 "$cert_file" "$tls_dir/server.crt"
-    install -m 0600 "$cert_key" "$tls_dir/server.key"
-    printf '%s\n' custom > "$tls_dir/certificate-source"
-  elif [[ ! -s "$tls_dir/server.crt" || ! -s "$tls_dir/server.key" ]]; then
-    regenerate=1
-  elif [[ $(cat "$tls_dir/certificate-source" 2>/dev/null || true) == managed-self-signed ]]; then
-    openssl x509 -in "$tls_dir/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate=1
-    docker_certificate_matches_host "$tls_dir/server.crt" || regenerate=1
-    docker_certificate_key_matches "$tls_dir/server.crt" "$tls_dir/server.key" || regenerate=1
-  fi
-
-  if ((regenerate)); then
-    san="DNS:$backend_host"
-    [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
-    openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
-      -keyout "$tls_dir/server.key" -out "$tls_dir/server.crt" \
-      -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
-    chmod 0600 "$tls_dir/server.crt" "$tls_dir/server.key"
-    printf '%s\n' managed-self-signed > "$tls_dir/certificate-source"
-  fi
-
-  docker_certificate_key_matches "$tls_dir/server.crt" "$tls_dir/server.key" || {
+docker_validate_tls_pair() {
+  local certificate=$1 private_key=$2
+  docker_certificate_key_matches "$certificate" "$private_key" || {
     ui_fail 'Certyfikat TLS i klucz prywatny nie pasują do siebie.'
     return 1
   }
-  openssl x509 -in "$tls_dir/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
-    ui_fail 'Certyfikat TLS wygasł albo wygaśnie w ciągu 5 minut.'
+  openssl x509 -in "$certificate" -noout -checkend 300 >/dev/null 2>&1 || {
+    ui_fail 'Certyfikat TLS jest nieprawidłowy, wygasł albo wygaśnie w ciągu 5 minut.'
     return 1
   }
-  docker_certificate_matches_host "$tls_dir/server.crt" || {
+  docker_certificate_matches_host "$certificate" || {
     ui_fail "Certyfikat TLS nie obejmuje hosta $backend_host."
     return 1
   }
 }
 
+docker_generate_managed_tls_pair() {
+  local certificate=$1 private_key=$2 san="DNS:$backend_host"
+  [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
+  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
+    -keyout "$private_key" -out "$certificate" \
+    -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
+  chmod 0600 "$certificate" "$private_key"
+}
+
+docker_prepare_tls() {
+  local tls_dir="$docker_root/tls" stage_dir source='' candidate_source='' use_candidate=0 regenerate=0
+  local staged_cert staged_key
+  docker_tls_changed=0
+  install -d -m 0700 "$tls_dir"
+  source=$(cat "$tls_dir/certificate-source" 2>/dev/null || true)
+  stage_dir=$(mktemp -d "$docker_root/.tls-stage.XXXXXXXX")
+  chmod 0700 "$stage_dir"
+  staged_cert="$stage_dir/server.crt"
+  staged_key="$stage_dir/server.key"
+
+  if [[ -n "$cert_file" ]]; then
+    install -m 0600 "$cert_file" "$staged_cert"
+    install -m 0600 "$cert_key" "$staged_key"
+    candidate_source=custom
+    use_candidate=1
+  elif [[ ! -s "$tls_dir/server.crt" || ! -s "$tls_dir/server.key" ]]; then
+    docker_generate_managed_tls_pair "$staged_cert" "$staged_key"
+    candidate_source=managed-self-signed
+    use_candidate=1
+  elif [[ "$source" == managed-self-signed ]]; then
+    openssl x509 -in "$tls_dir/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate=1
+    docker_certificate_matches_host "$tls_dir/server.crt" || regenerate=1
+    docker_certificate_key_matches "$tls_dir/server.crt" "$tls_dir/server.key" || regenerate=1
+    if ((regenerate)); then
+      docker_generate_managed_tls_pair "$staged_cert" "$staged_key"
+      candidate_source=managed-self-signed
+      use_candidate=1
+    fi
+  fi
+
+  if ((use_candidate)); then
+    if ! docker_validate_tls_pair "$staged_cert" "$staged_key"; then
+      rm -rf "$stage_dir"
+      return 1
+    fi
+    if [[ ! -s "$tls_dir/server.crt" || ! -s "$tls_dir/server.key" ]] \
+        || ! cmp -s "$staged_cert" "$tls_dir/server.crt" \
+        || ! cmp -s "$staged_key" "$tls_dir/server.key"; then
+      docker_tls_changed=1
+    fi
+    install -m 0600 "$staged_cert" "$tls_dir/.server.crt.next"
+    install -m 0600 "$staged_key" "$tls_dir/.server.key.next"
+    mv -f "$tls_dir/.server.crt.next" "$tls_dir/server.crt"
+    mv -f "$tls_dir/.server.key.next" "$tls_dir/server.key"
+    printf '%s\n' "$candidate_source" > "$tls_dir/certificate-source"
+    chmod 0600 "$tls_dir/certificate-source"
+  else
+    if ! docker_validate_tls_pair "$tls_dir/server.crt" "$tls_dir/server.key"; then
+      rm -rf "$stage_dir"
+      return 1
+    fi
+  fi
+  rm -rf "$stage_dir"
+}
+
+docker_proxy_owns_port() {
+  local proxy_id
+  proxy_id=$(docker ps -q \
+    --filter 'label=com.docker.compose.project=cloudportal-backed' \
+    --filter 'label=com.docker.compose.service=proxy' | head -n 1)
+  [[ -n "$proxy_id" ]] || return 1
+  docker port "$proxy_id" 8443/tcp 2>/dev/null | grep -Eq "[:.]$backend_port$"
+}
+
 docker_preflight() {
-  local failed=0 command free_kib
+  local failed=0 command free_kib port_owner
   ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
-  for command in docker curl tar openssl sha256sum awk sed grep flock df hostname; do
+  for command in docker curl tar openssl sha256sum awk sed grep flock df hostname ss cmp; do
     command -v "$command" >/dev/null 2>&1 || { ui_fail "Brak wymaganej komendy: $command"; failed=1; }
   done
   if command -v docker >/dev/null 2>&1; then
@@ -339,6 +390,17 @@ docker_preflight() {
     failed=1
   elif [[ "$free_kib" =~ ^[0-9]+$ ]]; then
     ui_ok "Wolne miejsce pod /opt: $((free_kib / 1024)) MiB"
+  fi
+  if command -v ss >/dev/null 2>&1 && ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$backend_port$"; then
+    if command -v docker >/dev/null 2>&1 && docker_proxy_owns_port; then
+      ui_info "Port HTTPS $backend_port jest używany przez istniejący proxy Cloudportal; reinstalacja może go ponownie wykorzystać."
+    else
+      port_owner=$(ss -ltnpH 2>/dev/null | awk -v suffix=":$backend_port" '$4 ~ suffix"$" {print; exit}')
+      ui_fail "Port HTTPS $backend_port jest zajęty przez inny proces lub usługę${port_owner:+: $port_owner}"
+      failed=1
+    fi
+  else
+    ui_ok "Port HTTPS $backend_port jest wolny."
   fi
   if command -v curl >/dev/null 2>&1; then
     curl -fsS --connect-timeout 5 --max-time 10 https://api.github.com/ >/dev/null 2>&1 \
@@ -519,6 +581,10 @@ docker_install_cloudportal() {
 
   ui_stage 5 6 'Uruchomienie kontenerów'
   docker_compose_for "$release_dir" up -d --remove-orphans --scale "worker=$workers"
+  if ((docker_tls_changed)); then
+    ui_info 'Materiał TLS zmienił się — restartuję proxy, aby Nginx wczytał nowy certyfikat.'
+    docker_compose_for "$release_dir" restart proxy
+  fi
   ui_ok "Kontenery uruchomione. Workery: $workers"
 
   ui_stage 6 6 'Healthcheck HTTPS'
