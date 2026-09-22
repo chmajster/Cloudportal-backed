@@ -930,15 +930,8 @@ async function blueprintForm(item = null) {
     let deploymentVariablesReady = false;
 
     const currentTemplate = () => templates.find(template => template.id === templateField.querySelector('select').value) || templates[0];
-    const guestCredentialField = selectField('Credential ustawiany na VM', 'deployment_guest_credential_id',
-      [{ value: '', label: 'Nie twórz użytkownika z credentiala' }, ...window.BlueprintProvisioningGuards.guestCredentialChoices(credentials)],
-      deployment.guest_credential_id || '', { wide: true,
-        help: 'Wybrany credential SSH zostanie użyty przez cloud-init do ustawienia konta w VM. Może zawierać hasło, klucz prywatny albo oba. Klucz prywatny nie jest kopiowany do VM; używany jest tylko wyliczony z niego klucz publiczny.' });
-    const syncGuestCredentialField = () => {
-      const supported = currentTemplate()?.id === 'proxmox-vm';
-      guestCredentialField.hidden = !supported;
-      if (!supported) guestCredentialField.querySelector('select').value = '';
-    };
+    const guestCredentialControl = window.BlueprintProvisioningGuards.guestCredentialField(credentials, deployment.guest_credential_id, currentTemplate()?.id);
+    const guestCredentialField = guestCredentialControl.field;
     const refill = (select, values, placeholder, selectedValue) => {
       select.replaceChildren(node('option', { value: '', text: placeholder }));
       values.forEach(value => select.append(node('option', {
@@ -1057,7 +1050,7 @@ async function blueprintForm(item = null) {
         templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
       });
       deploymentVariablesReady = true;
-      syncGuestCredentialField();
+      guestCredentialControl.sync(template.id);
       renderBlueprintAnsible();
     };
     templateField.querySelector('select').addEventListener('change', refreshDeploymentTemplate);
