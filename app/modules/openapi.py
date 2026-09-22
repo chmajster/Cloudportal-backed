@@ -3,7 +3,7 @@ from fastapi.routing import APIRoute
 
 _CREATION_RESOURCES = {
     'users', 'roles', 'tokens', 'credentials', 'providers', 'deployments', 'jobs',
-    'blueprints', 'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy', 'power', 'events',
+    'blueprints', 'hostname-schemes', 'generate', 'execute', 'reset-password', 'destroy', 'recreate', 'power', 'events',
 }
 
 
