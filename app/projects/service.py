@@ -84,8 +84,8 @@ def project_delete(db, principal, project_id, expected_version):
         fail(409, 'SYSTEM_PROJECT_PROTECTED', 'Default project cannot be deleted')
     if db.scalar(select(exists().where(ProjectMembership.project_id == row.id))):
         fail(409, 'PROJECT_NOT_EMPTY', 'Remove project memberships before deleting the project')
-    # Resource-scope integration adds its referential guard here before enabling
-    # scoped infrastructure creation. This domain never deletes infrastructure.
+    from app.resource_scope.service import ensure_project_empty
+    ensure_project_empty(db, row.id)
     row.deleted_at = now()
     row.status = 'disabled'
     row.version += 1

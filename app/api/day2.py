@@ -23,7 +23,8 @@ from app.day2.service import (
     save_day2_settings,
 )
 from app.models import Job, now
-from app.security.core import audit, require
+from app.security.core import audit, require as require_global
+from app.resource_scope.day2 import require
 
 
 router = APIRouter(tags=['day2'])
@@ -347,7 +348,7 @@ def bulk_day2_actions(data: Day2BulkInput, request: Request, actor=Depends(requi
 
 
 @router.get('/day2/settings')
-def get_day2_settings(request: Request, actor=Depends(require('settings.read')),
+def get_day2_settings(request: Request, actor=Depends(require_global('settings.read')),
                       db=Depends(get_db, scope='function')):
     if 'day2.admin' not in _permissions(request):
         raise HTTPException(403, 'Permission required: day2.admin')
@@ -355,7 +356,7 @@ def get_day2_settings(request: Request, actor=Depends(require('settings.read')),
 
 
 @router.put('/day2/settings')
-def put_day2_settings(data: Day2SettingsInput, request: Request, actor=Depends(require('settings.update')),
+def put_day2_settings(data: Day2SettingsInput, request: Request, actor=Depends(require_global('settings.update')),
                       db=Depends(get_db, scope='function')):
     if 'day2.admin' not in _permissions(request):
         raise HTTPException(403, 'Permission required: day2.admin')

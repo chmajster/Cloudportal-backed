@@ -98,3 +98,49 @@ Do not expose the administrative context resolver as proof of resource isolation
 Next integration: resource ownership backfill, scoped DB queries, provider and
 credential assignment checks, every direct-ID/nested route and worker context,
 followed by quota/usage/reservation and governed operation pipelines.
+
+
+## Resource-scope continuation: bounded local patch
+
+Implementation base is the `main` tree after **merged PR #119**:
+`0dec12c7b4700ab187b9cfb27e1f45866d3ae391`, tracked tree
+`d47b99cc817407c34f423ce745abfa621425e986`. The competing Projects branch
+in PR #120 is not used as the migration baseline or merged by this delivery.
+Earlier architecture findings above describe the original baseline, not the
+newly scoped paths below.
+
+Delivered on local branch `feat/resource-scope-integration`:
+
+- Additive ownership and relational constraints for existing deployments, jobs,
+  inventory, Blueprints, IPAM, hostnames and schedules; Default/Default backfill.
+- Explicit provider/credential reference assignments and revision-checked API.
+- Validated header/query scope, live resource permissions, SQL criteria before
+  pagination and direct-ID/identity-map checks for existing HTTP resource APIs.
+- Persisted worker/scheduler scope, execution-time reference checks, idempotent
+  response authorization, guarded inventory and raw-task reconciliation.
+- Console capability reauthorization and periodic WebSocket revocation checks.
+- Semantic, HTTP, worker, migration and negative-reference regression tests.
+
+**Slice 03 remains bounded, not generally enabled multi-tenant execution.**
+Delegated non-default execution is rejected with
+`PROJECT_EXECUTION_REQUIRES_PLATFORM_ADMIN`; explicit global `governance.admin`
+is needed until provider-target governance is complete. Legacy delegated
+Default execution is also gated once non-default managed resources exist.
+Raw Proxmox VM/task/restore paths are Default-only and rejected on shared
+providers. A global permission is not a substitute for policy/quota admission.
+
+Do not remove these rollout restrictions based solely on passing ORM/API tests.
+The remaining slice-03 gates are provider-native target admission, template/image
+and static Catalog/playbook entitlements, safe resource adoption/reassignment,
+all external consumers, scoped audit/events/metrics, and the cross-application
+Project Switcher with in-flight request invalidation. Real PostgreSQL and browser/
+provider acceptance are still required for this patch.
+
+Quotas/usage/reservations, leases, placement, expanded policies and their complete
+approval/Day-2 integrations are **not implemented** by this continuation. Their
+slice-04 through slice-12 criteria above remain open.
+
+Read `docs/architecture/resource-scope.md` for the security boundary and
+`docs/delivery/resource-scope.md` for exact verification, shared files, package
+application and remaining work. This is a locally committed, exported patch;
+no GitHub push, PR update, merge or new CI result is implied.

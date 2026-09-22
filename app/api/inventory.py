@@ -16,16 +16,17 @@ from app.database import get_db
 from app.inventory_sync import repair_inventory_from_states
 from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider
 from app.providers.registry import provider_for
-from app.security.core import audit, require
+from app.security.core import audit
+from app.resource_scope.http import require
 
 
 router = APIRouter(prefix='/inventory', tags=['inventory'])
 FIELDS = (
-    'id provider_id deployment_id node vm_id name management_mode lifecycle_status '
+    'tenant_id project_id id provider_id deployment_id node vm_id name management_mode lifecycle_status '
     'created_by created_at updated_at destroyed_at'
 )
 RESOURCE_FIELDS = (
-    'id deployment_id provider_id provider resource_type external_id name primary_ip '
+    'tenant_id project_id id deployment_id provider_id provider resource_type external_id name primary_ip '
     'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
 )
 
@@ -191,6 +192,8 @@ def import_vm(
     actor=Depends(require('inventory.import')),
     db=Depends(get_db, scope='function'),
 ):
+    from app.resource_scope.service import guard_vm_identity
+    guard_vm_identity(db, data.provider_id, data.vm_id, request.state.resource_scope)
     def create():
         provider, adapter = provider_adapter(db, data.provider_id)
         if provider.type != 'proxmox':

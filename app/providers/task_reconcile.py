@@ -55,6 +55,13 @@ def _apply_success(db, adapter, item):
     vm_id = item.get('vm_id')
     target_vm_id = item.get('target_vm_id')
     target_node = item.get('target_node') or item.get('node')
+    from app.resource_scope.authorization import DEFAULT_SCOPE
+    from app.resource_scope.service import guard_vm_identity
+    identity = target_vm_id if action in {'clone', 'restore'} else vm_id
+    if identity is not None:
+        # The synchronous provider surface is legacy Default-only. Never let
+        # a delayed task overwrite a VM claimed by another project meanwhile.
+        guard_vm_identity(db, provider_id, identity, DEFAULT_SCOPE)
 
     if action in {'clone', 'restore'}:
         identity = int(target_vm_id)
@@ -62,6 +69,8 @@ def _apply_success(db, adapter, item):
             ManagedVM.provider_id == provider_id,
             ManagedVM.vm_id == identity,
         ))
+        if existing is not None and existing.deployment_id is not None:
+            raise RuntimeError('Task target is already managed by a deployment')
         live = _live_vm(adapter, target_node, identity)
         values = {
             'deployment_id': None,
@@ -110,6 +119,7 @@ def reconcile_proxmox_tasks_once(limit=100):
         return {'checked': 0, 'completed': 0}
 
     checked = completed = 0
+    completed_keys = []
     with session() as db:
         for key in keys:
             try:
@@ -117,25 +127,36 @@ def reconcile_proxmox_tasks_once(limit=100):
                 if not raw:
                     continue
                 item = json.loads(raw)
-                provider = db.get(Provider, int(item['provider_id']))
-                if provider is None or provider.type != 'proxmox':
-                    redis.delete(key)
-                    continue
-                credential = db.get(Credential, provider.credentials_id)
-                if credential is None:
-                    redis.delete(key)
-                    continue
-                adapter = provider_for(credential)
-                checked += 1
-                status = adapter.task_status(item['node'], item['upid']) or {}
-                if str(status.get('status') or '').lower() != 'stopped':
-                    continue
-                if str(status.get('exitstatus') or '') == 'OK':
-                    _apply_success(db, adapter, item)
-                redis.delete(key)
+                # Flush/constraint failures roll back only this item. Redis
+                # acknowledgements happen after the database commit, so a
+                # crash cannot silently discard the ownership reconciliation.
+                with db.begin_nested():
+                    provider = db.get(Provider, int(item['provider_id']))
+                    if provider is None or provider.type != 'proxmox':
+                        completed_keys.append(key)
+                        continue
+                    credential = db.get(Credential, provider.credentials_id)
+                    if credential is None:
+                        completed_keys.append(key)
+                        continue
+                    adapter = provider_for(credential)
+                    checked += 1
+                    status = adapter.task_status(item['node'], item['upid']) or {}
+                    if str(status.get('status') or '').lower() != 'stopped':
+                        continue
+                    if str(status.get('exitstatus') or '') == 'OK':
+                        _apply_success(db, adapter, item)
+                    db.flush()
+                completed_keys.append(key)
                 completed += 1
             except Exception:
                 # Keep the record for the next dispatcher pass.
                 continue
         db.commit()
+    for key in completed_keys:
+        try:
+            redis.delete(key)
+        except Exception:
+            # Retrying metadata reconciliation is idempotent.
+            pass
     return {'checked': checked, 'completed': completed}

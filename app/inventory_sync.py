@@ -41,6 +41,8 @@ def sync_deployment_inventory(db, deployment, outputs):
             ManagedVM.deployment_id == deployment.id
         ))
 
+        if by_identity and (by_identity.tenant_id, by_identity.project_id) != (deployment.tenant_id, deployment.project_id):
+            raise RuntimeError('VM identity belongs to another project')
         if by_identity and by_identity.deployment_id not in {None, deployment.id}:
             raise RuntimeError('VM identity is already linked to another deployment')
         if by_identity and by_deployment and by_identity.id != by_deployment.id:

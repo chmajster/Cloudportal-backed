@@ -21,12 +21,13 @@ from app.jobs.lifecycle import has_released_allocations, release_pre_execution_a
 from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
-from app.security.core import audit, require
+from app.security.core import audit
+from app.resource_scope.http import require
 from app.terraform.state import delete_plan
 
 router = APIRouter(tags=['infrastructure'])
-DEPLOYMENT_FIELDS = 'id name provider_id provider template credentials_id workspace state_location variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
-JOB_FIELDS = 'id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error retry_of attempt'
+DEPLOYMENT_FIELDS = 'id tenant_id project_id name provider_id provider template credentials_id workspace state_location variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
+JOB_FIELDS = 'id tenant_id project_id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error retry_of attempt'
 
 
 def deployment_public(d):
@@ -309,6 +310,9 @@ def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templa
              actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
     p = find(db, Provider, id)
     rows = provider_for(find(db, Credential, p.credentials_id)).discover(resource, node)
+    if resource in {'vms', 'templates'}:
+        from app.resource_scope.service import filter_provider_vms
+        rows = filter_provider_vms(db, id, rows)
     # Providers can expose storage passwords or plugin configuration; publish only discovery metadata.
     safe_fields = {
         'nodes': 'node status cpu maxcpu mem maxmem disk maxdisk uptime',

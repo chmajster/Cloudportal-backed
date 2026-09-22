@@ -53,6 +53,7 @@ class Context:
             job = db.get(Job, self.job.id)
             if not job or job.cancel_requested:
                 raise Cancelled('Cancellation requested')
+            validate_authorization(db, job)
             job.heartbeat_at = now()
             db.commit()
 
@@ -111,7 +112,7 @@ def validate_authorization(db, job):
             raise ExecutionFailed('Scheduled job owner is disabled or locked')
     else:
         token = db.get(Token, job.token_id)
-        if not token or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
+        if not token or token.user_id != job.created_by or not token.user.is_active or token.user.is_locked or (token.user.locked_until and token.user.locked_until > now()):
             raise ExecutionFailed('Job authorization has been revoked')
         if token.kind == 'session':
             # Normal refresh rotates the access token. Authorize the surviving session family,
@@ -129,6 +130,31 @@ def validate_authorization(db, job):
             if token.expires_at and token.expires_at <= now():
                 raise ExecutionFailed('Job API token expired')
             permissions &= set(token.scopes)
+    # Preserve the original API-token/session-family semantics above, then
+    # reauthorize the persisted project rather than any later browser selection.
+    from app.resource_scope.authorization import Scope, permissions_for_identity, ensure_execution_ready
+    from app.resource_scope.database import bind_scope, reference_visible
+    from app.tenancy.authorization import Identity
+    scope = Scope(job.tenant_id, job.project_id)
+    ceiling = frozenset(token.scopes or []) if job.token_id is not None and token.kind == 'api' else None
+    identity = Identity(user.id, job.token_id or 0, frozenset(permissions), ceiling)
+    try:
+        permissions = set(permissions_for_identity(db, identity, scope, write=True))
+        bind_scope(db, scope)
+        ensure_execution_ready(db, identity, scope)
+        if job.deployment_id:
+            target = db.get(Deployment, job.deployment_id)
+            if target is None or (target.tenant_id, target.project_id) != (scope.tenant_id, scope.project_id):
+                raise ExecutionFailed('Job and deployment scope do not match')
+            if not reference_visible(db, 'provider', target.provider_id, scope):
+                raise ExecutionFailed('Provider access has been revoked')
+            if not reference_visible(db, 'credential', target.credentials_id, scope):
+                raise ExecutionFailed('Credential access has been revoked')
+        ansible = (job.payload or {}).get('ansible') or {}
+        if ansible and not reference_visible(db, 'credential', ansible.get('credentials_id'), scope):
+            raise ExecutionFailed('Ansible credential access has been revoked')
+    except HTTPException:
+        raise ExecutionFailed('Job project authorization has been revoked') from None
     needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
     if job.operation == 'terraform.apply':
         needed.add('deployments.create')
@@ -212,6 +238,8 @@ def register_adopted_resource(context):
         ))
         if managed_vm is None:
             raise ExecutionFailed('Imported VM is missing from managed inventory')
+        if (managed_vm.tenant_id, managed_vm.project_id) != (deployment.tenant_id, deployment.project_id):
+            raise ExecutionFailed('Imported VM belongs to another project')
         if managed_vm.deployment_id not in {None, deployment.id}:
             raise ExecutionFailed('Imported VM is already linked to another deployment')
         managed_vm.deployment_id = deployment.id

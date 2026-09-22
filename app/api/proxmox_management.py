@@ -19,7 +19,8 @@ from app.database import get_db, session as db_session
 from app.models import Credential, ManagedVM, Provider
 from app.providers.registry import provider_for
 from app.providers.task_reconcile import track_proxmox_task
-from app.security.core import audit, redis_client, require
+from app.security.core import audit, redis_client
+from app.resource_scope.http import require
 
 
 router = APIRouter(tags=['proxmox-vm-management'])
@@ -66,21 +67,15 @@ def load_console_session(session_id):
         value = json.loads(raw)
     except (TypeError, ValueError):
         return None
-    required = {'provider_id', 'node', 'vmid', 'port', 'ticket'}
+    required = {'provider_id', 'node', 'vmid', 'port', 'ticket', 'user_id', 'token_id', 'tenant_id', 'project_id'}
     if not isinstance(value, dict) or not required <= set(value):
         return None
     return value
 
 
-def console_adapter(provider_id):
-    with db_session() as db:
-        provider = db.get(Provider, int(provider_id))
-        if provider is None or provider.type != 'proxmox':
-            raise HTTPException(404, 'Console provider not found')
-        credential = db.get(Credential, provider.credentials_id)
-        if credential is None or credential.type != 'proxmox':
-            raise HTTPException(404, 'Console credential not found')
-        return provider_for(credential)
+def console_adapter(record):
+    from app.resource_scope.console import console_access
+    return console_access(record, adapter=True)
 
 
 class VMPowerInput(Input):
@@ -393,6 +388,10 @@ def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
     session_id = secrets.token_urlsafe(32)
     payload = {
         'provider_id': provider_id,
+        'user_id': actor.user_id,
+        'token_id': actor.id,
+        'tenant_id': request.state.resource_scope.tenant_id,
+        'project_id': request.state.resource_scope.project_id,
         'node': node,
         'vmid': vmid,
         'port': int(result['port']),
@@ -417,7 +416,7 @@ def console_asset(session_id: str, asset_path: str):
     record = load_console_session(session_id)
     if record is None:
         raise HTTPException(410, 'Console session expired')
-    body, upstream_content_type = console_adapter(record['provider_id']).novnc_asset(asset_path)
+    body, upstream_content_type = console_adapter(record).novnc_asset(asset_path)
     return Response(
         content=body,
         headers={
@@ -443,7 +442,7 @@ async def console_websocket(websocket: WebSocket, session_id: str):
         return
 
     try:
-        proxmox = await run_in_threadpool(console_adapter, record['provider_id'])
+        proxmox = await run_in_threadpool(console_adapter, record)
         headers = await run_in_threadpool(proxmox.console_auth_headers)
         upstream_url = proxmox.console_websocket_url(
             record['node'], record['vmid'], record['port'], record['ticket']
@@ -491,7 +490,22 @@ async def console_websocket(websocket: WebSocket, session_id: str):
                     else:
                         await websocket.send_text(message)
 
+            async def reauthorize_console():
+                from app.resource_scope.console import console_access
+                while True:
+                    await asyncio.sleep(5)
+                    current = await run_in_threadpool(load_console_session, session_id)
+                    if current is None:
+                        await websocket.close(code=4401)
+                        return
+                    try:
+                        await run_in_threadpool(console_access, current)
+                    except HTTPException:
+                        await websocket.close(code=4403)
+                        return
+
             tasks = {
+                asyncio.create_task(reauthorize_console()),
                 asyncio.create_task(browser_to_proxmox()),
                 asyncio.create_task(proxmox_to_browser()),
             }

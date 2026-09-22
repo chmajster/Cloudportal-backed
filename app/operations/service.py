@@ -134,7 +134,15 @@ def materialize_scheduled_jobs():
                 schedule.last_error = 'Schedule owner is disabled or locked'
                 continue
             try:
-                ensure_operation_permissions(permissions, schedule.operation, deployment)
+                from app.resource_scope.authorization import Scope, permissions_for_identity, ensure_execution_ready
+                from app.tenancy.authorization import Identity
+                scope = Scope(schedule.tenant_id, schedule.project_id)
+                if (deployment.tenant_id, deployment.project_id) != (scope.tenant_id, scope.project_id):
+                    raise HTTPException(409, 'Schedule and deployment scope do not match')
+                identity = Identity(schedule.created_by, 0, frozenset(permissions), None)
+                scoped = permissions_for_identity(db, identity, scope, write=True)
+                ensure_execution_ready(db, identity, scope)
+                ensure_operation_permissions(scoped, schedule.operation, deployment)
             except HTTPException:
                 schedule.is_active = False
                 schedule.last_error = 'Schedule owner no longer has required execution permissions'

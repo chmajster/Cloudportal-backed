@@ -4,7 +4,9 @@ PROJECT_PERMISSION_ACTIONS = {
 }
 PROJECT_PERMISSIONS = frozenset('projects.' + action for action in PROJECT_PERMISSION_ACTIONS['projects'])
 # Creation and tenant-wide/global crossing authority cannot be granted inside a project.
-PROJECT_DELEGABLE_PERMISSIONS = PROJECT_PERMISSIONS - {'projects.create', 'projects.admin'}
+from app.resource_scope.permissions import RESOURCE_PERMISSIONS
+
+PROJECT_DELEGABLE_PERMISSIONS = (PROJECT_PERMISSIONS | RESOURCE_PERMISSIONS) - {'projects.create', 'projects.admin'}
 PROJECT_DEFAULT_ROLES = {
     'Project Administrator': PROJECT_DELEGABLE_PERMISSIONS,
     'Project Viewer': frozenset({'projects.read', 'projects.members.read', 'projects.audit.read', 'projects.select'}),

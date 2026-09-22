@@ -10,7 +10,8 @@ from app.api.schemas import Input, Name
 from app.database import get_db
 from app.ipam.service import allocate_address, allocation_public, is_excluded, network_for, pool_public
 from app.models import IPAllocation, IPPool, now
-from app.security.core import audit, require
+from app.security.core import audit
+from app.resource_scope.http import require
 
 
 router = APIRouter(prefix='/ipam', tags=['ipam'])

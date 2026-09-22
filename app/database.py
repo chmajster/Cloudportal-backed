@@ -16,7 +16,8 @@ def engine():
 
 
 def session():
-    return sessionmaker(engine(), expire_on_commit=False)()
+    from app.resource_scope.database import ScopedSession
+    return sessionmaker(engine(), class_=ScopedSession, expire_on_commit=False)()
 
 
 def get_db():

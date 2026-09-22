@@ -52,6 +52,7 @@ class Day2Context:
             request = db.get(Day2ActionRequest, self.action_request.id)
             if job is None or request is None or job.cancel_requested or request.status == 'CANCEL_REQUESTED':
                 raise Cancelled('Cancellation requested')
+            _execution_permissions(db, job, request)
             job.heartbeat_at = now()
             refresh_resource_lock(
                 db,
@@ -112,8 +113,21 @@ def _execution_permissions(db, job, request):
     required = get_action(request.action).permission
     if required not in permissions or 'day2.view' not in permissions:
         raise failure('PERMISSION_DENIED', message='Day-2 permission has been revoked', status_code=403, details={'permission': required})
+    from app.resource_scope.authorization import permissions_for_identity
+    from app.resource_scope.database import bind_scope, row_scope
+    from app.resource_scope.day2 import ensure_legacy_day2_scope
+    from app.tenancy.authorization import Identity
+    scope = row_scope(job)
+    try:
+        ensure_legacy_day2_scope(db, scope)
+        principal = Identity(user.id, token.id, frozenset(permissions),
+                             frozenset(token.scopes or []) if token.kind == 'api' else None)
+        permissions_for_identity(db, principal, scope, write=True)
+        bind_scope(db, scope)
+    except HTTPException:
+        raise failure('PERMISSION_DENIED', message='Day-2 project authorization is no longer valid', status_code=403) from None
     _, _, resource = load_target(db, request.resource_id)
-    access_request = SimpleNamespace(state=SimpleNamespace(permissions=permissions))
+    access_request = SimpleNamespace(state=SimpleNamespace(permissions=permissions, resource_scope=scope))
     try:
         if isinstance(resource, ManagedVM):
             ensure_inventory_vm_access(db, access_request, token, resource)

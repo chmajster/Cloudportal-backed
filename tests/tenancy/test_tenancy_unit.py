@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, delete, event, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.resource_scope.permissions import RESOURCE_PERMISSIONS
 from app.database import Base
 from app.models import Audit, Permission, Role, RolePermission, Setting, Token, User, UserRole, now
 from app.tenancy import service
@@ -38,7 +39,7 @@ def domain():
         connection.execute('PRAGMA foreign_keys=ON')
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as db:
-        perms = {name: Permission(name=name) for name in TENANCY_PERMISSIONS | {'users.delete', 'users.read'}}
+        perms = {name: Permission(name=name) for name in TENANCY_PERMISSIONS | RESOURCE_PERMISSIONS | {'users.delete', 'users.read'}}
         db.add_all(perms.values())
         db.add(Setting(key='governance', value={}))
         global_role = Role(name='Not a magic admin name', permissions=list(perms.values()))
