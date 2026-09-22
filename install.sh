@@ -128,7 +128,7 @@ while (($#)); do
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing value for $1" >&2; exit 2; }
       case "$1" in
         --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2;; --ref) ref=$2;;
-        --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2;;
+        --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2; backup_option_set=1;;
       esac
       shift 2;;
     --enable-backups) backup_schedule=true; backup_option_set=1; shift;;
@@ -483,12 +483,14 @@ docker_install_cloudportal() {
   }
 
   local temp_dir release_dir current_release existing_password
+  current_release=$(docker_current_release)
   temp_dir=$(mktemp -d)
   trap 'rm -rf "$temp_dir"' RETURN
 
   ui_stage 2 6 'Pobieranie kodu aplikacji'
   release_dir=$(mktemp -d "$docker_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXXXX")
   docker_download_release "$release_dir" "$temp_dir"
+  rm -rf "$release_dir/tls"
   ln -s "$docker_root/tls" "$release_dir/tls"
 
   ui_stage 3 6 'TLS i konfiguracja Docker Compose'
@@ -507,6 +509,7 @@ docker_install_cloudportal() {
   printf 'host=%s\nport=%s\nworkers=%s\nref=%s\n' "$backend_host" "$backend_port" "$workers" "$ref" > "$docker_root/install.conf"
   chmod 0600 "$docker_root/install.conf"
   docker_compose_for "$release_dir" config >/dev/null
+  ln -sfn "$release_dir" "$docker_root/current"
   ui_ok 'Konfiguracja Docker Compose jest poprawna.'
 
   ui_stage 4 6 'Budowa obrazu i bootstrap'
@@ -515,7 +518,6 @@ docker_install_cloudportal() {
   docker_compose_for "$release_dir" run --rm bootstrap
 
   ui_stage 5 6 'Uruchomienie kontenerów'
-  current_release=$(docker_current_release)
   docker_compose_for "$release_dir" up -d --remove-orphans --scale "worker=$workers"
   ui_ok "Kontenery uruchomione. Workery: $workers"
 
@@ -543,7 +545,6 @@ docker_install_cloudportal() {
     return 1
   fi
 
-  ln -sfn "$release_dir" "$docker_root/current"
   if [[ -n "$current_release" && "$current_release" != "$release_dir" && -d "$current_release" ]]; then
     find "$docker_root/releases" -mindepth 1 -maxdepth 1 -type d ! -path "$release_dir" -mtime +7 -exec rm -rf {} + 2>/dev/null || true
   fi
