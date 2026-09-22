@@ -19,6 +19,11 @@ variable "ssh_public_key" {
   type    = string
   default = null
 }
+variable "ssh_password" {
+  type      = string
+  default   = null
+  sensitive = true
+}
 variable "install_qemu_guest_agent" {
   type    = bool
   default = false
