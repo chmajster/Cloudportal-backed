@@ -65,6 +65,68 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --build-arg BUILD_COMMIT="$GITHUB_SHA" -t cloudportal-backed:ci .
+      - name: Validate Docker Compose contract
+        env:
+          CP_POSTGRES_PASSWORD: ci-compose-password
+          CP_BUILD_COMMIT: ${{ github.sha }}
+          CP_HTTPS_PORT: '18443'
+        run: docker compose config >/dev/null
+  docker-installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker installation, status and purge
+        env:
+          REPOSITORY_READ_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          token_file=$(mktemp)
+          cleanup() {
+            sudo ./install.sh --docker --uninstall --purge-data >/dev/null 2>&1 || true
+            sudo rm -f "$token_file" /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status
+          }
+          trap cleanup EXIT
+          printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
+          unset REPOSITORY_READ_TOKEN
+
+          sudo ./install.sh --docker --non-interactive \
+            --host localhost \
+            --port 18443 \
+            --workers 2 \
+            --ref "$GITHUB_SHA" \
+            --github-token-file "$token_file" \
+            > /tmp/cloudportal-docker-install-output 2>&1
+
+          sudo test -L /opt/cloudportal-backed-docker/current
+          sudo test -s /opt/cloudportal-backed-docker/.env
+          sudo test "$(sudo stat -c %a /opt/cloudportal-backed-docker/.env)" = 600
+          sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status
+          grep -Fq 'Docker status' /tmp/cloudportal-docker-status
+
+          sudo curl -fsS --noproxy '*' \
+            --cacert /opt/cloudportal-backed-docker/tls/server.crt \
+            --resolve localhost:18443:127.0.0.1 \
+            https://localhost:18443/api/v1/health >/dev/null
+
+          running_workers=$(sudo docker ps --filter 'label=com.docker.compose.project=cloudportal-backed' --filter 'label=com.docker.compose.service=worker' --format '{{.ID}}' | wc -l)
+          test "$running_workers" -eq 2
+
+          sudo ./install.sh --docker --uninstall --purge-data
+          test ! -e /opt/cloudportal-backed-docker
+      - name: Sanitized Docker diagnostics
+        if: failure()
+        run: |
+          if sudo test -f /tmp/cloudportal-docker-install-output; then
+            sudo sed -E \
+              -e 's/(Initial (API Token|password):).*/\1 [REDACTED]/I' \
+              -e 's/(Authorization: (Bearer|token) )[A-Za-z0-9_.-]+/\1[REDACTED]/Ig' \
+              /tmp/cloudportal-docker-install-output | tail -n 160
+          fi
+          sudo docker ps -a || true
+
   installer:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
