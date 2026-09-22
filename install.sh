@@ -417,10 +417,10 @@ docker_install_dependencies() {
   local need_install=0
   command -v docker >/dev/null 2>&1 || need_install=1
   docker_compose_detect || need_install=1
-  ((need_install == 0)) && return 0
 
-  ui_info 'Docker Engine/Compose nie jest kompletny; instaluję runtime po zakończonym preflight.'
-  case "$os_family" in
+  if ((need_install)); then
+    ui_info 'Docker Engine/Compose nie jest kompletny; instaluję runtime po zakończonym preflight.'
+    case "$os_family" in
     debian)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
@@ -441,12 +441,13 @@ docker_install_dependencies() {
         exit 1
       fi
       ;;
-    *)
-      ui_fail 'Brak Docker Engine/Compose. Na tym systemie instalator nie instaluje runtime Docker automatycznie.'
-      ui_info 'Zainstaluj Docker Engine i Docker Compose, potem uruchom ponownie install.sh --docker.'
-      exit 1
-      ;;
-  esac
+      *)
+        ui_fail 'Brak Docker Engine/Compose. Na tym systemie instalator nie instaluje runtime Docker automatycznie.'
+        ui_info 'Zainstaluj Docker Engine i Docker Compose, potem uruchom ponownie install.sh --docker.'
+        exit 1
+        ;;
+    esac
+  fi
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl enable --now docker >/dev/null 2>&1 || true
@@ -788,10 +789,10 @@ EOF
   docker_compose_for "$release" "$candidate_env" build
   ui_ok 'Obraz Cloudportal został zbudowany.'
 
-  ui_stage 5 "$stages" 'Migracje i bootstrap'
-  ui_info 'Uruchamiam migracje i bootstrap administratora. Nowy token, jeżeli powstanie, zostanie pokazany tylko przez bootstrap.'
-  docker_compose_for "$release" "$candidate_env" run --rm bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
-  ui_ok 'Migracje i bootstrap zakończone.'
+  ui_stage 5 "$stages" 'Klucz szyfrujący'
+  ui_info 'Tworzę lub weryfikuję master key bez generowania jednorazowych danych administratora.'
+  docker_compose_for "$release" "$candidate_env" run --rm --no-deps bootstrap python -m app.bootstrap --key-only
+  ui_ok 'Master key jest gotowy; migracje wykona usługa migrate podczas startu kandydata.'
 
   if ((docker_tls_changed)); then
     tls_backup_dir="$docker_tmp_dir/tls-backup"
@@ -845,6 +846,10 @@ EOF
   mv -f "$candidate_env" "$docker_env"
   ln -sfn "$release" "$docker_root/current"
   ui_ok 'Kandydat został aktywowany jako bieżący release Docker.'
+
+  ui_info 'Finalizuję bootstrap administratora dopiero po udanym healthchecku. Jednorazowy token, jeżeli powstanie, zostanie wyświetlony poniżej.'
+  docker_compose_for "$release" "$docker_env" run --rm --no-deps bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
+  ui_ok 'Bootstrap administratora zakończony po walidacji działającego stacka.'
 
   ui_header 'Podsumowanie'
   ui_ok 'Instalacja Docker Cloudportal-backed zakończona.'
