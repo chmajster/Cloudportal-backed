@@ -279,7 +279,7 @@ docker_preflight() {
   ui_info "System: $NAME $VERSION_ID · $arch · tryb Docker"
   ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
 
-  for command in awk sed grep tar openssl curl df sha256sum stat hostname flock; do
+  for command in awk sed grep tar openssl curl df sha256sum stat hostname flock ss; do
     if ! command -v "$command" >/dev/null 2>&1; then
       ui_fail "Brak wymaganej komendy przed instalacją Docker: $command"
       failed=1
