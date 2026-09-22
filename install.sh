@@ -885,7 +885,22 @@ EOF
   ui_ok 'Obraz Cloudportal został zbudowany.'
 
   ui_stage 5 "$stages" 'Klucz szyfrujący'
-  ui_info 'Tworzę lub weryfikuję master key bez generowania jednorazowych danych administratora.'
+  ui_info 'Uruchamiam wyłącznie PostgreSQL, bez migracji, aby bezpiecznie zweryfikować istniejący master key.'
+  docker_compose_for "$release" "$candidate_env" up -d postgres
+  local postgres_ready=0
+  for ((attempt=1; attempt<=30; attempt++)); do
+    if docker_compose_for "$release" "$candidate_env" exec -T postgres pg_isready -U cloudportal -d cloudportal >/dev/null 2>&1; then
+      postgres_ready=1
+      break
+    fi
+    sleep 1
+  done
+  ((postgres_ready == 1)) || {
+    ui_fail 'PostgreSQL kandydata Docker nie osiągnął stanu ready przed weryfikacją master key.'
+    docker_compose_for "$release" "$candidate_env" logs --tail=80 postgres || true
+    exit 1
+  }
+  ui_info 'Tworzę lub weryfikuję master key bez generowania jednorazowych danych administratora i bez uruchamiania migracji.'
   docker_compose_for "$release" "$candidate_env" run --rm --no-deps bootstrap python -m app.bootstrap --key-only
   ui_ok 'Master key jest gotowy; migracje wykona usługa migrate podczas startu kandydata.'
 
