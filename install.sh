@@ -105,6 +105,7 @@ purge_data=0
 status_mode=0
 update_in_progress=${CLOUDPORTAL_UPDATE_IN_PROGRESS:-0}
 [[ "$update_in_progress" == 1 ]] || update_in_progress=0
+update_channel_ref=${CLOUDPORTAL_UPDATE_CHANNEL_REF:-}
 install_progress() {
   local percent=$1 phase=$2 message=$3
   if ((update_in_progress)); then
@@ -701,6 +702,8 @@ workers=$((10#$workers))
 backup_retention_days=$((10#$backup_retention_days))
 [[ -z "$github_token_file" || -z "$github_config" ]] || { ui_fail 'Użyj tylko jednej opcji: --github-token-file albo --github-config.'; exit 2; }
 [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || { ui_fail 'Nieprawidłowy Git ref.'; exit 2; }
+[[ -z "$update_channel_ref" || "$update_channel_ref" =~ ^[A-Za-z0-9._/-]+$ && "$update_channel_ref" != *..* ]] || { ui_fail 'Nieprawidłowy CLOUDPORTAL_UPDATE_CHANNEL_REF.'; exit 2; }
+release_ref=${update_channel_ref:-$ref}
 [[ -z "$cert_file" && -z "$cert_key" || -r "$cert_file" && -r "$cert_key" ]] || { ui_fail 'Podaj oba pliki TLS: --cert-file i --cert-key.'; exit 2; }
 preflight_checks
 ui_ok 'Pretest zakończony.'
@@ -775,7 +778,7 @@ cp -a "$tmp/source/." "$release/"
 chmod -R go-w "$release"
 find "$release" -type d -exec chmod 0755 {} +
 find "$release" -type f -exec chmod 0644 {} +
-"$python_binary" - "$release/.cloudportal-release.json" "$repo" "$ref" "$release_sha" "$archive_sha" <<'PY'
+"$python_binary" - "$release/.cloudportal-release.json" "$repo" "$release_ref" "$release_sha" "$archive_sha" <<'PY'
 import json, sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -877,7 +880,7 @@ if [[ -n "$github_config" ]]; then
   chown root:root "$persistent_github_config"
 fi
 updater_config="$config/updater.json"
-"$python_binary" - "$updater_config" "$ref" "$persistent_github_token" "$persistent_github_config" <<'PY'
+"$python_binary" - "$updater_config" "$release_ref" "$persistent_github_token" "$persistent_github_config" <<'PY'
 import json, os, sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -889,6 +892,10 @@ if not isinstance(data, dict):
     data = {}
 data.setdefault('enabled', False)
 data.setdefault('interval_hours', 24)
+data.setdefault('require_ci', True)
+data.setdefault('ci_workflow', 'Backend CI')
+data.setdefault('ci_wait_minutes', 45)
+data.setdefault('candidate_validation', True)
 data['ref'] = sys.argv[2]
 if sys.argv[3]:
     data['github_token_file'] = sys.argv[3]

@@ -47,3 +47,20 @@ def test_backup_streams_pg_dump_into_root_owned_file():
     assert "with dump.open('xb') as stream:" in source
     assert "stdout=stream" in source
     assert "dump.unlink(missing_ok=True)" in source
+
+
+
+def test_updater_install_preserves_moving_channel_while_source_is_sha_pinned():
+    updater = (ROOT / 'scripts' / 'update-service.py').read_text()
+    assert 'download_installer(target_sha, installer)' in updater
+    assert 'installer_args(target_sha)' in updater
+    assert 'CLOUDPORTAL_UPDATE_CHANNEL_REF' in updater
+    assert 'wait_for_required_ci(target_sha, settings)' in updater
+    assert 'validate_candidate(target_sha, settings)' in updater
+
+    assert 'update_channel_ref=${CLOUDPORTAL_UPDATE_CHANNEL_REF:-}' in INSTALLER
+    assert 'release_ref=${update_channel_ref:-$ref}' in INSTALLER
+    assert '"$repo" "$release_ref" "$release_sha" "$archive_sha"' in INSTALLER
+    assert '"$updater_config" "$release_ref"' in INSTALLER
+    assert "data.setdefault('require_ci', True)" in INSTALLER
+    assert "data.setdefault('candidate_validation', True)" in INSTALLER

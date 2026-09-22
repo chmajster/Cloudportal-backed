@@ -10,7 +10,10 @@ import hmac
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -43,6 +46,10 @@ SECRET_RE = re.compile(
 MAX_BODY = 16 * 1024
 MAX_OUTPUT = 160
 MAX_EVENTS = 120
+MAX_CANDIDATE_ARCHIVE = 128 * 1024 * 1024
+MAX_CANDIDATE_FILES = 20_000
+MAX_CANDIDATE_EXTRACTED = 768 * 1024 * 1024
+CI_POLL_SECONDS = 15
 
 lock = threading.RLock()
 update_thread: threading.Thread | None = None
@@ -67,6 +74,10 @@ def default_settings() -> dict:
         "ref": "main",
         "github_token_file": "",
         "github_config": "",
+        "require_ci": True,
+        "ci_workflow": "Backend CI",
+        "ci_wait_minutes": 45,
+        "candidate_validation": True,
     }
 
 
@@ -224,6 +235,305 @@ def _read_url(url: str, settings: dict, accept: str) -> bytes:
 
 def _http_json(url: str, settings: dict) -> dict:
     return json.loads(_read_url(url, settings, "application/vnd.github+json").decode("utf-8"))
+
+
+def _http_json_ci(url: str, settings: dict) -> dict:
+    """Read GitHub Actions state, retrying anonymously for public repositories.
+
+    A fine-grained Contents-only token can legitimately be unable to read the
+    Actions API. For a public repository the anonymous retry still lets the
+    safety gate work; for a private repository we fail closed and require
+    Actions: read instead of silently deploying an unverified commit.
+    """
+    try:
+        return _http_json(url, settings)
+    except HTTPError as authenticated_error:
+        if authenticated_error.code not in {401, 403, 404}:
+            raise
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "cloudportal-updater/1",
+            },
+        )
+        try:
+            with urlopen(request, timeout=60) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as anonymous_error:
+            raise RuntimeError(
+                "Nie można odczytać statusu GitHub Actions. "
+                "Dla prywatnego repozytorium token updatera wymaga uprawnienia Actions: read."
+            ) from anonymous_error
+
+
+def required_ci_status(target_sha: str, settings: dict) -> dict:
+    workflow = str(settings.get("ci_workflow") or "Backend CI").strip()
+    url = (
+        "https://api.github.com/repos/" + REPOSITORY
+        + "/actions/runs?head_sha=" + quote(target_sha, safe="")
+        + "&per_page=100"
+    )
+    data = _http_json_ci(url, settings)
+    runs = [
+        run for run in (data.get("workflow_runs") or [])
+        if str(run.get("head_sha") or "") == target_sha
+        and str(run.get("name") or "") == workflow
+    ]
+    if not runs:
+        return {
+            "state": "pending",
+            "workflow": workflow,
+            "message": f"Oczekiwanie na workflow {workflow} dla {target_sha[:12]}.",
+            "url": None,
+        }
+
+    runs.sort(
+        key=lambda run: (
+            str(run.get("updated_at") or run.get("created_at") or ""),
+            int(run.get("run_attempt") or 0),
+        ),
+        reverse=True,
+    )
+    run = runs[0]
+    status = str(run.get("status") or "")
+    conclusion = str(run.get("conclusion") or "")
+    run_url = str(run.get("html_url") or "") or None
+    if status != "completed":
+        return {
+            "state": "pending",
+            "workflow": workflow,
+            "message": f"Workflow {workflow} ma status {status or 'oczekuje'}.",
+            "url": run_url,
+        }
+    if conclusion == "success":
+        return {
+            "state": "success",
+            "workflow": workflow,
+            "message": f"Workflow {workflow} zakończył się powodzeniem.",
+            "url": run_url,
+        }
+    return {
+        "state": "failed",
+        "workflow": workflow,
+        "message": f"Workflow {workflow} zakończył się wynikiem {conclusion or 'unknown'}.",
+        "url": run_url,
+    }
+
+
+def wait_for_required_ci(target_sha: str, settings: dict) -> None:
+    if not bool(settings.get("require_ci", True)):
+        append_output("CI gate disabled in updater settings.")
+        return
+
+    try:
+        timeout_minutes = int(settings.get("ci_wait_minutes", 45))
+    except (TypeError, ValueError):
+        timeout_minutes = 45
+    timeout_minutes = max(5, min(180, timeout_minutes))
+    deadline = time.monotonic() + timeout_minutes * 60
+    last_message = None
+
+    while True:
+        result = required_ci_status(target_sha, settings)
+        if result["state"] == "success":
+            event(
+                "ci_gate",
+                10,
+                result["message"],
+                ci_status="success",
+                ci_workflow=result["workflow"],
+                ci_url=result.get("url"),
+            )
+            return
+        if result["state"] == "failed":
+            raise RuntimeError("CI gate zablokował aktualizację: " + result["message"])
+        if result["message"] != last_message:
+            event(
+                "ci_wait",
+                9,
+                result["message"],
+                ci_status="pending",
+                ci_workflow=result["workflow"],
+                ci_url=result.get("url"),
+            )
+            last_message = result["message"]
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"CI gate nie uzyskał zielonego wyniku w ciągu {timeout_minutes} min; aktualizacja nie została uruchomiona."
+            )
+        time.sleep(CI_POLL_SECONDS)
+
+
+def download_candidate_archive(target_sha: str, target: Path, settings: dict) -> None:
+    url = "https://api.github.com/repos/" + REPOSITORY + "/tarball/" + quote(target_sha, safe="")
+    content = _read_url(url, settings, "application/vnd.github+json")
+    if not content.startswith(b"\x1f\x8b"):
+        raise RuntimeError("GitHub returned an invalid candidate archive")
+    if len(content) > MAX_CANDIDATE_ARCHIVE:
+        raise RuntimeError("Candidate archive is unexpectedly large")
+    target.write_bytes(content)
+    os.chmod(target, 0o600)
+
+
+def extract_candidate_archive(archive_path: Path, destination: Path) -> None:
+    file_count = 0
+    extracted_size = 0
+    with tarfile.open(archive_path, mode="r:gz") as archive:
+        members = archive.getmembers()
+        if not members:
+            raise RuntimeError("Candidate archive is empty")
+        for member in members:
+            path = Path(member.name)
+            if path.is_absolute() or ".." in path.parts:
+                raise RuntimeError("Candidate archive contains an unsafe path")
+            # GitHub tarballs have one generated top-level directory.
+            relative_parts = path.parts[1:]
+            if not relative_parts:
+                continue
+            relative = Path(*relative_parts)
+            target = destination / relative
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise RuntimeError("Candidate archive contains an unsupported special entry")
+            file_count += 1
+            extracted_size += int(member.size or 0)
+            if file_count > MAX_CANDIDATE_FILES or extracted_size > MAX_CANDIDATE_EXTRACTED:
+                raise RuntimeError("Candidate archive exceeds extraction safety limits")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise RuntimeError("Candidate archive contains an unreadable file")
+            with stream, target.open("wb") as output:
+                shutil.copyfileobj(stream, output)
+            os.chmod(target, 0o700 if member.mode & 0o111 else 0o600)
+
+
+def _run_candidate_command(command: list[str], cwd: Path, label: str, timeout: int = 300) -> None:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Walidacja kandydata przekroczyła limit czasu: {label}") from exc
+    if result.returncode == 0:
+        return
+    lines = (result.stdout or "").splitlines()
+    for line in lines[-40:]:
+        append_output("candidate: " + line)
+    raise RuntimeError(f"Walidacja kandydata nie przeszła: {label} (kod {result.returncode})")
+
+
+def validate_candidate(target_sha: str, settings: dict) -> None:
+    if not bool(settings.get("candidate_validation", True)):
+        append_output("Local candidate validation disabled in updater settings.")
+        return
+
+    event("candidate_validation", 11, "Pobieranie i walidacja kandydata bez zmiany aktywnej aplikacji.")
+    with tempfile.TemporaryDirectory(prefix="cloudportal-candidate-") as temp:
+        root = Path(temp)
+        archive = root / "candidate.tar.gz"
+        source = root / "source"
+        source.mkdir()
+        download_candidate_archive(target_sha, archive, settings)
+        extract_candidate_archive(archive, source)
+
+        required = [
+            source / "install.sh",
+            source / "requirements.txt",
+            source / "app" / "main.py",
+            source / "alembic.ini",
+            source / "scripts" / "update-service.py",
+        ]
+        missing = [str(path.relative_to(source)) for path in required if not path.is_file()]
+        if missing:
+            raise RuntimeError("Kandydat nie zawiera wymaganych plików: " + ", ".join(missing))
+
+        bash = shutil.which("bash") or "/bin/bash"
+        shell_scripts = [source / "install.sh"]
+        secondary_installer = source / "scripts" / "install.sh"
+        if secondary_installer.is_file():
+            shell_scripts.append(secondary_installer)
+        _run_candidate_command(
+            [bash, "-n", *[str(path) for path in shell_scripts]],
+            source,
+            "bash -n instalatora",
+            timeout=120,
+        )
+        _run_candidate_command(
+            [sys.executable, "-m", "compileall", "-q", "app", "migrations", "scripts"],
+            source,
+            "kompilacja składni Python",
+            timeout=300,
+        )
+
+    event(
+        "candidate_validated",
+        13,
+        "Kandydat przeszedł lokalną walidację i nie zmienił aktywnej instalacji.",
+        candidate_validation="success",
+    )
+
+
+def _service_active(unit: str) -> bool:
+    return subprocess.run(
+        ["systemctl", "is-active", "--quiet", unit],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+
+
+def ensure_current_installation_healthy() -> None:
+    backend = parse_kv(CONFIG_DIR / "backend.env")
+    try:
+        workers = max(1, min(64, int(backend.get("CP_WORKER_COUNT", "1"))))
+    except ValueError:
+        workers = 1
+    units = [
+        "cloudportal-api.service",
+        "cloudportal-dispatcher.service",
+        "cloudportal-redis.service",
+        "nginx.service",
+        *[f"cloudportal-worker@{index}.service" for index in range(1, workers + 1)],
+    ]
+    inactive = [unit for unit in units if not _service_active(unit)]
+    if inactive:
+        raise RuntimeError(
+            "Bieżąca instalacja nie jest zdrowa; auto-update wstrzymany. Nieaktywne usługi: "
+            + ", ".join(inactive)
+        )
+
+    request = Request(
+        "http://127.0.0.1:8765/api/v1/health",
+        headers={"Accept": "application/json", "User-Agent": "cloudportal-updater/1"},
+    )
+    try:
+        with urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Bieżący healthcheck API nie przeszedł; auto-update wstrzymany") from exc
+    if response.status != 200 or str(payload.get("status") or "").lower() != "ok":
+        raise RuntimeError("Bieżący healthcheck API zwrócił nieprawidłowy stan; auto-update wstrzymany")
+
+
+def verify_installed_release(target_sha: str) -> None:
+    release = release_info()
+    installed_sha = str(release.get("commit_sha") or "")
+    if installed_sha != target_sha:
+        raise RuntimeError(
+            "Instalator zakończył się bez potwierdzenia oczekiwanego commita "
+            f"{target_sha[:12]} (aktywny: {installed_sha[:12] or 'unknown'})."
+        )
+    ensure_current_installation_healthy()
 
 
 def remote_commit(ref: str, settings: dict) -> dict:
@@ -463,28 +773,45 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
                 "status": "running",
                 "phase": "preflight",
                 "progress": 1,
-                "message": "Rozpoczynanie aktualizacji.",
+                "message": "Rozpoczynanie bezpiecznej aktualizacji.",
                 "started_at": utcnow(),
                 "ref": ref,
                 "automatic": automatic,
                 "events": [],
                 "output": [],
             })
+
         checked = check_remote(ref, update_context=True)
         if not checked["update_available"]:
             return
+
+        target_sha = checked["target_sha"]
         save_state(status="running", finished_at=None, automatic=automatic)
-        event("backup", 10, "Tworzenie backupu PostgreSQL przed aktualizacją.")
+
+        if automatic:
+            event("current_health", 8, "Sprawdzanie stanu bieżącej instalacji przed auto-update.")
+            ensure_current_installation_healthy()
+            event("current_health", 9, "Bieżąca instalacja jest zdrowa; można ocenić kandydata.")
+
+        wait_for_required_ci(target_sha, settings)
+        validate_candidate(target_sha, settings)
+
+        event("backup", 15, "Tworzenie backupu PostgreSQL przed aktualizacją.")
         pre_update_backup()
-        event("download", 15, "Pobieranie aktualnego instalatora.")
+
+        event("download", 18, "Pobieranie instalatora dokładnie dla zweryfikowanego commita.")
         with tempfile.TemporaryDirectory(prefix="cloudportal-update-") as temp:
             installer = Path(temp) / "install.sh"
-            download_installer(ref, installer)
-            args = [part.format(installer=str(installer)) for part in installer_args(ref)]
+            # Pin both installer and source download to the immutable SHA that
+            # passed CI. The tracked channel (for example main) is preserved
+            # separately so a moving branch cannot race this update.
+            download_installer(target_sha, installer)
+            args = [part.format(installer=str(installer)) for part in installer_args(target_sha)]
             env = os.environ.copy()
             env["CLOUDPORTAL_UPDATE_IN_PROGRESS"] = "1"
-            env["CLOUDPORTAL_RELEASE_SHA"] = checked["target_sha"]
-            event("install", 20, "Uruchamianie instalatora nowej wersji.")
+            env["CLOUDPORTAL_UPDATE_CHANNEL_REF"] = ref
+            env["CLOUDPORTAL_RELEASE_SHA"] = target_sha
+            event("install", 20, "Uruchamianie instalatora zweryfikowanego commita.")
             process = subprocess.Popen(
                 args,
                 stdout=subprocess.PIPE,
@@ -499,12 +826,16 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
                 marker = PROGRESS_RE.match(line)
                 if marker:
                     progress, phase, message = marker.groups()
-                    event(phase, int(progress), message, status="running")
+                    mapped_progress = min(95, 20 + (int(progress) * 75 // 100))
+                    event(phase, mapped_progress, message, status="running")
                 else:
                     append_output(line)
             code = process.wait()
             if code != 0:
                 raise RuntimeError("Installer exited with code " + str(code))
+
+        event("postcheck", 97, "Weryfikowanie aktywnego commita, usług i healthchecku po instalacji.")
+        verify_installed_release(target_sha)
         save_state(
             status="success",
             update_available=False,
@@ -517,16 +848,22 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
             behind_by=0,
             version_strategy="git_commit",
             finished_at=utcnow(),
+            ci_status="success" if bool(settings.get("require_ci", True)) else "disabled",
+            candidate_validation="success" if bool(settings.get("candidate_validation", True)) else "disabled",
         )
-        event("complete", 100, "Aktualizacja zakończona pomyślnie.", status="success")
+        event("complete", 100, "Aktualizacja zakończona pomyślnie po wszystkich bramkach bezpieczeństwa.", status="success")
     except Exception as exc:
         save_state(status="failed", finished_at=utcnow())
-        event("failed", load_state().get("progress", 0), "Aktualizacja nie powiodła się: " + str(exc), status="failed")
+        event(
+            "failed",
+            load_state().get("progress", 0),
+            "Aktualizacja została zablokowana lub nie powiodła się: " + str(exc),
+            status="failed",
+        )
         append_output("ERROR: " + str(exc))
     finally:
         with lock:
             update_thread = None
-
 
 def update_operation_active() -> bool:
     global update_thread
