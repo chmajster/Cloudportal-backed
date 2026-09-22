@@ -78,7 +78,8 @@ jobs:
           set -euo pipefail
           umask 077
           token_file=$(mktemp)
-          trap 'sudo rm -f "$token_file"' EXIT
+          custom_tls_dir=$(mktemp -d)
+          trap 'sudo rm -f "$token_file"; sudo rm -rf "$custom_tls_dir"' EXIT
           printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
           unset REPOSITORY_READ_TOKEN
 
@@ -111,6 +112,25 @@ jobs:
           sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status-output 2>&1
           grep -Fq 'Runtime Docker:' /tmp/cloudportal-docker-status-output
 
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -keyout "$custom_tls_dir/server.key" -out "$custom_tls_dir/server.crt" \
+            -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost' >/dev/null 2>&1
+          sudo ./install.sh --docker --non-interactive --host localhost --port 9443 --workers 2 --ref "$GITHUB_SHA" \
+            --github-token-file "$token_file" --cert-file "$custom_tls_dir/server.crt" --cert-key "$custom_tls_dir/server.key" \
+            > /tmp/cloudportal-docker-custom-tls-output 2>&1
+          custom_tls_sha=$(sudo sha256sum /etc/cloudportal-backed-docker/tls/server.crt | awk '{print $1}')
+          curl -kfsS https://localhost:9443/api/v1/health >/dev/null
+
+          sudo ./install.sh --docker --non-interactive --ref "$GITHUB_SHA" --github-token-file "$token_file" \
+            > /tmp/cloudportal-docker-reinstall-output 2>&1
+          test "$custom_tls_sha" = "$(sudo sha256sum /etc/cloudportal-backed-docker/tls/server.crt | awk '{print $1}')"
+          sudo grep -Fxq 'CP_PUBLIC_HOST=localhost' /etc/cloudportal-backed-docker/docker.env
+          sudo grep -Fxq 'CP_HTTPS_PORT=9443' /etc/cloudportal-backed-docker/docker.env
+          sudo grep -Fxq 'CP_WORKER_COUNT=2' /etc/cloudportal-backed-docker/docker.env
+          worker_count=$(sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed --filter label=com.docker.compose.service=worker --format '{{.ID}}' | wc -l)
+          test "$worker_count" -eq 2
+          curl -kfsS https://localhost:9443/api/v1/health >/dev/null
+
           sudo ./install.sh --docker --non-interactive --uninstall --yes > /tmp/cloudportal-docker-uninstall-output 2>&1
           sudo test ! -e /opt/cloudportal-backed-docker
           sudo test -d /etc/cloudportal-backed-docker
@@ -130,7 +150,7 @@ jobs:
       - name: Sanitized Docker installer diagnostics
         if: failure()
         run: |
-          for output in /tmp/cloudportal-docker-port-conflict-output /tmp/cloudportal-docker-lock-output /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status-output /tmp/cloudportal-docker-uninstall-output /tmp/cloudportal-docker-purge-confirm-output /tmp/cloudportal-docker-purge-output; do
+          for output in /tmp/cloudportal-docker-port-conflict-output /tmp/cloudportal-docker-lock-output /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status-output /tmp/cloudportal-docker-custom-tls-output /tmp/cloudportal-docker-reinstall-output /tmp/cloudportal-docker-uninstall-output /tmp/cloudportal-docker-purge-confirm-output /tmp/cloudportal-docker-purge-output; do
             if sudo test -f "$output"; then
               echo "Docker installer diagnostics: $output"
               sudo sed -E \
