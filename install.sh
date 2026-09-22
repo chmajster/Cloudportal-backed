@@ -229,6 +229,7 @@ fi
 docker_root=/opt/cloudportal-backed-docker
 docker_config=/etc/cloudportal-backed-docker
 docker_env="$docker_config/docker.env"
+docker_pending_env="$docker_config/docker.env.pending"
 docker_tls="$docker_config/tls"
 docker_project=cloudportal-backed
 DOCKER_COMPOSE=()
@@ -327,10 +328,11 @@ docker_preflight() {
 
   auth_tmp=$(mktemp -d)
   docker_prepare_github_curl "$auth_tmp"
-  if curl "${DOCKER_CURL_ARGS[@]}" --connect-timeout 5 --max-time 10 https://api.github.com/ >/dev/null 2>&1; then
-    ui_ok 'Połączenie HTTPS z api.github.com'
+  if curl "${DOCKER_CURL_ARGS[@]}" --connect-timeout 5 --max-time 10 \
+      "https://api.github.com/repos/$repo/contents/install.sh?ref=$ref" >/dev/null 2>&1; then
+    ui_ok "Dostęp do źródła GitHub: $repo @ $ref"
   else
-    ui_fail 'Brak połączenia z api.github.com z wybraną konfiguracją GitHub. Sprawdź DNS, token/config, proxy/firewall i czas systemowy.'
+    ui_fail "Nie można odczytać $repo @ $ref z wybraną konfiguracją GitHub. Sprawdź --ref, token/config, DNS i proxy/firewall."
     failed=1
   fi
   rm -rf "$auth_tmp"
@@ -465,18 +467,28 @@ docker_current_release() {
   readlink -f "$docker_root/current" 2>/dev/null || true
 }
 
+docker_compose_for() {
+  local release=$1 env_file=$2
+  shift 2
+  [[ -n "$release" && -f "$release/docker-compose.yml" ]] || {
+    ui_fail "Brak pliku Compose w release: ${release:-?}"
+    return 1
+  }
+  [[ -r "$env_file" ]] || {
+    ui_fail "Brak konfiguracji Docker: $env_file"
+    return 1
+  }
+  "${DOCKER_COMPOSE[@]}" -p "$docker_project" --env-file "$env_file" -f "$release/docker-compose.yml" "$@"
+}
+
 docker_compose() {
   local release
   release=$(docker_current_release)
-  [[ -n "$release" && -f "$release/docker-compose.yml" ]] || {
+  [[ -n "$release" ]] || {
     ui_fail "Brak aktywnego release Docker w $docker_root/current."
     return 1
   }
-  [[ -r "$docker_env" ]] || {
-    ui_fail "Brak konfiguracji Docker: $docker_env"
-    return 1
-  }
-  "${DOCKER_COMPOSE[@]}" -p "$docker_project" --env-file "$docker_env" -f "$release/docker-compose.yml" "$@"
+  docker_compose_for "$release" "$docker_env" "$@"
 }
 
 docker_status() {
@@ -534,14 +546,15 @@ docker_uninstall() {
   fi
 
   ui_stage 1 3 'Zatrzymanie stacka'
-  docker_compose_detect || {
-    ui_fail 'Docker Compose nie jest dostępny; nie mogę bezpiecznie zatrzymać stacka.'
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || {
+    ui_fail 'Docker Engine nie jest dostępny; nie mogę bezpiecznie usunąć kontenerów ani wolumenów projektu.'
     exit 1
   }
 
-  local release project_containers=() project_networks=()
+  local release project_containers=() project_networks=() compose_available=0
+  docker_compose_detect && compose_available=1 || ui_warn 'Docker Compose nie jest dostępny; użyję cleanupu po etykietach projektu.'
   release=$(docker_current_release)
-  if [[ -n "$release" && -f "$release/docker-compose.yml" && -r "$docker_env" ]]; then
+  if ((compose_available)) && [[ -n "$release" && -f "$release/docker-compose.yml" && -r "$docker_env" ]]; then
     if ((purge_data)); then
       docker_compose down --remove-orphans --rmi local -v
     else
