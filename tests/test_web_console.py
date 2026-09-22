@@ -173,7 +173,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "api('/blueprints?available=true&limit=200')" in script
     assert "label: 'Produkty'" in script
     assert "id: 'inventory', label: 'Moje zasoby'" in script
-    assert "id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: 'deployments.read', order: 111, navigation: false" in script
+    assert "id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: null, order: 111" in script
+    assert "sekcji „Moje zasoby” w menu bocznym" in script
     assert "function productResourceTabs(" not in script
     assert "'aria-label': 'Produkty i zasoby'" not in script
     assert "function myResourcesView(repairInventory = true)" in script
@@ -243,7 +244,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'blueprints': '/blueprints'" in script or "blueprints: '/blueprints'" in script
     assert """const CLIENT_NAVIGATION_ROUTES = Object.freeze([
     'deployments',
-    'inventory',
+    'my-resources',
     'providers',
     'jobs',
     'blueprints',
