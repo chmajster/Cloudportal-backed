@@ -40,41 +40,8 @@ def _active_inventory_exists(db, deployment_id: str) -> bool:
     )
 
 
-def _terraform_apply_ancestors(steps: list[dict]) -> set[str] | None:
-    """Return the single apply step and all dependencies; multiple applies are ambiguous."""
-    by_id = {
-        str(step.get('id')): dict(step)
-        for step in (steps or [])
-        if step and step.get('id')
-    }
-    apply_ids = [
-        step_id for step_id, step in by_id.items()
-        if str(step.get('type')) == 'terraform_apply'
-    ]
-    if len(apply_ids) > 1:
-        return None
-    if not apply_ids:
-        return set()
-
-    completed: set[str] = set()
-    stack = [apply_ids[0]]
-    while stack:
-        step_id = stack.pop()
-        if step_id in completed:
-            continue
-        step = by_id.get(step_id)
-        if step is None:
-            return None
-        completed.add(step_id)
-        stack.extend(str(value) for value in (step.get('depends_on') or []))
-    return completed
-
-
-def _confirmed_provider_apply(db, job: Job) -> bool:
-    payload = dict(job.payload or {})
-    auto_resume = dict(payload.get('_auto_resume') or {})
-    if auto_resume.get('skip_provider_apply') is True:
-        return True
+def _safe_to_auto_retry(db, job: Job) -> bool:
+    """Require reconciled accounting plus state-backed inventory before retry."""
     if not _active_inventory_exists(db, job.deployment_id):
         return False
 
@@ -84,6 +51,13 @@ def _confirmed_provider_apply(db, job: Job) -> bool:
             reservation.status == 'committed'
             and reservation.reconciliation_required is False
         )
+
+    payload = dict(job.payload or {})
+    previous_auto = dict(payload.get('_auto_resume') or {})
+    if previous_auto.get('from_persisted_state') is True:
+        # A previous automatic retry can be quota-neutral and therefore have no
+        # reservation. The persisted state/inventory evidence is still valid.
+        return True
 
     # Legacy/no-reservation path still requires explicit evidence produced while
     # this exact job owned the deployment. Never infer an update apply from VM
@@ -96,7 +70,7 @@ def _confirmed_provider_apply(db, job: Job) -> bool:
 
 
 def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job | None:
-    """Queue a bounded resume that never repeats the already-confirmed Terraform apply."""
+    """Queue a bounded retry once persisted state and quota are safe to reuse."""
     cfg = settings()
     if not cfg.worker_auto_resume_enabled or cfg.worker_auto_resume_max_attempts <= 0:
         return None
@@ -108,7 +82,7 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
         or deployment.active_job_id != job.id
     ):
         return None
-    if not _confirmed_provider_apply(db, job):
+    if not _safe_to_auto_retry(db, job):
         return None
 
     payload = dict(job.payload or {})
@@ -117,33 +91,19 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
     if resume_count >= cfg.worker_auto_resume_max_attempts:
         return None
 
-    blueprint = dict(payload.get('blueprint') or {})
-    ancestors = _terraform_apply_ancestors(list(blueprint.get('steps') or []))
-    if ancestors is None:
-        return None
-
-    runtime = dict(payload.get('_workflow_runtime') or {})
-    completed = {
-        str(value) for value in (runtime.get('completed_steps') or [])
-    }
-    completed.update(ancestors)
-    runtime.update({
-        'completed_steps': sorted(completed),
-        'provider_applied': True,
-        'inventory_synced': True,
-        'plan_ready': False,
-        'plan_sha256': None,
-    })
-    runtime.pop('current_step', None)
-
+    # Retry gets fresh quota admission. For an initial create that was already
+    # reconciled into quota accounting this is normally a zero delta. If desired
+    # state changed meanwhile, normal quota admission protects the new delta.
     payload.pop('_provider_wait', None)
+    payload.pop('_quota_checked', None)
     payload.pop('_quota_reservation_id', None)
     payload.pop('_state_recovery', None)
-    payload['_quota_checked'] = True
-    payload['_workflow_runtime'] = runtime
+    runtime = dict(payload.get('_workflow_runtime') or {})
+    runtime.pop('current_step', None)
+    if runtime:
+        payload['_workflow_runtime'] = runtime
     payload['_auto_resume'] = {
-        'skip_provider_apply': True,
-        'inventory_reconciled': True,
+        'from_persisted_state': True,
         'count': resume_count + 1,
         'from_job_id': job.id,
         'queued_at': now().isoformat(),
@@ -176,7 +136,7 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
         message=(
             f'recovery.auto_resume.queued: previous_job={job.id}; '
             f'attempt={resume_count + 1}/{cfg.worker_auto_resume_max_attempts}; '
-            'terraform_apply=skip_confirmed'
+            'terraform_apply=retry_with_restored_state'
         ),
     ))
     db.add(Audit(
@@ -197,7 +157,7 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
             'status': 'queued',
             'recovery_of': job.id,
             'automatic': True,
-            'skip_provider_apply': True,
+            'from_persisted_state': True,
         }
     })
     return resumed
