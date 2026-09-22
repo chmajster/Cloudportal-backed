@@ -104,7 +104,16 @@ jobs:
           sudo kill "$lock_pid" >/dev/null 2>&1 || true
           wait "$lock_pid" 2>/dev/null || true
 
+          sudo systemctl stop docker.service docker.socket
+          ! sudo docker info >/dev/null 2>&1
+
           sudo ./install.sh --docker --non-interactive --host localhost --port 9443 --workers 2 --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-docker-install-output 2>&1
+          sudo systemctl is-active --quiet docker.service
+          health_line=$(grep -nF 'Healthcheck HTTPS kandydata zakończony pomyślnie.' /tmp/cloudportal-docker-install-output | head -n 1 | cut -d: -f1)
+          token_line=$(grep -nF 'Initial API Token:' /tmp/cloudportal-docker-install-output | head -n 1 | cut -d: -f1)
+          test -n "$health_line"
+          test -n "$token_line"
+          test "$health_line" -lt "$token_line"
           curl -kfsS https://localhost:9443/api/v1/health >/dev/null
           worker_count=$(sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed --filter label=com.docker.compose.service=worker --format '{{.ID}}' | wc -l)
           test "$worker_count" -eq 2
