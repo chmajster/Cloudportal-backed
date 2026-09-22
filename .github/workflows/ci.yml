@@ -78,7 +78,7 @@ jobs:
           set -euo pipefail
           umask 077
           token_file=$(mktemp)
-          trap 'sudo rm -f "$token_file" /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status-output /tmp/cloudportal-docker-uninstall-output /tmp/cloudportal-docker-purge-output' EXIT
+          trap 'sudo rm -f "$token_file"' EXIT
           printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
           unset REPOSITORY_READ_TOKEN
 
