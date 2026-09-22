@@ -72,6 +72,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/hostnames.js',
         'features/ipam.js',
         'features/inventory.js',
+        'features/deployments-bulk.js',
         'features/deployments.js',
         'features/operations.js',
         'features/search.js',
@@ -187,6 +188,16 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "document.getElementById(sectionId)?.scrollIntoView" in script
     assert "button('Utwórz VM'" in script
     assert "button('Zarządzaj VM'" in script
+    assert "registerExtension('deployments-bulk-vm-actions'" in script
+    assert "api('/day2-actions/bulk'" in script
+    assert "const DEFAULT_BATCH_SIZE = 25;" in script
+    assert "isBulkLimitError(error)" in script
+    assert "await submitChunk(actionId, ids.slice(0, middle), label)" in script
+    assert "Wybierz wszystkie" in script
+    assert "Wyczyść" in script
+    assert "Wymuś stop" in script
+    assert "window.vmBulkActions?.toolbar" in script
+    assert "window.vmBulkActions?.decorateCard" in script
     assert "button('Anuluj'" in script
     assert "button('Anuluj zadanie'" in script
     assert "Anulowanie rozpoczęte." in script
@@ -210,6 +221,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.my-resources-section-icon' in stylesheet
     assert '.my-resources-empty-icon' in stylesheet
     assert '.my-resource-grid' in stylesheet
+    assert '.my-resources-bulk-bar' in stylesheet
+    assert '.my-resources-bulk-actions' in stylesheet
+    assert '.my-resource-card.selected' in stylesheet
+    assert '.my-resource-vm-card .my-resource-card-head' in stylesheet
     assert 'function navigationGroup(' in core
     assert 'function navigationGroupRank(' in core
     assert 'function navigationRouteRank(' in core

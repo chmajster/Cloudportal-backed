@@ -923,6 +923,20 @@
   border-color: var(--accent-border);
 }
 
+.my-resource-vm-card .my-resource-card-head {
+  grid-template-columns: 22px 40px minmax(0, 1fr) auto;
+}
+
+.my-resource-select,
+.vm-bulk-select-all {
+  cursor: pointer;
+}
+
+.my-resource-select:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
 .my-resource-card-head {
   min-width: 0;
   display: grid;
@@ -1072,6 +1086,10 @@
 
   .my-resource-grid {
     grid-template-columns: 1fr;
+  }
+
+  .my-resource-vm-card .my-resource-card-head {
+    grid-template-columns: 22px 38px minmax(0, 1fr) auto;
   }
 
   .my-resources-empty {

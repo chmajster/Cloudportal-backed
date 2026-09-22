@@ -108,32 +108,7 @@ async function deploymentsView() {
   );
 }
 
-function managedVmPowerBase(item) {
-  return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
-}
-
-async function runBulkVmPower(items, action) {
-  const labels = {
-    start: 'uruchomienie',
-    shutdown: 'wyłączenie',
-    reboot: 'restart',
-    stop: 'wymuszone zatrzymanie',
-  };
-  const results = await Promise.allSettled(items.map(item =>
-    api(`${managedVmPowerBase(item)}/power`, {
-      method: 'POST',
-      idempotent: true,
-      body: { action },
-    })
-  ));
-  const ok = results.filter(result => result.status === 'fulfilled').length;
-  const failed = results.length - ok;
-  if (failed) toast(`Masowa akcja: ${labels[action] || action}. Zlecono: ${ok}, błędy: ${failed}.`, 'warning');
-  else toast(`Masowa akcja: ${labels[action] || action}. Zlecono dla ${ok} VM.`);
-  await myResourcesView(false);
-}
-
-function managedVmCard(item, providerNames, deploymentById, selection = null) {
+function managedVmCard(item, providerNames, deploymentById, onSelectionChange = null) {
   const liveStatus = item.live?.status || item.lifecycle_status || 'unknown';
   const active = item.lifecycle_status === 'active';
   const canOpen = allowed('vms.read') && active && hasCommand('inventory.openVm');
@@ -150,25 +125,8 @@ function managedVmCard(item, providerNames, deploymentById, selection = null) {
 
   const card = node('article', {
     class: 'my-resource-card my-resource-vm-card',
-  });
-  const selector = selection ? node('input', {
-    type: 'checkbox',
-    class: 'my-resource-select',
-    checked: selection.selected.has(String(item.id)),
-    'aria-label': 'Wybierz ' + (item.name || ('VM ' + item.vm_id)),
-  }) : null;
-  if (selector) {
-    selector.addEventListener('change', () => {
-      if (selector.checked) selection.selected.add(String(item.id));
-      else selection.selected.delete(String(item.id));
-      card.classList.toggle('selected', selector.checked);
-      selection.update();
-    });
-  }
-
-  card.append(
+  },
     node('div', { class: 'my-resource-card-head' },
-      selector,
       node('span', { class: 'my-resource-card-icon', 'aria-hidden': 'true' }, appIcon('server')),
       node('div', { class: 'my-resource-card-title' },
         node('strong', { text: item.name || ('VM ' + item.vm_id) }),
@@ -180,7 +138,8 @@ function managedVmCard(item, providerNames, deploymentById, selection = null) {
     actions.length
       ? node('div', { class: 'my-resource-card-actions' }, ...actions)
       : node('small', { class: 'muted', text: 'Brak uprawnień do sterowania tą VM.' }));
-  card.classList.toggle('selected', Boolean(selector?.checked));
+
+  window.vmBulkActions?.decorateCard(card, item, onSelectionChange);
   return card;
 }
 
@@ -275,62 +234,20 @@ async function myResourcesView(repairInventory = true) {
   const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
   const deploymentById = new Map(deployments.map(item => [item.id, item]));
 
-  const selectableVms = vms.filter(item => item.lifecycle_status === 'active');
-  const vmSelection = allowed('vms.power') && selectableVms.length ? {
-    selected: new Set(),
-    update: () => {},
-  } : null;
+  let vmBulkControls = null;
   let vmGrid;
   if (vms.length) {
     const grid = node('div', { class: 'my-resource-grid' });
-    const bulkBar = vmSelection ? node('div', { class: 'my-resources-bulk-bar' }) : null;
-    const selectedCount = vmSelection ? node('strong', { text: '0 wybranych' }) : null;
-    const bulkButtons = vmSelection ? [
-      button('Uruchom', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'start'), 'primary', true),
-      button('Wyłącz', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'shutdown'), 'ghost', true),
-      button('Restart', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'reboot'), 'ghost', true),
-      button('Wymuś stop', () => confirmAction(
-        'Wymuś zatrzymanie wybranych VM',
-        'Operacja natychmiast zatrzyma wybrane maszyny. Użyj jej tylko, gdy bezpieczne wyłączenie nie działa.',
-        async () => {
-          await runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'stop');
-          return false;
-        },
-      ), 'danger', true),
-    ] : [];
-
-    if (vmSelection) {
-      const selectAll = node('input', { type: 'checkbox', 'aria-label': 'Wybierz wszystkie VM' });
-      vmSelection.update = () => {
-        const count = vmSelection.selected.size;
-        selectedCount.textContent = count + ' wybranych';
-        bulkButtons.forEach(action => { action.disabled = count === 0; });
-        selectAll.checked = count > 0 && count === selectableVms.length;
-        selectAll.indeterminate = count > 0 && count < selectableVms.length;
-      };
-      selectAll.addEventListener('change', () => {
-        vmSelection.selected.clear();
-        if (selectAll.checked) selectableVms.forEach(item => vmSelection.selected.add(String(item.id)));
-        grid.querySelectorAll('.my-resource-select').forEach(input => {
-          input.checked = vmSelection.selected.has(input.dataset.resourceId);
-          input.closest('.my-resource-card')?.classList.toggle('selected', input.checked);
-        });
-        vmSelection.update();
-      });
-      bulkBar.append(
-        node('label', { class: 'my-resources-select-all' }, selectAll, node('span', { text: 'Wybierz wszystkie' })),
-        selectedCount,
-        node('div', { class: 'my-resources-bulk-actions' }, ...bulkButtons));
-    }
-
-    vms.forEach(item => {
-      const card = managedVmCard(item, providerNames, deploymentById, vmSelection && item.lifecycle_status === 'active' ? vmSelection : null);
-      const input = card.querySelector('.my-resource-select');
-      if (input) input.dataset.resourceId = String(item.id);
-      grid.append(card);
-    });
-    if (vmSelection) vmSelection.update();
-    vmGrid = bulkBar ? node('div', { class: 'my-resources-vm-list' }, bulkBar, grid) : grid;
+    vms.forEach(item => grid.append(managedVmCard(
+      item,
+      providerNames,
+      deploymentById,
+      () => vmBulkControls?.sync(),
+    )));
+    vmBulkControls = window.vmBulkActions?.toolbar(vms, grid, () => myResourcesView(false)) || null;
+    vmGrid = vmBulkControls
+      ? node('div', { class: 'my-resources-vm-list' }, vmBulkControls.element, grid)
+      : grid;
   } else {
     vmGrid = resourceEmptyState('monitor', 'Brak maszyn VM', 'Nie ma VM dostępnych dla bieżących uprawnień.');
   }
@@ -362,7 +279,7 @@ async function myResourcesView(repairInventory = true) {
       resourceSummaryCard('server', 'VM', vms.length, 'Maszyny wirtualne', 'vm', 'my-resources-vms'),
       resourceSummaryCard('database', 'Inne zasoby', resources.length, 'Zasoby dodatkowe', 'resources', 'my-resources-other'),
       resourceSummaryCard('rocket', 'Wdrożenia', deployments.length, 'Aktywne wdrożenia', 'deployments', 'my-resources-deployments')),
-    resourceSection('my-resources-vms', 'monitor', 'Maszyny wirtualne', 'Kliknij „Zarządzaj VM”, aby przejść do sterowania, konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
+    resourceSection('my-resources-vms', 'monitor', 'Maszyny wirtualne', 'Zaznacz VM, aby wykonać akcję masową, albo kliknij „Zarządzaj VM”, aby przejść do konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
     resourceSection('my-resources-other', 'box', 'Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
     resourceSection('my-resources-deployments', 'rocket', 'Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent));
 
