@@ -6,16 +6,21 @@ from app.security.core import decrypt_secret, encrypt_secret
 
 def credential_public(c):
     supports_cloud_init_ssh_key = False
+    supports_cloud_init_password = False
     if c.type == 'ssh' and c.encrypted_secret:
         try:
-            supports_cloud_init_ssh_key = bool(decrypt_secret(c).get('private_key'))
+            secret = decrypt_secret(c)
+            supports_cloud_init_ssh_key = bool(secret.get('private_key'))
+            supports_cloud_init_password = bool(secret.get('password'))
         except Exception:
             # Capability metadata must never expose secret material or make credential listing fail.
             supports_cloud_init_ssh_key = False
+            supports_cloud_init_password = False
     return {
         **public(c, 'id name type endpoint username verify_ssl expires_at rotation_due_at secret_updated_at created_at updated_at'),
         'configured': bool(c.encrypted_secret),
         'supports_cloud_init_ssh_key': supports_cloud_init_ssh_key,
+        'supports_cloud_init_password': supports_cloud_init_password,
         'secret': '********',
     }
 
