@@ -15,7 +15,7 @@ from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
 from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, workspace_lock
 from app.jobs.worker import execute
-from app.jobs.queue import reconcile_cancelled_jobs
+from app.jobs.queue import reconcile_cancelled_jobs, reconcile_persisted_inventory, reconcile_stale_jobs
 from app.terraform.state import persist_state
 
 
@@ -230,6 +230,71 @@ def test_inventory_reconcile_recovers_vm_from_persisted_state(client, headers, t
     repeated = client.post('/api/v1/inventory/reconcile', headers=headers)
     assert repeated.status_code == 200
     assert repeated.json()['repaired_count'] == 0
+
+
+def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
+    client, headers, monkeypatch, tmp_path
+):
+    d = deployment(client, headers)
+    workspace = terraform_state_workspace(tmp_path, vm_id=613)
+    assert persist_state(d['id'], workspace)
+
+    with session() as db:
+        job = db.get(Job, d['job']['id'])
+        job.status = 'running'
+        job.heartbeat_at = now() - timedelta(seconds=settings().execution_timeout + 181)
+        dep = db.get(Deployment, d['id'])
+        dep.status = 'running'
+        db.commit()
+
+    with session() as db:
+        reconcile_persisted_inventory(db)
+        assert reconcile_stale_jobs(db) == 1
+        db.commit()
+
+    with session() as db:
+        original = db.get(Job, d['job']['id'])
+        resumed = db.scalar(select(Job).where(Job.retry_of == original.id))
+        reservation = db.get(QuotaReservation, original.payload['_quota_reservation_id'])
+        dep = db.get(Deployment, d['id'])
+
+        assert original.status == 'failed'
+        assert 'automatic resume queued as job' in original.error
+        assert reservation.status == 'committed'
+        assert resumed is not None
+        assert resumed.status == 'queued'
+        assert resumed.source == 'Recovery'
+        assert resumed.payload['_auto_resume']['from_persisted_state'] is True
+        assert resumed.payload['_auto_resume']['count'] == 1
+        assert '_quota_checked' not in resumed.payload
+        assert '_quota_reservation_id' not in resumed.payload
+        assert dep.active_job_id == resumed.id
+        assert dep.status == 'recovery_queued'
+        resumed_id = resumed.id
+
+    monkeypatch.setattr(settings(), 'data_dir', tmp_path)
+    monkeypatch.setattr(
+        'app.jobs.worker.provider_for',
+        lambda _credential: SimpleNamespace(
+            execution_availability=lambda: {'ok': True},
+        ),
+    )
+    operations = []
+    monkeypatch.setattr(
+        TerraformExecutor,
+        'execute',
+        lambda _executor, operation, _context: operations.append(operation) or workspace,
+    )
+
+    execute(resumed_id)
+
+    assert operations == ['terraform.apply']
+    with session() as db:
+        resumed = db.get(Job, resumed_id)
+        dep = db.get(Deployment, d['id'])
+        assert resumed.status == 'successful'
+        assert dep.status == 'successful'
+        assert dep.active_job_id is None
 
 
 def test_worker_rechecks_revoked_permissions(client,headers,monkeypatch):

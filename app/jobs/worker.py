@@ -28,7 +28,7 @@ from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReserv
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.security.core import effective_permissions
-from app.terraform.state import delete_plan, persist_plan, restore_plan
+from app.terraform.state import delete_plan, persist_plan, restore_plan, restore_state
 
 
 class ApprovalPending(Exception):
@@ -473,6 +473,48 @@ def clear_provider_wait(job_id):
         db.commit()
 
 
+def restore_recovery_workspace(context):
+    workspace = settings().data_dir / 'workspaces' / context.deployment.workspace
+    workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        restored = restore_state(context.deployment.id, workspace)
+    except RuntimeError as exc:
+        raise ExecutionFailed(str(exc)) from None
+    if not restored:
+        raise ExecutionFailed(
+            'Automatic resume refused: persisted Terraform state is unavailable'
+        )
+    context.stage('recovery.terraform_state.restored')
+    return workspace
+
+
+def persist_workflow_runtime(context, runtime):
+    """Checkpoint enough workflow state to resume without repeating Terraform apply."""
+    job_id = getattr(context.job, 'id', None)
+    if not job_id:
+        return
+    with session() as db:
+        current = db.get(Job, job_id)
+        if current is None:
+            return
+        payload = dict(current.payload or {})
+        saved = dict(payload.get('_workflow_runtime') or {})
+        saved.update({
+            'completed_steps': sorted(
+                key for key, value in runtime['step_states'].items()
+                if value == 'completed'
+            ),
+            'plan_ready': bool(runtime.get('plan_ready')),
+            'plan_sha256': runtime.get('plan_sha256'),
+            'provider_applied': bool(runtime.get('applied')),
+            'inventory_synced': bool(runtime.get('inventory_synced')),
+            'ansible_ran': bool(runtime.get('ansible_ran')),
+        })
+        payload['_workflow_runtime'] = saved
+        current.payload = payload
+        db.commit()
+        context.job.payload = dict(payload)
+
 
 BLUEPRINT_DECLARATIVE_STEPS = {
     'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
@@ -723,16 +765,28 @@ def run_blueprint_workflow(context, executor):
         str(value) for value in (saved_runtime.get('completed_steps') or [])
     }
     saved_plan_ready = bool(saved_runtime.get('plan_ready'))
-    saved_workspace = (
-        settings().data_dir / 'workspaces' / context.deployment.workspace
-        if saved_plan_ready else None
+    provider_applied = bool(saved_runtime.get('provider_applied'))
+    if provider_applied:
+        saved_workspace = restore_recovery_workspace(context)
+    else:
+        saved_workspace = (
+            settings().data_dir / 'workspaces' / context.deployment.workspace
+            if saved_plan_ready else None
+        )
+    explicit_ansible_completed = any(
+        str(step.get('type')) == 'run_ansible_playbook'
+        and str(step.get('id')) in completed_steps
+        for step in steps
     )
     runtime = {
         'workspace': saved_workspace,
-        'inventory_synced': False,
+        'inventory_synced': bool(saved_runtime.get('inventory_synced')),
         'addresses': None,
-        'applied': False,
-        'ansible_ran': False,
+        'applied': provider_applied,
+        'ansible_ran': bool(
+            saved_runtime.get('ansible_ran')
+            or explicit_ansible_completed
+        ),
         'prepared': [],
         'step_states': {step_id: 'completed' for step_id in completed_steps},
         'plan_ready': saved_plan_ready,
@@ -851,6 +905,7 @@ def run_blueprint_workflow(context, executor):
         for prepared in runtime['prepared']:
             context.log(f"workflow.step.materialized: {prepared}")
         runtime['prepared'].clear()
+        persist_workflow_runtime(context, runtime)
         return workspace
 
     def workspace_for(step_type):
@@ -893,6 +948,9 @@ def run_blueprint_workflow(context, executor):
                 ),
                 'plan_ready': bool(runtime['plan_ready']),
                 'plan_sha256': plan_sha256,
+                'provider_applied': bool(runtime['applied']),
+                'inventory_synced': bool(runtime['inventory_synced']),
+                'ansible_ran': bool(runtime['ansible_ran']),
                 'approval_step': step_id,
             }
             current.payload = payload
@@ -990,7 +1048,13 @@ def run_blueprint_workflow(context, executor):
                     except RuntimeError as exc:
                         raise ExecutionFailed(str(exc)) from None
                 elif step_type == 'terraform_apply':
-                    apply_and_sync()
+                    if runtime['applied']:
+                        context.log(
+                            f'workflow.step.resumed: {step_id}:terraform_apply: '
+                            'provider apply checkpoint already completed'
+                        )
+                    else:
+                        apply_and_sync()
                 elif step_type == 'terraform_destroy':
                     raise ExecutionFailed('terraform_destroy is rollback-only')
                 elif step_type == 'wait_for_vm':
@@ -1057,6 +1121,7 @@ def run_blueprint_workflow(context, executor):
 
                 runtime['step_states'][step_id] = 'completed'
                 context.stage(f'workflow.step.completed:{step_id}:{step_type}')
+                persist_workflow_runtime(context, runtime)
                 break
             except ApprovalPending:
                 raise
@@ -1108,6 +1173,7 @@ def run_blueprint_workflow(context, executor):
         AnsibleExecutor().execute('ansible.execute', context)
 
     context.blueprint_workflow_completed = True
+    persist_workflow_runtime(context, runtime)
     context.stage('workflow.completed')
     return runtime['workspace']
 

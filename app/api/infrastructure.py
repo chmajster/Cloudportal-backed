@@ -566,6 +566,8 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
     payload.pop('_provider_wait', None)
     payload.pop('_quota_checked', None)
     payload.pop('_quota_reservation_id', None)
+    payload.pop('_state_recovery', None)
+    payload.pop('_auto_resume', None)
     if original.operation == 'ansible.execute' and payload.get('ansible'):
         from app.api.schemas import AnsibleInput
         validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))

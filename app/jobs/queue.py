@@ -13,6 +13,7 @@ from app.blueprint_settings import blueprint_execution_settings
 from app.database import session
 from app.events.service import dispatch_event_broker_once
 from app.inventory_sync import repair_inventory_from_states
+from app.jobs.recovery import queue_automatic_resume, record_persisted_state_recovery
 from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
 from app.providers.task_reconcile import reconcile_proxmox_tasks_once
@@ -103,6 +104,7 @@ def reconcile_persisted_inventory(db):
         job = db.get(Job, deployment.active_job_id)
         if job is None:
             continue
+        record_persisted_state_recovery(job, item)
         if item['vm_id'] is not None:
             message = f"inventory.vm.recovered: {item['node']} / VMID {item['vm_id']}"
         else:
@@ -227,16 +229,28 @@ def reconcile_stale_jobs(db):
     ).with_for_update(skip_locked=True)).all()
     for job in rows:
         mark_job_reservation_uncertain(db, job)
+        deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
+        resumed = queue_automatic_resume(db, job, deployment)
+
         job.status = 'failed'
-        job.error = (
-            'Worker heartbeat lost. Inventory was reconciled from persisted Terraform state; '
-            'quota reservation requires reconciliation before retrying.'
-        )
-        if job.deployment_id:
-            deployment = db.get(Deployment, job.deployment_id)
-            if deployment is not None and deployment.active_job_id == job.id:
-                deployment.active_job_id = None
-                deployment.status = 'failed'
+        if resumed is not None:
+            job.error = (
+                'Worker heartbeat lost. Persisted Terraform state and quota were reconciled; '
+                f'automatic resume queued as job {resumed.id}.'
+            )
+        else:
+            job.error = (
+                'Worker heartbeat lost. Inventory was reconciled from persisted Terraform state; '
+                'quota reservation requires reconciliation before retrying.'
+            )
+
+        if (
+            resumed is None
+            and deployment is not None
+            and deployment.active_job_id == job.id
+        ):
+            deployment.active_job_id = None
+            deployment.status = 'failed'
         db.add(JobLog(job_id=job.id, message=job.error))
         queue_job_webhooks(db, job)
     return len(rows)
