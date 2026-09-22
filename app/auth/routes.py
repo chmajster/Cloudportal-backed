@@ -173,8 +173,10 @@ def reset_password(data: ResetPassword, request: Request, db=Depends(get_db, sco
 def change_password(data: ChangePassword, request: Request, actor=Depends(authenticate), db=Depends(get_db, scope='function')):
     if actor.user.auth_source != 'local':
         raise HTTPException(409, 'Password is managed by LDAP')
-    if actor.kind != 'session' or not verify_password(data.current_password, actor.user.password_hash):
-        raise HTTPException(403, 'Current password required')
+    if actor.kind != 'session':
+        raise HTTPException(403, 'Browser session required')
+    if not verify_password(data.current_password, actor.user.password_hash):
+        raise HTTPException(403, 'Current password is incorrect')
     actor.user.password_hash = password_hasher.hash(data.password)
     actor.user.must_change_password = False
     db.execute(update(PasswordReset).where(PasswordReset.user_id == actor.user_id, PasswordReset.consumed_at.is_(None)).values(consumed_at=now()))
