@@ -76,15 +76,18 @@ Resolution is conservative:
 
 When a worker heartbeat is lost after an initial Terraform apply, the dispatcher
 automatically resumes the job only when persisted Terraform state/inventory and
-quota accounting independently confirm that the provider-side create completed.
-The recovery job has explicit retry lineage, restores the persisted state and
-skips the already-confirmed `terraform apply`, so post-provisioning workflow work
-can continue without creating a second VM. Automatic resume is bounded by
-`CP_WORKER_AUTO_RESUME_MAX_ATTEMPTS` (default 3) and can be disabled with
-`CP_WORKER_AUTO_RESUME_ENABLED=false`.
+quota accounting independently confirm that provider-side state exists and the
+original reservation is resolved. The recovery job has explicit retry lineage.
+Terraform restores the persisted state and runs plan/apply again against that
+state, so an interrupted apply can converge remaining desired changes instead of
+blindly creating a second VM. Completed Blueprint workflow steps are checkpointed
+and are not repeated when their durable checkpoint proves completion. Automatic
+resume is bounded by `CP_WORKER_AUTO_RESUME_MAX_ATTEMPTS` (default 3) and can be
+disabled with `CP_WORKER_AUTO_RESUME_ENABLED=false`.
 
 Update/re-apply uncertainty remains fail-closed: VM presence alone does not prove
-CPU/RAM/disk changes completed, so those reservations are not auto-resumed.
+CPU/RAM/disk changes completed, so unresolved update reservations are not
+auto-resumed.
 Manual reconciliation remains available for `uncertain` reservations when an
 operator has independent evidence unavailable to the automatic paths.
 
