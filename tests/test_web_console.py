@@ -174,7 +174,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "label: 'Produkty'" in script
     assert "id: 'inventory', label: 'Moje zasoby'" in script
     assert "id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: 'deployments.read', order: 111, navigation: false" in script
-    assert "function productResourceTabs(" in script
+    assert "function productResourceTabs(" not in script
+    assert "'aria-label': 'Produkty i zasoby'" not in script
     assert "function myResourcesView(repairInventory = true)" in script
     assert "api('/inventory/reconcile', { method: 'POST', body: {} })" in script
     assert "Odbudowano inventory dla " in script
@@ -213,7 +214,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.product-card' in stylesheet
     assert '.job-log-status' in stylesheet
     assert '.job-live-log' in stylesheet
-    assert '.product-resource-tabs' in stylesheet
+    assert '.product-resource-tabs' not in stylesheet
     assert '.my-resources-page-head' in stylesheet
     assert '.my-resources-body' in stylesheet
     assert '.my-resources-summary-card' in stylesheet
