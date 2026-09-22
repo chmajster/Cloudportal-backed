@@ -42,19 +42,33 @@ def test_installer_allows_disabling_takeover():
     assert '--no-takeover zabrania jej zatrzymania' in INSTALLER
 
 
-def test_force_uninstall_preserves_data_by_default():
-    assert '--force-uninstall|--uninstall) force_uninstall=1' in INSTALLER
-    assert 'force_uninstall_cloudportal' in INSTALLER
-    assert 'rm -rf "$app_root"' in INSTALLER
-    assert 'Baza, /etc/cloudportal-backed i /var/lib/cloudportal-backed zostały zachowane.' in INSTALLER
+def test_uninstall_preserves_data_by_default_and_removes_runtime_integrations():
+    assert '--uninstall) uninstall_mode=1' in INSTALLER
+    assert '--force-uninstall) uninstall_mode=1; assume_yes=1' in INSTALLER
+    assert 'uninstall_cloudportal()' in INSTALLER
+    assert 'acquire_install_lock' in INSTALLER
+    assert 'rm -rf "$app_root" /usr/local/lib/cloudportal-updater' in INSTALLER
+    assert "Baza, konfiguracja i dane aplikacji zostały zachowane." in INSTALLER
+    assert 'cloudportal-updater.timer' in INSTALLER
     assert 'systemctl disable --now' in INSTALLER
     assert '/etc/nginx/conf.d/cloudportal-backed.conf' in INSTALLER
+    assert "Pakiety współdzielone PostgreSQL, Redis/Valkey, Nginx, Terraform i Ansible nie są automatycznie usuwane." in INSTALLER
 
 
-def test_force_uninstall_can_purge_all_local_data():
+def test_uninstall_requires_confirmation_and_supports_noninteractive_yes():
+    assert 'confirm_uninstall()' in INSTALLER
+    assert "Wpisz USUN, aby potwierdzić pełne usunięcie" in INSTALLER
+    assert "Odinstalować runtime Cloudportal i zachować bazę oraz dane? [y/N]" in INSTALLER
+    assert "Tryb --non-interactive z --uninstall wymaga jawnego --yes." in INSTALLER
+    assert '--yes|-y) assume_yes=1' in INSTALLER
+
+
+def test_uninstall_can_purge_all_local_data_and_verifies_cleanup():
     assert '--purge-data) purge_data=1' in INSTALLER
-    assert '--purge-data requires --force-uninstall.' in INSTALLER
-    assert 'dropdb --if-exists cloudportal' in INSTALLER
+    assert '--purge-data wymaga --uninstall.' in INSTALLER
+    assert 'dropdb --force --if-exists cloudportal' in INSTALLER
     assert 'dropuser --if-exists cloudportal' in INSTALLER
     assert 'rm -rf "$config" "$data" /var/backups/cloudportal-backed' in INSTALLER
     assert 'userdel cloudportal' in INSTALLER
+    assert 'verify_uninstall()' in INSTALLER
+    assert "Baza PostgreSQL cloudportal nadal istnieje." in INSTALLER
