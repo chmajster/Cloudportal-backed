@@ -188,7 +188,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
     assert "runCommand('inventory.openVm', vm, 'overview', 'my-resources')" in script
     assert "registerCommand('inventory.consoleVm', showVmConsole)" in script
-    assert "allowed('vms.console') && hasCommand('inventory.consoleVm')" in script
+    assert "const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm')" in script
     assert "runCommand('inventory.consoleVm', item)" in script
     assert "Wdrożenia i operacje" in script
     assert 'Brak gotowych Blueprintów.' in script
