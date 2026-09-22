@@ -760,15 +760,11 @@ def run_blueprint_workflow(context, executor):
         raise ExecutionFailed('Unsupported Blueprint workflow steps: ' + ', '.join(unsupported))
 
     saved_runtime = dict((context.job.payload or {}).get('_workflow_runtime') or {})
-    auto_resume = dict((context.job.payload or {}).get('_auto_resume') or {})
     completed_steps = {
         str(value) for value in (saved_runtime.get('completed_steps') or [])
     }
     saved_plan_ready = bool(saved_runtime.get('plan_ready'))
-    provider_applied = bool(
-        saved_runtime.get('provider_applied')
-        or auto_resume.get('skip_provider_apply')
-    )
+    provider_applied = bool(saved_runtime.get('provider_applied'))
     if provider_applied:
         saved_workspace = restore_recovery_workspace(context)
     else:
@@ -778,10 +774,7 @@ def run_blueprint_workflow(context, executor):
         )
     runtime = {
         'workspace': saved_workspace,
-        'inventory_synced': bool(
-            saved_runtime.get('inventory_synced')
-            or auto_resume.get('inventory_reconciled')
-        ),
+        'inventory_synced': bool(saved_runtime.get('inventory_synced')),
         'addresses': None,
         'applied': provider_applied,
         'ansible_ran': False,
@@ -990,19 +983,6 @@ def run_blueprint_workflow(context, executor):
             context.log(f'workflow.step.rollback_only: {step_id}:{step_type}')
             continue
 
-        if (
-            runtime['applied']
-            and auto_resume.get('skip_provider_apply')
-            and step_type in (BLUEPRINT_DECLARATIVE_STEPS | BLUEPRINT_PRECOMPILED_STEPS)
-        ):
-            runtime['step_states'][step_id] = 'completed'
-            context.log(
-                f'workflow.step.recovered: {step_id}:{step_type}: '
-                'materialized by confirmed Terraform state'
-            )
-            persist_workflow_runtime(context, runtime)
-            continue
-
         dependencies = [str(value) for value in (step.get('depends_on') or [])]
         blocked_dependencies = [
             dependency for dependency in dependencies
@@ -1058,10 +1038,10 @@ def run_blueprint_workflow(context, executor):
                     except RuntimeError as exc:
                         raise ExecutionFailed(str(exc)) from None
                 elif step_type == 'terraform_apply':
-                    if runtime['applied'] and auto_resume.get('skip_provider_apply'):
+                    if runtime['applied']:
                         context.log(
-                            f'workflow.step.recovered: {step_id}:terraform_apply: '
-                            'provider apply already confirmed by persisted state'
+                            f'workflow.step.resumed: {step_id}:terraform_apply: '
+                            'provider apply checkpoint already completed'
                         )
                     else:
                         apply_and_sync()
@@ -1249,17 +1229,12 @@ def execute(job_id):
         if job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             blueprint = (job.payload or {}).get('blueprint') or {}
-            auto_resume = dict((job.payload or {}).get('_auto_resume') or {})
             if job.operation == 'terraform.apply' and blueprint.get('steps'):
                 run_blueprint_workflow(context, executor)
                 if not context.blueprint_workflow_completed:
                     raise ExecutionFailed('Blueprint workflow did not complete')
             else:
-                if job.operation == 'terraform.apply' and auto_resume.get('skip_provider_apply'):
-                    workspace = restore_recovery_workspace(context)
-                    context.stage('recovery.terraform_apply.skipped')
-                else:
-                    workspace = executor.execute(job.operation, context)
+                workspace = executor.execute(job.operation, context)
                 if job.operation == 'terraform.import':
                     register_adopted_resource(context)
                     with session() as quota_db:
