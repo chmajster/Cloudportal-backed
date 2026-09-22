@@ -102,6 +102,16 @@ def test_default_admin_session_requires_password_change(system):
     assert blocked.json()['detail'] == 'Password change required'
     assert client.get('/api/v1/users', headers=bootstrap_headers).status_code == 200
 
+    wrong = client.post('/api/v1/auth/change-password', headers=session_headers,
+                        json={'current_password': 'wrong-password', 'password': 'secure-admin-password-1234'})
+    assert wrong.status_code == 403
+    assert wrong.json()['detail'] == 'Current password is incorrect'
+
+    api_token_change = client.post('/api/v1/auth/change-password', headers=bootstrap_headers,
+                                   json={'current_password': 'admin', 'password': 'secure-admin-password-1234'})
+    assert api_token_change.status_code == 403
+    assert api_token_change.json()['detail'] == 'Browser session required'
+
     changed = client.post('/api/v1/auth/change-password', headers=session_headers,
                           json={'current_password': 'admin', 'password': 'secure-admin-password-1234'})
     assert changed.status_code == 200, changed.text
