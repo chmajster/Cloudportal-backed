@@ -40,6 +40,8 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
         'cores': 4,
         'memory': 8192,
         'scsi0': 'local-lvm:vm-777-disk-0,size=64G',
+        'scsi1': 'local-lvm:vm-777-disk-1,size=256G',
+        'ide2': 'local-lvm:cloudinit,media=cdrom,size=4M',
         'net0': 'virtio=00:11:22:33:44:55,bridge=vmbr0,tag=20',
         'onboot': 1,
         'agent': '1',
@@ -91,7 +93,7 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
             'vm_count': 1,
             'vcpu': 4,
             'memory_mb': 8192,
-            'disk_gib': 64,
+            'disk_gib': 320,
         }
 
     commands = []
@@ -135,7 +137,7 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
             'vm_count': 1,
             'vcpu': 4,
             'memory_mb': 8192,
-            'disk_gib': 64,
+            'disk_gib': 320,
         }
 
     blocked = client.delete(f"/api/v1/inventory/vms/{inventory['id']}", headers=headers)
