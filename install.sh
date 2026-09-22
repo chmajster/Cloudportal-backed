@@ -486,35 +486,55 @@ docker_status() {
 
 docker_uninstall() {
   ui_header 'Cloudportal-backed — deinstalacja Docker'
+
+  if ((purge_data)); then
+    ui_warn 'Tryb --purge-data usunie również nazwane wolumeny PostgreSQL, Redis, konfigurację i dane backendu.'
+    if ((assume_yes == 0)); then
+      if ((non_interactive)); then
+        ui_fail '--non-interactive --uninstall --purge-data wymaga --yes.'
+        exit 2
+      fi
+      [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall --purge-data.'; exit 2; }
+      read -r -p 'Wpisz USUN, aby trwale usunąć dane Docker: ' confirmation
+      [[ "$confirmation" == USUN ]] || { ui_warn 'Anulowano.'; exit 1; }
+    fi
+  else
+    if ((assume_yes == 0)); then
+      if ((non_interactive)); then
+        ui_fail '--non-interactive --uninstall wymaga --yes.'
+        exit 2
+      fi
+      [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall.'; exit 2; }
+      read -r -p 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' confirmation
+      [[ "$confirmation" =~ ^[TtYy]$ ]] || { ui_warn 'Anulowano.'; exit 1; }
+    fi
+  fi
+
   ui_stage 1 3 'Zatrzymanie stacka'
   docker_compose_detect || {
     ui_fail 'Docker Compose nie jest dostępny; nie mogę bezpiecznie zatrzymać stacka.'
     exit 1
   }
-  local release
+
+  local release project_containers=() project_networks=()
   release=$(docker_current_release)
   if [[ -n "$release" && -f "$release/docker-compose.yml" && -r "$docker_env" ]]; then
     if ((purge_data)); then
-      ui_warn 'Tryb --purge-data usunie również nazwane wolumeny PostgreSQL, Redis i dane backendu.'
-      if ((assume_yes == 0)); then
-        [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall --purge-data.'; exit 2; }
-        read -r -p 'Wpisz USUN, aby kontynuować: ' confirmation
-        [[ "$confirmation" == USUN ]] || { ui_warn 'Anulowano.'; exit 1; }
-      fi
       docker_compose down --remove-orphans --rmi local -v
     else
-      if ((assume_yes == 0 && non_interactive == 0)); then
-        [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall.'; exit 2; }
-        read -r -p 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' confirmation
-        [[ "$confirmation" =~ ^[TtYy]$ ]] || { ui_warn 'Anulowano.'; exit 1; }
-      elif ((non_interactive && assume_yes == 0)); then
-        ui_fail '--non-interactive --uninstall wymaga --yes.'
-        exit 2
-      fi
       docker_compose down --remove-orphans --rmi local
     fi
   else
-    ui_warn 'Nie znaleziono kompletnej aktywnej konfiguracji Compose; usuwam tylko znany runtime/config zgodnie z wybranym trybem.'
+    ui_warn 'Nie znaleziono kompletnej aktywnej konfiguracji Compose; wykonuję cleanup po etykiecie projektu.'
+    mapfile -t project_containers < <(docker ps -aq --filter "label=com.docker.compose.project=$docker_project" 2>/dev/null || true)
+    if ((${#project_containers[@]})); then
+      docker rm -f "${project_containers[@]}" >/dev/null
+      ui_info "Usunięto osierocone kontenery projektu: ${#project_containers[@]}"
+    fi
+    mapfile -t project_networks < <(docker network ls -q --filter "label=com.docker.compose.project=$docker_project" 2>/dev/null || true)
+    if ((${#project_networks[@]})); then
+      docker network rm "${project_networks[@]}" >/dev/null
+    fi
   fi
 
   ui_stage 2 3 'Usunięcie runtime'
