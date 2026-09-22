@@ -245,6 +245,84 @@ docker_valid_workers() {
   [[ "$1" =~ ^[0-9]{1,2}$ ]] && ((10#$1 >= 1 && 10#$1 <= 64))
 }
 
+docker_preflight() {
+  local failed=0 command free_kib
+  ui_info "System: $NAME $VERSION_ID · $arch · tryb Docker"
+  ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
+
+  for command in awk sed grep tar openssl curl df sha256sum stat hostname; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+      ui_fail "Brak wymaganej komendy przed instalacją Docker: $command"
+      failed=1
+    fi
+  done
+  ((failed == 0)) || {
+    ui_info 'Uzupełnij brakujące narzędzia bazowe przed uruchomieniem instalatora; preflight nie modyfikuje systemu.'
+    return 1
+  }
+
+  free_kib=$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')
+  if [[ "$free_kib" =~ ^[0-9]+$ ]]; then
+    if ((free_kib < 2097152)); then
+      ui_fail "Za mało wolnego miejsca: $((free_kib / 1024)) MiB. Wymagane minimum 2 GiB, zalecane 10 GiB."
+      failed=1
+    elif ((free_kib < 10485760)); then
+      ui_warn "Wolne miejsce: $((free_kib / 1024)) MiB. Zalecane co najmniej 10 GiB."
+    else
+      ui_ok "Wolne miejsce: $((free_kib / 1024 / 1024)) GiB"
+    fi
+  else
+    ui_fail 'Nie udało się ustalić wolnego miejsca na dysku.'
+    failed=1
+  fi
+
+  if curl -fsS --connect-timeout 5 --max-time 10 https://api.github.com/ >/dev/null 2>&1; then
+    ui_ok 'Połączenie HTTPS z api.github.com'
+  else
+    ui_fail 'Brak połączenia z api.github.com. Sprawdź DNS, routing, proxy/firewall i czas systemowy.'
+    failed=1
+  fi
+
+  if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$backend_port$"; then
+    if ! command -v docker >/dev/null 2>&1 || ! docker ps --format '{{.Ports}}' 2>/dev/null | grep -Eq "(^|:)$backend_port->"; then
+      ui_fail "Port $backend_port jest już zajęty."
+      failed=1
+    else
+      ui_info "Port $backend_port jest używany przez istniejący stack Docker; reinstalacja może go przejąć."
+    fi
+  else
+    ui_ok "Port $backend_port jest dostępny."
+  fi
+
+  ((failed == 0))
+}
+
+docker_certificate_key_matches() {
+  local cert_public key_public
+  cert_public=$(openssl x509 -in "$1" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  key_public=$(openssl pkey -in "$2" -pubout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  [[ -n "$cert_public" && "$cert_public" == "$key_public" ]]
+}
+
+docker_certificate_matches_host() {
+  if [[ "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    openssl x509 -in "$1" -noout -checkip "$backend_host" >/dev/null 2>&1
+  else
+    openssl x509 -in "$1" -noout -checkhost "$backend_host" >/dev/null 2>&1
+  fi
+}
+
+docker_generate_managed_tls() {
+  local san="DNS:$backend_host"
+  [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
+  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
+    -keyout "$docker_tls/server.key" -out "$docker_tls/server.crt" \
+    -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
+  chmod 0600 "$docker_tls/server.crt" "$docker_tls/server.key"
+  printf '%s\n' "$backend_host" > "$docker_tls/host"
+  printf '%s\n' managed-self-signed > "$docker_tls/source"
+}
+
 docker_compose_detect() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     DOCKER_COMPOSE=(docker compose)
@@ -259,18 +337,16 @@ docker_compose_detect() {
 
 docker_install_dependencies() {
   local need_install=0
-  for command in curl tar openssl docker; do
-    command -v "$command" >/dev/null 2>&1 || need_install=1
-  done
+  command -v docker >/dev/null 2>&1 || need_install=1
   docker_compose_detect || need_install=1
   ((need_install == 0)) && return 0
 
-  ui_info 'Brakuje części zależności Docker; próbuję zainstalować je z repozytoriów systemowych.'
+  ui_info 'Docker Engine/Compose nie jest kompletny; instaluję runtime po zakończonym preflight.'
   case "$os_family" in
     debian)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
-      apt-get install -y ca-certificates curl tar openssl docker.io
+      apt-get install -y ca-certificates docker.io
       if ! docker compose version >/dev/null 2>&1; then
         if apt-cache show docker-compose-v2 >/dev/null 2>&1; then
           apt-get install -y docker-compose-v2
@@ -282,7 +358,6 @@ docker_install_dependencies() {
       fi
       ;;
     rhel)
-      dnf install -y ca-certificates curl tar openssl
       if ! command -v docker >/dev/null 2>&1; then
         ui_fail 'Na RHEL zainstaluj Docker Engine oraz Docker Compose plugin zgodnie z polityką serwera, następnie uruchom instalator ponownie z --docker.'
         exit 1
@@ -445,17 +520,12 @@ docker_install() {
   [[ -z "$backup_schedule" ]] || { ui_fail '--enable-backups/--disable-backups dotyczą instalacji natywnej; tryb --docker nie zarządza jeszcze harmonogramem backupu.'; exit 2; }
 
   ui_stage 1 "$stages" 'Pretest Docker'
+  docker_preflight || exit 1
+  ui_ok 'Pretest zakończony bez zmian w systemie.'
   docker_install_dependencies
   docker info >/dev/null
   docker_compose_detect
   ui_ok "Docker Engine i Compose są dostępne: ${DOCKER_COMPOSE[*]}"
-
-  if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$backend_port$"; then
-    if ! docker ps --format '{{.Ports}}' 2>/dev/null | grep -Eq "(^|:)$backend_port->"; then
-      ui_fail "Port $backend_port jest już zajęty przez proces spoza stacka Cloudportal."
-      exit 1
-    fi
-  fi
 
   ui_stage 2 "$stages" 'Pobieranie aplikacji'
   install -d -m 0755 "$docker_root" "$docker_root/releases"
@@ -506,20 +576,35 @@ EOF
   if [[ -n "$cert_file" ]]; then
     install -m 0600 "$cert_file" "$docker_tls/server.crt"
     install -m 0600 "$cert_key" "$docker_tls/server.key"
+    docker_certificate_key_matches "$docker_tls/server.crt" "$docker_tls/server.key" || {
+      ui_fail 'Własny certyfikat TLS i klucz nie pasują do siebie.'
+      exit 1
+    }
+    openssl x509 -in "$docker_tls/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
+      ui_fail 'Własny certyfikat TLS jest nieważny albo wygasa w ciągu 5 minut.'
+      exit 1
+    }
+    docker_certificate_matches_host "$docker_tls/server.crt" || {
+      ui_fail "Własny certyfikat TLS nie obejmuje hosta $backend_host."
+      exit 1
+    }
     printf '%s\n' custom > "$docker_tls/source"
+    printf '%s\n' "$backend_host" > "$docker_tls/host"
   else
-    local regenerate_tls=0 previous_tls_host=''
-    [[ -r "$docker_tls/host" ]] && previous_tls_host=$(cat "$docker_tls/host")
+    local regenerate_tls=0 previous_tls_host='' previous_tls_source=''
+    [[ -r "$docker_tls/host" ]] && previous_tls_host=$(tr -d '\r\n' < "$docker_tls/host")
+    [[ -r "$docker_tls/source" ]] && previous_tls_source=$(tr -d '\r\n' < "$docker_tls/source")
     [[ -r "$docker_tls/server.crt" && -r "$docker_tls/server.key" ]] || regenerate_tls=1
+    [[ "$previous_tls_source" == managed-self-signed ]] || regenerate_tls=1
     [[ "$previous_tls_host" == "$backend_host" ]] || regenerate_tls=1
+    if ((regenerate_tls == 0)); then
+      openssl x509 -in "$docker_tls/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate_tls=1
+      docker_certificate_matches_host "$docker_tls/server.crt" || regenerate_tls=1
+      docker_certificate_key_matches "$docker_tls/server.crt" "$docker_tls/server.key" || regenerate_tls=1
+    fi
     if ((regenerate_tls)); then
-      local san="DNS:$backend_host"
-      [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
-      openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365         -keyout "$docker_tls/server.key" -out "$docker_tls/server.crt"         -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
-      chmod 0600 "$docker_tls/server.crt" "$docker_tls/server.key"
-      printf '%s\n' "$backend_host" > "$docker_tls/host"
-      printf '%s\n' managed-self-signed > "$docker_tls/source"
-      ui_info "Wygenerowano self-signed TLS dla $backend_host."
+      docker_generate_managed_tls
+      ui_info "Wygenerowano lub odnowiono self-signed TLS dla $backend_host."
     fi
   fi
   ui_ok "Konfiguracja Docker: $docker_env"
