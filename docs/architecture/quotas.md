@@ -74,6 +74,17 @@ Resolution is conservative:
 - Day-2 resize/disk uncertainty is not inferred from mere VM presence and must
   be reconciled from the actual operation/provider result.
 
+When a worker heartbeat is lost after an initial Terraform apply, the dispatcher
+automatically resumes the job only when persisted Terraform state/inventory and
+quota accounting independently confirm that the provider-side create completed.
+The recovery job has explicit retry lineage, restores the persisted state and
+skips the already-confirmed `terraform apply`, so post-provisioning workflow work
+can continue without creating a second VM. Automatic resume is bounded by
+`CP_WORKER_AUTO_RESUME_MAX_ATTEMPTS` (default 3) and can be disabled with
+`CP_WORKER_AUTO_RESUME_ENABLED=false`.
+
+Update/re-apply uncertainty remains fail-closed: VM presence alone does not prove
+CPU/RAM/disk changes completed, so those reservations are not auto-resumed.
 Manual reconciliation remains available for `uncertain` reservations when an
 operator has independent evidence unavailable to the automatic paths.
 
