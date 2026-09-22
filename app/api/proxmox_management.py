@@ -16,7 +16,7 @@ from app.api.common import find, idempotent
 from app.api.schemas import Input, Name, Slug
 from app.config import settings
 from app.database import get_db, session as db_session
-from app.models import Credential, ManagedVM, Provider
+from app.models import Credential, ManagedResource, ManagedVM, Provider
 from app.providers.registry import provider_for
 from app.providers.task_reconcile import track_proxmox_task
 from app.security.core import audit, redis_client
@@ -172,9 +172,34 @@ def ensure_not_terraform_managed(row, action):
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/status')
 def vm_status(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('vms.read')),
               db=Depends(get_db, scope='function')):
-    data = adapter(db, provider_id).vm_status(node, vmid)
+    provider = adapter(db, provider_id)
+    data = provider.vm_status(node, vmid)
     allowed = 'vmid name status qmpstatus cpu cpus mem maxmem disk maxdisk uptime pid lock template tags'.split()
-    return {key: value for key, value in data.items() if key in allowed}
+    result = {key: value for key, value in data.items() if key in allowed}
+
+    primary_ip = None
+    managed = managed_vm_record(db, provider_id, vmid)
+    if managed is not None and managed.deployment_id:
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == managed.deployment_id,
+            ManagedResource.lifecycle_status == 'active',
+        ))
+        if resource is not None and resource.primary_ip:
+            primary_ip = str(resource.primary_ip)
+
+    if primary_ip is None and str(result.get('status') or '').lower() == 'running':
+        try:
+            addresses = provider.guest_addresses(node, vmid) or []
+        except Exception:
+            addresses = []
+        ipv4 = [str(address) for address in addresses if ':' not in str(address)]
+        if ipv4:
+            primary_ip = ipv4[0]
+        elif addresses:
+            primary_ip = str(addresses[0])
+
+    result['primary_ip'] = primary_ip
+    return result
 
 
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/power')

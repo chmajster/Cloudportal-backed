@@ -242,11 +242,36 @@ function vmUsageBar(label, used, total, formatter = value => String(value)) {
     node('small', { text: valid ? `${Math.round(percent)}%` : 'Brak danych' }));
 }
 
+function vmRuntimeState(status, item) {
+  const qmpState = String(status.qmpstatus || '').trim().toLowerCase();
+  if (qmpState === 'paused') return 'paused';
+  return String(status.status || item.live?.status || 'unknown').trim().toLowerCase();
+}
+
+function vmRuntimeStateLabel(value) {
+  const labels = {
+    running: 'Uruchomiona',
+    stopped: 'Wyłączona',
+    paused: 'Wstrzymana',
+    suspended: 'Wstrzymana',
+  };
+  return labels[value] || statusLabel(value);
+}
+
+function vmRuntimeStateKind(value) {
+  if (value === 'running') return 'ok';
+  if (value === 'paused' || value === 'suspended') return 'warning';
+  if (value === 'stopped') return 'info';
+  return statusKind(value);
+}
+
 function vmOverviewContent(item, status) {
-  const stateValue = status.status || item.live?.status || 'unknown';
+  const stateValue = vmRuntimeState(status, item);
+  const primaryIp = status.primary_ip || item.primary_ip || '—';
   return node('div', { class: 'vm-detail-stack' },
     node('div', { class: 'vm-overview-grid' },
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'Stan' }), badge(statusLabel(stateValue), statusKind(stateValue)), node('small', { text: item.node || '—' })),
+      node('section', { class: 'vm-stat-card' }, node('span', { text: 'Stan' }), badge(vmRuntimeStateLabel(stateValue), vmRuntimeStateKind(stateValue)), node('small', { text: item.node || '—' })),
+      node('section', { class: 'vm-stat-card' }, node('span', { text: 'IP' }), node('strong', { class: 'mono', text: primaryIp }), node('small', { text: primaryIp === '—' ? 'Brak adresu z inventory/QEMU Agent' : 'Adres podstawowy VM' })),
       node('section', { class: 'vm-stat-card' }, node('span', { text: 'CPU' }), node('strong', { text: String(status.cpus ?? status.cpu ?? '—') }), node('small', { text: 'vCPU' })),
       node('section', { class: 'vm-stat-card' }, node('span', { text: 'RAM' }), node('strong', { text: status.maxmem ? formatBytes(status.maxmem) : '—' }), node('small', { text: status.mem ? `używane ${formatBytes(status.mem)}` : 'brak telemetryki' })),
       node('section', { class: 'vm-stat-card' }, node('span', { text: 'Dysk' }), node('strong', { text: status.maxdisk ? formatBytes(status.maxdisk) : '—' }), node('small', { text: status.disk ? `używane ${formatBytes(status.disk)}` : 'brak telemetryki' })),
@@ -264,6 +289,7 @@ function vmOverviewContent(item, status) {
         info('Nazwa', status.name || item.name || `VM ${item.vm_id}`),
         info('Node', item.node || status.node || '—'),
         info('VMID', String(item.vm_id)),
+        info('Adres IP', primaryIp),
         info('Tagi', status.tags || '—'),
         info('Tryb zarządzania', statusLabel(item.management_mode)),
         info('Lifecycle', statusLabel(item.lifecycle_status)))));
