@@ -44,11 +44,13 @@ Pełna pomoc:
 
 Jeżeli nowy instalator wykryje aktywny `/run/cloudportal-install.lock`, domyślnie przejmuje instalację: zatrzymuje usługi aplikacji Cloudportal (API, dispatcher, workery oraz updater), kończy poprzedni proces instalatora i po zwolnieniu blokady kontynuuje instalację. Blokada jest teraz utrzymywana przez osobny proces `flock --close`, dzięki czemu nie jest dziedziczona przez `apt`, `curl`, `systemctl`, Pythona, Terraform ani inne procesy potomne. Dla zgodności ze starymi uruchomieniami instalator dodatkowo skanuje `/proc/*/fd`, więc potrafi znaleźć lock niewidoczny w `lslocks`. Zachowanie można wyłączyć przez `--no-takeover`.
 
-Awaryjne usunięcie runtime Cloudportal z zachowaniem bazy, konfiguracji i danych:
+Odinstalowanie Cloudportal z zachowaniem bazy, konfiguracji i danych:
 
 ```bash
 curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --uninstall
 ```
+
+Instalator wyświetli potwierdzenie przed usunięciem runtime, jednostek systemd, konfiguracji Nginx i helperów Cloudportal. PostgreSQL, Redis/Valkey, Nginx, Terraform i Ansible pozostają zainstalowane, ponieważ mogą być współdzielone z innymi aplikacjami.
 
 Pełny, destrukcyjny reset razem z bazą PostgreSQL, `/etc/cloudportal-backed`, `/var/lib/cloudportal-backed`, backupami i użytkownikiem systemowym:
 
@@ -56,7 +58,13 @@ Pełny, destrukcyjny reset razem z bazą PostgreSQL, `/etc/cloudportal-backed`, 
 curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' | sudo bash -s -- --uninstall --purge-data
 ```
 
-`--purge-data` działa wyłącznie razem z `--force-uninstall`.
+Przy `--purge-data` trzeba wpisać `USUN`. W automatyzacji użyj jawnego `--yes`:
+
+```bash
+sudo ./install.sh --non-interactive --uninstall --purge-data --yes
+```
+
+`--purge-data` działa wyłącznie razem z `--uninstall`. Historyczny `--force-uninstall` pozostaje aliasem zgodnościowym dla `--uninstall --yes`.
 
 
 Instalacja z interfejsem terminalowym `dialog` jest uruchamiana jawnie przez `--gui` lub alias `-gui`. Działa również przy `curl | sudo bash`, ponieważ formularze czytają wejście bezpośrednio z `/dev/tty`. GUI pozwala ustawić host, port HTTPS, liczbę workerów, backup i retencję, a przed zmianami pokazuje podsumowanie:

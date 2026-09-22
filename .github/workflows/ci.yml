@@ -96,10 +96,26 @@ jobs:
           test "$tls_before" != "$tls_after"
           sudo openssl x509 -in /etc/cloudportal-backed/tls/server.crt -noout -checkip 127.0.0.1
           sudo python3 scripts/installer-smoke.py --verify-only
+
+          sudo ./install.sh --non-interactive --uninstall --yes > /tmp/cloudportal-uninstall-output 2>&1
+          sudo test ! -e /opt/cloudportal-backed
+          sudo test ! -e /etc/systemd/system/cloudportal-api.service
+          sudo test ! -e /etc/nginx/conf.d/cloudportal-backed.conf
+          sudo test -d /etc/cloudportal-backed
+          sudo test -d /var/lib/cloudportal-backed
+          id cloudportal >/dev/null
+
+          sudo ./install.sh --non-interactive --uninstall --purge-data --yes > /tmp/cloudportal-purge-output 2>&1
+          sudo test ! -e /etc/cloudportal-backed
+          sudo test ! -e /var/lib/cloudportal-backed
+          sudo test ! -e /var/backups/cloudportal-backed
+          ! id cloudportal >/dev/null 2>&1
+          ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='cloudportal'" | grep -qx 1
+          ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='cloudportal'" | grep -qx 1
       - name: Sanitized service diagnostics
         if: failure()
         run: |
-          for output in /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output; do
+          for output in /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output /tmp/cloudportal-uninstall-output /tmp/cloudportal-purge-output; do
             if sudo test -f "$output"; then
               echo "Installer diagnostics: $output"
               sudo sed -E \
@@ -116,4 +132,4 @@ jobs:
           sudo openssl x509 -in /etc/cloudportal-backed/tls/server.crt -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true
       - name: Remove installer diagnostics
         if: always()
-        run: sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output
+        run: sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output /tmp/cloudportal-uninstall-output /tmp/cloudportal-purge-output

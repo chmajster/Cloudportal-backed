@@ -29,7 +29,9 @@ def test_installer_has_preflight_status_help_and_uninstall_modes():
     assert 'Połączenie HTTPS z api.github.com' in INSTALLER
     assert 'Wolne miejsce:' in INSTALLER
     assert '--status) status_mode=1' in INSTALLER
-    assert '--force-uninstall|--uninstall) force_uninstall=1' in INSTALLER
+    assert '--uninstall) uninstall_mode=1' in INSTALLER
+    assert '--force-uninstall) uninstall_mode=1; assume_yes=1' in INSTALLER
+    assert '--yes|-y) assume_yes=1' in INSTALLER
     assert '--help|-h) usage; exit 0' in INSTALLER
     assert 'show_status()' in INSTALLER
 
@@ -56,6 +58,7 @@ def test_help_is_plain_text_without_ansi_sequences():
     assert '--status' in result.stdout
     assert '--uninstall' in result.stdout
     assert '--non-interactive' in result.stdout
+    assert '--yes, -y' in result.stdout
 
 
 
