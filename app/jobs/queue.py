@@ -235,7 +235,7 @@ def reconcile_stale_jobs(db):
         job.status = 'failed'
         if resumed is not None:
             job.error = (
-                'Worker heartbeat lost. Persisted Terraform state confirmed the provider apply; '
+                'Worker heartbeat lost. Persisted Terraform state and quota were reconciled; '
                 f'automatic resume queued as job {resumed.id}.'
             )
         else:
