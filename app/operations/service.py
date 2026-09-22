@@ -179,6 +179,14 @@ def materialize_scheduled_jobs():
                         error.detail.get('message', 'Quota policy rejected the scheduled operation')
                         if isinstance(error.detail, dict) else 'Quota policy rejected the scheduled operation'
                     )
+                    schedule.last_run_at = current_time
+                    if schedule.interval_seconds:
+                        next_run = schedule.next_run_at
+                        while next_run <= current_time:
+                            next_run += timedelta(seconds=schedule.interval_seconds)
+                        schedule.next_run_at = next_run
+                    else:
+                        schedule.is_active = False
                     continue
             schedule.last_run_at = current_time
             schedule.last_error = None
