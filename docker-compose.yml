@@ -8,6 +8,7 @@ x-backend: &backend
     CP_REDIS_URL: redis://redis:6379/0
     CP_MASTER_KEY_FILE: /etc/cloudportal-backed/master.key
     CP_DATA_DIR: /var/lib/cloudportal-backed
+    CP_WORKER_COUNT: ${CP_WORKER_COUNT:-1}
   volumes:
     - backend-config:/etc/cloudportal-backed
     - backend-data:/var/lib/cloudportal-backed
