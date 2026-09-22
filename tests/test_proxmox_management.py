@@ -42,6 +42,7 @@ def test_proxmox_vm_lifecycle_routes(client, headers, monkeypatch):
     monkeypatch.setattr(ProxmoxProvider, 'vm_status', lambda self, node, vmid: {
         'vmid': vmid, 'name': 'vm01', 'status': 'running', 'secret': 'never-return'
     })
+    monkeypatch.setattr(ProxmoxProvider, 'guest_addresses', lambda self, node, vmid: ['192.0.2.101'])
     monkeypatch.setattr(ProxmoxProvider, 'vm_power', lambda self, node, vmid, action: calls.append(('power', node, vmid, action)) or 'UPID:power')
     monkeypatch.setattr(ProxmoxProvider, 'snapshots', lambda self, node, vmid: [
         {'name': 'baseline', 'description': 'safe', 'snaptime': 1, 'secret': 'never-return'}
@@ -63,6 +64,7 @@ def test_proxmox_vm_lifecycle_routes(client, headers, monkeypatch):
 
     status = client.get(base + '/status', headers=headers)
     assert status.status_code == 200 and status.json()['status'] == 'running'
+    assert status.json()['primary_ip'] == '192.0.2.101'
     assert 'secret' not in status.json()
 
     power = client.post(base + '/power', headers=headers, json={'action': 'reboot'})
