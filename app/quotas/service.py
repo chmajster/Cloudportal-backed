@@ -64,6 +64,15 @@ def _positive(deltas: Mapping[str, int]) -> dict[str, int]:
     return {key: max(0, int(value)) for key, value in deltas.items() if int(value) > 0}
 
 
+def _nonnegative_int(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def _scope(row) -> Scope:
     return Scope(str(row.tenant_id), str(row.project_id))
 
@@ -189,6 +198,7 @@ def quota_snapshot(db, scope: Scope):
 def set_project_limit(db, scope: Scope, dimension: str, limit_value: int):
     dimension = _dimension(dimension)
     _lock_scope(db, scope)
+    _ensure_limit_accountable(db, scope, dimension, tenant_wide=False)
     if isinstance(limit_value, bool) or int(limit_value) < 0:
         fail(422, 'INVALID_QUOTA_VALUE', 'Quota limit must be a non-negative integer')
     row = _project_limit(db, scope, dimension, lock=True)
@@ -215,6 +225,7 @@ def set_project_limit(db, scope: Scope, dimension: str, limit_value: int):
 def set_tenant_limit(db, scope: Scope, dimension: str, limit_value: int):
     dimension = _dimension(dimension)
     _lock_scope(db, scope)
+    _ensure_limit_accountable(db, scope, dimension, tenant_wide=True)
     if isinstance(limit_value, bool) or int(limit_value) < 0:
         fail(422, 'INVALID_QUOTA_VALUE', 'Quota limit must be a non-negative integer')
     row = _tenant_limit(db, scope, dimension, lock=True)
@@ -234,6 +245,24 @@ def set_tenant_limit(db, scope: Scope, dimension: str, limit_value: int):
         fail(409, 'QUOTA_LIMIT_BELOW_COMMITTED_USAGE',
              'Quota limit cannot be lower than committed plus reserved usage')
     row.limit_value = int(limit_value)
+    return row
+
+
+def clear_project_limit(db, scope: Scope, dimension: str):
+    dimension = _dimension(dimension)
+    _lock_scope(db, scope)
+    row = _project_limit(db, scope, dimension, lock=True)
+    if row is not None:
+        db.delete(row)
+    return row
+
+
+def clear_tenant_limit(db, scope: Scope, dimension: str):
+    dimension = _dimension(dimension)
+    _lock_scope(db, scope)
+    row = _tenant_limit(db, scope, dimension, lock=True)
+    if row is not None:
+        db.delete(row)
     return row
 
 
@@ -458,23 +487,99 @@ def reconcile_reservation(db, reservation_id: str, outcome: str):
     fail(422, 'INVALID_RECONCILIATION_OUTCOME', 'Outcome must be commit or release')
 
 
+def _provider_unresolved_dimensions(provider: str) -> set[str]:
+    provider = str(provider or '').lower()
+    if provider in {'proxmox', 'vmware'}:
+        return set()
+    if provider in {'aws', 'azure'}:
+        return {'vcpu', 'memory_mb'}
+    if provider == 'openstack':
+        return {'vcpu', 'memory_mb', 'disk_gib'}
+    return {'vcpu', 'memory_mb', 'disk_gib'}
+
+
+def deployment_unresolved_dimensions(deployment: Deployment) -> set[str]:
+    return _provider_unresolved_dimensions(deployment.provider)
+
+
 def deployment_dimensions(deployment: Deployment) -> dict[str, int]:
     values = dict(deployment.variables or {})
+    provider = str(deployment.provider or '').lower()
     result = {'vm_count': 1}
-    if values.get('cpu') is not None:
-        result['vcpu'] = max(0, int(values['cpu']))
-    if values.get('memory') is not None:
-        result['memory_mb'] = max(0, int(values['memory']))
-    disk = values.get('disk', values.get('os_disk_size_gb'))
-    if disk is not None:
-        result['disk_gib'] = max(0, int(disk))
-    return {key: value for key, value in result.items() if value}
+    if provider in {'proxmox', 'vmware'}:
+        cpu = _nonnegative_int(values.get('cpu'))
+        memory = _nonnegative_int(values.get('memory'))
+        disk = _nonnegative_int(values.get('disk'))
+        if cpu:
+            result['vcpu'] = cpu
+        if memory:
+            result['memory_mb'] = memory
+        if disk:
+            result['disk_gib'] = disk
+    elif provider == 'aws':
+        disk = _nonnegative_int(values.get('root_volume_size'))
+        if disk:
+            result['disk_gib'] = disk
+    elif provider == 'azure':
+        disk = _nonnegative_int(values.get('os_disk_size_gb'))
+        if disk:
+            result['disk_gib'] = disk
+    return result
+
+
+def active_limit_dimensions(db, scope: Scope) -> set[str]:
+    return {
+        dimension
+        for dimension in DIMENSIONS
+        if _tenant_limit(db, scope, dimension) is not None
+        or _project_limit(db, scope, dimension) is not None
+    }
+
+
+def require_governed_legacy_mutation(db, scope: Scope, dimensions, action: str):
+    blocked = sorted(active_limit_dimensions(db, scope) & set(dimensions))
+    if blocked:
+        fail(
+            409,
+            'QUOTA_GOVERNED_ACTION_REQUIRED',
+            f"{action} must use the governed Day-2/provisioning path while quota is active for: {', '.join(blocked)}",
+        )
+
+
+def _ensure_limit_accountable(db, scope: Scope, dimension: str, *, tenant_wide: bool):
+    if dimension == 'vm_count':
+        return
+    table = Deployment.__table__
+    query = select(table.c.id, table.c.provider).where(
+        table.c.tenant_id == scope.tenant_id,
+        table.c.destroyed_at.is_(None),
+    )
+    if not tenant_wide:
+        query = query.where(table.c.project_id == scope.project_id)
+    unresolved = [
+        row.id for row in db.connection().execute(query)
+        if dimension in _provider_unresolved_dimensions(row.provider)
+    ]
+    if unresolved:
+        fail(
+            409,
+            'QUOTA_DIMENSION_UNRESOLVED',
+            f'Cannot enable {dimension} quota while active deployments use provider shapes '
+            f'that do not expose a normalized {dimension} value',
+        )
 
 
 def _job_quota(db, job: Job, deployment: Deployment):
     scope = Scope(job.tenant_id, job.project_id)
     current = allocation_dimensions(db, scope, 'deployment', deployment.id)
     if job.operation in {'terraform.apply', 'terraform.import'}:
+        unresolved = active_limit_dimensions(db, scope) & deployment_unresolved_dimensions(deployment)
+        if unresolved:
+            fail(
+                409,
+                'QUOTA_DIMENSION_UNRESOLVED',
+                'Quota admission cannot determine normalized capacity for: ' + ', '.join(sorted(unresolved)),
+            )
         target = deployment_dimensions(deployment)
     elif job.operation == 'terraform.destroy':
         target = {}
@@ -527,17 +632,17 @@ def mark_job_reservation_uncertain(db, job: Job):
     return mark_uncertain(db, row.id) if row else None
 
 
-def release_uncertain_for_subject(db, scope: Scope, subject_type: str, subject_id: str):
+def release_active_for_subject(db, scope: Scope, subject_type: str, subject_id: str):
     _lock_scope(db, scope)
     rows = db.scalars(select(QuotaReservation).where(
         QuotaReservation.tenant_id == scope.tenant_id,
         QuotaReservation.project_id == scope.project_id,
         QuotaReservation.subject_type == subject_type,
         QuotaReservation.subject_id == str(subject_id),
-        QuotaReservation.status == 'uncertain',
+        QuotaReservation.status.in_(ACTIVE_RESERVATION_STATES),
     ).with_for_update()).all()
     for row in rows:
-        release_reservation(db, row.id, reconciled=True)
+        release_reservation(db, row.id, reconciled=(row.status == 'uncertain'))
     return len(rows)
 
 
@@ -586,8 +691,8 @@ def reconcile_terraform_presence(db, scope: Scope, subject_id: str, *, present: 
 def account_confirmed_absent(db, scope: Scope, subject_type: str, subject_id: str,
                              request_key: str, created_by: int | None):
     # A confirmed destroy is stronger evidence than a stale/uncertain create.
-    # Release uncertain positive reservations first, then remove committed usage.
-    release_uncertain_for_subject(db, scope, subject_type, subject_id)
+    # Release every active positive reservation first, then remove committed usage.
+    release_active_for_subject(db, scope, subject_type, subject_id)
     current = allocation_dimensions(db, scope, subject_type, subject_id)
     if not current:
         return None
@@ -610,13 +715,7 @@ def _target_scope_and_subject(db, target):
 
 
 def _quota_limits_exist(db, scope: Scope):
-    return (
-        db.scalar(select(TenantQuotaLimit.id).where(TenantQuotaLimit.tenant_id == scope.tenant_id).limit(1)) is not None
-        or db.scalar(select(ProjectQuotaLimit.id).where(
-            ProjectQuotaLimit.tenant_id == scope.tenant_id,
-            ProjectQuotaLimit.project_id == scope.project_id,
-        ).limit(1)) is not None
-    )
+    return bool(active_limit_dimensions(db, scope))
 
 
 def day2_delta(db, target, action: str, params: Mapping, current: Mapping | None = None):
@@ -654,7 +753,7 @@ def day2_delta(db, target, action: str, params: Mapping, current: Mapping | None
             deltas['disk_gib'] = -max(0, size)
     elif action == 'delete_vm':
         deltas = {key: -value for key, value in allocation.items()}
-    elif action == 'clone_vm' and _quota_limits_exist(db, scope):
+    elif action == 'clone_vm':
         fail(409, 'QUOTA_GOVERNED_CLONE_REQUIRED',
              'Clone must use governed provisioning so the new resource receives its own quota allocation')
     return QuotaDelta(scope, subject_type, subject_id, 'day2.' + action,
@@ -666,7 +765,17 @@ def check_day2(db, target, action: str, params: Mapping, current: Mapping | None
     checks = check_delta(db, quota.scope, quota.deltas)
     denied = next((item for item in checks if not item['allowed']), None)
     if denied:
-        code = 'PROJECT_QUOTA_EXCEEDED' if denied['project_limit'] is not None else 'TENANT_QUOTA_EXCEEDED'
+        tenant_exceeded = (
+            denied['tenant_limit'] is not None
+            and denied['tenant_after_reserve'] > denied['tenant_limit']
+        )
+        project_exceeded = (
+            denied['project_limit'] is not None
+            and denied['project_after_reserve'] > denied['project_limit']
+        )
+        code = 'TENANT_QUOTA_EXCEEDED' if tenant_exceeded else (
+            'PROJECT_QUOTA_EXCEEDED' if project_exceeded else 'QUOTA_ACCOUNTING_CONFLICT'
+        )
         fail(409, code, f"Quota exceeded for {denied['dimension']}")
     return quota, checks
 
