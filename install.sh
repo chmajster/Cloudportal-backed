@@ -536,31 +536,138 @@ preflight_checks() {
   }
 }
 
-force_uninstall_cloudportal() {
-  ui_stage 1 3 'Zatrzymanie usług i procesów'
-  ui_warn 'FORCE UNINSTALL: zatrzymuję runtime Cloudportal i stare procesy instalatora...'
+confirm_uninstall() {
+  ((assume_yes)) && return 0
+
+  if ((non_interactive)); then
+    ui_fail 'Tryb --non-interactive z --uninstall wymaga jawnego --yes.'
+    exit 2
+  fi
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    ui_fail 'Brak interaktywnego terminala do potwierdzenia deinstalacji. Uruchom ponownie z --yes.'
+    exit 2
+  fi
+
+  local answer=''
+  if ((purge_data)); then
+    ui_warn 'Ta operacja usunie bazę PostgreSQL, konfigurację, dane, backupy i użytkownika systemowego cloudportal.'
+    printf 'Wpisz USUN, aby potwierdzić pełne usunięcie: ' >/dev/tty
+    IFS= read -r answer </dev/tty || true
+    if [[ "$answer" != 'USUN' ]]; then
+      ui_info 'Deinstalacja anulowana.'
+      exit 0
+    fi
+    return 0
+  fi
+
+  printf 'Odinstalować runtime Cloudportal i zachować bazę oraz dane? [y/N] ' >/dev/tty
+  IFS= read -r answer </dev/tty || true
+  case "$answer" in
+    y|Y|yes|YES|tak|TAK) return 0 ;;
+    *) ui_info 'Deinstalacja anulowana.'; exit 0 ;;
+  esac
+}
+
+verify_uninstall() {
+  local leftovers=0 path
+  local runtime_paths=(
+    "$app_root"
+    /usr/local/lib/cloudportal-updater
+    /usr/local/sbin/cloudportal-backup
+    /usr/local/sbin/cloudportal-restore
+    /etc/nginx/conf.d/cloudportal-backed.conf
+    /etc/systemd/system/cloudportal-api.service
+    /etc/systemd/system/cloudportal-dispatcher.service
+    /etc/systemd/system/cloudportal-worker@.service
+    /etc/systemd/system/cloudportal-redis.service
+    /etc/systemd/system/cloudportal-backup.service
+    /etc/systemd/system/cloudportal-backup.timer
+    /etc/systemd/system/cloudportal-updater.service
+    /etc/systemd/system/cloudportal-updater.timer
+  )
+
+  for path in "${runtime_paths[@]}"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      ui_warn "Pozostałość po deinstalacji: $path"
+      leftovers=1
+    fi
+  done
+
+  if ((purge_data)); then
+    for path in "$config" "$data" /var/backups/cloudportal-backed; do
+      if [[ -e "$path" || -L "$path" ]]; then
+        ui_warn "Pozostałość danych po purge: $path"
+        leftovers=1
+      fi
+    done
+    if id cloudportal >/dev/null 2>&1; then
+      ui_warn 'Użytkownik systemowy cloudportal nadal istnieje.'
+      leftovers=1
+    fi
+    if command -v runuser >/dev/null 2>&1 && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+      if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='cloudportal'" 2>/dev/null | grep -qx 1; then
+        ui_warn 'Baza PostgreSQL cloudportal nadal istnieje.'
+        leftovers=1
+      fi
+      if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='cloudportal'" 2>/dev/null | grep -qx 1; then
+        ui_warn 'Rola PostgreSQL cloudportal nadal istnieje.'
+        leftovers=1
+      fi
+    fi
+  fi
+
+  ((leftovers == 0)) || {
+    ui_fail 'Deinstalacja pozostawiła elementy Cloudportal. Sprawdź komunikaty [WARN] powyżej.'
+    return 1
+  }
+  ui_ok 'Weryfikacja deinstalacji zakończona pomyślnie.'
+}
+
+uninstall_cloudportal() {
+  ui_stage 1 4 'Blokada i zatrzymanie usług'
+  ui_info 'Przejmuję blokadę instalatora i zatrzymuję usługi Cloudportal.'
+  acquire_install_lock
   stop_cloudportal_application
-  stop_previous_installer TERM
-  sleep 2
-  stop_previous_installer KILL
 
   if id cloudportal >/dev/null 2>&1; then
     pkill -TERM -u cloudportal >/dev/null 2>&1 || true
     sleep 1
     pkill -KILL -u cloudportal >/dev/null 2>&1 || true
   fi
+  ui_ok 'Procesy aplikacji zostały zatrzymane.'
 
+  ui_stage 2 4 'Usunięcie runtime i integracji systemowej'
   local worker_units=()
   mapfile -t worker_units < <(
-    systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null       | awk '{print $1}'       | grep -E '^cloudportal-worker@.+\.service$' || true
+    systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null |
+      awk '{print $1}' |
+      grep -E '^cloudportal-worker@.+\.service$' || true
   )
   if ((${#worker_units[@]})); then
     systemctl disable --now "${worker_units[@]}" >/dev/null 2>&1 || true
   fi
 
-  systemctl disable --now     cloudportal-api.service     cloudportal-dispatcher.service     cloudportal-redis.service     cloudportal-backup.timer     cloudportal-backup.service     cloudportal-updater.service >/dev/null 2>&1 || true
+  systemctl disable --now \
+    cloudportal-api.service \
+    cloudportal-dispatcher.service \
+    cloudportal-redis.service \
+    cloudportal-backup.timer \
+    cloudportal-backup.service \
+    cloudportal-updater.timer \
+    cloudportal-updater.service >/dev/null 2>&1 || true
 
-  rm -f     /etc/systemd/system/cloudportal-api.service     /etc/systemd/system/cloudportal-dispatcher.service     /etc/systemd/system/cloudportal-worker@.service     /etc/systemd/system/cloudportal-redis.service     /etc/systemd/system/cloudportal-backup.service     /etc/systemd/system/cloudportal-backup.timer     /etc/systemd/system/cloudportal-updater.service     /etc/systemd/system/cloudportal-updater.timer     /usr/local/sbin/cloudportal-backup     /usr/local/sbin/cloudportal-restore     /etc/nginx/conf.d/cloudportal-backed.conf
+  rm -f \
+    /etc/systemd/system/cloudportal-api.service \
+    /etc/systemd/system/cloudportal-dispatcher.service \
+    /etc/systemd/system/cloudportal-worker@.service \
+    /etc/systemd/system/cloudportal-redis.service \
+    /etc/systemd/system/cloudportal-backup.service \
+    /etc/systemd/system/cloudportal-backup.timer \
+    /etc/systemd/system/cloudportal-updater.service \
+    /etc/systemd/system/cloudportal-updater.timer \
+    /usr/local/sbin/cloudportal-backup \
+    /usr/local/sbin/cloudportal-restore \
+    /etc/nginx/conf.d/cloudportal-backed.conf
 
   systemctl daemon-reload
   systemctl reset-failed >/dev/null 2>&1 || true
@@ -577,21 +684,39 @@ force_uninstall_cloudportal() {
   fi
 
   rm -rf "$app_root" /usr/local/lib/cloudportal-updater
-  rm -f "$lock_file" "$lock_owner_file" /run/cloudportal-install.ready.*
+  rm -f /run/cloudportal-install.ready.*
+  ui_ok 'Runtime, jednostki systemd, helpery i konfiguracja Nginx zostały usunięte.'
 
-  ui_stage 3 3 'Polityka danych'
+  ui_stage 3 4 'Polityka danych'
   if ((purge_data)); then
-    ui_warn 'PURGE DATA: usuwam bazę Cloudportal, konfigurację, dane i backupy...'
-    if command -v runuser >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
-      runuser -u postgres -- dropdb --if-exists cloudportal >/dev/null 2>&1 || true
+    ui_warn 'PURGE DATA: usuwam lokalną bazę Cloudportal, konfigurację, dane i backupy.'
+    if command -v runuser >/dev/null 2>&1 && command -v dropdb >/dev/null 2>&1 \
+        && command -v dropuser >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+      runuser -u postgres -- dropdb --force --if-exists cloudportal >/dev/null 2>&1 || true
       runuser -u postgres -- dropuser --if-exists cloudportal >/dev/null 2>&1 || true
+    else
+      ui_warn 'Nie znaleziono lokalnych narzędzi PostgreSQL; nie można potwierdzić automatycznego usunięcia bazy/roli.'
     fi
     rm -rf "$config" "$data" /var/backups/cloudportal-backed
     userdel cloudportal >/dev/null 2>&1 || true
-    ui_ok 'Cloudportal usunięty razem z bazą i lokalnymi danymi.'
+    ui_ok 'Konfiguracja, dane, backupy i użytkownik systemowy zostały usunięte.'
   else
-    ui_ok 'Runtime Cloudportal usunięty. Baza, /etc/cloudportal-backed i /var/lib/cloudportal-backed zostały zachowane.'
-    ui_info 'Pełny reset: --uninstall --purge-data'
+    ui_ok 'Baza, konfiguracja i dane aplikacji zostały zachowane.'
+    ui_info "Konfiguracja: $config"
+    ui_info "Dane: $data"
+    ui_info 'Pełny reset wymaga: --uninstall --purge-data'
+  fi
+
+  ui_stage 4 4 'Weryfikacja'
+  verify_uninstall
+
+  ui_header 'Podsumowanie'
+  ui_ok 'Cloudportal-backed został odinstalowany.'
+  ui_info 'Pakiety współdzielone PostgreSQL, Redis/Valkey, Nginx, Terraform i Ansible nie są automatycznie usuwane.'
+  if ((purge_data)); then
+    ui_info 'Dane Cloudportal: usunięte.'
+  else
+    ui_info 'Dane Cloudportal: zachowane.'
   fi
 }
 
@@ -601,16 +726,16 @@ if ((status_mode)); then
   exit 0
 fi
 
-if ((force_uninstall)); then
+if ((uninstall_mode)); then
   CURRENT_STAGE='deinstalacja'
   ui_header 'Cloudportal-backed — deinstalacja'
   if ((purge_data)); then
     ui_warn 'Tryb PURGE: baza danych, konfiguracja, dane i backupy zostaną trwale usunięte.'
   else
-    ui_info 'Runtime zostanie usunięty, ale baza, konfiguracja i dane zostaną zachowane.'
+    ui_info 'Runtime i integracje systemowe zostaną usunięte; baza, konfiguracja i dane zostaną zachowane.'
   fi
-  force_uninstall_cloudportal
-  ui_ok 'Deinstalacja zakończona.'
+  confirm_uninstall
+  uninstall_cloudportal
   drain_script_input
   exit 0
 fi
