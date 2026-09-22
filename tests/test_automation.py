@@ -327,7 +327,7 @@ def test_blueprint_guest_credential_accepts_password_only_ssh_without_persisting
         assert password not in str(deployment.workflow)
         runtime_variables, runtime_password = guest_credential_runtime_variables(deployment)
     assert runtime_variables['ssh_username'] == 'vmadmin'
-    assert 'ssh_public_key' not in runtime_variables
+    assert runtime_variables['ssh_public_key'] is None
     assert runtime_password == password
 
 
