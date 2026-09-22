@@ -495,16 +495,17 @@ docker_prepare_github_curl() {
     local github_token
     github_token=$(tr -d '\r\n' < "$github_token_file")
     [[ "$github_token" =~ ^[A-Za-z0-9._-]{20,512}$ ]] || { ui_fail 'Token GitHub ma nieprawidłowy format.'; exit 1; }
-    printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$tmp_dir/curl.conf"
-    chmod 0600 "$tmp_dir/curl.conf"
+    printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$docker_tmp_dir/curl.conf"
+    chmod 0600 "$docker_tmp_dir/curl.conf"
     unset github_token
-    DOCKER_CURL_ARGS+=(--config "$tmp_dir/curl.conf")
+    DOCKER_CURL_ARGS+=(--config "$docker_tmp_dir/curl.conf")
   fi
 }
 
 docker_install() {
   ui_header 'Cloudportal-backed — instalacja Docker'
-  local stages=6 tmp_dir release_sha effective_tarball_url candidate_sha release
+  local stages=6 release_sha effective_tarball_url candidate_sha release
+  docker_tmp_dir=''
   backend_host=${backend_host:-$(hostname -f 2>/dev/null || hostname)}
   backend_port=${backend_port:-8443}
   workers=${workers:-1}
@@ -530,25 +531,25 @@ docker_install() {
   ui_stage 2 "$stages" 'Pobieranie aplikacji'
   install -d -m 0755 "$docker_root" "$docker_root/releases"
   install -d -m 0700 "$docker_config" "$docker_tls"
-  tmp_dir=$(mktemp -d)
-  trap 'rm -rf "$tmp_dir"' EXIT
-  docker_prepare_github_curl "$tmp_dir"
+  docker_tmp_dir=$(mktemp -d)
+  trap '[[ -z "${docker_tmp_dir:-}" ]] || rm -rf "$docker_tmp_dir"' EXIT
+  docker_prepare_github_curl "$docker_tmp_dir"
   ui_info "Pobieram kod źródłowy z GitHub: $repo @ $ref"
   release_sha=''
-  effective_tarball_url=$(curl "${DOCKER_CURL_ARGS[@]}" -w '%{url_effective}' "https://api.github.com/repos/$repo/tarball/$ref" -o "$tmp_dir/source.tar.gz") || {
+  effective_tarball_url=$(curl "${DOCKER_CURL_ARGS[@]}" -w '%{url_effective}' "https://api.github.com/repos/$repo/tarball/$ref" -o "$docker_tmp_dir/source.tar.gz") || {
     ui_fail 'Nie udało się pobrać kodu źródłowego z GitHub.'
     exit 1
   }
   candidate_sha=${effective_tarball_url##*/}
-  [[ "$candidate_sha" =~ ^[0-9a-fA-F]{40}$ ]] && release_sha=${candidate_sha,,} || release_sha=$(sha256sum "$tmp_dir/source.tar.gz" | awk '{print $1}')
-  mkdir "$tmp_dir/source"
-  tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/source" --strip-components=1 --no-same-owner
-  [[ -f "$tmp_dir/source/Dockerfile" && -f "$tmp_dir/source/docker-compose.yml" && -f "$tmp_dir/source/scripts/nginx-container.conf" ]] || {
+  [[ "$candidate_sha" =~ ^[0-9a-fA-F]{40}$ ]] && release_sha=${candidate_sha,,} || release_sha=$(sha256sum "$docker_tmp_dir/source.tar.gz" | awk '{print $1}')
+  mkdir "$docker_tmp_dir/source"
+  tar -xzf "$docker_tmp_dir/source.tar.gz" -C "$docker_tmp_dir/source" --strip-components=1 --no-same-owner
+  [[ -f "$docker_tmp_dir/source/Dockerfile" && -f "$docker_tmp_dir/source/docker-compose.yml" && -f "$docker_tmp_dir/source/scripts/nginx-container.conf" ]] || {
     ui_fail 'Pobrane archiwum nie zawiera kompletnej konfiguracji Docker Cloudportal.'
     exit 1
   }
   release=$(mktemp -d "$docker_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-${release_sha:0:12}-XXXXXX")
-  cp -a "$tmp_dir/source/." "$release/"
+  cp -a "$docker_tmp_dir/source/." "$release/"
   chmod -R go-w "$release"
   ln -sfn "$release" "$docker_root/current"
   ui_ok "Przygotowano release: $release"
@@ -650,6 +651,9 @@ EOF
   ui_info "Workery: $workers"
   ui_info 'Status: sudo ./install.sh --docker --status'
   ui_info 'Logi: docker compose -p cloudportal-backed logs'
+  rm -rf "$docker_tmp_dir"
+  docker_tmp_dir=''
+  trap - EXIT
 }
 
 if ((docker_mode)); then
