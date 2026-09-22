@@ -72,8 +72,14 @@ def credential_in_use(db, id, *, pending_only=False):
         deployments = deployments.where(Deployment.active_job_id.is_not(None))
     else:
         deployments = deployments.where(Deployment.status != 'destroyed')
-    if db.scalar(deployments.limit(1)) or db.scalar(select(Job.id).where(
-        Job.status.in_(['queued', 'running', 'cancelling']), Job.payload['ansible']['credentials_id'].as_integer() == id).limit(1)):
+    active_job_credential = select(Job.id).where(
+        Job.status.in_(['queued', 'running', 'cancelling']),
+        or_(
+            Job.payload['ansible']['credentials_id'].as_integer() == id,
+            Job.payload['blueprint']['guest_credential_id'].as_integer() == id,
+        ),
+    )
+    if db.scalar(deployments.limit(1)) or db.scalar(active_job_credential.limit(1)):
         return True
     if pending_only:
         return False
