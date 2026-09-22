@@ -6,11 +6,28 @@
       value.type === 'ssh' && value.supports_cloud_init_ssh_key === true);
   }
 
+  function guestSshCredentials(credentials = []) {
+    return credentials.filter(value =>
+      value.type === 'ssh'
+      && (
+        value.supports_cloud_init_ssh_key === true
+        || value.supports_cloud_init_password === true
+      ));
+  }
+
   function guestCredentialChoices(credentials = []) {
-    return keyBasedSshCredentials(credentials).map(value => ({
-      value: value.id,
-      label: value.name + (value.username ? ' · ' + value.username : '') + ' (#' + value.id + ')',
-    }));
+    return guestSshCredentials(credentials).map(value => {
+      const methods = [];
+      if (value.supports_cloud_init_password === true) methods.push('hasło');
+      if (value.supports_cloud_init_ssh_key === true) methods.push('klucz SSH');
+      return {
+        value: value.id,
+        label: value.name
+          + (value.username ? ' · ' + value.username : '')
+          + (methods.length ? ' · ' + methods.join(' + ') : '')
+          + ' (#' + value.id + ')',
+      };
+    });
   }
 
   function selectSnippetStorage(storages = [], current = '') {
@@ -94,6 +111,7 @@
   registerExtension('blueprint-provisioning-guards', () => {
     window.BlueprintProvisioningGuards = {
       keyBasedSshCredentials,
+      guestSshCredentials,
       guestCredentialChoices,
       selectSnippetStorage,
       syncWaitAgentControl,

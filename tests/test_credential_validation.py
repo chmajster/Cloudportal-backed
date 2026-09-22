@@ -87,6 +87,7 @@ def test_ssh_credential_reports_cloud_init_key_capability(client, headers):
     })
     assert password_only.status_code == 201, password_only.text
     assert password_only.json()['supports_cloud_init_ssh_key'] is False
+    assert password_only.json()['supports_cloud_init_password'] is True
 
     key_based = client.post('/api/v1/credentials', headers=headers, json={
         'name': 'SSH key capability',
@@ -97,9 +98,12 @@ def test_ssh_credential_reports_cloud_init_key_capability(client, headers):
     })
     assert key_based.status_code == 201, key_based.text
     assert key_based.json()['supports_cloud_init_ssh_key'] is True
+    assert key_based.json()['supports_cloud_init_password'] is False
 
     listed = client.get('/api/v1/credentials?limit=200', headers=headers)
     assert listed.status_code == 200, listed.text
     by_id = {row['id']: row for row in listed.json()['items']}
     assert by_id[password_only.json()['id']]['supports_cloud_init_ssh_key'] is False
+    assert by_id[password_only.json()['id']]['supports_cloud_init_password'] is True
     assert by_id[key_based.json()['id']]['supports_cloud_init_ssh_key'] is True
+    assert by_id[key_based.json()['id']]['supports_cloud_init_password'] is False

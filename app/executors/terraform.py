@@ -8,7 +8,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from app.catalog import resolve_template_source, template_definition, template_import_target
 from app.config import settings
+from app.credentials.ssh import public_key_from_private_key
+from app.database import session
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
+from app.models import Credential, now
 from app.security.core import decrypt_secret
 from app.terraform.state import distributed_deployment_lock, persist_state, restore_state
 
@@ -70,6 +73,42 @@ def mark_terraform_initialized(workspace, fingerprint, binary):
     temporary.write_text(json.dumps({'fingerprint': fingerprint, 'binary': binary}, sort_keys=True))
     os.chmod(temporary, 0o600)
     os.replace(temporary, marker)
+
+
+def guest_credential_runtime_variables(deployment):
+    """Resolve guest-login secrets only for the active Terraform execution.
+
+    The Blueprint/deployment stores only the credential id. A password is never
+    copied into deployment.variables or the job payload. A private key is never
+    passed to Terraform or the VM; only its derived public key is used.
+    """
+    blueprint = ((deployment.workflow or {}).get('blueprint') or {})
+    credential_id = blueprint.get('guest_credential_id')
+    if not credential_id:
+        return {}, None
+
+    with session() as db:
+        credential = db.get(Credential, int(credential_id))
+        if credential is None:
+            raise ExecutionFailed('Guest SSH credential is missing')
+        if credential.type != 'ssh':
+            raise ExecutionFailed('Guest credential must be an SSH credential')
+        if credential.expires_at is not None and credential.expires_at <= now():
+            raise ExecutionFailed('Guest SSH credential expired before VM provisioning')
+        if not credential.username:
+            raise ExecutionFailed('Guest SSH credential must define a username')
+        secret = decrypt_secret(credential)
+
+    private_key = secret.get('private_key')
+    password = secret.get('password')
+    if not private_key and not password:
+        raise ExecutionFailed('Guest SSH credential has no password or private key')
+
+    variables = {
+        'ssh_username': credential.username,
+        'ssh_public_key': public_key_from_private_key(private_key) if private_key else None,
+    }
+    return variables, password
 
 
 def proxmox_ssh_preflight(credential, env):
@@ -176,6 +215,16 @@ class TerraformExecutor(Executor):
             value for name, value in env.items()
             if name in {'PROXMOX_VE_SSH_PASSWORD', 'PROXMOX_VE_SSH_PRIVATE_KEY'} and value
         )
+        runtime_variables = dict(deployment.variables or {})
+        if operation in {'terraform.plan', 'terraform.apply'}:
+            guest_variables, guest_password = guest_credential_runtime_variables(deployment)
+            runtime_variables.update(guest_variables)
+            if guest_password:
+                # Keep the plaintext password out of deployment variables, job
+                # payloads and terraform.tfvars.json. Terraform reads it only from
+                # the process environment for this execution.
+                env['TF_VAR_ssh_password'] = guest_password
+                sensitive_values.append(guest_password)
         with distributed_deployment_lock(deployment.id):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
@@ -187,7 +236,7 @@ class TerraformExecutor(Executor):
                 if lock_source.exists() and not (workspace / '.terraform.lock.hcl').exists():
                     shutil.copyfile(lock_source, workspace / '.terraform.lock.hcl')
                 variables_path = workspace / 'terraform.tfvars.json'
-                variables_path.write_text(json.dumps(deployment.variables))
+                variables_path.write_text(json.dumps(runtime_variables))
                 os.chmod(variables_path, 0o600)
                 init_fingerprint = terraform_init_fingerprint(source, self.binary)
                 if terraform_init_ready(workspace, init_fingerprint, self.binary):
@@ -251,6 +300,7 @@ class TerraformExecutor(Executor):
                     if (workspace / 'terraform.tfstate').exists():
                         context.stage('terraform.state.persist')
                         persist_state(deployment.id, workspace)
+                    variables_path.unlink(missing_ok=True)
         return workspace
 
 

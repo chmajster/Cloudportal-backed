@@ -762,24 +762,22 @@
               })
         );
 
-        const guestCredentials = (data.credentials || []).filter(value =>
-          value.type === 'ssh' && value.supports_cloud_init_ssh_key === true);
+        const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(
+          data.credentials || []
+        );
         const guestCredentialField = selectField(
-          'Credential dostępu do VM',
+          'Credential ustawiany na VM',
           'guest_credential_id',
           [
             { value: '', label: 'Nie ustawiaj credentiala przez cloud-init' },
-            ...guestCredentials.map(value => ({
-              value: value.id,
-              label: value.name + (value.username ? ' · ' + value.username : ''),
-            })),
+            ...guestCredentialChoices,
           ],
           state.guestCredentialId,
           {
             wide: true,
-            help: guestCredentials.length
-              ? 'Po utworzeniu VM cloud-init ustawi użytkownika oraz publiczny klucz SSH wynikający z wybranego credentiala. Klucz prywatny nie trafia do Terraform ani do VM.'
-              : 'Brak credentiali SSH zawierających klucz prywatny. Credential password-only nie może zostać użyty do wstrzyknięcia klucza przez cloud-init.',
+            help: guestCredentialChoices.length
+              ? 'Cloud-init ustawi użytkownika z wybranego credentiala. Credential może używać hasła, klucza SSH albo obu. Klucz prywatny nigdy nie jest kopiowany do VM; przy logowaniu kluczem dodawany jest wyłącznie odpowiadający mu klucz publiczny.'
+              : 'Brak credentiali SSH z hasłem lub kluczem prywatnym dostępnych do ustawienia konta w VM.',
           }
         );
         guestCredentialField.querySelector('select').addEventListener('change', event => {

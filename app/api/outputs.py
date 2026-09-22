@@ -114,23 +114,6 @@ class IssuedResetOutput(Output):
     user_id: int
 
 
-class CredentialOutput(Output):
-    id: int
-    name: str
-    type: str
-    endpoint: str
-    username: str
-    verify_ssl: bool
-    expires_at: datetime | None
-    rotation_due_at: datetime | None
-    secret_updated_at: datetime | None
-    created_at: datetime
-    updated_at: datetime
-    configured: bool
-    supports_cloud_init_ssh_key: bool = False
-    secret: Literal['********']
-
-
 class ProviderOutput(Output):
     id: int
     name: str
@@ -245,12 +228,6 @@ class SSHHostKeyOutput(Output):
     key_type: str
     fingerprint: str
     known_hosts: str
-
-
-class SSHKeyBootstrapOutput(Output):
-    credential: CredentialOutput
-    public_key: str
-    fingerprint: str
 
 
 class CredentialTestOutput(Output):

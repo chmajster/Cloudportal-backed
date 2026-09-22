@@ -160,15 +160,21 @@ def guest_credential_cloud_init(db, credential_id):
         raise HTTPException(422, 'Guest SSH credential must define a username')
     secret = decrypt_secret(credential)
     private_key = secret.get('private_key')
-    if not private_key:
+    password = secret.get('password')
+    if not private_key and not password:
         raise HTTPException(
             422,
-            'Guest SSH credential must use a private key; password-only credentials cannot be injected by cloud-init',
+            'Guest SSH credential must contain a password, a private key, or both',
         )
     return {
         'id': credential.id,
         'username': credential.username,
-        'public_key': public_key_from_private_key(private_key),
+        # The private key is never copied to the VM. Only its derived public key
+        # can be persisted in non-secret deployment variables.
+        'public_key': public_key_from_private_key(private_key) if private_key else None,
+        # Password material is resolved again by the worker at execution time and
+        # is intentionally not returned here or persisted in the deployment/job.
+        'has_password': bool(password),
     }
 
 
@@ -192,7 +198,10 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     guest_credential = guest_credential_cloud_init(db, guest_credential_id)
     if guest_credential:
         deployment_variables['ssh_username'] = guest_credential['username']
-        deployment_variables['ssh_public_key'] = guest_credential['public_key']
+        if guest_credential['public_key']:
+            deployment_variables['ssh_public_key'] = guest_credential['public_key']
+        else:
+            deployment_variables['ssh_public_key'] = None
 
     tags = [str(tag).strip().lower() for tag in (deployment_variables.get('tags') or []) if str(tag).strip()]
 

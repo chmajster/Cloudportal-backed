@@ -275,16 +275,23 @@ def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, head
     assert protected.status_code == 409
 
 
-def test_blueprint_guest_credential_rejects_password_only_ssh(client, headers):
+def test_blueprint_guest_credential_accepts_password_only_ssh_without_persisting_password(client, headers):
+    from app.database import session
+    from app.executors.terraform import guest_credential_runtime_variables
+    from app.models import Deployment
+
     provider_credential, provider, deployment_payload = resources(client, headers)
+    password = 'temporary-password-1234'
     guest = client.post('/api/v1/credentials', headers=headers, json={
         'name': 'Password-only VM SSH',
         'type': 'ssh',
         'endpoint': 'ssh://vm.example.com:22',
         'username': 'vmadmin',
-        'secrets': {'password': 'temporary-password-1234'},
+        'secrets': {'password': password},
     })
     assert guest.status_code == 201, guest.text
+    assert guest.json()['supports_cloud_init_password'] is True
+    assert guest.json()['supports_cloud_init_ssh_key'] is False
 
     created = client.post('/api/v1/blueprints', headers=headers, json={
         'slug': 'password-only-guest',
@@ -301,8 +308,27 @@ def test_blueprint_guest_credential_rejects_password_only_ssh(client, headers):
         },
         'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
     })
-    assert created.status_code == 422
-    assert 'private key' in created.text.lower()
+    assert created.status_code == 201, created.text
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['variables']['ssh_username'] == 'vmadmin'
+    assert execution.json()['variables']['ssh_public_key'] is None
+    assert password not in execution.text
+    assert execution.json()['workflow']['blueprint']['guest_credential_id'] == guest.json()['id']
+
+    with session() as db:
+        deployment = db.get(Deployment, execution.json()['id'])
+        assert password not in str(deployment.variables)
+        assert password not in str(deployment.workflow)
+        runtime_variables, runtime_password = guest_credential_runtime_variables(deployment)
+    assert runtime_variables['ssh_username'] == 'vmadmin'
+    assert runtime_variables['ssh_public_key'] is None
+    assert runtime_password == password
 
 
 def test_blueprint_runtime_apmid_is_required_by_ui_and_applied_by_backend(client, headers):

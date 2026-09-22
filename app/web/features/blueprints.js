@@ -254,7 +254,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     const guestCredentialField = selectField('Credential ustawiany na VM', 'guest_credential_id',
       [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...guestCredentialChoices],
       deployment.guest_credential_id || '', { wide: true,
-        help: 'Cloud-init ustawi użytkownika i publiczny klucz SSH wynikający z credentiala. Klucz prywatny pozostaje zaszyfrowany w Cloudportal.' });
+        help: 'Cloud-init ustawi użytkownika oraz dostęp z credentiala: hasło, publiczny klucz SSH albo oba. Klucz prywatny pozostaje zaszyfrowany w Cloudportal i nie jest kopiowany do VM.' });
     const executorField = selectField(
       'Silnik IaC', 'executor',
       [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }],
@@ -1153,10 +1153,10 @@ async function blueprintForm(item = null) {
           credentialField,
           selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
           deploymentHostnameSchemeField,
-          selectField('Credential użytkownika VM', 'deployment_guest_credential_id',
+          selectField('Credential ustawiany na VM', 'deployment_guest_credential_id',
             [{ value: '', label: 'Nie twórz użytkownika z credentiala' }, ...window.BlueprintProvisioningGuards.guestCredentialChoices(credentials)],
             deployment.guest_credential_id || '', { wide: true,
-              help: 'Wybrany credential SSH zostanie użyty przez cloud-init do utworzenia konta w VM. Nazwa użytkownika pochodzi z credentiala, a odpowiadający mu publiczny klucz SSH zostanie dodany do authorized_keys. Klucz prywatny pozostaje zaszyfrowany w Cloudportal.' }),
+              help: 'Wybrany credential SSH zostanie użyty przez cloud-init do ustawienia konta w VM. Może zawierać hasło, klucz prywatny albo oba. Klucz prywatny nie jest kopiowany do VM; używany jest tylko wyliczony z niego klucz publiczny.' }),
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
           ansibleSection)),

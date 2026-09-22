@@ -71,6 +71,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
     }
     user_account {
       username = var.ssh_username
+      password = var.ssh_password
       keys     = var.ssh_public_key == null ? [] : [var.ssh_public_key]
     }
   }
