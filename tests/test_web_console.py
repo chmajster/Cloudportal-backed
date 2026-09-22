@@ -368,8 +368,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "ipam_pool_id" in script
     assert "guest_credential_id" in script
     assert "Credential ustawiany na VM" in script
-    assert "guestCredentialField.hidden = !supported" in script
-    assert "currentTemplate()?.id === 'proxmox-vm'" in script
+    assert "field.hidden = !supported" in script
+    assert "value === 'proxmox-vm'" in script
     assert "supports_cloud_init_ssh_key === true" in script
     assert "supports_cloud_init_password === true" in script
     assert "requiredExecutionPermissions" in script
