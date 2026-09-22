@@ -264,9 +264,9 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
         assert resumed is not None
         assert resumed.status == 'queued'
         assert resumed.source == 'Recovery'
-        assert resumed.payload['_auto_resume']['skip_provider_apply'] is True
+        assert resumed.payload['_auto_resume']['from_persisted_state'] is True
         assert resumed.payload['_auto_resume']['count'] == 1
-        assert resumed.payload['_quota_checked'] is True
+        assert '_quota_checked' not in resumed.payload
         assert '_quota_reservation_id' not in resumed.payload
         assert dep.active_job_id == resumed.id
         assert dep.status == 'recovery_queued'
@@ -279,16 +279,16 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
             execution_availability=lambda: {'ok': True},
         ),
     )
+    operations = []
     monkeypatch.setattr(
         TerraformExecutor,
         'execute',
-        lambda *args: (_ for _ in ()).throw(
-            AssertionError('automatic resume must not repeat terraform apply')
-        ),
+        lambda _executor, operation, _context: operations.append(operation) or workspace,
     )
 
     execute(resumed_id)
 
+    assert operations == ['terraform.apply']
     with session() as db:
         resumed = db.get(Job, resumed_id)
         dep = db.get(Deployment, d['id'])
