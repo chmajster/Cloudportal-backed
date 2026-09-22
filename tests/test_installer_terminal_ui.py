@@ -71,6 +71,12 @@ def test_installer_has_docker_mode_with_status_uninstall_and_secure_config():
     assert 'install -m 0600 "$temp_dir/docker.env" "$docker_root/.env"' in INSTALLER
     assert '--cacert "$docker_root/tls/server.crt"' in INSTALLER
     assert 'docker_compose_for "$release_dir" up -d --remove-orphans --scale "worker=$workers"' in INSTALLER
+    assert 'docker_validate_tls_pair()' in INSTALLER
+    assert 'mktemp -d "$docker_root/.tls-stage.XXXXXXXX"' in INSTALLER
+    assert 'cmp -s "$staged_cert" "$tls_dir/server.crt"' in INSTALLER
+    assert "docker_compose_for \"$release_dir\" restart proxy" in INSTALLER
+    assert 'docker_proxy_owns_port()' in INSTALLER
+    assert 'Port HTTPS $backend_port jest zajęty przez inny proces lub usługę' in INSTALLER
 
 
 
