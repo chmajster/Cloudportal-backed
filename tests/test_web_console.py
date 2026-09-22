@@ -192,7 +192,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "api('/day2-actions/bulk'" in script
     assert "const DEFAULT_BATCH_SIZE = 25;" in script
     assert "isBulkLimitError(error)" in script
-    assert "await submitChunk(actionId, ids.slice(0, middle), label)" in script
+    assert "await submitChunk(actionId, ids.slice(0, middle), label, keys, onSubmitted)" in script
+    assert "document.addEventListener('cloudportal:app-hidden', () => selection.clear())" in script
+    assert "headers: { 'Idempotency-Key': idempotencyKeyFor(keys, actionId, ids) }" in script
+    assert "submittedIds.forEach(id => selection.delete(String(id)))" in script
+    assert "const pending = selected.filter(item => selection.has(resourceId(item)))" in script
     assert "Wybierz wszystkie" in script
     assert "Wyczyść" in script
     assert "Wymuś stop" in script
