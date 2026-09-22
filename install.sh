@@ -495,10 +495,10 @@ docker_prepare_github_curl() {
     local github_token
     github_token=$(tr -d '\r\n' < "$github_token_file")
     [[ "$github_token" =~ ^[A-Za-z0-9._-]{20,512}$ ]] || { ui_fail 'Token GitHub ma nieprawidłowy format.'; exit 1; }
-    printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$docker_tmp_dir/curl.conf"
-    chmod 0600 "$docker_tmp_dir/curl.conf"
+    printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$tmp_dir/curl.conf"
+    chmod 0600 "$tmp_dir/curl.conf"
     unset github_token
-    DOCKER_CURL_ARGS+=(--config "$docker_tmp_dir/curl.conf")
+    DOCKER_CURL_ARGS+=(--config "$tmp_dir/curl.conf")
   fi
 }
 
