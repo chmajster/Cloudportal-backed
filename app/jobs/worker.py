@@ -819,7 +819,6 @@ def run_blueprint_workflow(context, executor):
             context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
         verify_saved_plan()
         context.apply_saved_terraform_plan = bool(runtime['plan_ready'])
-        context.quota_provider_submitted = True
         try:
             workspace = executor.execute('terraform.apply', context)
         finally:
@@ -1162,8 +1161,6 @@ def execute(job_id):
                 if not context.blueprint_workflow_completed:
                     raise ExecutionFailed('Blueprint workflow did not complete')
             else:
-                if job.operation in {'terraform.apply', 'terraform.destroy'}:
-                    context.quota_provider_submitted = True
                 workspace = executor.execute(job.operation, context)
                 if job.operation == 'terraform.import':
                     register_adopted_resource(context)
