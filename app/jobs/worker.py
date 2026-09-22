@@ -1126,6 +1126,15 @@ def execute(job_id):
             if job.deployment_id:
                 context.deployment = db.get(Deployment, job.deployment_id)
                 context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
+                if (
+                    job.operation in {'terraform.apply', 'terraform.import', 'terraform.destroy'}
+                    and not (job.payload or {}).get('_quota_checked')
+                ):
+                    quota_job = db.get(Job, job.id)
+                    prepare_job_reservation(db, quota_job, context.deployment)
+                    db.commit()
+                    job.payload = dict(quota_job.payload or {})
+                    context.job.payload = dict(quota_job.payload or {})
                 if job.operation == 'terraform.apply':
                     if ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
                         raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
