@@ -4,9 +4,10 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, or_, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
-from app.api.outputs import (Items, CredentialOutput, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
+from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
-                             SSHHostKeyOutput, SSHKeyBootstrapOutput)
+                             SSHHostKeyOutput)
+from app.credentials.outputs import CredentialOutput, SSHKeyBootstrapOutput
 from app.api.schemas import (CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
                              ProxmoxTokenBootstrapInput, SSHHostKeyInput, SSHKeyBootstrapInput)
 from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, template_definition,
@@ -66,14 +67,17 @@ def ensure_credential_usable(credential):
 
 
 def credential_in_use(db, id, *, pending_only=False):
-    deployments = select(Deployment.id).where(
-        or_(Deployment.credentials_id == id, Deployment.workflow['ansible']['credentials_id'].as_integer() == id))
+    deployments = select(Deployment.id).where(or_(
+        Deployment.credentials_id == id,
+        Deployment.workflow['ansible']['credentials_id'].as_integer() == id,
+        Deployment.workflow['blueprint']['guest_credential_id'].as_integer() == id,
+    ))
     if pending_only:
         deployments = deployments.where(Deployment.active_job_id.is_not(None))
     else:
         deployments = deployments.where(Deployment.status != 'destroyed')
     active_job_credential = select(Job.id).where(
-        Job.status.in_(['queued', 'running', 'cancelling']),
+        Job.status.in_(['waiting_approval', 'queued', 'running', 'cancelling']),
         or_(
             Job.payload['ansible']['credentials_id'].as_integer() == id,
             Job.payload['blueprint']['guest_credential_id'].as_integer() == id,
