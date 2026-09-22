@@ -245,12 +245,41 @@ docker_valid_workers() {
   [[ "$1" =~ ^[0-9]{1,2}$ ]] && ((10#$1 >= 1 && 10#$1 <= 64))
 }
 
+DOCKER_INSTALL_LOCK_FD=''
+
+docker_acquire_install_lock() {
+  command -v flock >/dev/null 2>&1 || {
+    ui_fail 'Brak komendy flock wymaganej do bezpiecznej instalacji Docker.'
+    exit 1
+  }
+
+  exec {DOCKER_INSTALL_LOCK_FD}>/run/cloudportal-install.lock
+  if flock --exclusive --nonblock "$DOCKER_INSTALL_LOCK_FD"; then
+    ui_ok 'Blokada instalatora Docker przejęta.'
+    return 0
+  fi
+
+  if ((takeover_running_install == 0)); then
+    ui_fail 'Inna instalacja Cloudportal jest aktywna, a --no-takeover zabrania oczekiwania na blokadę.'
+    exit 1
+  fi
+
+  ui_warn 'Inna instalacja Cloudportal jest aktywna; oczekuję na bezpieczne zwolnienie blokady.'
+  if flock --exclusive --wait 120 "$DOCKER_INSTALL_LOCK_FD"; then
+    ui_ok 'Blokada instalatora Docker przejęta po oczekiwaniu.'
+    return 0
+  fi
+
+  ui_fail 'Nie udało się uzyskać /run/cloudportal-install.lock w ciągu 120 sekund.'
+  exit 1
+}
+
 docker_preflight() {
-  local failed=0 command free_kib
+  local failed=0 command free_kib auth_tmp docker_root_dir docker_root_kib
   ui_info "System: $NAME $VERSION_ID · $arch · tryb Docker"
   ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
 
-  for command in awk sed grep tar openssl curl df sha256sum stat hostname; do
+  for command in awk sed grep tar openssl curl df sha256sum stat hostname flock; do
     if ! command -v "$command" >/dev/null 2>&1; then
       ui_fail "Brak wymaganej komendy przed instalacją Docker: $command"
       failed=1
@@ -264,31 +293,54 @@ docker_preflight() {
   free_kib=$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')
   if [[ "$free_kib" =~ ^[0-9]+$ ]]; then
     if ((free_kib < 2097152)); then
-      ui_fail "Za mało wolnego miejsca: $((free_kib / 1024)) MiB. Wymagane minimum 2 GiB, zalecane 10 GiB."
+      ui_fail "Za mało wolnego miejsca na /: $((free_kib / 1024)) MiB. Wymagane minimum 2 GiB, zalecane 10 GiB."
       failed=1
     elif ((free_kib < 10485760)); then
-      ui_warn "Wolne miejsce: $((free_kib / 1024)) MiB. Zalecane co najmniej 10 GiB."
+      ui_warn "Wolne miejsce na /: $((free_kib / 1024)) MiB. Zalecane co najmniej 10 GiB."
     else
-      ui_ok "Wolne miejsce: $((free_kib / 1024 / 1024)) GiB"
+      ui_ok "Wolne miejsce na /: $((free_kib / 1024 / 1024)) GiB"
     fi
   else
-    ui_fail 'Nie udało się ustalić wolnego miejsca na dysku.'
+    ui_fail 'Nie udało się ustalić wolnego miejsca na /.'
     failed=1
   fi
 
-  if curl -fsS --connect-timeout 5 --max-time 10 https://api.github.com/ >/dev/null 2>&1; then
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker_root_dir=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)
+    if [[ -n "$docker_root_dir" ]]; then
+      docker_root_kib=$(df -Pk "$docker_root_dir" 2>/dev/null | awk 'NR==2 {print $4}')
+      if [[ "$docker_root_kib" =~ ^[0-9]+$ ]]; then
+        if ((docker_root_kib < 2097152)); then
+          ui_fail "Za mało wolnego miejsca w DockerRootDir ($docker_root_dir): $((docker_root_kib / 1024)) MiB."
+          failed=1
+        elif ((docker_root_kib < 10485760)); then
+          ui_warn "DockerRootDir $docker_root_dir ma tylko $((docker_root_kib / 1024)) MiB wolnego miejsca."
+        else
+          ui_ok "DockerRootDir $docker_root_dir: $((docker_root_kib / 1024 / 1024)) GiB wolnego"
+        fi
+      else
+        ui_fail "Nie udało się sprawdzić wolnego miejsca dla DockerRootDir: $docker_root_dir"
+        failed=1
+      fi
+    fi
+  fi
+
+  auth_tmp=$(mktemp -d)
+  docker_prepare_github_curl "$auth_tmp"
+  if curl "${DOCKER_CURL_ARGS[@]}" --connect-timeout 5 --max-time 10 https://api.github.com/ >/dev/null 2>&1; then
     ui_ok 'Połączenie HTTPS z api.github.com'
   else
-    ui_fail 'Brak połączenia z api.github.com. Sprawdź DNS, routing, proxy/firewall i czas systemowy.'
+    ui_fail 'Brak połączenia z api.github.com z wybraną konfiguracją GitHub. Sprawdź DNS, token/config, proxy/firewall i czas systemowy.'
     failed=1
   fi
+  rm -rf "$auth_tmp"
 
   if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$backend_port$"; then
-    if ! command -v docker >/dev/null 2>&1 || ! docker ps --format '{{.Ports}}' 2>/dev/null | grep -Eq "(^|:)$backend_port->"; then
-      ui_fail "Port $backend_port jest już zajęty."
-      failed=1
+    if command -v docker >/dev/null 2>&1 && docker ps         --filter "label=com.docker.compose.project=$docker_project"         --filter "label=com.docker.compose.service=proxy"         --format '{{.Ports}}' 2>/dev/null | grep -Eq "(^|:)$backend_port->"; then
+      ui_info "Port $backend_port jest używany przez istniejący proxy Cloudportal; reinstalacja może go przejąć."
     else
-      ui_info "Port $backend_port jest używany przez istniejący stack Docker; reinstalacja może go przejąć."
+      ui_fail "Port $backend_port jest już zajęty przez proces lub kontener spoza projektu $docker_project."
+      failed=1
     fi
   else
     ui_ok "Port $backend_port jest dostępny."
@@ -313,14 +365,15 @@ docker_certificate_matches_host() {
 }
 
 docker_generate_managed_tls() {
-  local san="DNS:$backend_host"
+  local target_dir=$1 san="DNS:$backend_host"
+  install -d -m 0700 "$target_dir"
   [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
   openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
-    -keyout "$docker_tls/server.key" -out "$docker_tls/server.crt" \
+    -keyout "$target_dir/server.key" -out "$target_dir/server.crt" \
     -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
-  chmod 0600 "$docker_tls/server.crt" "$docker_tls/server.key"
-  printf '%s\n' "$backend_host" > "$docker_tls/host"
-  printf '%s\n' managed-self-signed > "$docker_tls/source"
+  chmod 0600 "$target_dir/server.crt" "$target_dir/server.key"
+  printf '%s\n' "$backend_host" > "$target_dir/host"
+  printf '%s\n' managed-self-signed > "$target_dir/source"
 }
 
 docker_compose_detect() {
