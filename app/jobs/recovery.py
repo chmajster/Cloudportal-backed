@@ -41,31 +41,26 @@ def _active_inventory_exists(db, deployment_id: str) -> bool:
 
 
 def _safe_to_auto_retry(db, job: Job) -> bool:
-    """Require reconciled accounting plus state-backed inventory before retry."""
+    """Require job-specific state recovery plus reconciled accounting before retry."""
+    payload = dict(job.payload or {})
+    previous_auto = dict(payload.get('_auto_resume') or {})
+    evidence = dict(payload.get('_state_recovery') or {})
+    state_recovered_for_job = (
+        evidence.get('source_job_id') == job.id
+        and evidence.get('deployment_id') == job.deployment_id
+    )
+    if not state_recovered_for_job and previous_auto.get('from_persisted_state') is not True:
+        return False
     if not _active_inventory_exists(db, job.deployment_id):
         return False
 
     reservation = job_reservation(db, job)
-    if reservation is not None:
-        return (
-            reservation.status == 'committed'
-            and reservation.reconciliation_required is False
-        )
-
-    payload = dict(job.payload or {})
-    previous_auto = dict(payload.get('_auto_resume') or {})
-    if previous_auto.get('from_persisted_state') is True:
-        # A previous automatic retry can be quota-neutral and therefore have no
-        # reservation. The persisted state/inventory evidence is still valid.
+    if reservation is None:
+        # A retry can be quota-neutral and therefore have no reservation.
         return True
-
-    # Legacy/no-reservation path still requires explicit evidence produced while
-    # this exact job owned the deployment. Never infer an update apply from VM
-    # presence alone.
-    evidence = dict(payload.get('_state_recovery') or {})
     return (
-        evidence.get('source_job_id') == job.id
-        and evidence.get('deployment_id') == job.deployment_id
+        reservation.status == 'committed'
+        and reservation.reconciliation_required is False
     )
 
 
