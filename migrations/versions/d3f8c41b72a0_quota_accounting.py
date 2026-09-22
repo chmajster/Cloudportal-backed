@@ -140,7 +140,7 @@ def _backfill_confirmed_deployments():
     deployments = sa.table(
         'deployments',
         sa.column('id'), sa.column('tenant_id'), sa.column('project_id'),
-        sa.column('provider'), sa.column('variables'), sa.column('status'), sa.column('destroyed_at'),
+        sa.column('provider'), sa.column('variables', sa.JSON()), sa.column('status'), sa.column('destroyed_at'),
     )
     managed_vms = sa.table(
         'managed_vms',
@@ -153,7 +153,7 @@ def _backfill_confirmed_deployments():
     allocation = sa.table(
         'quota_allocations',
         sa.column('id'), sa.column('tenant_id'), sa.column('project_id'),
-        sa.column('subject_type'), sa.column('subject_id'), sa.column('dimensions'),
+        sa.column('subject_type'), sa.column('subject_id'), sa.column('dimensions', sa.JSON()),
         sa.column('created_at'), sa.column('updated_at'),
     )
     tenant_usage = sa.table(
