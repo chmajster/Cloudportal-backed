@@ -161,15 +161,54 @@ Anulowanie kończy grupę procesów i zachowuje state. Joby mają jawny retry li
 
 ## Uruchomienie w Docker Compose
 
-Alternatywa dla instalacji systemd. Wersja aplikacji jest skróconym SHA commita użytego do budowy obrazu. Przygotuj `.env` z losowym, URL-safe `CP_POSTGRES_PASSWORD`, pliki `tls/server.crt` i `tls/server.key`, wykonaj `export CP_BUILD_COMMIT=$(git rev-parse HEAD)`, następnie:
+Alternatywa dla instalacji natywnej systemd. Najprościej użyć tego samego instalatora z parametrem `--docker`:
 
 ```bash
+curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/chmajster/Cloudportal-backed/contents/install.sh?ref=main' \
+  | sudo bash -s -- --docker --non-interactive --host backend.example.com --port 8443 --workers 3
+```
+
+Tryb Docker:
+- instaluje brakujące zależności Docker automatycznie na Ubuntu/Debian, o ile są dostępne w repozytoriach systemowych;
+- pobiera wskazany `--ref` do wersjonowanego katalogu w `/opt/cloudportal-backed-docker/releases`;
+- tworzy trwałą konfigurację w `/etc/cloudportal-backed-docker`;
+- generuje bezpieczne hasło PostgreSQL i certyfikat self-signed, jeżeli nie przekazano `--cert-file` oraz `--cert-key`;
+- buduje obraz, wykonuje migracje i bootstrap, uruchamia stack oraz skaluje usługę worker zgodnie z `--workers`;
+- wystawia wyłącznie HTTPS przez Nginx; port hosta ustawia `--port`.
+
+Status:
+
+```bash
+sudo ./install.sh --docker --status
+```
+
+Odinstalowanie z zachowaniem nazwanych wolumenów i konfiguracji:
+
+```bash
+sudo ./install.sh --docker --uninstall
+```
+
+Pełne usunięcie razem z wolumenami danych i konfiguracją:
+
+```bash
+sudo ./install.sh --docker --uninstall --purge-data
+```
+
+Przy automatycznej deinstalacji bez TTY dodaj `--yes`.
+
+Nadal można uruchomić Docker Compose ręcznie. `docker-compose.yml` obsługuje `CP_HTTPS_PORT` i `CP_TLS_DIR`:
+
+```bash
+export CP_POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+export CP_BUILD_COMMIT="$(git rev-parse HEAD)"
+export CP_HTTPS_PORT=8443
+export CP_TLS_DIR="$PWD/tls"
 docker compose build
 docker compose run --rm bootstrap
 docker compose up -d
 ```
 
-`bootstrap` jest jednorazowym interaktywnym kontenerem usuwanym po wyświetleniu tokena. API i worker działają jako UID 10001, z read-only root filesystem, wyłączonymi capabilities i no-new-privileges. PostgreSQL/Redis/API nie publikują portów hosta; jedyny port hosta to TLS Nginx 8443. Nie podłączaj niezaufanych kontenerów do sieci backend.
+`bootstrap` jest jednorazowym kontenerem usuwanym po wykonaniu. API i worker działają jako UID 10001, z read-only root filesystem, wyłączonymi capabilities i no-new-privileges. PostgreSQL/Redis/API nie publikują portów hosta; jedynym publikowanym portem jest TLS Nginx. Nie podłączaj niezaufanych kontenerów do sieci backend.
 
 ## Testy i obsługa
 
