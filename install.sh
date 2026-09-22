@@ -38,12 +38,13 @@ Użycie:
 
 Tryby:
   --status                    Pokaż stan instalacji i usług; niczego nie zmienia.
-  --uninstall                 Usuń runtime aplikacji; zachowaj bazę, konfigurację i dane.
-  --force-uninstall           Alias techniczny trybu --uninstall.
+  --uninstall                 Odinstaluj Cloudportal; domyślnie zachowaj bazę, konfigurację i dane.
   --purge-data                Z --uninstall usuń także bazę, /etc, /var/lib i backupy.
+  --yes, -y                   Pomiń potwierdzenie deinstalacji; wymagane bez TTY.
+  --force-uninstall           Zgodnościowy alias: --uninstall --yes.
   --check-platform            Sprawdź obsługę systemu bez wykonywania instalacji.
   --gui, -gui                 Interaktywny interfejs dialog.
-  --non-interactive           Instalacja bez pytań.
+  --non-interactive           Tryb bez pytań; przy --uninstall wymaga także --yes.
   --docker                    Zainstaluj/uruchom aplikację przez Docker Compose zamiast systemd.
 
 Konfiguracja:
@@ -75,6 +76,7 @@ Przykłady:
   sudo ./install.sh --status
   sudo ./install.sh --uninstall
   sudo ./install.sh --uninstall --purge-data
+  sudo ./install.sh --non-interactive --uninstall --yes
 EOF
 }
 
@@ -87,7 +89,7 @@ installer_error() {
     ui_info 'Logi: docker compose -p cloudportal-backed logs --tail=100'
   else
     ui_info 'Usługi: systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1'
-    ui_info 'Logi: journalctl -u cloudportal-api -u cloudportal-dispatcher -u cloudportal-worker@1 -n 100 --no-pager'
+    ui_info 'Logi: journalctl -u cloudportal-api -u cloudportal-dispatcher cloudportal-worker@1 -n 100 --no-pager'
   fi
   exit "$rc"
 }
@@ -108,9 +110,10 @@ gui=0
 non_interactive=0
 check_platform=0
 takeover_running_install=1
-force_uninstall=0
 purge_data=0
 status_mode=0
+uninstall_mode=0
+assume_yes=0
 docker_mode=0
 backup_option_set=0
 update_in_progress=${CLOUDPORTAL_UPDATE_IN_PROGRESS:-0}
@@ -139,13 +142,22 @@ while (($#)); do
     --check-platform) check_platform=1; shift;;
     --takeover) takeover_running_install=1; shift;;
     --no-takeover) takeover_running_install=0; shift;;
-    --force-uninstall|--uninstall) force_uninstall=1; shift;;
+    --uninstall) uninstall_mode=1; shift;;
+    --force-uninstall) uninstall_mode=1; assume_yes=1; shift;;
+    --yes|-y) assume_yes=1; shift;;
     --purge-data) purge_data=1; shift;;
     --status) status_mode=1; shift;;
     --help|-h) usage; exit 0;;
     *) ui_fail "Nieznana opcja: $1"; ui_info 'Uruchom --help, aby zobaczyć dostępne opcje.'; exit 2;;
   esac
 done
+
+mode_count=$((status_mode + uninstall_mode + check_platform))
+((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall albo --check-platform.'; exit 2; }
+((purge_data == 0 || uninstall_mode == 1)) || { ui_fail '--purge-data wymaga --uninstall.'; exit 2; }
+((assume_yes == 0 || uninstall_mode == 1)) || { ui_fail '--yes/-y ma zastosowanie tylko z --uninstall.'; exit 2; }
+((gui == 0 || uninstall_mode == 0)) || { ui_fail '--gui/-gui nie może być użyte razem z --uninstall.'; exit 2; }
+
 drain_script_input() {
   [[ -t 0 ]] || cat >/dev/null || true
 }
@@ -182,6 +194,12 @@ case "$ID:$VERSION_ID" in
       python_command=container
       key_value_package=container
       key_value_command=container
+    elif ((uninstall_mode || status_mode)); then
+      os_family=unknown
+      python_command=python3
+      key_value_package=unknown
+      key_value_command=unknown
+      ui_warn "System $ID $VERSION_ID nie jest wspierany do instalacji; tryb status/deinstalacji będzie kontynuowany."
     else
       echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2
       drain_script_input
@@ -192,7 +210,15 @@ esac
 case "$(uname -m)" in
   x86_64) arch=amd64;;
   aarch64|arm64) arch=arm64;;
-  *) ui_fail "Nieobsługiwana architektura: $(uname -m). Obsługiwane: amd64/arm64."; exit 1;;
+  *)
+    if ((uninstall_mode || status_mode)); then
+      arch=$(uname -m)
+      ui_warn "Architektura $arch nie jest wspierana do instalacji; tryb status/deinstalacji będzie kontynuowany."
+    else
+      ui_fail "Nieobsługiwana architektura: $(uname -m). Obsługiwane: amd64/arm64."
+      exit 1
+    fi
+    ;;
 esac
 if ((check_platform)); then
   ui_header 'Pretest platformy'
@@ -255,8 +281,6 @@ valid_retention() {
   [[ "$1" =~ ^[0-9]{1,4}$ ]] && ((10#$1 >= 1 && 10#$1 <= 3650))
 }
 ((gui == 0 || non_interactive == 0)) || { echo '--gui/-gui cannot be combined with --non-interactive.' >&2; exit 2; }
-
-((purge_data == 0 || force_uninstall == 1)) || { echo '--purge-data requires --force-uninstall.' >&2; exit 2; }
 
 docker_compose_for() {
   local release_dir=$1
@@ -626,15 +650,42 @@ docker_install_cloudportal() {
   ui_info "Logi: docker compose -p cloudportal-backed --env-file $docker_root/.env -f $docker_root/current/docker-compose.yml logs --tail=100"
 }
 
+docker_confirm_uninstall() {
+  ((assume_yes)) && return 0
+  if ((non_interactive)); then
+    ui_fail 'Tryb --non-interactive z --docker --uninstall wymaga jawnego --yes.'
+    exit 2
+  fi
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    ui_fail 'Brak interaktywnego terminala do potwierdzenia deinstalacji Docker. Uruchom ponownie z --yes.'
+    exit 2
+  fi
+  local answer=''
+  if ((purge_data)); then
+    ui_warn 'Ta operacja usunie kontenery, obrazy lokalne, wolumeny PostgreSQL/Redis, TLS i konfigurację Docker Cloudportal.'
+    printf 'Wpisz USUN, aby potwierdzić pełne usunięcie Docker: ' >/dev/tty
+    IFS= read -r answer </dev/tty || true
+    [[ "$answer" == 'USUN' ]] || { ui_info 'Deinstalacja Docker anulowana.'; exit 0; }
+    return 0
+  fi
+  printf 'Odinstalować runtime Docker Cloudportal i zachować wolumeny danych? [y/N] ' >/dev/tty
+  IFS= read -r answer </dev/tty || true
+  case "$answer" in
+    y|Y|yes|YES|tak|TAK) return 0 ;;
+    *) ui_info 'Deinstalacja Docker anulowana.'; exit 0 ;;
+  esac
+}
+
 if ((docker_mode)); then
   if ((status_mode)); then
     docker_show_status
     drain_script_input
     exit 0
   fi
-  if ((force_uninstall)); then
+  if ((uninstall_mode)); then
     command -v docker >/dev/null 2>&1 || { ui_fail 'Brak komendy docker.'; exit 1; }
     docker compose version >/dev/null 2>&1 || { ui_fail 'Brak Docker Compose v2.'; exit 1; }
+    docker_confirm_uninstall
     docker_uninstall_cloudportal
     drain_script_input
     exit 0
@@ -643,6 +694,7 @@ if ((docker_mode)); then
   drain_script_input
   exit 0
 fi
+
 
 lock_file=/run/cloudportal-install.lock
 lock_owner_file=/run/cloudportal-install.owner
@@ -658,7 +710,6 @@ stop_cloudportal_application() {
   systemctl stop cloudportal-backup.timer cloudportal-backup.service >/dev/null 2>&1 || true
   systemctl stop cloudportal-dispatcher.service cloudportal-api.service >/dev/null 2>&1 || true
 
-  ui_stage 2 3 'Usunięcie runtime i integracji systemowej'
   local worker_units=()
   mapfile -t worker_units < <(
     systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null       | awk '{print $1}'       | grep -E '^cloudportal-worker@.+\.service$' || true
@@ -950,31 +1001,169 @@ preflight_checks() {
   }
 }
 
-force_uninstall_cloudportal() {
-  ui_stage 1 3 'Zatrzymanie usług i procesów'
-  ui_warn 'FORCE UNINSTALL: zatrzymuję runtime Cloudportal i stare procesy instalatora...'
+uninstall_preflight() {
+  local failed=0 command
+  for command in systemctl flock awk grep ps readlink pkill rm id; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+      ui_fail "Deinstalacja wymaga komendy: $command"
+      failed=1
+    fi
+  done
+
+  if ((purge_data)); then
+    for command in runuser psql dropdb dropuser; do
+      if ! command -v "$command" >/dev/null 2>&1; then
+        ui_fail "Pełny purge wymaga komendy PostgreSQL/systemowej: $command"
+        failed=1
+      fi
+    done
+    id postgres >/dev/null 2>&1 || {
+      ui_fail 'Pełny purge wymaga lokalnego użytkownika systemowego postgres.'
+      failed=1
+    }
+  fi
+
+  ((failed == 0)) || {
+    ui_fail 'Pretest deinstalacji nie przeszedł. Nic nie zostało usunięte.'
+    return 1
+  }
+  ui_ok 'Pretest deinstalacji zakończony.'
+}
+
+confirm_uninstall() {
+  ((assume_yes)) && return 0
+
+  if ((non_interactive)); then
+    ui_fail 'Tryb --non-interactive z --uninstall wymaga jawnego --yes.'
+    exit 2
+  fi
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    ui_fail 'Brak interaktywnego terminala do potwierdzenia deinstalacji. Uruchom ponownie z --yes.'
+    exit 2
+  fi
+
+  local answer=''
+  if ((purge_data)); then
+    ui_warn 'Ta operacja usunie bazę PostgreSQL, konfigurację, dane, backupy i użytkownika systemowego cloudportal.'
+    printf 'Wpisz USUN, aby potwierdzić pełne usunięcie: ' >/dev/tty
+    IFS= read -r answer </dev/tty || true
+    if [[ "$answer" != 'USUN' ]]; then
+      ui_info 'Deinstalacja anulowana.'
+      exit 0
+    fi
+    return 0
+  fi
+
+  printf 'Odinstalować runtime Cloudportal i zachować bazę oraz dane? [y/N] ' >/dev/tty
+  IFS= read -r answer </dev/tty || true
+  case "$answer" in
+    y|Y|yes|YES|tak|TAK) return 0 ;;
+    *) ui_info 'Deinstalacja anulowana.'; exit 0 ;;
+  esac
+}
+
+verify_uninstall() {
+  local leftovers=0 path
+  local runtime_paths=(
+    "$app_root"
+    /usr/local/lib/cloudportal-updater
+    /usr/local/sbin/cloudportal-backup
+    /usr/local/sbin/cloudportal-restore
+    /etc/nginx/conf.d/cloudportal-backed.conf
+    /etc/systemd/system/cloudportal-api.service
+    /etc/systemd/system/cloudportal-dispatcher.service
+    /etc/systemd/system/cloudportal-worker@.service
+    /etc/systemd/system/cloudportal-redis.service
+    /etc/systemd/system/cloudportal-backup.service
+    /etc/systemd/system/cloudportal-backup.timer
+    /etc/systemd/system/cloudportal-updater.service
+    /etc/systemd/system/cloudportal-updater.timer
+  )
+
+  for path in "${runtime_paths[@]}"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      ui_warn "Pozostałość po deinstalacji: $path"
+      leftovers=1
+    fi
+  done
+
+  if ((purge_data)); then
+    for path in "$config" "$data" /var/backups/cloudportal-backed; do
+      if [[ -e "$path" || -L "$path" ]]; then
+        ui_warn "Pozostałość danych po purge: $path"
+        leftovers=1
+      fi
+    done
+    if id cloudportal >/dev/null 2>&1; then
+      ui_warn 'Użytkownik systemowy cloudportal nadal istnieje.'
+      leftovers=1
+    fi
+    if command -v runuser >/dev/null 2>&1 && command -v psql >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
+      if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='cloudportal'" 2>/dev/null | grep -qx 1; then
+        ui_warn 'Baza PostgreSQL cloudportal nadal istnieje.'
+        leftovers=1
+      fi
+      if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='cloudportal'" 2>/dev/null | grep -qx 1; then
+        ui_warn 'Rola PostgreSQL cloudportal nadal istnieje.'
+        leftovers=1
+      fi
+    fi
+  fi
+
+  ((leftovers == 0)) || {
+    ui_fail 'Deinstalacja pozostawiła elementy Cloudportal. Sprawdź komunikaty [WARN] powyżej.'
+    return 1
+  }
+  ui_ok 'Weryfikacja deinstalacji zakończona pomyślnie.'
+}
+
+uninstall_cloudportal() {
+  ui_stage 1 4 'Blokada i zatrzymanie usług'
+  ui_info 'Przejmuję blokadę instalatora i zatrzymuję usługi Cloudportal.'
+  acquire_install_lock
+  update_in_progress=0
   stop_cloudportal_application
-  stop_previous_installer TERM
-  sleep 2
-  stop_previous_installer KILL
+  systemctl stop cloudportal-updater.timer cloudportal-updater.service >/dev/null 2>&1 || true
 
   if id cloudportal >/dev/null 2>&1; then
     pkill -TERM -u cloudportal >/dev/null 2>&1 || true
     sleep 1
     pkill -KILL -u cloudportal >/dev/null 2>&1 || true
   fi
+  ui_ok 'Procesy aplikacji zostały zatrzymane.'
 
+  ui_stage 2 4 'Usunięcie runtime i integracji systemowej'
   local worker_units=()
   mapfile -t worker_units < <(
-    systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null       | awk '{print $1}'       | grep -E '^cloudportal-worker@.+\.service$' || true
+    systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null |
+      awk '{print $1}' |
+      grep -E '^cloudportal-worker@.+\.service$' || true
   )
   if ((${#worker_units[@]})); then
     systemctl disable --now "${worker_units[@]}" >/dev/null 2>&1 || true
   fi
 
-  systemctl disable --now     cloudportal-api.service     cloudportal-dispatcher.service     cloudportal-redis.service     cloudportal-backup.timer     cloudportal-backup.service     cloudportal-updater.service >/dev/null 2>&1 || true
+  systemctl disable --now \
+    cloudportal-api.service \
+    cloudportal-dispatcher.service \
+    cloudportal-redis.service \
+    cloudportal-backup.timer \
+    cloudportal-backup.service \
+    cloudportal-updater.timer \
+    cloudportal-updater.service >/dev/null 2>&1 || true
 
-  rm -f     /etc/systemd/system/cloudportal-api.service     /etc/systemd/system/cloudportal-dispatcher.service     /etc/systemd/system/cloudportal-worker@.service     /etc/systemd/system/cloudportal-redis.service     /etc/systemd/system/cloudportal-backup.service     /etc/systemd/system/cloudportal-backup.timer     /etc/systemd/system/cloudportal-updater.service     /etc/systemd/system/cloudportal-updater.timer     /usr/local/sbin/cloudportal-backup     /usr/local/sbin/cloudportal-restore     /etc/nginx/conf.d/cloudportal-backed.conf
+  rm -f \
+    /etc/systemd/system/cloudportal-api.service \
+    /etc/systemd/system/cloudportal-dispatcher.service \
+    /etc/systemd/system/cloudportal-worker@.service \
+    /etc/systemd/system/cloudportal-redis.service \
+    /etc/systemd/system/cloudportal-backup.service \
+    /etc/systemd/system/cloudportal-backup.timer \
+    /etc/systemd/system/cloudportal-updater.service \
+    /etc/systemd/system/cloudportal-updater.timer \
+    /usr/local/sbin/cloudportal-backup \
+    /usr/local/sbin/cloudportal-restore \
+    /etc/nginx/conf.d/cloudportal-backed.conf
 
   systemctl daemon-reload
   systemctl reset-failed >/dev/null 2>&1 || true
@@ -991,21 +1180,38 @@ force_uninstall_cloudportal() {
   fi
 
   rm -rf "$app_root" /usr/local/lib/cloudportal-updater
-  rm -f "$lock_file" "$lock_owner_file" /run/cloudportal-install.ready.*
+  rm -f /run/cloudportal-install.ready.*
+  ui_ok 'Runtime, jednostki systemd, helpery i konfiguracja Nginx zostały usunięte.'
 
-  ui_stage 3 3 'Polityka danych'
+  ui_stage 3 4 'Polityka danych'
   if ((purge_data)); then
-    ui_warn 'PURGE DATA: usuwam bazę Cloudportal, konfigurację, dane i backupy...'
-    if command -v runuser >/dev/null 2>&1 && id postgres >/dev/null 2>&1; then
-      runuser -u postgres -- dropdb --if-exists cloudportal >/dev/null 2>&1 || true
-      runuser -u postgres -- dropuser --if-exists cloudportal >/dev/null 2>&1 || true
+    ui_warn 'PURGE DATA: usuwam lokalną bazę Cloudportal, konfigurację, dane i backupy.'
+    if ! systemctl is-active --quiet postgresql.service 2>/dev/null; then
+      ui_info 'Uruchamiam PostgreSQL na czas bezpiecznego usunięcia bazy Cloudportal.'
+      systemctl start postgresql.service
     fi
+    runuser -u postgres -- dropdb --force --if-exists cloudportal >/dev/null
+    runuser -u postgres -- dropuser --if-exists cloudportal >/dev/null
     rm -rf "$config" "$data" /var/backups/cloudportal-backed
     userdel cloudportal >/dev/null 2>&1 || true
-    ui_ok 'Cloudportal usunięty razem z bazą i lokalnymi danymi.'
+    ui_ok 'Konfiguracja, dane, backupy i użytkownik systemowy zostały usunięte.'
   else
-    ui_ok 'Runtime Cloudportal usunięty. Baza, /etc/cloudportal-backed i /var/lib/cloudportal-backed zostały zachowane.'
-    ui_info 'Pełny reset: --uninstall --purge-data'
+    ui_ok 'Baza, konfiguracja i dane aplikacji zostały zachowane.'
+    ui_info "Konfiguracja: $config"
+    ui_info "Dane: $data"
+    ui_info 'Pełny reset wymaga: --uninstall --purge-data'
+  fi
+
+  ui_stage 4 4 'Weryfikacja'
+  verify_uninstall
+
+  ui_header 'Podsumowanie'
+  ui_ok 'Cloudportal-backed został odinstalowany.'
+  ui_info 'Pakiety współdzielone PostgreSQL, Redis/Valkey, Nginx, Terraform i Ansible nie są automatycznie usuwane.'
+  if ((purge_data)); then
+    ui_info 'Dane Cloudportal: usunięte.'
+  else
+    ui_info 'Dane Cloudportal: zachowane.'
   fi
 }
 
@@ -1015,16 +1221,17 @@ if ((status_mode)); then
   exit 0
 fi
 
-if ((force_uninstall)); then
+if ((uninstall_mode)); then
   CURRENT_STAGE='deinstalacja'
   ui_header 'Cloudportal-backed — deinstalacja'
   if ((purge_data)); then
     ui_warn 'Tryb PURGE: baza danych, konfiguracja, dane i backupy zostaną trwale usunięte.'
   else
-    ui_info 'Runtime zostanie usunięty, ale baza, konfiguracja i dane zostaną zachowane.'
+    ui_info 'Runtime i integracje systemowe zostaną usunięte; baza, konfiguracja i dane zostaną zachowane.'
   fi
-  force_uninstall_cloudportal
-  ui_ok 'Deinstalacja zakończona.'
+  uninstall_preflight
+  confirm_uninstall
+  uninstall_cloudportal
   drain_script_input
   exit 0
 fi
