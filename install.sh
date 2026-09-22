@@ -38,9 +38,10 @@ Użycie:
 
 Tryby:
   --status                    Pokaż stan instalacji i usług; niczego nie zmienia.
-  --uninstall                 Usuń runtime aplikacji; zachowaj bazę, konfigurację i dane.
-  --force-uninstall           Alias techniczny trybu --uninstall.
+  --uninstall                 Odinstaluj Cloudportal; domyślnie zachowaj bazę, konfigurację i dane.
   --purge-data                Z --uninstall usuń także bazę, /etc, /var/lib i backupy.
+  --yes, -y                   Pomiń potwierdzenie deinstalacji; wymagane bez TTY.
+  --force-uninstall           Zgodnościowy alias: --uninstall --yes.
   --check-platform            Sprawdź obsługę systemu bez wykonywania instalacji.
   --gui, -gui                 Interaktywny interfejs dialog.
   --non-interactive           Instalacja bez pytań.
@@ -72,6 +73,7 @@ Przykłady:
   sudo ./install.sh --status
   sudo ./install.sh --uninstall
   sudo ./install.sh --uninstall --purge-data
+  sudo ./install.sh --non-interactive --uninstall --yes
 EOF
 }
 
@@ -100,7 +102,6 @@ gui=0
 non_interactive=0
 check_platform=0
 takeover_running_install=1
-force_uninstall=0
 purge_data=0
 status_mode=0
 uninstall_mode=0
@@ -139,6 +140,13 @@ while (($#)); do
     *) ui_fail "Nieznana opcja: $1"; ui_info 'Uruchom --help, aby zobaczyć dostępne opcje.'; exit 2;;
   esac
 done
+
+mode_count=$((status_mode + uninstall_mode + check_platform))
+((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall albo --check-platform.'; exit 2; }
+((purge_data == 0 || uninstall_mode == 1)) || { ui_fail '--purge-data wymaga --uninstall.'; exit 2; }
+((assume_yes == 0 || uninstall_mode == 1)) || { ui_fail '--yes/-y ma zastosowanie tylko z --uninstall.'; exit 2; }
+((gui == 0 || uninstall_mode == 0)) || { ui_fail '--gui/-gui nie może być użyte razem z --uninstall.'; exit 2; }
+
 drain_script_input() {
   [[ -t 0 ]] || cat >/dev/null || true
 }
@@ -222,7 +230,6 @@ valid_retention() {
   [[ "$1" =~ ^[0-9]{1,4}$ ]] && ((10#$1 >= 1 && 10#$1 <= 3650))
 }
 ((gui == 0 || non_interactive == 0)) || { echo '--gui/-gui cannot be combined with --non-interactive.' >&2; exit 2; }
-((purge_data == 0 || force_uninstall == 1)) || { echo '--purge-data requires --force-uninstall.' >&2; exit 2; }
 
 lock_file=/run/cloudportal-install.lock
 lock_owner_file=/run/cloudportal-install.owner
@@ -230,15 +237,14 @@ lock_holder_pid=''
 
 stop_cloudportal_application() {
   ui_info 'Zatrzymuję usługi aplikacyjne Cloudportal...'
-  if ((update_in_progress)); then
+  if ((update_in_progress && uninstall_mode == 0)); then
     ui_info 'Serwis updatera pozostaje aktywny na czas aktualizacji.'
   else
-    systemctl stop cloudportal-updater.service >/dev/null 2>&1 || true
+    systemctl stop cloudportal-updater.timer cloudportal-updater.service >/dev/null 2>&1 || true
   fi
   systemctl stop cloudportal-backup.timer cloudportal-backup.service >/dev/null 2>&1 || true
   systemctl stop cloudportal-dispatcher.service cloudportal-api.service >/dev/null 2>&1 || true
 
-  ui_stage 2 3 'Usunięcie runtime i integracji systemowej'
   local worker_units=()
   mapfile -t worker_units < <(
     systemctl list-units --all --type=service --no-legend --no-pager 'cloudportal-worker@*.service' 2>/dev/null       | awk '{print $1}'       | grep -E '^cloudportal-worker@.+\.service$' || true
