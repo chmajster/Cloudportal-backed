@@ -263,8 +263,10 @@
               || state.snippetStorages[0];
             state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || '');
           }
-          if (!state.snippetStorages.length) state.cloudInitSnippetStorage = '';
-          if (!state.snippetStorages.length || !state.qemuAgentSshReady) state.waitAgent = false;
+          if (!state.snippetStorages.length) {
+            state.cloudInitSnippetStorage = '';
+            state.installQemuGuestAgent = false;
+          }
           state.networks = (networkResult.items || []).filter(value => value.iface);
           if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
             state.storage = String(state.storages[0]?.storage || state.storages[0]?.id || '');
@@ -308,6 +310,7 @@
           dns_domain: 'dnsDomain',
           ansible_enabled: 'ansibleEnabled',
           ansible_credentials_id: 'ansibleCredentialId',
+          install_qemu_guest_agent: 'installQemuGuestAgent',
           wait_agent: 'waitAgent',
           advanced_workflow: 'advancedWorkflow',
           visibility_backend: 'visibilityBackend',
@@ -372,6 +375,7 @@
             state.ansibleVariables[input.dataset.ansibleVariable] = input.value.trim();
           });
         } else if (state.step === 6) {
+          state.installQemuGuestAgent = root.querySelector('[name="install_qemu_guest_agent"]')?.checked ?? state.installQemuGuestAgent;
           state.waitAgent = root.querySelector('[name="wait_agent"]')?.checked ?? state.waitAgent;
           state.advancedWorkflow = root.querySelector('[name="advanced_workflow"]')?.checked ?? state.advancedWorkflow;
           if (state.advancedWorkflow) {
@@ -479,8 +483,8 @@
           }
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
-          if (state.providerType === 'proxmox' && state.waitAgent && !state.cloudInitSnippetStorage) {
-            errors.wait_agent = 'QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.';
+          if (state.providerType === 'proxmox' && state.installQemuGuestAgent && !state.cloudInitSnippetStorage) {
+            errors.install_qemu_guest_agent = 'Instalacja QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.';
           }
         }
         state.errors = errors;
@@ -872,9 +876,13 @@
         if (state.selectEnvironmentOnExecute) runtimeParts.push('Environment');
         const qemuAgentInfo = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'QEMU Guest Agent' }),
-          node('span', { text: state.waitAgent
-            ? 'Terraform utworzy vendor-data cloud-init i zainstaluje qemu-guest-agent. Snippet storage: ' + (state.cloudInitSnippetStorage || 'local') + '.'
-            : 'Automatyczna instalacja qemu-guest-agent jest wyłączona.' }));
+          node('span', { text: state.installQemuGuestAgent
+            ? 'Automatyczna instalacja przez cloud-init: włączona. Snippet storage: '
+              + (state.cloudInitSnippetStorage || 'brak') + '. Oczekiwanie w workflow: '
+              + (state.waitAgent ? 'włączone.' : 'wyłączone.')
+            : state.waitAgent
+              ? 'Automatyczna instalacja jest wyłączona. Workflow będzie czekać na QEMU Guest Agent już obecny w obrazie/template.'
+              : 'Automatyczna instalacja i oczekiwanie na QEMU Guest Agent są wyłączone.' }));
 
         const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'Klasyfikacja VM' }),
@@ -1004,7 +1012,7 @@
             || state.selectApmidOnExecute
             || state.selectEnvironmentOnExecute
           ),
-          waitAgent: state.waitAgent,
+          waitAgent: state.providerType === 'proxmox' && state.waitAgent,
           ansible: state.ansibleEnabled,
         });
       }
@@ -1065,12 +1073,29 @@
           if (state.advancedWorkflow) state.workflow = auto.map(value => ({ ...value, depends_on: [...value.depends_on] }));
           render();
         });
-        const snippetAvailable = state.providerType !== 'proxmox' || Boolean(state.cloudInitSnippetStorage);
-        const sshReady = state.providerType !== 'proxmox' || state.qemuAgentSshReady !== false;
-        const agentAvailable = snippetAvailable && sshReady;
-        const wait = checkboxField('Czekaj na QEMU Agent po Terraform apply — zainstaluj qemu-guest-agent przez cloud-init', 'wait_agent', state.waitAgent);
+        const isProxmox = state.providerType === 'proxmox';
+        const snippetAvailable = Boolean(state.cloudInitSnippetStorage);
+        const sshReady = state.qemuAgentSshReady !== false;
+
+        const install = checkboxField(
+          'Instaluj qemu-guest-agent przez cloud-init',
+          'install_qemu_guest_agent',
+          state.installQemuGuestAgent
+        );
+        const installControl = install.querySelector('input');
+        installControl.disabled = !isProxmox || !snippetAvailable;
+        installControl.addEventListener('change', event => {
+          state.installQemuGuestAgent = event.currentTarget.checked;
+          render();
+        });
+
+        const wait = checkboxField(
+          'Czekaj na QEMU Guest Agent po Terraform apply',
+          'wait_agent',
+          state.waitAgent
+        );
         const waitControl = wait.querySelector('input');
-        waitControl.disabled = !agentAvailable;
+        waitControl.disabled = !isProxmox;
         waitControl.addEventListener('change', event => {
           state.waitAgent = event.currentTarget.checked;
           if (!state.advancedWorkflow) state.workflow = currentAutoWorkflow();
@@ -1083,12 +1108,14 @@
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki runtime, zależności, retry, timeout, rollback i conditions.'
               : 'Hostname, IPAM, cloud-init i tagi są przygotowywane przed runtime; workflow pokazuje tylko faktycznie wykonywane operacje.' })),
-          !agentAvailable ? node('div', { class: 'callout warning' },
-            node('strong', { text: 'QEMU Guest Agent niedostępny' }),
-            node('p', { text: !snippetAvailable
-              ? 'Na wybranym node nie wykryto storage obsługującego snippets. Włącz content „Snippets” na storage w Proxmox albo wybierz inny node.'
-              : 'Preflight SSH do Proxmox nie jest gotowy (' + (state.qemuAgentSshReason || 'ssh_not_ready') + '). Sprawdź SSH, firewall oraz PROXMOX_VE_SSH_*.' })) : null,
-          wait,
+          isProxmox && !snippetAvailable ? node('div', { class: 'callout warning' },
+            node('strong', { text: 'Automatyczna instalacja QEMU Guest Agent niedostępna' }),
+            node('p', { text: 'Na wybranym node nie wykryto storage obsługującego snippets. Możesz nadal czekać na agenta już obecnego w template, ale instalacja przez cloud-init wymaga content „Snippets”.' })) : null,
+          isProxmox && state.installQemuGuestAgent && !sshReady ? node('div', { class: 'callout warning' },
+            node('strong', { text: 'Preflight SSH Proxmox nie jest gotowy' }),
+            node('p', { text: 'Instalację można włączyć i zapisać w Blueprintcie, ale wykonanie będzie zablokowane do czasu poprawnego preflight SSH (' + (state.qemuAgentSshReason || 'ssh_not_ready') + '). Sprawdź SSH, firewall oraz PROXMOX_VE_SSH_*.' })) : null,
+          isProxmox ? install : null,
+          isProxmox ? wait : null,
           toggle,
           workflowVisual(state.advancedWorkflow ? state.workflow : auto));
 
@@ -1184,7 +1211,9 @@
             ['Credential VM', state.guestCredentialId
               ? (data.credentials.find(value => String(value.id) === String(state.guestCredentialId))?.name || ('#' + state.guestCredentialId))
               : 'Brak'],
-            ['QEMU Guest Agent', state.waitAgent ? 'Instalacja przez cloud-init + oczekiwanie' : 'Bez automatycznej instalacji'],
+            ['QEMU Guest Agent', state.installQemuGuestAgent
+              ? (state.waitAgent ? 'Instalacja przez cloud-init + oczekiwanie' : 'Instalacja przez cloud-init, bez oczekiwania')
+              : (state.waitAgent ? 'Bez instalacji, oczekiwanie na agenta z template' : 'Wyłączony')],
             ['Klasyfikacja', state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—'],
           ] : [
             ['Szablon IaC', state.terraformTemplateId],
