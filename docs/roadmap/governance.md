@@ -144,3 +144,28 @@ Read `docs/architecture/resource-scope.md` for the security boundary and
 `docs/delivery/resource-scope.md` for exact verification, shared files, package
 application and remaining work. This is a locally committed, exported patch;
 no GitHub push, PR update, merge or new CI result is implied.
+
+
+## Quota continuation status (PR #121)
+
+After resource-scope integration was merged through PR #122, PR #121 was
+rebased onto that merged baseline and repurposed for the next governance gate.
+
+Delivered by PR #121:
+
+- slices 04/05 quota accounting primitives: Tenant/Project hierarchical limits,
+  `vm_count`/`vcpu`/`memory_mb`/`disk_gib` usage, ledger, allocations and
+  atomic PostgreSQL reservations;
+- provisioning, retry, approval, scheduled work, Terraform/OpenTofu recovery and
+  governed Day-2 quota integration;
+- provider-confirmed negative releases and `uncertain` handling for timeouts,
+  partial/ambiguous outcomes and manual reconciliation;
+- persisted-state/provider inventory recovery after worker crashes;
+- additive migration `d3f8c41b72a0` with existing-deployment backfill;
+- scoped quota API/RBAC and PostgreSQL concurrency/recovery acceptance tests.
+
+The quota gate does **not** claim placement capacity (slice 07), leases (slice
+06), policy core/integration (08/09), governance UI (10), full telemetry work
+(11), or live-provider production acceptance (12). Those domains must consume
+the quota contract documented in `docs/architecture/quotas.md` rather than
+reimplementing counters or bypassing reservations.
