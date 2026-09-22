@@ -755,5 +755,6 @@ async function cloneVm(item) {
 }
 
 registerCommand('inventory.openVm', showVmDetailsPage);
+registerCommand('inventory.consoleVm', showVmConsole);
 registerView({ id: 'inventory', label: 'Zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
 })();
