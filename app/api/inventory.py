@@ -18,6 +18,8 @@ from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provi
 from app.providers.registry import provider_for
 from app.security.core import audit
 from app.resource_scope.http import require
+from app.resource_scope.authorization import Scope
+from app.quotas.service import reconcile_terraform_presence
 
 
 router = APIRouter(prefix='/inventory', tags=['inventory'])
@@ -342,11 +344,19 @@ def reconcile_vm(
         if error.status_code != 404:
             raise
         row.lifecycle_status = 'missing' if row.lifecycle_status != 'destroyed' else 'destroyed'
+        if row.deployment_id:
+            reconcile_terraform_presence(
+                db, Scope(row.tenant_id, row.project_id), row.deployment_id, present=False
+            )
         audit(db, request, 'inventory.vm_missing', 'managed_vms', row.id)
         return public(row)
     row.node = str(live.get('node', row.node))
     row.name = str(live.get('name', row.name))
     row.lifecycle_status = 'active'
+    if row.deployment_id:
+        reconcile_terraform_presence(
+            db, Scope(row.tenant_id, row.project_id), row.deployment_id, present=True
+        )
     audit(db, request, 'inventory.vm_reconciled', 'managed_vms', row.id)
     return public(row)
 
