@@ -32,7 +32,7 @@ dialog.modal-console { width: min(96vw, 1400px); max-width: 1400px; }
 
 .vm-tab-content { min-height: 260px; }
 .vm-detail-stack { display: grid; gap: 18px; }
-.vm-overview-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.vm-overview-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; }
 .vm-stat-card { min-width: 0; min-height: 116px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .vm-stat-card > span:first-child { color: var(--muted); font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; }
 .vm-stat-card > strong { overflow: hidden; text-overflow: ellipsis; font-size: 1.15rem; }
