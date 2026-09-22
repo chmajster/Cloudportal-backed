@@ -84,13 +84,41 @@ jobs:
           set -euo pipefail
           umask 077
           token_file=$(mktemp)
+          listener_pid=''
           cleanup() {
+            if [[ -n "$listener_pid" ]]; then
+              kill "$listener_pid" >/dev/null 2>&1 || true
+              wait "$listener_pid" 2>/dev/null || true
+            fi
             sudo ./install.sh --docker --uninstall --purge-data >/dev/null 2>&1 || true
-            sudo rm -f "$token_file" /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status
+            sudo rm -f "$token_file" \
+              /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status \
+              /tmp/cloudportal-docker-port-conflict /tmp/cloudportal-docker-reinstall-output \
+              /tmp/cloudportal-docker-invalid-tls-output \
+              /tmp/cloudportal-replacement.crt /tmp/cloudportal-replacement.key \
+              /tmp/cloudportal-invalid.crt /tmp/cloudportal-invalid.key
           }
           trap cleanup EXIT
           printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
           unset REPOSITORY_READ_TOKEN
+
+          python3 -m http.server 18444 >/dev/null 2>&1 &
+          listener_pid=$!
+          sleep 1
+          if sudo ./install.sh --docker --non-interactive \
+            --host localhost \
+            --port 18444 \
+            --workers 1 \
+            --ref "$GITHUB_SHA" \
+            --github-token-file "$token_file" \
+            > /tmp/cloudportal-docker-port-conflict 2>&1; then
+            echo 'Docker installer accepted an occupied HTTPS port.' >&2
+            exit 1
+          fi
+          grep -Fq 'Port HTTPS 18444 jest zajęty' /tmp/cloudportal-docker-port-conflict
+          kill "$listener_pid"
+          wait "$listener_pid" 2>/dev/null || true
+          listener_pid=''
 
           sudo ./install.sh --docker --non-interactive \
             --host localhost \
@@ -113,6 +141,51 @@ jobs:
 
           running_workers=$(sudo docker ps --filter 'label=com.docker.compose.project=cloudportal-backed' --filter 'label=com.docker.compose.service=worker' --format '{{.ID}}' | wc -l)
           test "$running_workers" -eq 2
+
+          tls_before=$(sudo sha256sum /opt/cloudportal-backed-docker/tls/server.crt | awk '{print $1}')
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
+            -keyout /tmp/cloudportal-replacement.key \
+            -out /tmp/cloudportal-replacement.crt \
+            -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost' >/dev/null 2>&1
+
+          sudo ./install.sh --docker --non-interactive \
+            --host localhost \
+            --port 18443 \
+            --workers 2 \
+            --ref "$GITHUB_SHA" \
+            --github-token-file "$token_file" \
+            --cert-file /tmp/cloudportal-replacement.crt \
+            --cert-key /tmp/cloudportal-replacement.key \
+            > /tmp/cloudportal-docker-reinstall-output 2>&1
+
+          tls_after=$(sudo sha256sum /opt/cloudportal-backed-docker/tls/server.crt | awk '{print $1}')
+          test "$tls_before" != "$tls_after"
+          sudo curl -fsS --noproxy '*' \
+            --cacert /opt/cloudportal-backed-docker/tls/server.crt \
+            --resolve localhost:18443:127.0.0.1 \
+            https://localhost:18443/api/v1/health >/dev/null
+
+          printf '%s\n' 'not-a-certificate' > /tmp/cloudportal-invalid.crt
+          printf '%s\n' 'not-a-private-key' > /tmp/cloudportal-invalid.key
+          tls_valid=$(sudo sha256sum /opt/cloudportal-backed-docker/tls/server.crt | awk '{print $1}')
+          if sudo ./install.sh --docker --non-interactive \
+            --host localhost \
+            --port 18443 \
+            --workers 2 \
+            --ref "$GITHUB_SHA" \
+            --github-token-file "$token_file" \
+            --cert-file /tmp/cloudportal-invalid.crt \
+            --cert-key /tmp/cloudportal-invalid.key \
+            > /tmp/cloudportal-docker-invalid-tls-output 2>&1; then
+            echo 'Docker installer accepted invalid TLS material.' >&2
+            exit 1
+          fi
+          test "$(sudo sha256sum /opt/cloudportal-backed-docker/tls/server.crt | awk '{print $1}')" = "$tls_valid"
+          sudo curl -fsS --noproxy '*' \
+            --cacert /opt/cloudportal-backed-docker/tls/server.crt \
+            --resolve localhost:18443:127.0.0.1 \
+            https://localhost:18443/api/v1/health >/dev/null
 
           sudo ./install.sh --docker --uninstall --purge-data
           test ! -e /opt/cloudportal-backed-docker
