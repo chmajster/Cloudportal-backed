@@ -107,9 +107,7 @@ def guest_credential_runtime_variables(deployment):
     variables = {'ssh_username': credential.username}
     if private_key:
         variables['ssh_public_key'] = public_key_from_private_key(private_key)
-    if password:
-        variables['ssh_password'] = password
-    return variables, ([password] if password else [])
+    return variables, password
 
 
 def proxmox_ssh_preflight(credential, env):
@@ -217,9 +215,14 @@ class TerraformExecutor(Executor):
             if name in {'PROXMOX_VE_SSH_PASSWORD', 'PROXMOX_VE_SSH_PRIVATE_KEY'} and value
         )
         runtime_variables = dict(deployment.variables or {})
-        guest_variables, guest_sensitive_values = guest_credential_runtime_variables(deployment)
+        guest_variables, guest_password = guest_credential_runtime_variables(deployment)
         runtime_variables.update(guest_variables)
-        sensitive_values.extend(guest_sensitive_values)
+        if guest_password:
+            # Keep the plaintext password out of deployment variables, job
+            # payloads and terraform.tfvars.json. Terraform reads it only from
+            # the process environment for this execution.
+            env['TF_VAR_ssh_password'] = guest_password
+            sensitive_values.append(guest_password)
         with distributed_deployment_lock(deployment.id):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
@@ -295,8 +298,6 @@ class TerraformExecutor(Executor):
                     if (workspace / 'terraform.tfstate').exists():
                         context.stage('terraform.state.persist')
                         persist_state(deployment.id, workspace)
-                    # Runtime guest passwords are written only to this temporary
-                    # 0600 tfvars file. Remove it after every execution path.
                     variables_path.unlink(missing_ok=True)
         return workspace
 
