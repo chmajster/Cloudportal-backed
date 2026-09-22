@@ -298,7 +298,16 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       field('Serwery DNS', 'dns_servers', { value: (variables.dns_servers || []).join(', '), placeholder: '1.1.1.1, 8.8.8.8' }),
       field('Domena wyszukiwania DNS', 'dns_domain', { value: variables.dns_domain || '', placeholder: 'lab.example.com' }),
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '5. Workflow' }), node('span', { text: 'Bez ponownego wybierania obrazu, hostname, tagów ani cloud-init.' })),
-      checkboxField('Czekaj na QEMU Agent po Terraform apply — zainstaluj qemu-guest-agent przez cloud-init', 'wait_agent', true),
+      checkboxField(
+        'Instaluj qemu-guest-agent przez cloud-init',
+        'install_qemu_guest_agent',
+        variables.install_qemu_guest_agent ?? true
+      ),
+      checkboxField(
+        'Czekaj na QEMU Guest Agent po Terraform apply',
+        'wait_agent',
+        item ? (item.workflow || []).some(step => step.type === 'wait_for_agent') : true
+      ),
       playbookField, ansibleCredentialField,
       node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp, role i recovery' })),
@@ -464,7 +473,11 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const storages = availableStorages.filter(value => String(value.content || '').includes('images'));
       const snippetState = window.BlueprintProvisioningGuards.selectSnippetStorage(availableStorages, cloudInitSnippetStorage);
       cloudInitSnippetStorage = snippetState.storage;
-      window.BlueprintProvisioningGuards.syncWaitAgentControl(fields.querySelector('[name="wait_agent"]'), snippetState.snippets, qemuReadiness);
+      window.BlueprintProvisioningGuards.syncQemuGuestAgentInstallControl(
+        fields.querySelector('[name="install_qemu_guest_agent"]'),
+        snippetState.snippets,
+        qemuReadiness
+      );
       setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
@@ -517,6 +530,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     ipModeSelect.addEventListener('change', updateIpMode);
     playbookSelect.addEventListener('change', updateAnsible);
     fields.querySelector('[name="tags"]').addEventListener('input', updateWorkflowPreview);
+    fields.querySelector('[name="install_qemu_guest_agent"]').addEventListener('change', updateWorkflowPreview);
     fields.querySelector('[name="wait_agent"]').addEventListener('change', updateWorkflowPreview);
     await loadProvider();
     updateHostnameFields();
@@ -533,8 +547,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         const provider = providers.find(value => String(value.id) === String(data.get('provider_id')));
         if (!provider) throw new Error('Wybierz platformę Proxmox.');
 
-        if (data.has('wait_agent') && !cloudInitSnippetStorage) {
-          throw new Error('QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.');
+        if (data.has('install_qemu_guest_agent') && !cloudInitSnippetStorage) {
+          throw new Error('Instalacja QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.');
         }
         let schemeId = data.get('hostname_scheme_id');
         let selectedPattern = '';
@@ -605,8 +619,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           vlan_id: data.get('vlan_id') ? Number(data.get('vlan_id')) : null,
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
-          install_qemu_guest_agent: data.has('wait_agent'),
-          cloud_init_snippet_storage: data.has('wait_agent') ? cloudInitSnippetStorage : null,
+          install_qemu_guest_agent: data.has('install_qemu_guest_agent'),
+          cloud_init_snippet_storage: data.has('install_qemu_guest_agent') ? cloudInitSnippetStorage : null,
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,
