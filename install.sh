@@ -233,6 +233,18 @@ docker_tls="$docker_config/tls"
 docker_project=cloudportal-backed
 DOCKER_COMPOSE=()
 
+docker_valid_host() {
+  [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]]
+}
+
+docker_valid_port() {
+  [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535 && 10#$1 != 6389 && 10#$1 != 8765 && 10#$1 != 8766))
+}
+
+docker_valid_workers() {
+  [[ "$1" =~ ^[0-9]{1,2}$ ]] && ((10#$1 >= 1 && 10#$1 <= 64))
+}
+
 docker_compose_detect() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     DOCKER_COMPOSE=(docker compose)
@@ -422,9 +434,9 @@ docker_install() {
   backend_port=${backend_port:-8443}
   workers=${workers:-1}
 
-  valid_host "$backend_host" || { ui_fail 'Nieprawidłowy host. Użyj nazwy DNS lub adresu bez schematu URL.'; exit 2; }
-  valid_port "$backend_port" || { ui_fail 'Nieprawidłowy port. Dozwolone 1-65535 z wyjątkiem 6389, 8765 i 8766.'; exit 2; }
-  valid_workers "$workers" || { ui_fail 'Nieprawidłowa liczba workerów. Dozwolone 1-64.'; exit 2; }
+  docker_valid_host "$backend_host" || { ui_fail 'Nieprawidłowy host. Użyj nazwy DNS lub adresu bez schematu URL.'; exit 2; }
+  docker_valid_port "$backend_port" || { ui_fail 'Nieprawidłowy port. Dozwolone 1-65535 z wyjątkiem 6389, 8765 i 8766.'; exit 2; }
+  docker_valid_workers "$workers" || { ui_fail 'Nieprawidłowa liczba workerów. Dozwolone 1-64.'; exit 2; }
   backend_port=$((10#$backend_port))
   workers=$((10#$workers))
   [[ -z "$github_token_file" || -z "$github_config" ]] || { ui_fail 'Użyj tylko jednej opcji: --github-token-file albo --github-config.'; exit 2; }
