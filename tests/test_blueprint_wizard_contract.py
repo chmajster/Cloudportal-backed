@@ -248,6 +248,7 @@ state.selectedTemplateVmid = '9000';
 state.selectedTemplateNode = 'pve01';
 state.storage = 'local-lvm';
 state.network = 'vmbr0';
+state.installQemuGuestAgent = true;
 state.waitAgent = true;
 state.cloudInitSnippetStorage = '';
 const data = {{
@@ -285,3 +286,79 @@ console.log(JSON.stringify(core.workflow({
         'wait_for_ip',
         'run_ansible_playbook',
     ]
+
+def test_wizard_can_wait_for_preinstalled_qemu_agent_without_installing_it():
+    result = run_core("""
+const state = core.stateDefaults();
+state.slug = 'preinstalled-agent';
+state.name = 'Preinstalled Agent';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.installQemuGuestAgent = false;
+state.waitAgent = true;
+state.cloudInitSnippetStorage = '';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+
+console.log(JSON.stringify(core.buildPayload(state, data)));
+""")
+
+    assert result['deployment']['variables']['install_qemu_guest_agent'] is False
+    assert result['deployment']['variables']['cloud_init_snippet_storage'] is None
+    assert [step['type'] for step in result['workflow']] == [
+        'terraform_apply',
+        'wait_for_agent',
+        'wait_for_ip',
+    ]
+
+
+def test_wizard_can_install_qemu_agent_without_waiting_for_it():
+    result = run_core("""
+const state = core.stateDefaults();
+state.slug = 'install-agent-no-wait';
+state.name = 'Install Agent No Wait';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.installQemuGuestAgent = true;
+state.waitAgent = false;
+state.cloudInitSnippetStorage = 'local';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+
+console.log(JSON.stringify(core.buildPayload(state, data)));
+""")
+
+    assert result['deployment']['variables']['install_qemu_guest_agent'] is True
+    assert result['deployment']['variables']['cloud_init_snippet_storage'] == 'local'
+    assert [step['type'] for step in result['workflow']] == ['terraform_apply']
+
