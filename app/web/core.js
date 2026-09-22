@@ -1044,7 +1044,7 @@ function showApp() {
   emitUiEvent('app-shown', { identity: state.identity });
   renderNavigation();
   const mustChangePassword = state.identity.user.must_change_password;
-  navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'dashboard');
+  navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'deployments');
   if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
 }
 function navigationGroup(route) {
@@ -1064,7 +1064,7 @@ function navigationRouteRank(route) {
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
-  const visibleRoutes = routes.filter(route => route.navigation !== false && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
+  const visibleRoutes = routes.filter(route => route.navigation !== false && (typeof window.uiNavigationVisible !== 'function' || window.uiNavigationVisible(route)) && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
     .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || navigationRouteRank(a) - navigationRouteRank(b) || a.id.localeCompare(b.id));
   let previousGroup = null;
   visibleRoutes.forEach(route => {
