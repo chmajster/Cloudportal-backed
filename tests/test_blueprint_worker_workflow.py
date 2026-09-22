@@ -128,6 +128,46 @@ def test_blueprint_workflow_implicit_apply_preserves_legacy_clone_only_workflow(
     assert any('implicit terraform_apply' in value for value in context.logs)
 
 
+def test_blueprint_auto_resume_skips_confirmed_terraform_apply(monkeypatch, tmp_path):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'health', 'type': 'health_check', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.blueprint_workflow_completed = False
+    context.job.payload['_auto_resume'] = {
+        'skip_provider_apply': True,
+        'inventory_reconciled': True,
+        'count': 1,
+    }
+    context.job.payload['_workflow_runtime'] = {
+        'completed_steps': ['apply'],
+        'provider_applied': True,
+        'inventory_synced': True,
+        'plan_ready': False,
+        'plan_sha256': None,
+    }
+    executor = FakeExecutor()
+    restored = tmp_path / 'restored-workspace'
+    restored.mkdir()
+    observed = []
+
+    monkeypatch.setattr(worker, 'restore_recovery_workspace', lambda _context: restored)
+    monkeypatch.setattr(worker, 'persist_workflow_runtime', lambda _context, _runtime: None)
+    monkeypatch.setattr(
+        worker,
+        'health_check_vm',
+        lambda _context, workspace: observed.append(workspace) or True,
+    )
+
+    workspace = worker.run_blueprint_workflow(context, executor)
+
+    assert workspace == restored
+    assert executor.operations == []
+    assert observed == [restored]
+    assert context.blueprint_workflow_completed is True
+
+
 def test_unknown_workflow_step_fails_explicitly():
     context = FakeContext([
         {'id': 'mystery', 'type': 'not-supported', 'depends_on': [], 'retry': 0, 'timeout': 30},
