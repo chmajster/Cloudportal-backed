@@ -572,7 +572,7 @@ def _ensure_limit_accountable(db, scope: Scope, dimension: str, *, tenant_wide: 
 def _job_quota(db, job: Job, deployment: Deployment):
     scope = Scope(job.tenant_id, job.project_id)
     current = allocation_dimensions(db, scope, 'deployment', deployment.id)
-    if job.operation in {'terraform.apply', 'terraform.import'}:
+    if job.operation == 'terraform.apply':
         unresolved = active_limit_dimensions(db, scope) & deployment_unresolved_dimensions(deployment)
         if unresolved:
             fail(
@@ -581,6 +581,23 @@ def _job_quota(db, job: Job, deployment: Deployment):
                 'Quota admission cannot determine normalized capacity for: ' + ', '.join(sorted(unresolved)),
             )
         target = deployment_dimensions(deployment)
+    elif job.operation == 'terraform.import':
+        raw_target = (job.payload or {}).get('_quota_dimensions')
+        if raw_target is None:
+            fail(
+                409,
+                'QUOTA_IMPORT_BASELINE_REQUIRED',
+                'Imported resources require provider-confirmed quota dimensions; recreate the adoption request',
+            )
+        target = _values(raw_target, signed=False)
+        target['vm_count'] = 1
+        unresolved = active_limit_dimensions(db, scope) - set(target)
+        if unresolved:
+            fail(
+                409,
+                'QUOTA_DIMENSION_UNRESOLVED',
+                'Import baseline does not provide normalized capacity for: ' + ', '.join(sorted(unresolved)),
+            )
     elif job.operation == 'terraform.destroy':
         target = {}
     else:
@@ -737,9 +754,11 @@ def day2_delta(db, target, action: str, params: Mapping, current: Mapping | None
             requested = max(0, int(params['memory_mb']))
             deltas['memory_mb'] = requested - int(allocation.get('memory_mb', requested))
     elif action in {'add_disk', 'resize_disk', 'delete_disk'}:
-        if not allocation and _quota_limits_exist(db, scope):
-            fail(409, 'QUOTA_ALLOCATION_REQUIRED',
-                 'Resource must be adopted into quota accounting before disk changes')
+        if not allocation:
+            if _quota_limits_exist(db, scope):
+                fail(409, 'QUOTA_ALLOCATION_REQUIRED',
+                     'Resource must be adopted into quota accounting before disk changes')
+            return QuotaDelta(scope, subject_type, subject_id, 'day2.' + action, {})
         live = dict(current or {})
         if action == 'add_disk':
             size = int(params.get('size_gib') or 0)
