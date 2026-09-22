@@ -128,6 +128,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     bootstrap = scripts['app.js'].text
     core = scripts['core.js'].text
     loader = scripts['loader.js'].text
+    navigation = scripts['shared/navigation.js'].text
 
     assert "fetch('./manifest.json'" in loader
     assert "loadFeatureScript('app.js')" in loader
@@ -153,6 +154,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'const routes = [];' in core
     assert 'const views = Object.create(null);' in core
     assert 'route.navigation !== false' in core
+    assert 'window.uiNavigationVisible' in core
+    assert "location.hash.slice(1) || 'deployments'" in core
     assert 'currentRoute?.navigationParent === route.id' in core
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
@@ -211,13 +214,38 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "window.uiResolveView" in core
     assert "window.uiRoutePath" in core
     assert "window.uiNavigationOrder" in script
+    assert "window.uiNavigationVisible = route => NAVIGATION_POSITION.has(route?.id);" in navigation
+    assert "window.uiNavigationGroup = () => '';" in navigation
     assert "window.cloudportalHttp" in script
     assert "window.pollingService" in script
     assert "window.uiStatusMeta" in script
     assert "window.uiPageHeading" in script
     assert "'my-resources': '/resources'" in script
     assert "'blueprints': '/blueprints'" in script or "blueprints: '/blueprints'" in script
-    assert "'Administracja'" in script
+    assert """const CLIENT_NAVIGATION_ROUTES = Object.freeze([
+    'deployments',
+    'inventory',
+    'providers',
+    'jobs',
+    'blueprints',
+    'catalog',
+    'credentials',
+    'tokens',
+    'schedules',
+    'webhooks',
+    'users',
+    'roles',
+    'tools',
+    'settings',
+    'observability',
+    'audit',
+    'account',
+    'tenants',
+    'projects',
+  ]);""" in navigation
+    assert "tenants: '/tenants'" in navigation
+    assert "projects: '/projects'" in navigation
+    assert "'Administracja'" not in navigation
     assert '.page-heading' in stylesheet
     assert '.filter-bar' in stylesheet
     assert '.ui-tabs' in stylesheet
