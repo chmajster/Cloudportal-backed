@@ -71,6 +71,13 @@ def test_docker_uninstall_confirmation_uses_controlling_tty():
     assert "printf 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' >/dev/tty" in INSTALLER
 
 
+def test_docker_key_validation_starts_postgres_without_running_migrations_first():
+    assert 'docker_compose_for "$release" "$candidate_env" up -d postgres' in INSTALLER
+    assert 'exec -T postgres pg_isready -U cloudportal -d cloudportal' in INSTALLER
+    assert 'run --rm --no-deps bootstrap python -m app.bootstrap --key-only' in INSTALLER
+    assert 'bez uruchamiania migracji' in INSTALLER
+
+
 def test_installer_failure_trap_is_actionable_without_dumping_commands():
     assert 'installer_error()' in INSTALLER
     assert 'Etap „$CURRENT_STAGE” przerwany' in INSTALLER
