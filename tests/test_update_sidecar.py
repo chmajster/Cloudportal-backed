@@ -331,7 +331,16 @@ def test_run_update_gates_before_backup_and_pins_verified_sha(tmp_path, monkeypa
     })
     monkeypatch.setattr(updater, 'wait_for_required_ci', lambda sha, settings: calls.append(('ci', sha)))
     monkeypatch.setattr(updater, 'validate_candidate', lambda sha, settings: calls.append(('candidate', sha)))
-    monkeypatch.setattr(updater, 'pre_update_backup', lambda: calls.append(('backup', None)))
+    backup_dir = tmp_path / 'backup'
+    backup_dir.mkdir()
+    (backup_dir / 'database.dump').write_bytes(b'dump')
+    (backup_dir / 'metadata.json').write_text('{}')
+    monkeypatch.setattr(updater, 'pre_update_backup', lambda: (calls.append(('backup', None)), backup_dir)[1])
+    monkeypatch.setattr(
+        updater,
+        'validate_candidate_runtime',
+        lambda sha, backup, settings: calls.append(('runtime', sha, backup)),
+    )
 
     def fake_download(ref, path):
         calls.append(('download', ref))
@@ -361,6 +370,7 @@ def test_run_update_gates_before_backup_and_pins_verified_sha(tmp_path, monkeypa
     updater.run_update('main', automatic=False)
 
     assert calls[:3] == [('ci', target), ('candidate', target), ('backup', None)]
+    assert ('runtime', target, backup_dir) in calls
     assert ('download', target) in calls
     assert ('args', target) in calls
     assert ('verify', target) in calls
@@ -397,3 +407,67 @@ def test_run_update_does_not_touch_backup_when_ci_fails(tmp_path, monkeypatch):
     assert state['status'] == 'failed'
     assert state['phase'] == 'failed'
     assert 'CI failed' in state['message']
+
+
+
+def test_runtime_preflight_url_helpers_support_installer_local_services(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    database = 'postgresql+psycopg:///cloudportal?host=/var/run/postgresql'
+    details = updater._database_clone_details(database)
+    assert details['host'] == '/var/run/postgresql'
+    assert details['username'] == 'cloudportal'
+    assert details['database'] == 'cloudportal'
+    assert updater._url_with_database(database, 'cloudportal_preflight_1').startswith(
+        'postgresql+psycopg:///cloudportal_preflight_1?'
+    )
+    assert updater._scratch_redis_url('redis://:secret@127.0.0.1:6389/0').endswith('/15')
+    assert updater._scratch_redis_url('redis://:secret@127.0.0.1:6389/15').endswith('/14')
+
+
+def test_runtime_preflight_rejects_external_database_without_mutating_it(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    try:
+        updater._database_clone_details(
+            'postgresql+psycopg://cloudportal:secret@db.example.com:5432/cloudportal'
+        )
+    except RuntimeError as exc:
+        assert 'lokalnego PostgreSQL' in str(exc)
+    else:
+        raise AssertionError('external PostgreSQL must fail closed')
+
+
+def test_candidate_core_health_ignores_workers_but_requires_runtime_dependencies(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    payload = {
+        'status': 'degraded',
+        'checks': {
+            'api': True,
+            'database': True,
+            'queue': True,
+            'dispatcher': False,
+            'workers': {'online': 0, 'expected': 1},
+            'terraform': True,
+            'ansible': True,
+            'disk': True,
+            'encryption': True,
+        },
+    }
+    assert updater._candidate_core_healthy(payload) is True
+    payload['checks']['database'] = False
+    assert updater._candidate_core_healthy(payload) is False
+
+
+def test_pre_update_backup_requires_verifiable_snapshot(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    backup_root = tmp_path / 'backups' / '20260922T100000Z'
+    backup_root.mkdir(parents=True)
+    (backup_root / 'database.dump').write_bytes(b'dump')
+    (backup_root / 'metadata.json').write_text('{}')
+    monkeypatch.setattr(updater.Path, 'exists', lambda self: True)
+
+    class Result:
+        returncode = 0
+        stdout = str(backup_root) + '\n'
+
+    monkeypatch.setattr(updater.subprocess, 'run', lambda *args, **kwargs: Result())
+    assert updater.pre_update_backup() == backup_root
