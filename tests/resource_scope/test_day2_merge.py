@@ -56,6 +56,9 @@ def test_merge_preserves_day2_defaults_without_granting_governance_admin(system)
     assert 'day2.view' in roles['Viewer']
     assert 'day2.view' in roles['Auditor']
     assert 'day2.admin' in roles['Infrastructure Administrator']
+    assert 'quotas.read' in roles['Infrastructure Administrator']
+    assert 'quotas.tenant.manage' not in roles['Infrastructure Administrator']
+    assert 'quotas.tenant.manage' in roles['Tenant Administrator']
     assert not any(p.startswith('governance.') for p in roles['Infrastructure Administrator'])
     assert 'governance.admin' in roles['Administrator']
 
@@ -69,8 +72,9 @@ def test_merge_migration_upgrades_both_published_tips(tmp_path, monkeypatch, sta
         command.upgrade(config, starting_revision)
         uid, did, cid, pid = legacy_deployment(engine())
         command.upgrade(config, 'head'); command.upgrade(config, 'head')
-        assert ScriptDirectory.from_config(config).get_heads() == ['c864db917f20']
-        assert {'project_credential_access', 'user_project_contexts', 'day2_action_requests'} <= set(inspect(engine()).get_table_names())
+        assert ScriptDirectory.from_config(config).get_heads() == ['d3f8c41b72a0']
+        assert {'project_credential_access', 'user_project_contexts', 'day2_action_requests',
+                'quota_reservations', 'quota_allocations'} <= set(inspect(engine()).get_table_names())
         with engine().connect() as connection:
             row = historical_deployment(connection, did)
             assert (row['tenant_id'], row['project_id']) == (DEFAULT_TENANT_ID, DEFAULT_PROJECT_ID)
