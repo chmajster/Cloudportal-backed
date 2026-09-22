@@ -414,7 +414,7 @@ async function vmAuditContent(item) {
 
 async function showVmDetailsPage(item, initialTab = 'overview', parentView = null) {
   const returnView = parentView || (state.view === 'my-resources' ? 'my-resources' : 'inventory');
-  const returnLabel = returnView === 'my-resources' ? 'Moje zasoby' : 'Zasoby';
+  const returnLabel = 'Moje zasoby';
   try {
     const status = await api(`${vmBase(item)}/status`);
     state.view = returnView;
@@ -782,5 +782,5 @@ async function cloneVm(item) {
 
 registerCommand('inventory.openVm', showVmDetailsPage);
 registerCommand('inventory.consoleVm', showVmConsole);
-registerView({ id: 'inventory', label: 'Zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
+registerView({ id: 'inventory', label: 'Moje zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
 })();
