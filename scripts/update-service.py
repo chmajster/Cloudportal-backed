@@ -673,6 +673,15 @@ def validate_candidate_runtime(target_sha: str, backup_dir: Path, settings: dict
             timeout=1200,
         )
 
+        scratch_dump = root / "database.dump"
+        shutil.copy2(dump, scratch_dump)
+        os.chmod(scratch_dump, 0o600)
+        _run_runtime_command(
+            ["chown", "cloudportal:cloudportal", str(scratch_dump)],
+            label="uprawnienia tymczasowej kopii backupu",
+            timeout=60,
+        )
+
         admin_create = [
             runuser, "-u", "postgres", "--", createdb,
             "--owner", details["username"], *pg_conn, scratch_db,
@@ -684,7 +693,7 @@ def validate_candidate_runtime(target_sha: str, backup_dir: Path, settings: dict
             restore_command = [
                 runuser, "-u", details["username"], "--", pg_restore,
                 "--no-owner", "--no-privileges", "--exit-on-error",
-                *pg_conn, "--dbname", scratch_db, str(dump),
+                *pg_conn, "--dbname", scratch_db, str(scratch_dump),
             ]
             _run_runtime_command(
                 restore_command,
