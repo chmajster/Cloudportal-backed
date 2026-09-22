@@ -99,12 +99,16 @@ def _validate_blueprint_authorization(db, job, user, permissions):
     ) and user.id not in blueprint.allowed_user_ids and not (role_ids & set(blueprint.allowed_role_ids)):
         raise ExecutionFailed('Blueprint access has been revoked')
 
+    authorization_source = (
+        ((job.payload or {}).get('_auto_resume') or {}).get('authorization_source')
+        or job.source
+    )
     source = {
         'CloudPortal': 'cloudportal',
         'Cloudportal-backed': 'backend',
         'API': 'api',
         'Scheduler': 'backend',
-    }.get(job.source, 'api')
+    }.get(authorization_source, 'api')
     if not (blueprint.visibility or {}).get(source, False):
         raise ExecutionFailed('Blueprint is no longer visible to this execution source')
 
@@ -1171,6 +1175,8 @@ def run_blueprint_workflow(context, executor):
         )
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
+        runtime['ansible_ran'] = True
+        persist_workflow_runtime(context, runtime)
 
     context.blueprint_workflow_completed = True
     persist_workflow_runtime(context, runtime)
