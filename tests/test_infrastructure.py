@@ -280,6 +280,9 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
 
     with session() as db:
         job = db.get(Job, d['job']['id'])
+        payload = dict(job.payload or {})
+        payload['_recreate'] = True
+        job.payload = payload
         job.status = 'running'
         job.heartbeat_at = now() - timedelta(seconds=settings().execution_timeout + 181)
         dep = db.get(Deployment, d['id'])
@@ -306,6 +309,7 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
         assert resumed.payload['_auto_resume']['from_persisted_state'] is True
         assert resumed.payload['_auto_resume']['authorization_source'] == original.source
         assert resumed.payload['_auto_resume']['count'] == 1
+        assert '_recreate' not in resumed.payload
         assert '_quota_checked' not in resumed.payload
         assert '_quota_reservation_id' not in resumed.payload
         assert dep.active_job_id == resumed.id
