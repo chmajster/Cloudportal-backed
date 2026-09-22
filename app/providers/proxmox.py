@@ -844,6 +844,13 @@ class ProxmoxProvider(InfrastructureProvider):
             }
         ):
             raise HTTPException(404, 'noVNC asset not found')
+
+        # noVNC is a static pveproxy application. Sending a PVE API-token
+        # Authorization header to this path breaks on some Proxmox/reverse-proxy
+        # combinations even though the same token correctly creates vncproxy.
+        # Prefer the public static asset and only authenticate when the upstream
+        # explicitly answers that authentication is required.
+        url = self.endpoint.removesuffix('/api2/json') + '/novnc/' + asset
         try:
             with httpx.Client(
                 verify=self.verify_ssl,
@@ -851,12 +858,19 @@ class ProxmoxProvider(InfrastructureProvider):
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
-                response = client.get(
-                    self.endpoint.removesuffix('/api2/json') + '/novnc/' + asset,
-                    headers=self.console_auth_headers(),
-                )
+                response = client.get(url)
+                if response.status_code in {301, 302, 303, 307, 308, 401, 403}:
+                    # Some authentication gateways hide static content behind a
+                    # login redirect. Retry the original URL with PVE auth; do
+                    # not forward credentials to the redirect destination.
+                    response = client.get(url, headers=self.console_auth_headers())
                 response.raise_for_status()
                 return response.content, response.headers.get('content-type', 'application/octet-stream')
+        except httpx.HTTPStatusError as error:
+            raise HTTPException(
+                502,
+                f'Unable to proxy Proxmox noVNC asset (upstream HTTP {error.response.status_code})',
+            ) from None
         except httpx.HTTPError:
             raise HTTPException(502, 'Unable to proxy Proxmox noVNC asset') from None
 
