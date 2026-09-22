@@ -541,6 +541,39 @@ def release_uncertain_for_subject(db, scope: Scope, subject_type: str, subject_i
     return len(rows)
 
 
+def reconcile_terraform_presence(db, scope: Scope, subject_id: str, *, present: bool):
+    """Resolve Terraform reservations from independently confirmed resource presence.
+
+    Presence is enough to conservatively commit an apply reservation (possibly
+    over-counting a partial apply, which is safer than freeing capacity). Absence
+    releases apply reservations and commits destroy reservations. Day-2
+    reservations are intentionally excluded because mere VM presence does not
+    prove a resize/disk mutation succeeded.
+    """
+    _lock_scope(db, scope)
+    rows = db.scalars(select(QuotaReservation).where(
+        QuotaReservation.tenant_id == scope.tenant_id,
+        QuotaReservation.project_id == scope.project_id,
+        QuotaReservation.subject_type == 'deployment',
+        QuotaReservation.subject_id == str(subject_id),
+        QuotaReservation.status.in_(ACTIVE_RESERVATION_STATES),
+        QuotaReservation.operation.in_(('terraform.apply', 'terraform.destroy')),
+    ).order_by(QuotaReservation.created_at).with_for_update()).all()
+    resolved = []
+    for row in rows:
+        if row.operation == 'terraform.apply':
+            resolved.append(
+                commit_reservation(db, row.id) if present
+                else release_reservation(db, row.id, reconciled=(row.status == 'uncertain'))
+            )
+        else:
+            resolved.append(
+                release_reservation(db, row.id, reconciled=(row.status == 'uncertain')) if present
+                else commit_reservation(db, row.id)
+            )
+    return resolved
+
+
 def account_confirmed_absent(db, scope: Scope, subject_type: str, subject_id: str,
                              request_key: str, created_by: int | None):
     # A confirmed destroy is stronger evidence than a stale/uncertain create.
