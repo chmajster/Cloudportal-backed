@@ -1061,10 +1061,14 @@ function navigationRouteRank(route) {
   if (typeof window.uiNavigationOrder === 'function') return window.uiNavigationOrder(route);
   return Number(route.order ?? 1000);
 }
+function navigationRouteVisible(route) {
+  return route.navigation !== false
+    && (typeof window.uiNavigationVisible !== 'function' || window.uiNavigationVisible(route));
+}
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
-  const visibleRoutes = routes.filter(route => route.navigation !== false && (typeof window.uiNavigationVisible !== 'function' || window.uiNavigationVisible(route)) && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
+  const visibleRoutes = routes.filter(route => navigationRouteVisible(route) && allowed(route.permission) && (!state.identity.user.must_change_password || route.id === 'account'))
     .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || navigationRouteRank(a) - navigationRouteRank(b) || a.id.localeCompare(b.id));
   let previousGroup = null;
   visibleRoutes.forEach(route => {
@@ -1086,7 +1090,10 @@ async function navigate(view) {
   if (typeof window.uiResolveView === 'function') view = window.uiResolveView(view);
   if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
   const available = routes.filter(item => allowed(item.permission) && (!state.identity.user.must_change_password || item.id === 'account'));
-  const route = available.find(item => item.id === view) || available[0];
+  const visibleAvailable = available
+    .filter(navigationRouteVisible)
+    .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || navigationRouteRank(a) - navigationRouteRank(b) || a.id.localeCompare(b.id));
+  const route = available.find(item => item.id === view) || visibleAvailable[0] || available[0];
   state.view = route.id;
   location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(route.id) : route.id;
   dom.pageTitle.textContent = route.label;
