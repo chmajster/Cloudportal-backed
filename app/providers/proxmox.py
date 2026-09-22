@@ -859,7 +859,10 @@ class ProxmoxProvider(InfrastructureProvider):
                 trust_env=False,
             ) as client:
                 response = client.get(url)
-                if response.status_code in {401, 403}:
+                if response.status_code in {301, 302, 303, 307, 308, 401, 403}:
+                    # Some authentication gateways hide static content behind a
+                    # login redirect. Retry the original URL with PVE auth; do
+                    # not forward credentials to the redirect destination.
                     response = client.get(url, headers=self.console_auth_headers())
                 response.raise_for_status()
                 return response.content, response.headers.get('content-type', 'application/octet-stream')
