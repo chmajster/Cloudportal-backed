@@ -115,6 +115,9 @@ function managedVmCard(item, providerNames, deploymentById) {
   if (canOpen) {
     actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', item, 'overview', 'my-resources'), 'primary'));
   }
+  if (canOpen && allowed('vms.console') && hasCommand('inventory.consoleVm')) {
+    actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
+  }
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   if (deployment) actions.push(button('Wdrożenie', () => showDeploymentDetails(deployment), 'ghost'));
 
