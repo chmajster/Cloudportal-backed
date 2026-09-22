@@ -38,6 +38,14 @@ async function inventoryView() {
 function inventoryVmActions(item) {
   const actions = [];
   if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('Szczegóły', () => showVmDetailsPage(item), 'primary'));
+  const canRecreate = item.lifecycle_status === 'active'
+    && item.management_mode === 'terraform'
+    && item.deployment_id
+    && allowed('deployments.destroy')
+    && allowed('deployments.create')
+    && allowed('jobs.execute')
+    && allowed('terraform.execute');
+  if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
   if (allowed('inventory.update')) actions.push(button('Odśwież stan', async () => {
     await api(`/inventory/vms/${item.id}/reconcile`, { method: 'POST' });
     toast('Stan zasobu odświeżony.');
