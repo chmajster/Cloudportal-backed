@@ -60,15 +60,17 @@ remove stale allocations without trusting a timeout as proof of deletion.
 
 ## Crash and uncertainty recovery
 
-Persisted Terraform state that independently confirms a deployment exists can
-resolve a reserved/uncertain apply after worker failure. Direct provider
-inventory reconciliation can likewise resolve Terraform apply/destroy
-reservations from confirmed presence/absence.
+Persisted Terraform state that independently confirms a newly created deployment exists can
+resolve a reserved/uncertain initial apply after worker failure. Direct provider
+inventory reconciliation can likewise resolve an initial Terraform apply or a
+destroy reservation from confirmed presence/absence. Presence alone never
+confirms a CPU/RAM/disk re-apply, so update reservations remain unresolved until
+stronger evidence is available.
 
 Resolution is conservative:
 
-- confirmed presence commits an apply and releases a destroy;
-- confirmed absence releases an apply and commits a destroy;
+- confirmed presence commits an **initial** apply and releases a destroy;
+- confirmed absence releases an **initial** apply and commits a destroy;
 - Day-2 resize/disk uncertainty is not inferred from mere VM presence and must
   be reconciled from the actual operation/provider result.
 
