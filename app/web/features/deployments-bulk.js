@@ -4,6 +4,8 @@
 const selection = new Set();
 const DEFAULT_BATCH_SIZE = 25;
 
+document.addEventListener('cloudportal:app-hidden', () => selection.clear());
+
 const POWER_ACTIONS = Object.freeze([
   { id: 'power_on', label: 'Uruchom', kind: 'primary' },
   { id: 'shutdown', label: 'Wyłącz', kind: 'ghost' },
@@ -36,25 +38,36 @@ function requestPayload(actionId, ids, label) {
   };
 }
 
-async function submitChunk(actionId, ids, label) {
+function chunkKey(actionId, ids) {
+  return actionId + ':' + ids.join(',');
+}
+
+function idempotencyKeyFor(keys, actionId, ids) {
+  const key = chunkKey(actionId, ids);
+  if (!keys.has(key)) keys.set(key, crypto.randomUUID());
+  return keys.get(key);
+}
+
+async function submitChunk(actionId, ids, label, keys, onSubmitted) {
   try {
     const result = await api('/day2-actions/bulk', {
       method: 'POST',
-      idempotent: true,
+      headers: { 'Idempotency-Key': idempotencyKeyFor(keys, actionId, ids) },
       body: requestPayload(actionId, ids, label),
     });
+    if (typeof onSubmitted === 'function') onSubmitted(ids, result);
     return [result];
   } catch (error) {
     if (!isBulkLimitError(error) || ids.length <= 1) throw error;
     const middle = Math.ceil(ids.length / 2);
     return [
-      ...(await submitChunk(actionId, ids.slice(0, middle), label)),
-      ...(await submitChunk(actionId, ids.slice(middle), label)),
+      ...(await submitChunk(actionId, ids.slice(0, middle), label, keys, onSubmitted)),
+      ...(await submitChunk(actionId, ids.slice(middle), label, keys, onSubmitted)),
     ];
   }
 }
 
-async function submitBulk(actionId, items, label) {
+async function submitBulk(actionId, items, label, keys) {
   const ids = [...new Set(items.map(resourceId).filter(Boolean))];
   const batches = [];
   for (let offset = 0; offset < ids.length; offset += DEFAULT_BATCH_SIZE) {
@@ -62,8 +75,11 @@ async function submitBulk(actionId, items, label) {
   }
 
   const results = [];
+  const markSubmitted = submittedIds => {
+    submittedIds.forEach(id => selection.delete(String(id)));
+  };
   for (const batch of batches) {
-    results.push(...(await submitChunk(actionId, batch, label)));
+    results.push(...(await submitChunk(actionId, batch, label, keys, markSubmitted)));
   }
 
   return results.reduce((summary, result) => {
@@ -88,20 +104,27 @@ function requestAction(actionId, items, onComplete) {
   const action = actionMeta(actionId);
   const preview = selected.slice(0, 5).map(item => item.name || ('VM ' + item.vm_id)).join(', ');
   const remainder = selected.length > 5 ? ` i ${selected.length - 5} więcej` : '';
+  const idempotencyKeys = new Map();
 
   confirmAction(
     `Masowa akcja: ${action.label}`,
     `${action.label} zostanie zlecone dla ${selected.length} VM: ${preview}${remainder}.`,
     async () => {
-      const result = await submitBulk(action.id, selected, action.label);
+      const pending = selected.filter(item => selection.has(resourceId(item)));
+      if (!pending.length) {
+        toast('Wszystkie wybrane VM zostały już obsłużone.');
+        if (typeof onComplete === 'function') await onComplete();
+        return;
+      }
+
+      const result = await submitBulk(action.id, pending, action.label, idempotencyKeys);
       const accepted = result.children.length;
       const rejected = result.errors.length;
-      selection.clear();
 
       if (rejected) {
         const first = result.errors[0];
         toast(
-          `Zlecono ${accepted} z ${selected.length} VM. Odrzucono ${rejected}: ${first?.message || first?.code || 'błąd walidacji'}.`,
+          `Zlecono ${accepted} z ${pending.length} VM. Odrzucono ${rejected}: ${first?.message || first?.code || 'błąd walidacji'}.`,
           accepted ? 'warning' : 'error'
         );
       } else {
