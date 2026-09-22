@@ -635,50 +635,6 @@
 }
 
 
-.product-resource-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  width: fit-content;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-2);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
-}
-
-.product-resource-tab {
-  position: relative;
-  min-height: 40px;
-  padding: 9px 18px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: .78rem;
-  font-weight: 850;
-  transition: color .15s ease, background .15s ease, box-shadow .15s ease;
-}
-
-.product-resource-tab:hover {
-  color: var(--text);
-  background: var(--surface-3);
-}
-
-.product-resource-tab.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow:
-    0 1px 4px rgba(0, 0, 0, .10),
-    inset 0 -2px 0 var(--accent);
-}
-
-.product-resource-tab:focus-visible {
-  outline: 3px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
 .my-resources-page-head {
   display: grid;
   gap: 10px;
@@ -1045,14 +1001,6 @@
 }
 
 @media (max-width: 760px) {
-  .product-resource-tabs {
-    width: 100%;
-  }
-
-  .product-resource-tab {
-    flex: 1 1 50%;
-  }
-
   .my-resources-intro {
     font-size: .78rem;
   }
@@ -1098,7 +1046,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .product-resource-tab,
   .my-resources-summary-card,
   .my-resource-card {
     transition: none;
