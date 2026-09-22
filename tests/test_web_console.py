@@ -165,8 +165,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('deployments.open'" in script
     assert "api('/blueprints?available=true&limit=200')" in script
     assert "label: 'Produkty'" in script
-    assert "label: 'Moje zasoby'" in script
-    assert "id: 'my-resources'" in script
+    assert "id: 'inventory', label: 'Moje zasoby'" in script
+    assert "id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: 'deployments.read', order: 111, navigation: false" in script
     assert "function productResourceTabs(" in script
     assert "function myResourcesView(repairInventory = true)" in script
     assert "api('/inventory/reconcile', { method: 'POST', body: {} })" in script
@@ -565,7 +565,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "VM zsynchronizowana z inventory" in script
     assert "Po zakończeniu Terraform backend automatycznie doda VM" in script
     assert "parentView = null" in script
-    assert "returnView === 'my-resources' ? 'Moje zasoby' : 'Zasoby'" in script
+    assert "const returnLabel = 'Moje zasoby'" in script
     assert "'start', 'Uruchom'" in script
     assert "'shutdown', 'Wyłącz'" in script
     assert "'reboot', 'Restart'" in script
