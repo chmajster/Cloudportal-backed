@@ -221,12 +221,52 @@ async function accountView() {
 }
 
 function changePassword(required = false) {
-  const fields = node('div', { class: 'form-grid' }, field('Obecne hasło', 'current_password', { type: 'password', autocomplete: 'current-password', required: true, wide: true }), field('Nowe hasło', 'password', { type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }), field('Powtórz nowe hasło', 'confirm', { type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }));
-  openModal({ title: required ? 'Zmień hasło początkowe' : 'Zmień hasło', eyebrow: 'Moje konto', body: fields, submitLabel: 'Zmień hasło', onSubmit: async data => {
-    if (data.get('password') !== data.get('confirm')) throw new Error('Nowe hasła nie są identyczne.');
-    await api('/auth/change-password', { method: 'POST', body: { current_password: data.get('current_password'), password: data.get('password') } });
-    showLogin('Hasło zmienione. Zaloguj się ponownie.', 'success');
-  }});
+  const currentPassword = field('Obecne hasło', 'current_password', {
+    type: 'password',
+    autocomplete: 'current-password',
+    required: true,
+    wide: true,
+    help: required
+      ? 'Wpisz hasło, którym zalogowałeś się do Cloudportal.'
+      : 'Wpisz aktualne hasło do konta.',
+  });
+  const fields = node('div', { class: 'form-grid' },
+    currentPassword,
+    field('Nowe hasło', 'password', { type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }),
+    field('Powtórz nowe hasło', 'confirm', { type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }));
+  openModal({
+    title: required ? 'Zmień hasło początkowe' : 'Zmień hasło',
+    eyebrow: 'Moje konto',
+    body: fields,
+    submitLabel: 'Zmień hasło',
+    onSubmit: async (data, form) => {
+      if (data.get('password') !== data.get('confirm')) throw new Error('Nowe hasła nie są identyczne.');
+      try {
+        await api('/auth/change-password', {
+          method: 'POST',
+          body: {
+            current_password: data.get('current_password'),
+            password: data.get('password'),
+          },
+        });
+      } catch (error) {
+        const message = String(error?.message || '');
+        if (error?.status === 403 && ['Current password required', 'Current password is incorrect'].includes(message)) {
+          const input = form.elements.current_password;
+          if (input) {
+            input.value = '';
+            input.focus();
+          }
+          throw new Error('Obecne hasło jest nieprawidłowe.');
+        }
+        if (error?.status === 403 && message === 'Browser session required') {
+          throw new Error('Zmiana hasła wymaga ponownego zalogowania.');
+        }
+        throw error;
+      }
+      showLogin('Hasło zmienione. Zaloguj się ponownie.', 'success');
+    },
+  });
 }
 
 registerCommand('users.create', createUser);
