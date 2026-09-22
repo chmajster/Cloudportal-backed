@@ -211,6 +211,59 @@ def test_manual_plan_authorizes_guest_credential_from_deployment_workflow(client
     assert ('credential', guest.json()['id']) in seen
 
 
+def test_destroy_does_not_require_guest_vm_credential_access(client, headers, monkeypatch):
+    credential, provider = infrastructure(client, headers)
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Destroy VM login',
+        'type': 'ssh',
+        'endpoint': 'ssh://destroy-vm.example.com:22',
+        'username': 'vmadmin',
+        'secrets': {'password': 'destroy-password'},
+    })
+    assert guest.status_code == 201, guest.text
+
+    payload = blueprint_payload(credential, provider)
+    payload['slug'] = 'destroy-guest-credential'
+    payload['name'] = 'Destroy guest credential'
+    payload['deployment']['guest_credential_id'] = guest.json()['id']
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+    launched = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(headers),
+        json={},
+    )
+    assert launched.status_code == 202, launched.text
+
+    with session() as db:
+        initial = db.get(Job, launched.json()['job']['id'])
+        deployment = db.get(Deployment, launched.json()['id'])
+        initial.status = 'failed'
+        deployment.active_job_id = None
+        deployment.status = 'failed'
+        db.commit()
+
+    destroy = client.post('/api/v1/jobs', headers=idem(headers), json={
+        'operation': 'terraform.destroy',
+        'deployment_id': launched.json()['id'],
+    })
+    assert destroy.status_code == 202, destroy.text
+
+    seen = []
+    guest_id = guest.json()['id']
+
+    def visible(db, kind, key, scope):
+        seen.append((kind, int(key)))
+        return not (kind == 'credential' and int(key) == guest_id)
+
+    monkeypatch.setattr('app.resource_scope.database.reference_visible', visible)
+    with session() as db:
+        job = db.get(Job, destroy.json()['id'])
+        worker.validate_authorization(db, job)
+
+    assert ('credential', guest_id) not in seen
+
+
 def test_failed_blueprint_apply_queues_explicit_recovery_destroy(client, headers, monkeypatch, tmp_path):
     credential, provider = infrastructure(client, headers)
     created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
