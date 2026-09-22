@@ -112,6 +112,105 @@ def test_blueprint_approval_permission_is_enforced(client, headers):
     assert current.json()['status'] == 'queued'
 
 
+def test_waiting_approval_guest_credential_cannot_be_rotated(client, headers):
+    setting = client.put(
+        '/api/v1/settings/blueprints',
+        headers=headers,
+        json={'auto_approve_for_executors': False},
+    )
+    assert setting.status_code == 200, setting.text
+
+    credential, provider = infrastructure(client, headers)
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Pending VM login',
+        'type': 'ssh',
+        'endpoint': 'ssh://pending-vm.example.com:22',
+        'username': 'vmadmin',
+        'secrets': {'password': 'pending-password-1'},
+    })
+    assert guest.status_code == 201, guest.text
+
+    payload = blueprint_payload(credential, provider, requires_approval=True)
+    payload['slug'] = 'pending-guest-credential'
+    payload['name'] = 'Pending guest credential'
+    payload['deployment']['guest_credential_id'] = guest.json()['id']
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+
+    launched = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(headers),
+        json={},
+    )
+    assert launched.status_code == 202, launched.text
+    assert launched.json()['job']['status'] == 'waiting_approval'
+
+    rotated = client.put(
+        f"/api/v1/credentials/{guest.json()['id']}",
+        headers=headers,
+        json={
+            'name': 'Pending VM login',
+            'type': 'ssh',
+            'endpoint': 'ssh://pending-vm.example.com:22',
+            'username': 'vmadmin',
+            'secrets': {'password': 'pending-password-2'},
+        },
+    )
+    assert rotated.status_code == 409, rotated.text
+    assert 'job' in rotated.text.lower()
+
+
+def test_manual_plan_authorizes_guest_credential_from_deployment_workflow(client, headers, monkeypatch):
+    credential, provider = infrastructure(client, headers)
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Plan VM login',
+        'type': 'ssh',
+        'endpoint': 'ssh://plan-vm.example.com:22',
+        'username': 'vmadmin',
+        'secrets': {'password': 'plan-password'},
+    })
+    assert guest.status_code == 201, guest.text
+
+    payload = blueprint_payload(credential, provider)
+    payload['slug'] = 'plan-guest-credential'
+    payload['name'] = 'Plan guest credential'
+    payload['deployment']['guest_credential_id'] = guest.json()['id']
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+    launched = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(headers),
+        json={},
+    )
+    assert launched.status_code == 202, launched.text
+
+    with session() as db:
+        initial = db.get(Job, launched.json()['job']['id'])
+        deployment = db.get(Deployment, launched.json()['id'])
+        initial.status = 'failed'
+        deployment.active_job_id = None
+        deployment.status = 'failed'
+        db.commit()
+
+    manual = client.post('/api/v1/jobs', headers=idem(headers), json={
+        'operation': 'terraform.plan',
+        'deployment_id': launched.json()['id'],
+    })
+    assert manual.status_code == 202, manual.text
+
+    seen = []
+    monkeypatch.setattr(
+        'app.resource_scope.database.reference_visible',
+        lambda db, kind, key, scope: seen.append((kind, int(key))) or True,
+    )
+    with session() as db:
+        job = db.get(Job, manual.json()['id'])
+        assert not (job.payload or {}).get('blueprint')
+        worker.validate_authorization(db, job)
+
+    assert ('credential', guest.json()['id']) in seen
+
+
 def test_failed_blueprint_apply_queues_explicit_recovery_destroy(client, headers, monkeypatch, tmp_path):
     credential, provider = infrastructure(client, headers)
     created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
