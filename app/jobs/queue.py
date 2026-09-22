@@ -18,6 +18,7 @@ from app.operations.service import cleanup_retention_once, deliver_webhooks_once
 from app.providers.task_reconcile import reconcile_proxmox_tasks_once
 from app.security.core import redis_client
 from app.terraform.state import delete_plan
+from app.quotas.service import mark_job_reservation_uncertain
 
 
 @lru_cache
@@ -83,6 +84,7 @@ def reconcile_cancelled_jobs(db):
             # Redis uncertainty is not proof that the worker stopped.
             continue
 
+        mark_job_reservation_uncertain(db, job)
         job.status = 'cancelled'
         job.error = 'Cancellation requested; worker no longer owns an active execution'
         if deployment is not None and deployment.active_job_id == job.id:
@@ -217,6 +219,29 @@ def expire_waiting_approvals(db):
         queue_job_webhooks(db, job)
 
 
+def reconcile_stale_jobs(db):
+    rows = db.scalars(select(Job).where(
+        Job.status == 'running',
+        Job.cancel_requested.is_(False),
+        Job.heartbeat_at < now() - timedelta(seconds=settings().execution_timeout + 180),
+    ).with_for_update(skip_locked=True)).all()
+    for job in rows:
+        mark_job_reservation_uncertain(db, job)
+        job.status = 'failed'
+        job.error = (
+            'Worker heartbeat lost. Inventory was reconciled from persisted Terraform state; '
+            'quota reservation requires reconciliation before retrying.'
+        )
+        if job.deployment_id:
+            deployment = db.get(Deployment, job.deployment_id)
+            if deployment is not None and deployment.active_job_id == job.id:
+                deployment.active_job_id = None
+                deployment.status = 'failed'
+        db.add(JobLog(job_id=job.id, message=job.error))
+        queue_job_webhooks(db, job)
+    return len(rows)
+
+
 def dispatch_once():
     materialize_scheduled_jobs()
     q = queue()
@@ -241,20 +266,7 @@ def dispatch_once():
         reconcile_cancelled_jobs(db)
         reconcile_deployment_job_statuses(db)
         reconcile_persisted_inventory(db)
-        # Fail uncertain interrupted executions conservatively instead of risking a duplicate apply.
-        stale = db.scalars(select(Job).where(
-            Job.status == 'running',
-            Job.cancel_requested.is_(False),
-            Job.heartbeat_at < now() - timedelta(seconds=settings().execution_timeout + 180),
-        ).with_for_update(skip_locked=True)).all()
-        for job in stale:
-            job.status = 'failed'
-            job.error = 'Worker heartbeat lost. Inventory was reconciled from persisted Terraform state; inspect state before retrying.'
-            if job.deployment_id:
-                d = db.get(Deployment, job.deployment_id)
-                d.active_job_id, d.status = None, 'failed'
-            db.add(JobLog(job_id=job.id, message=job.error))
-            queue_job_webhooks(db, job)
+        reconcile_stale_jobs(db)
         from app.day2.reconciliation import reconcile_finished_jobs
         reconcile_finished_jobs(db)
         db.commit()

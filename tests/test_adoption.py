@@ -40,6 +40,8 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
         'cores': 4,
         'memory': 8192,
         'scsi0': 'local-lvm:vm-777-disk-0,size=64G',
+        'scsi1': 'local-lvm:vm-777-disk-1,size=256G',
+        'ide2': 'local-lvm:cloudinit,media=cdrom,size=4M',
         'net0': 'virtio=00:11:22:33:44:55,bridge=vmbr0,tag=20',
         'onboot': 1,
         'agent': '1',
@@ -69,10 +71,12 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
     assert preview.json()['plan_only'] is True
     assert preview.json()['template']['importable'] is True
 
+    requested = dict(suggestion)
+    requested.update({'cpu': 1, 'memory': 512, 'disk': 1})
     adopted = client.post(
         f"/api/v1/inventory/vms/{inventory['id']}/adopt",
         headers=idem(headers),
-        json={'template': 'proxmox-vm', 'variables': suggestion, 'executor': 'terraform'},
+        json={'template': 'proxmox-vm', 'variables': requested, 'executor': 'terraform'},
     )
     assert adopted.status_code == 202, adopted.text
     deployment = adopted.json()
@@ -85,6 +89,12 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
         dep = db.get(Deployment, deployment['id'])
         cred = db.get(Credential, dep.credentials_id)
         job = db.get(Job, deployment['job']['id'])
+        assert job.payload['_quota_dimensions'] == {
+            'vm_count': 1,
+            'vcpu': 4,
+            'memory_mb': 8192,
+            'disk_gib': 320,
+        }
 
     commands = []
     stages = []
@@ -121,6 +131,14 @@ def test_proxmox_vm_adoption_is_import_and_plan_only(client, headers, monkeypatc
         assert dep.status == 'imported'
         assert row.management_mode == 'terraform'
         assert row.deployment_id == dep.id
+        from app.quotas.models import QuotaAllocation
+        allocation = db.query(QuotaAllocation).filter_by(subject_type='deployment', subject_id=dep.id).one()
+        assert allocation.dimensions == {
+            'vm_count': 1,
+            'vcpu': 4,
+            'memory_mb': 8192,
+            'disk_gib': 320,
+        }
 
     blocked = client.delete(f"/api/v1/inventory/vms/{inventory['id']}", headers=headers)
     assert blocked.status_code == 409

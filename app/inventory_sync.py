@@ -2,6 +2,8 @@ from sqlalchemy import select
 
 from app.models import Deployment, ManagedResource, ManagedVM
 from app.terraform.state import read_stored_state
+from app.quotas.service import reconcile_terraform_presence
+from app.resource_scope.authorization import Scope
 
 
 def state_outputs(payload):
@@ -138,6 +140,12 @@ def repair_inventory_from_states(db, limit=200):
                 continue
             outputs = state_outputs(payload)
             result = sync_deployment_inventory(db, deployment, outputs)
+            reconcile_terraform_presence(
+                db,
+                Scope(deployment.tenant_id, deployment.project_id),
+                deployment.id,
+                present=True,
+            )
             repaired.append({
                 'deployment_id': deployment.id,
                 'provider': deployment.provider,

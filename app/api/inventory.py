@@ -18,6 +18,8 @@ from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provi
 from app.providers.registry import provider_for
 from app.security.core import audit
 from app.resource_scope.http import require
+from app.resource_scope.authorization import Scope
+from app.quotas.service import reconcile_terraform_presence
 
 
 router = APIRouter(prefix='/inventory', tags=['inventory'])
@@ -69,6 +71,24 @@ def discover_vm(adapter, vm_id):
 def live_public(row):
     allowed = 'vmid name node status template type tags mem maxmem cpu maxcpu disk maxdisk uptime'.split()
     return {key: value for key, value in row.items() if key in allowed}
+
+
+def live_disk_total_gib(live):
+    total = 0.0
+    for device, raw in dict(live or {}).items():
+        if not re.fullmatch(r'(?:scsi|virtio|sata|ide)\d{1,2}', str(device)):
+            continue
+        raw = str(raw or '')
+        if re.search(r'(?:^|,)media=cdrom(?:,|$)', raw, re.I):
+            continue
+        size_match = re.search(r'(?:^|,)size=([0-9]+(?:\.[0-9]+)?)([KMGT])(?:,|$)', raw, re.I)
+        if not size_match:
+            raise HTTPException(409, f'Provider did not report a size for governed disk {device}')
+        size = float(size_match.group(1))
+        unit = size_match.group(2).upper()
+        factors = {'K': 1 / 1024 / 1024, 'M': 1 / 1024, 'G': 1, 'T': 1024}
+        total += size * factors[unit]
+    return max(0, math.ceil(total))
 
 
 def adoption_suggestion(row, live):
@@ -266,7 +286,7 @@ def adopt_vm(
     if row.management_mode != 'external' or row.lifecycle_status != 'active' or row.deployment_id:
         raise HTTPException(409, 'Only an active external VM can be adopted')
 
-    provider = find(db, Provider, row.provider_id)
+    provider, adapter = provider_adapter(db, row.provider_id)
     if provider.type != 'proxmox':
         raise HTTPException(422, 'VM adoption is currently implemented for Proxmox')
     require_catalog_item_enabled(db, 'templates', data.template)
@@ -281,6 +301,14 @@ def adopt_vm(
     locked_credential(db, provider.credentials_id)
 
     def create():
+        live = adapter.vm_config(row.node, row.vm_id)
+        confirmed = adoption_suggestion(row, live)
+        quota_dimensions = {
+            'vm_count': 1,
+            'vcpu': max(1, int(live.get('cores') or confirmed['cpu'])) * max(1, int(live.get('sockets') or 1)),
+            'memory_mb': max(0, int(live.get('memory') or confirmed['memory'])),
+            'disk_gib': live_disk_total_gib(live),
+        }
         deployment = Deployment(
             name=variables.name,
             provider_id=provider.id,
@@ -310,6 +338,7 @@ def adopt_vm(
             {
                 'import_values': import_values,
                 'adoption': {'managed_vm_id': row.id, 'plan_only': True},
+                '_quota_dimensions': quota_dimensions,
             },
         )
         audit(db, request, 'inventory.vm_adoption_started', 'managed_vms', row.id)
@@ -342,11 +371,19 @@ def reconcile_vm(
         if error.status_code != 404:
             raise
         row.lifecycle_status = 'missing' if row.lifecycle_status != 'destroyed' else 'destroyed'
+        if row.deployment_id:
+            reconcile_terraform_presence(
+                db, Scope(row.tenant_id, row.project_id), row.deployment_id, present=False
+            )
         audit(db, request, 'inventory.vm_missing', 'managed_vms', row.id)
         return public(row)
     row.node = str(live.get('node', row.node))
     row.name = str(live.get('name', row.name))
     row.lifecycle_status = 'active'
+    if row.deployment_id:
+        reconcile_terraform_presence(
+            db, Scope(row.tenant_id, row.project_id), row.deployment_id, present=True
+        )
     audit(db, request, 'inventory.vm_reconciled', 'managed_vms', row.id)
     return public(row)
 

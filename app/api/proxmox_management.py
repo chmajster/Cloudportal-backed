@@ -21,6 +21,7 @@ from app.providers.registry import provider_for
 from app.providers.task_reconcile import track_proxmox_task
 from app.security.core import audit, redis_client
 from app.resource_scope.http import require
+from app.quotas.service import DIMENSIONS, require_governed_legacy_mutation
 
 
 router = APIRouter(tags=['proxmox-vm-management'])
@@ -221,6 +222,9 @@ def delete_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSHOT
 def rollback_snapshot(provider_id: int, node: NODE, vmid: VMID, snapname: SNAPSHOT, request: Request,
                       actor=Depends(require('snapshots.rollback')), db=Depends(get_db, scope='function')):
     ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'rolled back to a snapshot')
+    require_governed_legacy_mutation(
+        db, request.state.resource_scope, ('vcpu', 'memory_mb', 'disk_gib'), 'Snapshot rollback'
+    )
     payload = {'snapname': snapname}
     def execute():
         task = adapter(db, provider_id).rollback_snapshot(node, vmid, snapname)
@@ -256,6 +260,7 @@ def backup_vm(provider_id: int, node: NODE, vmid: VMID, data: BackupVMInput, req
 def restore_vm(provider_id: int, node: NODE, data: RestoreVMInput, request: Request,
                actor=Depends(require('backups.restore')), db=Depends(get_db, scope='function')):
     ensure_not_terraform_managed(managed_vm_record(db, provider_id, data.vm_id), 'restored over directly')
+    require_governed_legacy_mutation(db, request.state.resource_scope, DIMENSIONS, 'VM restore')
     source_storage = data.archive.split(':', 1)[0]
     provider = adapter(db, provider_id)
     available = provider.backups(node, source_storage)
@@ -289,6 +294,7 @@ def convert_to_template(provider_id: int, node: NODE, vmid: VMID, request: Reque
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/clone', status_code=202)
 def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, request: Request,
              actor=Depends(require('vms.clone')), db=Depends(get_db, scope='function')):
+    require_governed_legacy_mutation(db, request.state.resource_scope, DIMENSIONS, 'VM clone')
     def execute():
         task = adapter(db, provider_id).clone_vm(
             node,
@@ -312,6 +318,7 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
 def resize_disk(provider_id: int, node: NODE, vmid: VMID, data: ResizeDiskInput, request: Request,
                 actor=Depends(require('vms.update')), db=Depends(get_db, scope='function')):
     ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'resized directly')
+    require_governed_legacy_mutation(db, request.state.resource_scope, ('disk_gib',), 'Disk resize')
     def execute():
         task = adapter(db, provider_id).resize_disk(
             node, vmid, disk=data.disk, grow_gib=data.grow_gib
@@ -327,6 +334,13 @@ def update_vm_config(provider_id: int, node: NODE, vmid: VMID, data: VMConfigInp
     managed = managed_vm_record(db, provider_id, vmid)
     ensure_not_terraform_managed(managed, 'reconfigured directly')
     payload = data.model_dump(exclude_none=True)
+    affected = set()
+    if 'cores' in payload:
+        affected.add('vcpu')
+    if 'memory' in payload:
+        affected.add('memory_mb')
+    if affected:
+        require_governed_legacy_mutation(db, request.state.resource_scope, affected, 'VM compute resize')
     def execute():
         values = dict(payload)
         if 'onboot' in values:
@@ -366,6 +380,7 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
               destroy_unreferenced_disks: Annotated[bool, Query()] = False,
               actor=Depends(require('vms.delete')), db=Depends(get_db, scope='function')):
     ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'deleted directly')
+    require_governed_legacy_mutation(db, request.state.resource_scope, DIMENSIONS, 'VM delete')
     payload = {'purge': purge, 'destroy_unreferenced_disks': destroy_unreferenced_disks}
     def execute():
         task = adapter(db, provider_id).delete_vm(

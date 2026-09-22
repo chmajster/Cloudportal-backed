@@ -10,6 +10,10 @@ from app.executors.terraform import TerraformExecutor
 from app.jobs.worker import execute
 from app.models import Deployment, Job, ScheduledOperation, User, WebhookDelivery, now
 from app.operations.service import deliver_webhooks_once, materialize_scheduled_jobs
+from app.projects.permissions import DEFAULT_PROJECT_ID
+from app.quotas.service import release_job_reservation, set_project_limit
+from app.resource_scope.authorization import Scope
+from app.tenancy.permissions import DEFAULT_TENANT_ID
 
 
 def idem(headers):
@@ -242,3 +246,46 @@ def test_scheduled_blueprint_apply_waits_for_approval(client, headers):
 
     execute(job_id)
     assert client.get('/api/v1/jobs/' + job_id, headers=headers).json()['status'] == 'waiting_approval'
+
+
+
+def test_quota_rejected_one_shot_schedule_does_not_repeat(client, headers):
+    created = deployment(client, headers)
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        initial = db.get(Job, dep.active_job_id)
+        release_job_reservation(db, initial)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        set_project_limit(db, Scope(DEFAULT_TENANT_ID, DEFAULT_PROJECT_ID), 'vm_count', 0)
+        db.commit()
+
+    response = client.post('/api/v1/schedules', headers=headers, json={
+        'name': 'quota-denied-apply',
+        'deployment_id': created['id'],
+        'operation': 'terraform.apply',
+        'next_run_at': (now() + timedelta(hours=1)).isoformat() + 'Z',
+    })
+    assert response.status_code == 201, response.text
+
+    with session() as db:
+        row = db.get(ScheduledOperation, response.json()['id'])
+        row.next_run_at = now() - timedelta(seconds=1)
+        db.commit()
+
+    materialize_scheduled_jobs()
+    materialize_scheduled_jobs()
+
+    with session() as db:
+        row = db.get(ScheduledOperation, response.json()['id'])
+        jobs = db.query(Job).filter(
+            Job.source == 'Scheduler',
+            Job.deployment_id == created['id'],
+            Job.operation == 'terraform.apply',
+        ).all()
+        assert len(jobs) == 1
+        assert jobs[0].status == 'failed'
+        assert row.is_active is False
+        assert row.last_run_at is not None
+        assert row.last_error

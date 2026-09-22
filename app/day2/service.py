@@ -15,6 +15,7 @@ from app.day2.providers import Day2Target, day2_provider
 from app.day2.registry import all_actions, get_action
 from app.models import Credential, Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, Setting, now
 from app.operations.service import queue_webhook_event
+from app.quotas.service import check_day2, prepare_day2_reservation, release_job_reservation
 from app.security.core import audit
 
 
@@ -337,11 +338,17 @@ def _current_for_diff(action_id, target, adapter, state, params=None):
         return {'metadata': dict((state.platform_metadata if state else {}) or {})}
     if action_id == 'migrate_vm':
         return {'target_node': target.node}
-    if action_id == 'resize_disk':
+    if action_id in {'resize_disk', 'delete_disk'}:
         rows = adapter.disks(target)
         device = (params or {}).get('device')
         row = next((item for item in rows if item['device'] == device), None)
-        return {'new_size_gib': row.get('size_gib')} if row else {}
+        if not row:
+            return {}
+        return (
+            {'new_size_gib': row.get('size_gib')}
+            if action_id == 'resize_disk'
+            else {'size_gib': row.get('size_gib')}
+        )
     return {}
 
 
@@ -386,7 +393,7 @@ def _validate_action_specific(db, target, credential, adapter, action, params):
     return warnings
 
 
-def validate_action(db, target, credential, action_id, params, reason, permissions):
+def validate_action(db, target, credential, action_id, params, reason, permissions, *, quota_check=True):
     action = get_action(action_id)
     config = day2_settings(db)
     if action.permission not in permissions:
@@ -426,6 +433,9 @@ def validate_action(db, target, credential, action_id, params, reason, permissio
             restart_required = restart_required or not capabilities.get('hot_cpu_supported', False)
         if 'memory_mb' in params:
             restart_required = restart_required or not capabilities.get('hot_memory_supported', False)
+    quota_checks = []
+    if quota_check:
+        _, quota_checks = check_day2(db, target, action.id, params, current=current)
     return {
         'valid': True,
         'warnings': warnings,
@@ -433,7 +443,8 @@ def validate_action(db, target, credential, action_id, params, reason, permissio
         'changes': changes,
         'restart_required': restart_required,
         'approval_required': approval_required(db, target, action, permissions, config, state),
-        'quota_checked': False,
+        'quota_checked': bool(quota_check),
+        'quota': quota_checks,
         'management_mode': target.management_mode,
     }
 
@@ -565,6 +576,10 @@ def create_action(db, request, actor, target, credential, action_id, params, rea
     row.job_id = job.id
     if not validation['approval_required']:
         acquire_resource_lock(db, target.resource_id, row.id, day2_settings(db)['resource_lock_timeout'])
+        quota_current = _current_for_diff(
+            action.id, target, day2_provider(credential), get_resource_state(db, target.resource_id), params
+        )
+        prepare_day2_reservation(db, job, target, action.id, params, current=quota_current)
     db.add(JobLog(job_id=job.id, message='day2.requested: ' + action.id))
     audit(db, request, 'day2.requested', 'day2_actions', row.id)
     _event(db, 'day2.approval_required' if validation['approval_required'] else 'day2.requested', row)
@@ -588,13 +603,18 @@ def approve_action(db, request, actor, row, permissions):
     target, credential, _ = load_target(db, row.resource_id)
     validate_action(db, target, credential, row.action, row.parameters or {}, row.reason, permissions | {get_action(row.action).permission})
     acquire_resource_lock(db, row.resource_id, row.id, day2_settings(db)['resource_lock_timeout'])
+    job = db.get(Job, row.job_id)
+    if job is None:
+        raise failure('RESOURCE_NOT_FOUND', message='Action job no longer exists', status_code=404)
+    quota_current = _current_for_diff(
+        row.action, target, day2_provider(credential), get_resource_state(db, target.resource_id),
+        row.parameters or {},
+    )
+    prepare_day2_reservation(db, job, target, row.action, row.parameters or {}, current=quota_current)
     row.approval_state = 'approved'
     row.approved_by = actor.user_id
     row.approved_at = now()
     row.status = 'QUEUED'
-    job = db.get(Job, row.job_id)
-    if job is None:
-        raise failure('RESOURCE_NOT_FOUND', message='Action job no longer exists', status_code=404)
     job.status = 'queued'
     payload = dict(job.payload or {})
     payload['_day2_approval'] = {'approved_by': actor.user_id, 'approved_at': row.approved_at.isoformat()}
@@ -621,6 +641,8 @@ def cancel_action(db, request, actor, row):
             job.error = 'Cancelled before execution'
             db.add(JobLog(job_id=job.id, message='day2.cancelled: before execution'))
         release_resource_lock(db, row.resource_id, row.id)
+        if job:
+            release_job_reservation(db, job)
         _event(db, 'day2.cancelled', row)
     elif action.supports_cancel:
         row.status = 'CANCEL_REQUESTED'

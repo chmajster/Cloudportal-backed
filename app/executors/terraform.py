@@ -236,6 +236,10 @@ class TerraformExecutor(Executor):
                             run_process(plan, workspace, env, context, sensitive_values)
                         if operation != 'terraform.plan':
                             context.stage(operation)
+                            # Quota enters uncertain state only once the mutating
+                            # Terraform subprocess is actually about to be submitted.
+                            # Init/plan/preflight failures are safe to retry.
+                            context.quota_provider_submitted = True
                             run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, sensitive_values)
                 finally:
                     keep_plan = (

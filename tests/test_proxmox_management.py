@@ -2,6 +2,10 @@ import uuid
 
 from app.database import session
 from app.models import ManagedVM
+from app.projects.permissions import DEFAULT_PROJECT_ID
+from app.quotas.service import set_project_limit
+from app.resource_scope.authorization import Scope
+from app.tenancy.permissions import DEFAULT_TENANT_ID
 from app.providers.task_reconcile import reconcile_proxmox_tasks_once, track_proxmox_task
 
 from conftest import new_user
@@ -251,3 +255,44 @@ def test_proxmox_task_reconciliation_registers_clone(client, headers, monkeypatc
         assert row.node == 'pve02'
         assert row.name == 'clone-vm'
         assert row.management_mode == 'external'
+
+
+
+def test_active_quota_blocks_legacy_capacity_mutations(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = resources(client, headers)
+    with session() as db:
+        scope = Scope(DEFAULT_TENANT_ID, DEFAULT_PROJECT_ID)
+        set_project_limit(db, scope, 'vm_count', 10)
+        set_project_limit(db, scope, 'disk_gib', 1000)
+        set_project_limit(db, scope, 'memory_mb', 65536)
+        db.commit()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('legacy provider mutation must be blocked before provider execution')
+
+    monkeypatch.setattr(ProxmoxProvider, 'clone_vm', forbidden)
+    monkeypatch.setattr(ProxmoxProvider, 'resize_disk', forbidden)
+    monkeypatch.setattr(ProxmoxProvider, 'update_vm_config', forbidden)
+    monkeypatch.setattr(ProxmoxProvider, 'delete_vm', forbidden)
+
+    base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
+
+    clone = client.post(base + '/clone', headers=idem(headers), json={
+        'new_vm_id': 202, 'name': 'vm02', 'full': True,
+    })
+    assert clone.status_code == 409
+    assert clone.json()['detail']['code'] == 'QUOTA_GOVERNED_ACTION_REQUIRED'
+
+    disk = client.put(base + '/disk', headers=idem(headers), json={'disk': 'scsi0', 'grow_gib': 20})
+    assert disk.status_code == 409
+    assert disk.json()['detail']['code'] == 'QUOTA_GOVERNED_ACTION_REQUIRED'
+
+    compute = client.put(base + '/config', headers=idem(headers), json={'memory': 8192})
+    assert compute.status_code == 409
+    assert compute.json()['detail']['code'] == 'QUOTA_GOVERNED_ACTION_REQUIRED'
+
+    deleted = client.delete(base, headers=idem(headers))
+    assert deleted.status_code == 409
+    assert deleted.json()['detail']['code'] == 'QUOTA_GOVERNED_ACTION_REQUIRED'
