@@ -140,7 +140,7 @@ def _backfill_confirmed_deployments():
     deployments = sa.table(
         'deployments',
         sa.column('id'), sa.column('tenant_id'), sa.column('project_id'),
-        sa.column('variables'), sa.column('status'), sa.column('destroyed_at'),
+        sa.column('provider'), sa.column('variables'), sa.column('status'), sa.column('destroyed_at'),
     )
     allocation = sa.table(
         'quota_allocations',
@@ -167,15 +167,35 @@ def _backfill_confirmed_deployments():
     stamp = datetime.now(timezone.utc).replace(tzinfo=None)
     for row in rows:
         variables = dict(row['variables'] or {})
+        provider = str(row['provider'] or '').lower()
         dimensions = {'vm_count': 1}
-        if variables.get('cpu') is not None:
-            dimensions['vcpu'] = max(0, int(variables['cpu']))
-        if variables.get('memory') is not None:
-            dimensions['memory_mb'] = max(0, int(variables['memory']))
-        disk = variables.get('disk', variables.get('os_disk_size_gb'))
-        if disk is not None:
-            dimensions['disk_gib'] = max(0, int(disk))
-        dimensions = {key: value for key, value in dimensions.items() if value}
+
+        def positive_int(value):
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return max(0, int(value))
+            except (TypeError, ValueError):
+                return None
+
+        if provider in {'proxmox', 'vmware'}:
+            cpu = positive_int(variables.get('cpu'))
+            memory = positive_int(variables.get('memory'))
+            disk = positive_int(variables.get('disk'))
+            if cpu:
+                dimensions['vcpu'] = cpu
+            if memory:
+                dimensions['memory_mb'] = memory
+            if disk:
+                dimensions['disk_gib'] = disk
+        elif provider == 'aws':
+            disk = positive_int(variables.get('root_volume_size'))
+            if disk:
+                dimensions['disk_gib'] = disk
+        elif provider == 'azure':
+            disk = positive_int(variables.get('os_disk_size_gb'))
+            if disk:
+                dimensions['disk_gib'] = disk
         connection.execute(allocation.insert().values(
             id=str(uuid.uuid4()), tenant_id=row['tenant_id'], project_id=row['project_id'],
             subject_type='deployment', subject_id=row['id'], dimensions=dimensions,
