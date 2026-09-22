@@ -85,7 +85,7 @@ def guest_credential_runtime_variables(deployment):
     blueprint = ((deployment.workflow or {}).get('blueprint') or {})
     credential_id = blueprint.get('guest_credential_id')
     if not credential_id:
-        return {}, []
+        return {}, None
 
     with session() as db:
         credential = db.get(Credential, int(credential_id))
