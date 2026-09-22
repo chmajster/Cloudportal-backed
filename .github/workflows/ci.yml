@@ -82,6 +82,27 @@ jobs:
           printf '%s' "$REPOSITORY_READ_TOKEN" > "$token_file"
           unset REPOSITORY_READ_TOKEN
 
+          sudo docker run -d --name cloudportal-port-conflict -p 9443:80 nginx:1.28-alpine >/dev/null
+          if sudo ./install.sh --docker --non-interactive --host localhost --port 9443 --workers 2 --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-docker-port-conflict-output 2>&1; then
+            echo 'Docker installer accepted a port owned by an unrelated container.' >&2
+            exit 1
+          fi
+          grep -Fq 'spoza projektu cloudportal-backed' /tmp/cloudportal-docker-port-conflict-output
+          sudo test ! -e /opt/cloudportal-backed-docker
+          sudo test ! -e /etc/cloudportal-backed-docker
+          sudo docker rm -f cloudportal-port-conflict >/dev/null
+
+          sudo sh -c 'exec 9>/run/cloudportal-install.lock; flock -n 9; sleep 15' &
+          lock_pid=$!
+          sleep 1
+          if sudo ./install.sh --docker --no-takeover --non-interactive --host localhost --port 9443 --workers 2 --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-docker-lock-output 2>&1; then
+            echo 'Docker installer ignored an existing install lock.' >&2
+            exit 1
+          fi
+          grep -Fq -- '--no-takeover' /tmp/cloudportal-docker-lock-output
+          sudo kill "$lock_pid" >/dev/null 2>&1 || true
+          wait "$lock_pid" 2>/dev/null || true
+
           sudo ./install.sh --docker --non-interactive --host localhost --port 9443 --workers 2 --ref "$GITHUB_SHA" --github-token-file "$token_file" > /tmp/cloudportal-docker-install-output 2>&1
           curl -kfsS https://localhost:9443/api/v1/health >/dev/null
           worker_count=$(sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed --filter label=com.docker.compose.service=worker --format '{{.ID}}' | wc -l)
@@ -95,13 +116,21 @@ jobs:
           sudo test -d /etc/cloudportal-backed-docker
           sudo docker volume ls -q --filter label=com.docker.compose.project=cloudportal-backed | grep -q .
 
+          if sudo ./install.sh --docker --non-interactive --uninstall --purge-data > /tmp/cloudportal-docker-purge-confirm-output 2>&1; then
+            echo 'Docker purge without --yes unexpectedly succeeded.' >&2
+            exit 1
+          fi
+          grep -Fq -- '--yes' /tmp/cloudportal-docker-purge-confirm-output
+          sudo test -d /etc/cloudportal-backed-docker
+          sudo docker volume ls -q --filter label=com.docker.compose.project=cloudportal-backed | grep -q .
+
           sudo ./install.sh --docker --non-interactive --uninstall --purge-data --yes > /tmp/cloudportal-docker-purge-output 2>&1
           sudo test ! -e /etc/cloudportal-backed-docker
           ! sudo docker volume ls -q --filter label=com.docker.compose.project=cloudportal-backed | grep -q .
       - name: Sanitized Docker installer diagnostics
         if: failure()
         run: |
-          for output in /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status-output /tmp/cloudportal-docker-uninstall-output /tmp/cloudportal-docker-purge-output; do
+          for output in /tmp/cloudportal-docker-port-conflict-output /tmp/cloudportal-docker-lock-output /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status-output /tmp/cloudportal-docker-uninstall-output /tmp/cloudportal-docker-purge-confirm-output /tmp/cloudportal-docker-purge-output; do
             if sudo test -f "$output"; then
               echo "Docker installer diagnostics: $output"
               sudo sed -E \
