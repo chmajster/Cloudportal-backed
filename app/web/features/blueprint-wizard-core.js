@@ -191,6 +191,7 @@
       playbookId: '',
       ansibleCredentialId: '',
       ansibleVariables: {},
+      installQemuGuestAgent: true,
       waitAgent: true,
       advancedWorkflow: false,
       workflow: [],
@@ -243,8 +244,8 @@
         tags.push('apmid-' + apmid, 'env-' + environment, apmid + '.' + environment);
       }
       const uniqueTags = [...new Set(tags)];
-      if (state.waitAgent && !state.cloudInitSnippetStorage) {
-        throw new Error('QEMU Guest Agent wymaga storage obsługującego snippets na wybranym node.');
+      if (state.installQemuGuestAgent && !state.cloudInitSnippetStorage) {
+        throw new Error('Instalacja QEMU Guest Agent wymaga storage obsługującego snippets na wybranym node.');
       }
       variables = {
         name: state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName,
@@ -257,8 +258,8 @@
         storage: state.storage,
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
-        install_qemu_guest_agent: Boolean(state.waitAgent),
-        cloud_init_snippet_storage: state.waitAgent ? state.cloudInitSnippetStorage : null,
+        install_qemu_guest_agent: Boolean(state.installQemuGuestAgent),
+        cloud_init_snippet_storage: state.installQemuGuestAgent ? state.cloudInitSnippetStorage : null,
         tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
@@ -317,7 +318,7 @@
       hostname: state.hostnameEnabled,
       ipam: state.ipMode === 'ipam',
       tags: Boolean(String(state.tags || '').trim() || (state.apmid && state.environment)),
-      waitAgent: state.waitAgent,
+      waitAgent: state.providerType === 'proxmox' && state.waitAgent,
       ansible: state.ansibleEnabled,
     });
     const selectedWorkflow = state.advancedWorkflow && state.workflow.length ? state.workflow : autoWorkflow;
