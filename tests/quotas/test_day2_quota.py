@@ -1,10 +1,11 @@
 """Day-2 quota recovery gates: reserve, commit, cancel and uncertain provider outcomes."""
+import pytest
 from sqlalchemy import select
 
 from app.database import session
-from app.day2 import worker
+from app.day2 import service, worker
 from app.day2.models import Day2ActionRequest
-from app.models import Job, ManagedVM
+from app.models import Credential, Job, ManagedVM, Provider, User
 from app.quotas.models import ProjectQuotaUsage, QuotaAllocation, QuotaReservation
 from app.quotas.service import (
     QuotaDelta,
@@ -13,7 +14,31 @@ from app.quotas.service import (
     set_project_limit,
 )
 from app.resource_scope.authorization import Scope
-from test_day2 import key, submit
+from test_day2 import FakeAdapter, key, submit
+
+
+@pytest.fixture
+def resource(system, monkeypatch):
+    client, headers, _ = system
+    fake = FakeAdapter()
+    monkeypatch.setattr(service, 'day2_provider', lambda credential: fake)
+    monkeypatch.setattr(worker, 'day2_provider', lambda credential: fake)
+    with session() as db:
+        owner = db.scalar(select(User).where(User.username == 'admin'))
+        cred = Credential(name='day2-quota-test', type='proxmox', encrypted_secret=b'not-used')
+        db.add(cred)
+        db.flush()
+        provider = Provider(name='day2-quota-test', type='proxmox', credentials_id=cred.id)
+        db.add(provider)
+        db.flush()
+        vm = ManagedVM(
+            provider_id=provider.id, node='pve', vm_id=701,
+            name='quota-test-vm', created_by=owner.id,
+        )
+        db.add(vm)
+        db.commit()
+        vm_id = vm.id
+    return client, headers, vm_id, fake
 
 
 def seed_memory(resource, *, limit=4096):
