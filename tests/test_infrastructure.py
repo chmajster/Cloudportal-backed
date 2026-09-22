@@ -265,6 +265,7 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
         assert resumed.status == 'queued'
         assert resumed.source == 'Recovery'
         assert resumed.payload['_auto_resume']['from_persisted_state'] is True
+        assert resumed.payload['_auto_resume']['authorization_source'] == original.source
         assert resumed.payload['_auto_resume']['count'] == 1
         assert '_quota_checked' not in resumed.payload
         assert '_quota_reservation_id' not in resumed.payload
@@ -295,6 +296,57 @@ def test_lost_worker_auto_resumes_after_persisted_state_reconciliation(
         assert resumed.status == 'successful'
         assert dep.status == 'successful'
         assert dep.active_job_id is None
+
+
+def test_lost_worker_auto_resumes_from_durable_apply_checkpoint(
+    client, headers, tmp_path
+):
+    d = deployment(client, headers)
+    workspace = terraform_state_workspace(tmp_path, vm_id=614)
+    assert persist_state(d['id'], workspace)
+
+    repaired = client.post('/api/v1/inventory/reconcile', headers=headers)
+    assert repaired.status_code == 200, repaired.text
+    assert repaired.json()['repaired_count'] == 1
+
+    with session() as db:
+        job = db.get(Job, d['job']['id'])
+        payload = dict(job.payload or {})
+        payload.pop('_state_recovery', None)
+        payload['_workflow_runtime'] = {
+            'completed_steps': ['apply'],
+            'provider_applied': True,
+            'inventory_synced': True,
+            'plan_ready': False,
+            'plan_sha256': None,
+            'ansible_ran': False,
+        }
+        job.payload = payload
+        job.status = 'running'
+        job.heartbeat_at = now() - timedelta(seconds=settings().execution_timeout + 181)
+        dep = db.get(Deployment, d['id'])
+        dep.status = 'running'
+        dep.active_job_id = job.id
+        db.commit()
+
+    with session() as db:
+        assert reconcile_stale_jobs(db) == 1
+        db.commit()
+
+    with session() as db:
+        original = db.get(Job, d['job']['id'])
+        resumed = db.scalar(select(Job).where(Job.retry_of == original.id))
+        dep = db.get(Deployment, d['id'])
+
+        assert '_state_recovery' not in original.payload
+        assert resumed is not None
+        assert resumed.status == 'queued'
+        assert resumed.source == 'Recovery'
+        assert resumed.payload['_workflow_runtime']['provider_applied'] is True
+        assert resumed.payload['_workflow_runtime']['inventory_synced'] is True
+        assert resumed.payload['_auto_resume']['authorization_source'] == original.source
+        assert dep.active_job_id == resumed.id
+        assert dep.status == 'recovery_queued'
 
 
 def test_worker_rechecks_revoked_permissions(client,headers,monkeypatch):

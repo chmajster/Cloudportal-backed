@@ -41,15 +41,25 @@ def _active_inventory_exists(db, deployment_id: str) -> bool:
 
 
 def _safe_to_auto_retry(db, job: Job) -> bool:
-    """Require job-specific state recovery plus reconciled accounting before retry."""
+    """Require durable provider-state evidence plus reconciled accounting before retry."""
     payload = dict(job.payload or {})
     previous_auto = dict(payload.get('_auto_resume') or {})
     evidence = dict(payload.get('_state_recovery') or {})
+    runtime = dict(payload.get('_workflow_runtime') or {})
+
     state_recovered_for_job = (
         evidence.get('source_job_id') == job.id
         and evidence.get('deployment_id') == job.deployment_id
     )
-    if not state_recovered_for_job and previous_auto.get('from_persisted_state') is not True:
+    durable_apply_checkpoint = (
+        runtime.get('provider_applied') is True
+        and runtime.get('inventory_synced') is True
+    )
+    if (
+        not state_recovered_for_job
+        and previous_auto.get('from_persisted_state') is not True
+        and not durable_apply_checkpoint
+    ):
         return False
     if not _active_inventory_exists(db, job.deployment_id):
         return False
@@ -97,8 +107,10 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
     runtime.pop('current_step', None)
     if runtime:
         payload['_workflow_runtime'] = runtime
+    authorization_source = previous_auto.get('authorization_source') or job.source
     payload['_auto_resume'] = {
         'from_persisted_state': True,
+        'authorization_source': authorization_source,
         'count': resume_count + 1,
         'from_job_id': job.id,
         'queued_at': now().isoformat(),

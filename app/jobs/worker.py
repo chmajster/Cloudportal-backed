@@ -79,6 +79,19 @@ class Context:
             db.commit()
 
 
+def blueprint_execution_channel(job):
+    authorization_source = (
+        ((job.payload or {}).get('_auto_resume') or {}).get('authorization_source')
+        or job.source
+    )
+    return {
+        'CloudPortal': 'cloudportal',
+        'Cloudportal-backed': 'backend',
+        'API': 'api',
+        'Scheduler': 'backend',
+    }.get(authorization_source, 'api')
+
+
 def _validate_blueprint_authorization(db, job, user, permissions):
     blueprint_snapshot = (job.payload or {}).get('blueprint') or {}
     if job.operation != 'terraform.apply' or not blueprint_snapshot:
@@ -99,12 +112,7 @@ def _validate_blueprint_authorization(db, job, user, permissions):
     ) and user.id not in blueprint.allowed_user_ids and not (role_ids & set(blueprint.allowed_role_ids)):
         raise ExecutionFailed('Blueprint access has been revoked')
 
-    source = {
-        'CloudPortal': 'cloudportal',
-        'Cloudportal-backed': 'backend',
-        'API': 'api',
-        'Scheduler': 'backend',
-    }.get(job.source, 'api')
+    source = blueprint_execution_channel(job)
     if not (blueprint.visibility or {}).get(source, False):
         raise ExecutionFailed('Blueprint is no longer visible to this execution source')
 
@@ -1171,6 +1179,8 @@ def run_blueprint_workflow(context, executor):
         )
         context.ansible.inventory = Inventory(hosts=runtime['addresses'])
         AnsibleExecutor().execute('ansible.execute', context)
+        runtime['ansible_ran'] = True
+        persist_workflow_runtime(context, runtime)
 
     context.blueprint_workflow_completed = True
     persist_workflow_runtime(context, runtime)

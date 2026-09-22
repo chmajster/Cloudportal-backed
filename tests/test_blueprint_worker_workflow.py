@@ -199,6 +199,62 @@ def test_blueprint_resume_does_not_repeat_completed_ansible(monkeypatch, tmp_pat
     assert context.blueprint_workflow_completed is True
 
 
+def test_recovery_preserves_original_blueprint_execution_channel():
+    job = SimpleNamespace(
+        source='Recovery',
+        payload={'_auto_resume': {'authorization_source': 'CloudPortal'}},
+    )
+    assert worker.blueprint_execution_channel(job) == 'cloudportal'
+
+    job.payload['_auto_resume']['authorization_source'] = 'Scheduler'
+    assert worker.blueprint_execution_channel(job) == 'backend'
+
+
+def test_blueprint_resume_checkpoints_compatibility_ansible(monkeypatch, tmp_path):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.blueprint_workflow_completed = False
+    context.ansible = SimpleNamespace(inventory=None)
+    context.job.payload['_workflow_runtime'] = {
+        'completed_steps': ['apply'],
+        'provider_applied': True,
+        'inventory_synced': True,
+        'plan_ready': False,
+        'plan_sha256': None,
+        'ansible_ran': False,
+    }
+    restored = tmp_path / 'restored-compat-ansible-workspace'
+    restored.mkdir()
+    calls = []
+    checkpoints = []
+
+    monkeypatch.setattr(worker, 'restore_recovery_workspace', lambda _context: restored)
+    monkeypatch.setattr(
+        worker,
+        'wait_for_ansible_transport',
+        lambda _context, workspace, **_kwargs: ['192.0.2.20'],
+    )
+    monkeypatch.setattr(
+        worker.AnsibleExecutor,
+        'execute',
+        lambda _executor, operation, _context: calls.append(operation),
+    )
+    monkeypatch.setattr(
+        worker,
+        'persist_workflow_runtime',
+        lambda _context, runtime: checkpoints.append(bool(runtime['ansible_ran'])),
+    )
+
+    worker.run_blueprint_workflow(context, FakeExecutor())
+
+    assert calls == ['ansible.execute']
+    assert checkpoints[-1] is True
+    assert True in checkpoints
+    assert context.blueprint_workflow_completed is True
+
+
 def test_unknown_workflow_step_fails_explicitly():
     context = FakeContext([
         {'id': 'mystery', 'type': 'not-supported', 'depends_on': [], 'retry': 0, 'timeout': 30},
