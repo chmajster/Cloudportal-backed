@@ -364,6 +364,13 @@ docker_certificate_matches_host() {
   fi
 }
 
+docker_certificate_is_self_signed() {
+  local subject issuer
+  subject=$(openssl x509 -in "$1" -noout -subject -nameopt RFC2253 2>/dev/null) || return 1
+  issuer=$(openssl x509 -in "$1" -noout -issuer -nameopt RFC2253 2>/dev/null) || return 1
+  [[ "${subject#subject=}" == "${issuer#issuer=}" ]]
+}
+
 docker_generate_managed_tls() {
   local target_dir=$1 san="DNS:$backend_host"
   install -d -m 0700 "$target_dir"
@@ -580,9 +587,15 @@ docker_install() {
   local stages=6 release_sha effective_tarball_url candidate_sha release docker_tls_stage
   local docker_tls_changed=0
   docker_tmp_dir=''
-  backend_host=${backend_host:-$(hostname -f 2>/dev/null || hostname)}
-  backend_port=${backend_port:-8443}
-  workers=${workers:-1}
+  local previous_docker_host='' previous_docker_port='' previous_docker_workers=''
+  if [[ -r "$docker_env" ]]; then
+    previous_docker_host=$(sed -n 's/^CP_PUBLIC_HOST=//p' "$docker_env" | tail -n 1)
+    previous_docker_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
+    previous_docker_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
+  fi
+  backend_host=${backend_host:-${previous_docker_host:-$(hostname -f 2>/dev/null || hostname)}}
+  backend_port=${backend_port:-${previous_docker_port:-8443}}
+  workers=${workers:-${previous_docker_workers:-1}}
 
   docker_valid_host "$backend_host" || { ui_fail 'Nieprawidłowy host. Użyj nazwy DNS lub adresu bez schematu URL.'; exit 2; }
   docker_valid_port "$backend_port" || { ui_fail 'Nieprawidłowy port. Dozwolone 1-65535 z wyjątkiem 6389, 8765 i 8766.'; exit 2; }
@@ -672,18 +685,43 @@ EOF
     local regenerate_tls=0 previous_tls_host='' previous_tls_source=''
     [[ -r "$docker_tls/host" ]] && previous_tls_host=$(tr -d '\r\n' < "$docker_tls/host")
     [[ -r "$docker_tls/source" ]] && previous_tls_source=$(tr -d '\r\n' < "$docker_tls/source")
-    [[ -r "$docker_tls/server.crt" && -r "$docker_tls/server.key" ]] || regenerate_tls=1
-    [[ "$previous_tls_source" == managed-self-signed ]] || regenerate_tls=1
-    [[ "$previous_tls_host" == "$backend_host" ]] || regenerate_tls=1
-    if ((regenerate_tls == 0)); then
-      openssl x509 -in "$docker_tls/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate_tls=1
-      docker_certificate_matches_host "$docker_tls/server.crt" || regenerate_tls=1
-      docker_certificate_key_matches "$docker_tls/server.crt" "$docker_tls/server.key" || regenerate_tls=1
-    fi
-    if ((regenerate_tls)); then
-      docker_generate_managed_tls "$docker_tls_stage"
-      docker_tls_changed=1
-      ui_info "Przygotowano nowy self-signed TLS dla $backend_host; zostanie aktywowany dopiero po udanym buildzie i bootstrapie."
+
+    if [[ "$previous_tls_source" == custom ]]; then
+      [[ -r "$docker_tls/server.crt" && -r "$docker_tls/server.key" ]] || {
+        ui_fail 'Instalacja używa własnego TLS, ale brakuje zapisanego certyfikatu lub klucza. Podaj ponownie --cert-file i --cert-key.'
+        exit 1
+      }
+      [[ "$previous_tls_host" == "$backend_host" ]] || {
+        ui_fail "Istniejący własny certyfikat TLS był skonfigurowany dla hosta ${previous_tls_host:-?}. Przy zmianie hosta podaj nowy --cert-file i --cert-key."
+        exit 1
+      }
+      docker_certificate_key_matches "$docker_tls/server.crt" "$docker_tls/server.key" || {
+        ui_fail 'Zapisany własny certyfikat TLS i klucz nie pasują do siebie. Podaj poprawny --cert-file i --cert-key.'
+        exit 1
+      }
+      openssl x509 -in "$docker_tls/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
+        ui_fail 'Zapisany własny certyfikat TLS jest nieważny albo wygasa w ciągu 5 minut. Podaj nowy --cert-file i --cert-key.'
+        exit 1
+      }
+      docker_certificate_matches_host "$docker_tls/server.crt" || {
+        ui_fail "Zapisany własny certyfikat TLS nie obejmuje hosta $backend_host. Podaj nowy --cert-file i --cert-key."
+        exit 1
+      }
+      ui_info 'Zachowuję istniejący własny certyfikat TLS.'
+    else
+      [[ -r "$docker_tls/server.crt" && -r "$docker_tls/server.key" ]] || regenerate_tls=1
+      [[ "$previous_tls_source" == managed-self-signed ]] || regenerate_tls=1
+      [[ "$previous_tls_host" == "$backend_host" ]] || regenerate_tls=1
+      if ((regenerate_tls == 0)); then
+        openssl x509 -in "$docker_tls/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate_tls=1
+        docker_certificate_matches_host "$docker_tls/server.crt" || regenerate_tls=1
+        docker_certificate_key_matches "$docker_tls/server.crt" "$docker_tls/server.key" || regenerate_tls=1
+      fi
+      if ((regenerate_tls)); then
+        docker_generate_managed_tls "$docker_tls_stage"
+        docker_tls_changed=1
+        ui_info "Przygotowano nowy self-signed TLS dla $backend_host; zostanie aktywowany dopiero po udanym buildzie i bootstrapie."
+      fi
     fi
   fi
   ui_ok "Konfiguracja Docker: $docker_env"
@@ -715,7 +753,7 @@ EOF
   local docker_tls_source=''
   local docker_health_curl=(-fsS --connect-timeout 2 --max-time 5)
   [[ -r "$docker_tls/source" ]] && docker_tls_source=$(tr -d '\r\n' < "$docker_tls/source")
-  if [[ "$docker_tls_source" == managed-self-signed ]]; then
+  if [[ "$docker_tls_source" == managed-self-signed ]] || docker_certificate_is_self_signed "$docker_tls/server.crt"; then
     docker_health_curl+=(--cacert "$docker_tls/server.crt")
   fi
   for ((attempt=1; attempt<=45; attempt++)); do
