@@ -1,5 +1,6 @@
 """Day-2 quota recovery gates: reserve, commit, cancel and uncertain provider outcomes."""
 import pytest
+from types import SimpleNamespace
 from sqlalchemy import select
 
 from app.database import session
@@ -152,3 +153,16 @@ def test_day2_timeout_keeps_quota_reserved_and_marks_reconciliation_required(res
         assert reservation.status == 'uncertain'
         assert reservation.reconciliation_required is True
         assert request.result['reconciliation_required'] is True
+
+
+
+def test_unaccounted_external_disk_delete_does_not_create_negative_quota(resource):
+    with session() as db:
+        quota = service.day2_delta(
+            db,
+            SimpleNamespace(resource_id=resource[2]),
+            'delete_disk',
+            {'device': 'scsi0'},
+            current={'size_gib': 20},
+        )
+        assert quota.deltas == {}
