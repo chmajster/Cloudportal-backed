@@ -26,6 +26,8 @@ curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/
 
 ### Interfejs terminalowy instalatora
 
+Uruchomienie `install.sh` bez żadnych parametrów nie rozpoczyna już automatycznie instalacji. Instalator otwiera menu „Co chcesz zrobić?” z wyborem instalacji/aktualizacji, statusu i deinstalacji dla trybu systemd oraz Docker. Opcje deinstalacji pozwalają zachować dane albo wykonać pełny purge. Menu czyta wejście z `/dev/tty`, dlatego działa także przy `curl | sudo bash`.
+
 `install.sh` raportuje postęp w siedmiu etapach: `[1/7]`–`[7/7]`. Operacje mają statusy `[ OK ]`, `[INFO]`, `[WARN]` i `[FAIL]`. Kolory ANSI są używane wyłącznie wtedy, gdy stdout jest interaktywnym terminalem; w pipe, cron, logach i CI wyjście pozostaje czystym tekstem. `NO_COLOR=1` wymusza brak kolorów.
 
 Przed zmianami w systemie wykonywany jest pretest: obsługiwany system/architektura, wymagane narzędzia bazowe, menedżer pakietów, wolne miejsce, dostęp HTTPS do GitHub oraz potencjalny konflikt portu. Błędy końcowe wskazują również komendy `systemctl` i `journalctl`, które należy sprawdzić.
