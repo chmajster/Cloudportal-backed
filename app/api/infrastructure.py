@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select, or_, update
+from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
@@ -13,7 +13,7 @@ from app.api.schemas import (CatalogItemStateInput, CredentialInput, DeploymentI
 from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, template_definition,
                          template_public, template_source_preview, playbook_source_preview, validate_template_variables)
 from app.catalog_control import catalog_item_public, require_catalog_item_enabled, set_catalog_item_enabled
-from app.credentials.service import credential_public, save_secret
+from app.credentials.service import credential_in_use, credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
@@ -65,33 +65,6 @@ def ensure_credential_usable(credential):
         raise HTTPException(409, 'Credential is expired and cannot be used for new infrastructure execution')
     return credential
 
-
-def credential_in_use(db, id, *, pending_only=False):
-    deployments = select(Deployment.id).where(or_(
-        Deployment.credentials_id == id,
-        Deployment.workflow['ansible']['credentials_id'].as_integer() == id,
-        Deployment.workflow['blueprint']['guest_credential_id'].as_integer() == id,
-    ))
-    if pending_only:
-        deployments = deployments.where(Deployment.active_job_id.is_not(None))
-    else:
-        deployments = deployments.where(Deployment.status != 'destroyed')
-    active_job_credential = select(Job.id).where(
-        Job.status.in_(['waiting_approval', 'queued', 'running', 'cancelling']),
-        or_(
-            Job.payload['ansible']['credentials_id'].as_integer() == id,
-            Job.payload['blueprint']['guest_credential_id'].as_integer() == id,
-        ),
-    )
-    if db.scalar(deployments.limit(1)) or db.scalar(active_job_credential.limit(1)):
-        return True
-    if pending_only:
-        return False
-    blueprint_ref = select(Blueprint.id).where(or_(
-        Blueprint.deployment['guest_credential_id'].as_integer() == id,
-        Blueprint.deployment['ansible']['credentials_id'].as_integer() == id,
-    ))
-    return bool(db.scalar(blueprint_ref.limit(1)))
 
 
 @router.get('/credentials', response_model=Items[CredentialOutput])

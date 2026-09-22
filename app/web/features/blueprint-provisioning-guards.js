@@ -30,6 +30,20 @@
     });
   }
 
+  function guestCredentialField(credentials = [], selected = '', templateId = 'proxmox-vm') {
+    const field = selectField('Credential ustawiany na VM', 'deployment_guest_credential_id',
+      [{ value: '', label: 'Nie twórz użytkownika z credentiala' }, ...guestCredentialChoices(credentials)],
+      selected || '', { wide: true,
+        help: 'Wybrany credential SSH zostanie użyty przez cloud-init do ustawienia konta w VM. Może zawierać hasło, klucz prywatny albo oba. Klucz prywatny nie jest kopiowany do VM; używany jest tylko wyliczony z niego klucz publiczny.' });
+    const sync = value => {
+      const supported = value === 'proxmox-vm';
+      field.hidden = !supported;
+      if (!supported) field.querySelector('select').value = '';
+    };
+    sync(templateId);
+    return { field, sync };
+  }
+
   function selectSnippetStorage(storages = [], current = '') {
     const available = storages.filter(value => !value.disable);
     const snippets = available.filter(value => String(value.content || '').includes('snippets'));
@@ -113,6 +127,7 @@
       keyBasedSshCredentials,
       guestSshCredentials,
       guestCredentialChoices,
+      guestCredentialField,
       selectSnippetStorage,
       syncWaitAgentControl,
       workflowChoicesForProvider,
