@@ -621,6 +621,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Backup'" in script
     assert "button('Odtwórz od zera'" in script
     assert "function recreateVm(item)" in script
+    assert "registerCommand('inventory.recreateVm', recreateVm)" in script
+    assert "runCommand('inventory.recreateVm', item)" in script
     assert "'Odtwórz VM od zera'" in script
     assert "Potwierdzić odtworzenie?" in script
     assert "'/recreate'" in script
