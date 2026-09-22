@@ -154,13 +154,13 @@ function managedVmCard(item, providerNames, deploymentById, selection = null) {
   const selector = selection ? node('input', {
     type: 'checkbox',
     class: 'my-resource-select',
-    checked: selection.selected.has(item.id),
+    checked: selection.selected.has(String(item.id)),
     'aria-label': 'Wybierz ' + (item.name || ('VM ' + item.vm_id)),
   }) : null;
   if (selector) {
     selector.addEventListener('change', () => {
-      if (selector.checked) selection.selected.add(item.id);
-      else selection.selected.delete(item.id);
+      if (selector.checked) selection.selected.add(String(item.id));
+      else selection.selected.delete(String(item.id));
       card.classList.toggle('selected', selector.checked);
       selection.update();
     });
@@ -286,14 +286,14 @@ async function myResourcesView(repairInventory = true) {
     const bulkBar = vmSelection ? node('div', { class: 'my-resources-bulk-bar' }) : null;
     const selectedCount = vmSelection ? node('strong', { text: '0 wybranych' }) : null;
     const bulkButtons = vmSelection ? [
-      button('Uruchom', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(item.id)), 'start'), 'primary', true),
-      button('Wyłącz', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(item.id)), 'shutdown'), 'ghost', true),
-      button('Restart', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(item.id)), 'reboot'), 'ghost', true),
+      button('Uruchom', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'start'), 'primary', true),
+      button('Wyłącz', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'shutdown'), 'ghost', true),
+      button('Restart', () => runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'reboot'), 'ghost', true),
       button('Wymuś stop', () => confirmAction(
         'Wymuś zatrzymanie wybranych VM',
         'Operacja natychmiast zatrzyma wybrane maszyny. Użyj jej tylko, gdy bezpieczne wyłączenie nie działa.',
         async () => {
-          await runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(item.id)), 'stop');
+          await runBulkVmPower(selectableVms.filter(item => vmSelection.selected.has(String(item.id))), 'stop');
           return false;
         },
       ), 'danger', true),
@@ -310,7 +310,7 @@ async function myResourcesView(repairInventory = true) {
       };
       selectAll.addEventListener('change', () => {
         vmSelection.selected.clear();
-        if (selectAll.checked) selectableVms.forEach(item => vmSelection.selected.add(item.id));
+        if (selectAll.checked) selectableVms.forEach(item => vmSelection.selected.add(String(item.id)));
         grid.querySelectorAll('.my-resource-select').forEach(input => {
           input.checked = vmSelection.selected.has(input.dataset.resourceId);
           input.closest('.my-resource-card')?.classList.toggle('selected', input.checked);
