@@ -275,3 +275,125 @@ def test_run_update_ignores_stale_persisted_running_flag(tmp_path, monkeypatch):
     state = updater.load_state()
     assert state['status'] == 'up_to_date'
     assert state['phase'] == 'up_to_date'
+
+
+
+def test_required_ci_status_is_fail_closed(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    target = 'a' * 40
+    settings = updater.default_settings()
+
+    monkeypatch.setattr(updater, '_http_json_ci', lambda url, cfg: {
+        'workflow_runs': [{
+            'head_sha': target,
+            'name': 'Backend CI',
+            'status': 'completed',
+            'conclusion': 'failure',
+            'html_url': 'https://example.invalid/run/1',
+            'updated_at': '2026-09-22T08:00:00Z',
+            'run_attempt': 1,
+        }]
+    })
+    failed = updater.required_ci_status(target, settings)
+    assert failed['state'] == 'failed'
+    assert failed['workflow'] == 'Backend CI'
+
+    monkeypatch.setattr(updater, '_http_json_ci', lambda url, cfg: {'workflow_runs': []})
+    pending = updater.required_ci_status(target, settings)
+    assert pending['state'] == 'pending'
+
+    monkeypatch.setattr(updater, '_http_json_ci', lambda url, cfg: {
+        'workflow_runs': [{
+            'head_sha': target,
+            'name': 'Backend CI',
+            'status': 'completed',
+            'conclusion': 'success',
+            'html_url': 'https://example.invalid/run/2',
+            'updated_at': '2026-09-22T08:05:00Z',
+            'run_attempt': 1,
+        }]
+    })
+    passed = updater.required_ci_status(target, settings)
+    assert passed['state'] == 'success'
+
+
+def test_run_update_gates_before_backup_and_pins_verified_sha(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    target = 'b' * 40
+    calls = []
+    captured = {}
+
+    monkeypatch.setattr(updater, 'check_remote', lambda ref, update_context=False: {
+        'update_available': True,
+        'target_sha': target,
+        'target_version': target[:12],
+        'target_commit_at': '2026-09-22T08:10:00Z',
+    })
+    monkeypatch.setattr(updater, 'wait_for_required_ci', lambda sha, settings: calls.append(('ci', sha)))
+    monkeypatch.setattr(updater, 'validate_candidate', lambda sha, settings: calls.append(('candidate', sha)))
+    monkeypatch.setattr(updater, 'pre_update_backup', lambda: calls.append(('backup', None)))
+
+    def fake_download(ref, path):
+        calls.append(('download', ref))
+        path.write_text('#!/usr/bin/env bash\nexit 0\n')
+
+    def fake_args(ref):
+        calls.append(('args', ref))
+        return ['/bin/true']
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = iter(['::cloudportal-progress::100::complete::done\n'])
+
+        def wait(self):
+            return 0
+
+    def fake_popen(args, **kwargs):
+        captured['args'] = args
+        captured['env'] = kwargs['env']
+        return FakeProcess()
+
+    monkeypatch.setattr(updater, 'download_installer', fake_download)
+    monkeypatch.setattr(updater, 'installer_args', fake_args)
+    monkeypatch.setattr(updater.subprocess, 'Popen', fake_popen)
+    monkeypatch.setattr(updater, 'verify_installed_release', lambda sha: calls.append(('verify', sha)))
+
+    updater.run_update('main', automatic=False)
+
+    assert calls[:3] == [('ci', target), ('candidate', target), ('backup', None)]
+    assert ('download', target) in calls
+    assert ('args', target) in calls
+    assert ('verify', target) in calls
+    assert captured['env']['CLOUDPORTAL_RELEASE_SHA'] == target
+    assert captured['env']['CLOUDPORTAL_UPDATE_CHANNEL_REF'] == 'main'
+    state = updater.load_state()
+    assert state['status'] == 'success'
+    assert state['current_version'] == target[:12]
+
+
+def test_run_update_does_not_touch_backup_when_ci_fails(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    target = 'c' * 40
+    touched = []
+
+    monkeypatch.setattr(updater, 'check_remote', lambda ref, update_context=False: {
+        'update_available': True,
+        'target_sha': target,
+        'target_version': target[:12],
+        'target_commit_at': '2026-09-22T08:15:00Z',
+    })
+    monkeypatch.setattr(
+        updater,
+        'wait_for_required_ci',
+        lambda sha, settings: (_ for _ in ()).throw(RuntimeError('CI failed')),
+    )
+    monkeypatch.setattr(updater, 'pre_update_backup', lambda: touched.append('backup'))
+    monkeypatch.setattr(updater, 'download_installer', lambda ref, path: touched.append('download'))
+
+    updater.run_update('main', automatic=False)
+
+    assert touched == []
+    state = updater.load_state()
+    assert state['status'] == 'failed'
+    assert state['phase'] == 'failed'
+    assert 'CI failed' in state['message']
