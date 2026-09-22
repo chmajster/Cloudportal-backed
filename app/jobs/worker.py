@@ -158,6 +158,10 @@ def validate_authorization(db, job):
         ansible = (job.payload or {}).get('ansible') or {}
         if ansible and not reference_visible(db, 'credential', ansible.get('credentials_id'), scope):
             raise ExecutionFailed('Ansible credential access has been revoked')
+        blueprint = (job.payload or {}).get('blueprint') or {}
+        guest_credential_id = blueprint.get('guest_credential_id')
+        if guest_credential_id and not reference_visible(db, 'credential', guest_credential_id, scope):
+            raise ExecutionFailed('Guest VM credential access has been revoked')
     except HTTPException:
         raise ExecutionFailed('Job project authorization has been revoked') from None
     needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
