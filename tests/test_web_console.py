@@ -549,6 +549,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function assignIpAllocation(' in script
     assert 'function showProxmoxTask(' in script
     assert 'function showVmDetailsPage(' in script
+    assert 'function vmRuntimeState(' in script
+    assert "running: 'Uruchomiona'" in script
+    assert "node('span', { text: 'IP' })" in script
+    assert "info('Adres IP', primaryIp)" in script
     assert 'let jobLogPollNonce = 0' in script
     assert 'let myResourcesPollTimer = null' in script
     assert "window.setTimeout(poll, 1500)" in script
