@@ -275,7 +275,7 @@ docker_acquire_install_lock() {
 }
 
 docker_preflight() {
-  local failed=0 command free_kib auth_tmp docker_root_dir docker_root_kib
+  local failed=0 command free_kib auth_tmp docker_root_dir docker_root_kib registry_code registry_auth_code
   ui_info "System: $NAME $VERSION_ID · $arch · tryb Docker"
   ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
 
@@ -334,6 +334,22 @@ docker_preflight() {
     failed=1
   fi
   rm -rf "$auth_tmp"
+
+  registry_code=$(curl -sS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' https://registry-1.docker.io/v2/ 2>/dev/null || true)
+  if [[ "$registry_code" == 200 || "$registry_code" == 401 ]]; then
+    ui_ok 'Połączenie z Docker Hub registry'
+  else
+    ui_fail "Brak połączenia z registry-1.docker.io (HTTP: ${registry_code:-brak}). Dockerfile i Compose wymagają obrazów z Docker Hub."
+    failed=1
+  fi
+
+  registry_auth_code=$(curl -sS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/alpine:pull' 2>/dev/null || true)
+  if [[ "$registry_auth_code" == 200 ]]; then
+    ui_ok 'Połączenie z Docker Hub auth'
+  else
+    ui_fail "Brak połączenia z auth.docker.io (HTTP: ${registry_auth_code:-brak})."
+    failed=1
+  fi
 
   if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$backend_port$"; then
     if command -v docker >/dev/null 2>&1 && docker ps         --filter "label=com.docker.compose.project=$docker_project"         --filter "label=com.docker.compose.service=proxy"         --format '{{.Ports}}' 2>/dev/null | grep -Eq "(^|:)$backend_port->"; then
