@@ -8,6 +8,7 @@ x-backend: &backend
     CP_REDIS_URL: redis://redis:6379/0
     CP_MASTER_KEY_FILE: /etc/cloudportal-backed/master.key
     CP_DATA_DIR: /var/lib/cloudportal-backed
+    CP_WORKER_COUNT: ${CP_WORKER_COUNT:-1}
   volumes:
     - backend-config:/etc/cloudportal-backed
     - backend-data:/var/lib/cloudportal-backed
@@ -70,10 +71,10 @@ services:
     restart: unless-stopped
   proxy:
     image: nginx:1.28-alpine
-    ports: ['8443:8443']
+    ports: ['${CP_HTTPS_PORT:-8443}:8443']
     volumes:
       - ./scripts/nginx-container.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./tls:/etc/nginx/tls:ro
+      - ${CP_TLS_DIR:-./tls}:/etc/nginx/tls:ro
     depends_on: [api]
     networks: [backend]
     security_opt: ['no-new-privileges:true']
