@@ -44,6 +44,7 @@ Tryby:
   --check-platform            Sprawdź obsługę systemu bez wykonywania instalacji.
   --gui, -gui                 Interaktywny interfejs dialog.
   --non-interactive           Instalacja bez pytań.
+  --docker                    Zainstaluj/uruchom aplikację przez Docker Compose zamiast systemd.
 
 Konfiguracja:
   --host HOST                 Host/DNS backendu.
@@ -69,6 +70,8 @@ Blokada instalatora:
 
 Przykłady:
   sudo ./install.sh --non-interactive --port 8443
+  sudo ./install.sh --docker --non-interactive --host cloud.example.com --port 8443
+  sudo ./install.sh --docker --status
   sudo ./install.sh --status
   sudo ./install.sh --uninstall
   sudo ./install.sh --uninstall --purge-data
@@ -79,8 +82,13 @@ installer_error() {
   local rc=$1 line=$2
   ui_fail "Etap „$CURRENT_STAGE” przerwany (kod $rc, linia $line)."
   ui_info 'Sprawdź komunikat bezpośrednio powyżej.'
-  ui_info 'Usługi: systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1'
-  ui_info 'Logi: journalctl -u cloudportal-api -u cloudportal-dispatcher -u cloudportal-worker@1 -n 100 --no-pager'
+  if ((${docker_mode:-0})); then
+    ui_info 'Docker: docker compose -p cloudportal-backed ps'
+    ui_info 'Logi: docker compose -p cloudportal-backed logs --tail=100'
+  else
+    ui_info 'Usługi: systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1'
+    ui_info 'Logi: journalctl -u cloudportal-api -u cloudportal-dispatcher -u cloudportal-worker@1 -n 100 --no-pager'
+  fi
   exit "$rc"
 }
 trap 'rc=$?; installer_error "$rc" "$LINENO"' ERR
@@ -103,6 +111,8 @@ takeover_running_install=1
 force_uninstall=0
 purge_data=0
 status_mode=0
+docker_mode=0
+backup_option_set=0
 update_in_progress=${CLOUDPORTAL_UPDATE_IN_PROGRESS:-0}
 [[ "$update_in_progress" == 1 ]] || update_in_progress=0
 update_channel_ref=${CLOUDPORTAL_UPDATE_CHANNEL_REF:-}
@@ -121,10 +131,11 @@ while (($#)); do
         --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2;;
       esac
       shift 2;;
-    --enable-backups) backup_schedule=true; shift;;
-    --disable-backups) backup_schedule=false; shift;;
+    --enable-backups) backup_schedule=true; backup_option_set=1; shift;;
+    --disable-backups) backup_schedule=false; backup_option_set=1; shift;;
     --gui|-gui) gui=1; shift;;
     --non-interactive) non_interactive=1; shift;;
+    --docker) docker_mode=1; shift;;
     --check-platform) check_platform=1; shift;;
     --takeover) takeover_running_install=1; shift;;
     --no-takeover) takeover_running_install=0; shift;;
@@ -166,9 +177,16 @@ case "$ID:$VERSION_ID" in
     key_value_command=valkey-server
     ;;
   *)
-    echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2
-    drain_script_input
-    exit 1
+    if ((docker_mode)); then
+      os_family=docker
+      python_command=container
+      key_value_package=container
+      key_value_command=container
+    else
+      echo 'Supported: Ubuntu 24.04/26.04, Debian 12/13, RHEL 9/10 with systemd.' >&2
+      drain_script_input
+      exit 1
+    fi
     ;;
 esac
 case "$(uname -m)" in
@@ -179,29 +197,48 @@ esac
 if ((check_platform)); then
   ui_header 'Pretest platformy'
   ui_ok "Obsługiwany system: $NAME $VERSION_ID"
-  ui_info "Rodzina: $os_family · architektura: $arch · KV: $key_value_package · Python: $python_command"
+  if ((docker_mode)); then
+    ui_info "Tryb: Docker Compose · architektura: $arch"
+    command -v docker >/dev/null 2>&1 || { ui_fail 'Brak Docker Engine.'; drain_script_input; exit 1; }
+    docker compose version >/dev/null 2>&1 || { ui_fail 'Brak Docker Compose v2 (docker compose).'; drain_script_input; exit 1; }
+    ui_ok "Docker Compose: $(docker compose version --short 2>/dev/null || docker compose version)"
+  else
+    ui_info "Rodzina: $os_family · architektura: $arch · KV: $key_value_package · Python: $python_command"
+  fi
   drain_script_input
   exit 0
 fi
 if ((status_mode == 0)); then
   [[ $EUID -eq 0 ]] || { ui_fail 'Instalacja i deinstalacja wymagają roota. Uruchom przez sudo bash.'; exit 1; }
 fi
-command -v systemctl >/dev/null || { ui_fail 'Brak systemctl. Instalator wymaga systemd.'; exit 1; }
-[[ -d /run/systemd/system ]] || { ui_fail 'systemd nie jest uruchomiony. Dla kontenera użyj Docker Compose.'; exit 1; }
+if ((docker_mode == 0)); then
+  command -v systemctl >/dev/null || { ui_fail 'Brak systemctl. Instalator wymaga systemd.'; exit 1; }
+  [[ -d /run/systemd/system ]] || { ui_fail 'systemd nie jest uruchomiony. Użyj --docker, aby wdrożyć przez Docker Compose.'; exit 1; }
+fi
 config=/etc/cloudportal-backed
 app_root=/opt/cloudportal-backed
 data=/var/lib/cloudportal-backed
-if [[ -r "$config/public.conf" ]]; then
-  previous_host=$(sed -n 's/^host=//p' "$config/public.conf")
-  previous_port=$(sed -n 's/^port=//p' "$config/public.conf")
+docker_root=/opt/cloudportal-backed-docker
+if ((docker_mode)); then
+  if [[ -r "$docker_root/install.conf" ]]; then
+    previous_host=$(sed -n 's/^host=//p' "$docker_root/install.conf")
+    previous_port=$(sed -n 's/^port=//p' "$docker_root/install.conf")
+    previous_workers=$(sed -n 's/^workers=//p' "$docker_root/install.conf")
+  fi
+else
+  if [[ -r "$config/public.conf" ]]; then
+    previous_host=$(sed -n 's/^host=//p' "$config/public.conf")
+    previous_port=$(sed -n 's/^port=//p' "$config/public.conf")
+  fi
+  if [[ -r "$config/backend.env" ]]; then
+    previous_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$config/backend.env")
+    previous_backup_schedule=$(sed -n 's/^CP_BACKUP_SCHEDULE_ENABLED=//p' "$config/backend.env")
+    previous_backup_retention_days=$(sed -n 's/^CP_BACKUP_RETENTION_DAYS=//p' "$config/backend.env")
+  fi
 fi
-backend_host=${backend_host:-${previous_host:-$(hostname -f)}}
+default_host=$(hostname -f 2>/dev/null || hostname)
+backend_host=${backend_host:-${previous_host:-$default_host}}
 backend_port=${backend_port:-${previous_port:-8443}}
-if [[ -r "$config/backend.env" ]]; then
-  previous_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$config/backend.env")
-  previous_backup_schedule=$(sed -n 's/^CP_BACKUP_SCHEDULE_ENABLED=//p' "$config/backend.env")
-  previous_backup_retention_days=$(sed -n 's/^CP_BACKUP_RETENTION_DAYS=//p' "$config/backend.env")
-fi
 workers=${workers:-${previous_workers:-1}}
 backup_schedule=${backup_schedule:-${previous_backup_schedule:-false}}
 backup_retention_days=${backup_retention_days:-${previous_backup_retention_days:-14}}
@@ -218,7 +255,327 @@ valid_retention() {
   [[ "$1" =~ ^[0-9]{1,4}$ ]] && ((10#$1 >= 1 && 10#$1 <= 3650))
 }
 ((gui == 0 || non_interactive == 0)) || { echo '--gui/-gui cannot be combined with --non-interactive.' >&2; exit 2; }
+
 ((purge_data == 0 || force_uninstall == 1)) || { echo '--purge-data requires --force-uninstall.' >&2; exit 2; }
+
+docker_compose_for() {
+  local release_dir=$1
+  shift
+  docker compose -p cloudportal-backed --env-file "$docker_root/.env" -f "$release_dir/docker-compose.yml" "$@"
+}
+
+docker_current_release() {
+  readlink -f "$docker_root/current" 2>/dev/null || true
+}
+
+docker_certificate_matches_host() {
+  local certificate=$1
+  if [[ "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    openssl x509 -in "$certificate" -noout -checkip "$backend_host" >/dev/null 2>&1
+  else
+    openssl x509 -in "$certificate" -noout -checkhost "$backend_host" >/dev/null 2>&1
+  fi
+}
+
+docker_certificate_key_matches() {
+  local certificate=$1 private_key=$2 cert_public key_public
+  cert_public=$(openssl x509 -in "$certificate" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  key_public=$(openssl pkey -in "$private_key" -pubout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl sha256 2>/dev/null) || return 1
+  [[ -n "$cert_public" && "$cert_public" == "$key_public" ]]
+}
+
+docker_prepare_tls() {
+  local tls_dir="$docker_root/tls" regenerate=0 san
+  install -d -m 0700 "$tls_dir"
+  if [[ -n "$cert_file" ]]; then
+    install -m 0600 "$cert_file" "$tls_dir/server.crt"
+    install -m 0600 "$cert_key" "$tls_dir/server.key"
+    printf '%s\n' custom > "$tls_dir/certificate-source"
+  elif [[ ! -s "$tls_dir/server.crt" || ! -s "$tls_dir/server.key" ]]; then
+    regenerate=1
+  elif [[ $(cat "$tls_dir/certificate-source" 2>/dev/null || true) == managed-self-signed ]]; then
+    openssl x509 -in "$tls_dir/server.crt" -noout -checkend 86400 >/dev/null 2>&1 || regenerate=1
+    docker_certificate_matches_host "$tls_dir/server.crt" || regenerate=1
+    docker_certificate_key_matches "$tls_dir/server.crt" "$tls_dir/server.key" || regenerate=1
+  fi
+
+  if ((regenerate)); then
+    san="DNS:$backend_host"
+    [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
+    openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
+      -keyout "$tls_dir/server.key" -out "$tls_dir/server.crt" \
+      -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
+    chmod 0600 "$tls_dir/server.crt" "$tls_dir/server.key"
+    printf '%s\n' managed-self-signed > "$tls_dir/certificate-source"
+  fi
+
+  docker_certificate_key_matches "$tls_dir/server.crt" "$tls_dir/server.key" || {
+    ui_fail 'Certyfikat TLS i klucz prywatny nie pasują do siebie.'
+    return 1
+  }
+  openssl x509 -in "$tls_dir/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
+    ui_fail 'Certyfikat TLS wygasł albo wygaśnie w ciągu 5 minut.'
+    return 1
+  }
+  docker_certificate_matches_host "$tls_dir/server.crt" || {
+    ui_fail "Certyfikat TLS nie obejmuje hosta $backend_host."
+    return 1
+  }
+}
+
+docker_preflight() {
+  local failed=0 command free_kib
+  ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
+  for command in docker curl tar openssl sha256sum awk sed grep flock df hostname; do
+    command -v "$command" >/dev/null 2>&1 || { ui_fail "Brak wymaganej komendy: $command"; failed=1; }
+  done
+  if command -v docker >/dev/null 2>&1; then
+    docker compose version >/dev/null 2>&1 || { ui_fail 'Brak Docker Compose v2. Wymagana jest komenda: docker compose.'; failed=1; }
+    docker info >/dev/null 2>&1 || { ui_fail 'Docker daemon jest niedostępny. Sprawdź usługę Docker i uprawnienia do socketu.'; failed=1; }
+  fi
+  free_kib=$(df -Pk /opt 2>/dev/null | awk 'NR==2 {print $4}')
+  if [[ "$free_kib" =~ ^[0-9]+$ && $free_kib -lt 4194304 ]]; then
+    ui_fail "Za mało wolnego miejsca pod /opt: $((free_kib / 1024)) MiB. Docker wymaga minimum 4 GiB wolnego miejsca."
+    failed=1
+  elif [[ "$free_kib" =~ ^[0-9]+$ ]]; then
+    ui_ok "Wolne miejsce pod /opt: $((free_kib / 1024)) MiB"
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --connect-timeout 5 --max-time 10 https://api.github.com/ >/dev/null 2>&1 \
+      && ui_ok 'Połączenie HTTPS z api.github.com' \
+      || { ui_fail 'Brak połączenia z api.github.com.'; failed=1; }
+  fi
+  ((failed == 0)) || return 1
+}
+
+docker_download_release() {
+  local target=$1 temp_dir=$2 effective_tarball_url candidate_sha
+  local curl_args=(-fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 --retry 3)
+  if [[ -n "$github_config" ]]; then
+    [[ -r "$github_config" && "$(stat -c %a "$github_config")" == 600 ]] || {
+      ui_fail 'Plik --github-config musi istnieć, być czytelny i mieć tryb 600.'
+      return 1
+    }
+    curl_args+=(--config "$github_config")
+  fi
+  if [[ -n "$github_token_file" ]]; then
+    [[ -r "$github_token_file" && "$(stat -c %a "$github_token_file")" == 600 ]] || {
+      ui_fail 'Plik --github-token-file musi istnieć, być czytelny i mieć tryb 600.'
+      return 1
+    }
+    local github_token
+    github_token=$(tr -d '\r\n' < "$github_token_file")
+    [[ "$github_token" =~ ^[A-Za-z0-9._-]{20,512}$ ]] || {
+      ui_fail 'Token GitHub ma nieprawidłowy format. Sprawdź plik i uprawnienie Contents: read.'
+      return 1
+    }
+    printf 'header = "Authorization: Bearer %s"\n' "$github_token" > "$temp_dir/curl.conf"
+    unset github_token
+    curl_args+=(--config "$temp_dir/curl.conf")
+  fi
+
+  ui_info "Pobieram kod źródłowy z GitHub: $repo @ $ref"
+  effective_tarball_url=$(curl "${curl_args[@]}" -w '%{url_effective}' "https://api.github.com/repos/$repo/tarball/$ref" -o "$temp_dir/source.tar.gz") || {
+    ui_fail 'Nie udało się pobrać kodu. Dla prywatnego repo sprawdź token Contents: read.'
+    return 1
+  }
+  docker_release_sha=${CLOUDPORTAL_RELEASE_SHA:-}
+  if [[ -z "$docker_release_sha" ]]; then
+    candidate_sha=${effective_tarball_url##*/}
+    [[ "$candidate_sha" =~ ^[0-9a-fA-F]{40}$ ]] && docker_release_sha=${candidate_sha,,} || true
+  fi
+  docker_archive_sha=$(sha256sum "$temp_dir/source.tar.gz" | awk '{print $1}')
+  mkdir "$temp_dir/source"
+  tar -xzf "$temp_dir/source.tar.gz" -C "$temp_dir/source" --strip-components=1 --no-same-owner
+  [[ -f "$temp_dir/source/app/main.py" && -f "$temp_dir/source/Dockerfile" && -f "$temp_dir/source/docker-compose.yml" ]] || {
+    ui_fail 'Pobrane archiwum nie zawiera kompletnego runtime Docker Cloudportal-backed.'
+    return 1
+  }
+  install -d -m 0755 "$target"
+  cp -a "$temp_dir/source/." "$target/"
+  chmod -R go-w "$target"
+}
+
+docker_show_status() {
+  CURRENT_STAGE='docker-status'
+  ui_header 'Cloudportal-backed — Docker status'
+  local release_dir
+  release_dir=$(docker_current_release)
+  if [[ -z "$release_dir" || ! -f "$release_dir/docker-compose.yml" || ! -f "$docker_root/.env" ]]; then
+    ui_info "Docker runtime: nie zainstalowano w $docker_root"
+    return 0
+  fi
+  ui_ok "Runtime: $release_dir"
+  if [[ -r "$docker_root/install.conf" ]]; then
+    local public_host public_port
+    public_host=$(sed -n 's/^host=//p' "$docker_root/install.conf")
+    public_port=$(sed -n 's/^port=//p' "$docker_root/install.conf")
+    ui_info "Endpoint: https://${public_host:-?}:${public_port:-?}/"
+  fi
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    docker_compose_for "$release_dir" ps
+  else
+    ui_warn 'Docker Compose jest niedostępny; nie można odczytać stanu kontenerów.'
+  fi
+}
+
+docker_uninstall_cloudportal() {
+  ui_header 'Cloudportal-backed — Docker deinstalacja'
+  local release_dir
+  release_dir=$(docker_current_release)
+  if [[ -n "$release_dir" && -f "$release_dir/docker-compose.yml" && -f "$docker_root/.env" ]]; then
+    ui_stage 1 3 'Zatrzymanie kontenerów'
+    if ((purge_data)); then
+      docker_compose_for "$release_dir" down --remove-orphans --volumes --rmi local
+    else
+      docker_compose_for "$release_dir" down --remove-orphans --rmi local
+    fi
+  elif ((purge_data)) && command -v docker >/dev/null 2>&1; then
+    ui_warn 'Brak aktywnego pliku Compose; próbuję usunąć znane wolumeny projektu.'
+    docker volume rm \
+      cloudportal-backed_backend-config cloudportal-backed_backend-data \
+      cloudportal-backed_postgres-data cloudportal-backed_redis-data >/dev/null 2>&1 || true
+  fi
+
+  ui_stage 2 3 'Usunięcie runtime Docker'
+  rm -f "$docker_root/current"
+  rm -rf "$docker_root/releases"
+  if ((purge_data)); then
+    ui_stage 3 3 'Usunięcie konfiguracji i danych'
+    rm -rf "$docker_root"
+    ui_ok 'Docker runtime, konfiguracja TLS i wolumeny danych zostały usunięte.'
+  else
+    ui_stage 3 3 'Zachowanie danych'
+    ui_ok 'Docker runtime usunięty. Wolumeny danych, TLS i konfiguracja instalatora zostały zachowane.'
+  fi
+}
+
+docker_install_cloudportal() {
+  CURRENT_STAGE='docker-preflight'
+  ui_header 'Cloudportal-backed — instalacja Docker'
+  ((gui == 0)) || { ui_fail '--docker nie obsługuje trybu --gui. Użyj parametrów CLI.'; return 2; }
+  ((backup_option_set == 0)) || {
+    ui_fail '--enable-backups/--disable-backups dotyczą instalacji systemd. Tryb Docker wymaga zewnętrznej polityki backupu wolumenu PostgreSQL.'
+    return 2
+  }
+  ((update_in_progress == 0)) || {
+    ui_fail 'Systemd auto-update nie może przełączyć istniejącej instalacji na tryb Docker.'
+    return 2
+  }
+  valid_host "$backend_host" || { ui_fail 'Nieprawidłowy host.'; return 2; }
+  valid_port "$backend_port" || { ui_fail 'Nieprawidłowy port HTTPS.'; return 2; }
+  valid_workers "$workers" || { ui_fail 'Nieprawidłowa liczba workerów. Dozwolone 1-64.'; return 2; }
+  [[ -z "$github_token_file" || -z "$github_config" ]] || { ui_fail 'Użyj tylko jednej opcji: --github-token-file albo --github-config.'; return 2; }
+  [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || { ui_fail 'Nieprawidłowy Git ref.'; return 2; }
+  [[ -z "$cert_file" && -z "$cert_key" || -r "$cert_file" && -r "$cert_key" ]] || { ui_fail 'Podaj oba pliki TLS: --cert-file i --cert-key.'; return 2; }
+  backend_port=$((10#$backend_port))
+  workers=$((10#$workers))
+
+  ui_stage 1 6 'Pretest Docker i serwera'
+  docker_preflight
+  ui_ok 'Pretest Docker zakończony.'
+
+  install -d -m 0700 "$docker_root" "$docker_root/releases"
+  exec 9>/run/cloudportal-docker-install.lock
+  flock --exclusive --nonblock 9 || {
+    ui_fail 'Inna instalacja Docker Cloudportal jest aktywna.'
+    return 1
+  }
+
+  local temp_dir release_dir current_release existing_password
+  temp_dir=$(mktemp -d)
+  trap 'rm -rf "$temp_dir"' RETURN
+
+  ui_stage 2 6 'Pobieranie kodu aplikacji'
+  release_dir=$(mktemp -d "$docker_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXXXX")
+  docker_download_release "$release_dir" "$temp_dir"
+  ln -s "$docker_root/tls" "$release_dir/tls"
+
+  ui_stage 3 6 'TLS i konfiguracja Docker Compose'
+  docker_prepare_tls
+  existing_password=$(sed -n 's/^CP_POSTGRES_PASSWORD=//p' "$docker_root/.env" 2>/dev/null || true)
+  if [[ -z "$existing_password" ]]; then
+    existing_password=$(openssl rand -hex 32)
+  fi
+  {
+    printf 'CP_POSTGRES_PASSWORD=%s\n' "$existing_password"
+    printf 'CP_BUILD_COMMIT=%s\n' "${docker_release_sha:-$ref}"
+    printf 'CP_HTTPS_PORT=%s\n' "$backend_port"
+  } > "$temp_dir/docker.env"
+  install -m 0600 "$temp_dir/docker.env" "$docker_root/.env"
+  unset existing_password
+  printf 'host=%s\nport=%s\nworkers=%s\nref=%s\n' "$backend_host" "$backend_port" "$workers" "$ref" > "$docker_root/install.conf"
+  chmod 0600 "$docker_root/install.conf"
+  docker_compose_for "$release_dir" config >/dev/null
+  ui_ok 'Konfiguracja Docker Compose jest poprawna.'
+
+  ui_stage 4 6 'Budowa obrazu i bootstrap'
+  docker_compose_for "$release_dir" build
+  ui_info 'Uruchamiam migracje i bootstrap administratora. Sekrety bootstrap są wyświetlane wyłącznie przez ten krok.'
+  docker_compose_for "$release_dir" run --rm bootstrap
+
+  ui_stage 5 6 'Uruchomienie kontenerów'
+  current_release=$(docker_current_release)
+  docker_compose_for "$release_dir" up -d --remove-orphans --scale "worker=$workers"
+  ui_ok "Kontenery uruchomione. Workery: $workers"
+
+  ui_stage 6 6 'Healthcheck HTTPS'
+  local ready=0
+  for ((attempt=1; attempt<=60; attempt++)); do
+    if curl -fsS --noproxy '*' --connect-timeout 2 --max-time 5 \
+      --cacert "$docker_root/tls/server.crt" \
+      --resolve "$backend_host:$backend_port:127.0.0.1" \
+      "https://$backend_host:$backend_port/api/v1/health" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    if ((attempt == 1)); then
+      ui_info 'Oczekuję na gotowość proxy/API Docker...'
+    elif ((attempt % 10 == 0)); then
+      ui_info "Nadal czekam na Docker API: próba $attempt/60."
+    fi
+    sleep 2
+  done
+  if ((ready != 1)); then
+    ui_fail 'Healthcheck HTTPS instalacji Docker nie przeszedł.'
+    docker_compose_for "$release_dir" ps || true
+    docker_compose_for "$release_dir" logs --tail=100 api proxy || true
+    return 1
+  fi
+
+  ln -sfn "$release_dir" "$docker_root/current"
+  if [[ -n "$current_release" && "$current_release" != "$release_dir" && -d "$current_release" ]]; then
+    find "$docker_root/releases" -mindepth 1 -maxdepth 1 -type d ! -path "$release_dir" -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+  fi
+
+  ui_header 'Podsumowanie'
+  ui_ok 'Instalacja Docker Cloudportal-backed zakończona.'
+  ui_info "Panel: https://$backend_host:$backend_port/ui/"
+  ui_info "Runtime: $release_dir"
+  ui_info "Konfiguracja: $docker_root/.env"
+  ui_info "TLS: $docker_root/tls"
+  ui_info "Workery: $workers"
+  ui_info 'Status: sudo ./install.sh --docker --status'
+  ui_info "Logi: docker compose -p cloudportal-backed --env-file $docker_root/.env -f $docker_root/current/docker-compose.yml logs --tail=100"
+}
+
+if ((docker_mode)); then
+  if ((status_mode)); then
+    docker_show_status
+    drain_script_input
+    exit 0
+  fi
+  if ((force_uninstall)); then
+    command -v docker >/dev/null 2>&1 || { ui_fail 'Brak komendy docker.'; exit 1; }
+    docker compose version >/dev/null 2>&1 || { ui_fail 'Brak Docker Compose v2.'; exit 1; }
+    docker_uninstall_cloudportal
+    drain_script_input
+    exit 0
+  fi
+  docker_install_cloudportal
+  drain_script_input
+  exit 0
+fi
 
 lock_file=/run/cloudportal-install.lock
 lock_owner_file=/run/cloudportal-install.owner
