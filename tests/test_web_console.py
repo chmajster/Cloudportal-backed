@@ -619,6 +619,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Konsola'" in script
     assert "button('Snapshot'" in script
     assert "button('Backup'" in script
+    assert "button('Odtwórz od zera'" in script
+    assert "function recreateVm(item)" in script
+    assert "'Odtwórz VM od zera'" in script
+    assert "Potwierdzić odtworzenie?" in script
+    assert "'/recreate'" in script
+    assert "item.management_mode === 'terraform'" in script
+    assert "allowed('deployments.destroy')" in script
     assert 'function vmDetailActions(' in script
     assert 'function vmSnapshotsContent(' in script
     assert 'function vmBackupsContent(' in script
