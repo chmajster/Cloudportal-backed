@@ -103,6 +103,8 @@ takeover_running_install=1
 force_uninstall=0
 purge_data=0
 status_mode=0
+uninstall_mode=0
+assume_yes=0
 update_in_progress=${CLOUDPORTAL_UPDATE_IN_PROGRESS:-0}
 [[ "$update_in_progress" == 1 ]] || update_in_progress=0
 update_channel_ref=${CLOUDPORTAL_UPDATE_CHANNEL_REF:-}
@@ -128,7 +130,9 @@ while (($#)); do
     --check-platform) check_platform=1; shift;;
     --takeover) takeover_running_install=1; shift;;
     --no-takeover) takeover_running_install=0; shift;;
-    --force-uninstall|--uninstall) force_uninstall=1; shift;;
+    --uninstall) uninstall_mode=1; shift;;
+    --force-uninstall) uninstall_mode=1; assume_yes=1; shift;;
+    --yes|-y) assume_yes=1; shift;;
     --purge-data) purge_data=1; shift;;
     --status) status_mode=1; shift;;
     --help|-h) usage; exit 0;;
