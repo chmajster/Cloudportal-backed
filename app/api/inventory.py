@@ -268,7 +268,7 @@ def adopt_vm(
     if row.management_mode != 'external' or row.lifecycle_status != 'active' or row.deployment_id:
         raise HTTPException(409, 'Only an active external VM can be adopted')
 
-    provider = find(db, Provider, row.provider_id)
+    provider, adapter = provider_adapter(db, row.provider_id)
     if provider.type != 'proxmox':
         raise HTTPException(422, 'VM adoption is currently implemented for Proxmox')
     require_catalog_item_enabled(db, 'templates', data.template)
@@ -283,6 +283,14 @@ def adopt_vm(
     locked_credential(db, provider.credentials_id)
 
     def create():
+        live = adapter.vm_config(row.node, row.vm_id)
+        confirmed = adoption_suggestion(row, live)
+        quota_dimensions = {
+            'vm_count': 1,
+            'vcpu': max(1, int(live.get('cores') or confirmed['cpu'])) * max(1, int(live.get('sockets') or 1)),
+            'memory_mb': max(0, int(live.get('memory') or confirmed['memory'])),
+            'disk_gib': max(0, int(confirmed['disk'])),
+        }
         deployment = Deployment(
             name=variables.name,
             provider_id=provider.id,
@@ -312,6 +320,7 @@ def adopt_vm(
             {
                 'import_values': import_values,
                 'adoption': {'managed_vm_id': row.id, 'plan_only': True},
+                '_quota_dimensions': quota_dimensions,
             },
         )
         audit(db, request, 'inventory.vm_adoption_started', 'managed_vms', row.id)
