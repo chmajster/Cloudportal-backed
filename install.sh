@@ -577,7 +577,8 @@ docker_prepare_github_curl() {
 
 docker_install() {
   ui_header 'Cloudportal-backed — instalacja Docker'
-  local stages=6 release_sha effective_tarball_url candidate_sha release
+  local stages=6 release_sha effective_tarball_url candidate_sha release docker_tls_stage
+  local docker_tls_changed=0
   docker_tmp_dir=''
   backend_host=${backend_host:-$(hostname -f 2>/dev/null || hostname)}
   backend_port=${backend_port:-8443}
@@ -647,23 +648,26 @@ EOF
   chmod 0600 "$docker_env"
   unset postgres_password
 
+  docker_tls_stage="$docker_tmp_dir/tls-stage"
   if [[ -n "$cert_file" ]]; then
-    install -m 0600 "$cert_file" "$docker_tls/server.crt"
-    install -m 0600 "$cert_key" "$docker_tls/server.key"
-    docker_certificate_key_matches "$docker_tls/server.crt" "$docker_tls/server.key" || {
+    install -d -m 0700 "$docker_tls_stage"
+    install -m 0600 "$cert_file" "$docker_tls_stage/server.crt"
+    install -m 0600 "$cert_key" "$docker_tls_stage/server.key"
+    docker_certificate_key_matches "$docker_tls_stage/server.crt" "$docker_tls_stage/server.key" || {
       ui_fail 'Własny certyfikat TLS i klucz nie pasują do siebie.'
       exit 1
     }
-    openssl x509 -in "$docker_tls/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
+    openssl x509 -in "$docker_tls_stage/server.crt" -noout -checkend 300 >/dev/null 2>&1 || {
       ui_fail 'Własny certyfikat TLS jest nieważny albo wygasa w ciągu 5 minut.'
       exit 1
     }
-    docker_certificate_matches_host "$docker_tls/server.crt" || {
+    docker_certificate_matches_host "$docker_tls_stage/server.crt" || {
       ui_fail "Własny certyfikat TLS nie obejmuje hosta $backend_host."
       exit 1
     }
-    printf '%s\n' custom > "$docker_tls/source"
-    printf '%s\n' "$backend_host" > "$docker_tls/host"
+    printf '%s\n' custom > "$docker_tls_stage/source"
+    printf '%s\n' "$backend_host" > "$docker_tls_stage/host"
+    docker_tls_changed=1
   else
     local regenerate_tls=0 previous_tls_host='' previous_tls_source=''
     [[ -r "$docker_tls/host" ]] && previous_tls_host=$(tr -d '\r\n' < "$docker_tls/host")
@@ -677,8 +681,9 @@ EOF
       docker_certificate_key_matches "$docker_tls/server.crt" "$docker_tls/server.key" || regenerate_tls=1
     fi
     if ((regenerate_tls)); then
-      docker_generate_managed_tls
-      ui_info "Wygenerowano lub odnowiono self-signed TLS dla $backend_host."
+      docker_generate_managed_tls "$docker_tls_stage"
+      docker_tls_changed=1
+      ui_info "Przygotowano nowy self-signed TLS dla $backend_host; zostanie aktywowany dopiero po udanym buildzie i bootstrapie."
     fi
   fi
   ui_ok "Konfiguracja Docker: $docker_env"
@@ -692,8 +697,20 @@ EOF
   docker_compose run --rm bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
   ui_ok 'Migracje i bootstrap zakończone.'
 
+  if ((docker_tls_changed)); then
+    install -d -m 0700 "$docker_tls"
+    install -m 0600 "$docker_tls_stage/server.crt" "$docker_tls/server.crt"
+    install -m 0600 "$docker_tls_stage/server.key" "$docker_tls/server.key"
+    install -m 0600 "$docker_tls_stage/source" "$docker_tls/source"
+    install -m 0600 "$docker_tls_stage/host" "$docker_tls/host"
+    ui_ok 'Nowy materiał TLS został aktywowany po udanym przygotowaniu release.'
+  fi
+
   ui_stage 6 "$stages" 'Start stacka i healthcheck'
   docker_compose up -d --remove-orphans --scale "worker=$workers"
+  if ((docker_tls_changed)); then
+    docker_compose restart proxy
+  fi
   local ready=0
   local docker_tls_source=''
   local docker_health_curl=(-fsS --connect-timeout 2 --max-time 5)
@@ -734,6 +751,7 @@ if ((docker_mode)); then
     docker_status
     exit $?
   fi
+  docker_acquire_install_lock
   if ((uninstall_mode)); then
     docker_uninstall
     exit 0
