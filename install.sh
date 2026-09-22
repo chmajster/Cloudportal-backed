@@ -36,6 +36,8 @@ Cloudportal-backed installer
 Użycie:
   install.sh [opcje]
 
+Bez parametrów instalator uruchamia interaktywne menu wyboru operacji.
+
 Tryby:
   --status                    Pokaż stan instalacji i usług; niczego nie zmienia.
   --uninstall                 Odinstaluj Cloudportal; domyślnie zachowaj bazę, konfigurację i dane.
@@ -96,6 +98,7 @@ installer_error() {
 trap 'rc=$?; installer_error "$rc" "$LINENO"' ERR
 
 repo='chmajster/Cloudportal-backed'
+initial_argc=$#
 ref='main'
 backend_host=''
 backend_port=''
@@ -150,6 +153,86 @@ while (($#)); do
     *) ui_fail "Nieznana opcja: $1"; ui_info 'Uruchom --help, aby zobaczyć dostępne opcje.'; exit 2;;
   esac
 done
+
+interactive_action_menu() {
+  ((initial_argc == 0)) || return 0
+
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    ui_fail 'Uruchomienie bez parametrów wymaga interaktywnego terminala.'
+    ui_info 'W automatyzacji podaj jawny tryb, np. --non-interactive, --status albo --uninstall --yes.'
+    exit 2
+  fi
+
+  ui_header 'Cloudportal-backed — wybór operacji'
+  cat >/dev/tty <<'EOF'
+  [1] Instalacja / aktualizacja — systemd
+  [2] Instalacja / aktualizacja — Docker
+  [3] Status — systemd
+  [4] Status — Docker
+  [5] Odinstaluj — zachowaj bazę i dane
+  [6] Odinstaluj całkowicie — usuń bazę i dane
+  [7] Odinstaluj Docker — zachowaj wolumeny i konfigurację
+  [8] Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację
+  [0] Wyjście
+EOF
+
+  local choice=''
+  while :; do
+    printf 'Wybierz operację [0-8]: ' >/dev/tty
+    if ! IFS= read -r choice </dev/tty; then
+      ui_fail 'Nie udało się odczytać wyboru z terminala.'
+      exit 2
+    fi
+    case "$choice" in
+      1)
+        gui=1
+        return 0
+        ;;
+      2)
+        docker_mode=1
+        return 0
+        ;;
+      3)
+        status_mode=1
+        return 0
+        ;;
+      4)
+        docker_mode=1
+        status_mode=1
+        return 0
+        ;;
+      5)
+        uninstall_mode=1
+        return 0
+        ;;
+      6)
+        uninstall_mode=1
+        purge_data=1
+        return 0
+        ;;
+      7)
+        docker_mode=1
+        uninstall_mode=1
+        return 0
+        ;;
+      8)
+        docker_mode=1
+        uninstall_mode=1
+        purge_data=1
+        return 0
+        ;;
+      0)
+        ui_info 'Nie wykonano żadnych zmian.'
+        exit 0
+        ;;
+      *)
+        ui_warn 'Nieprawidłowy wybór. Wpisz cyfrę od 0 do 8.'
+        ;;
+    esac
+  done
+}
+
+interactive_action_menu
 
 mode_count=$((status_mode + uninstall_mode + check_platform))
 ((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall albo --check-platform.'; exit 2; }
@@ -555,8 +638,9 @@ docker_uninstall() {
         ui_fail '--non-interactive --uninstall --purge-data wymaga --yes.'
         exit 2
       fi
-      [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall --purge-data.'; exit 2; }
-      read -r -p 'Wpisz USUN, aby trwale usunąć dane Docker: ' confirmation
+      [[ -r /dev/tty && -w /dev/tty ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall --purge-data.'; exit 2; }
+      printf 'Wpisz USUN, aby trwale usunąć dane Docker: ' >/dev/tty
+      IFS= read -r confirmation </dev/tty || true
       [[ "$confirmation" == USUN ]] || { ui_warn 'Anulowano.'; exit 1; }
     fi
   else
@@ -565,8 +649,9 @@ docker_uninstall() {
         ui_fail '--non-interactive --uninstall wymaga --yes.'
         exit 2
       fi
-      [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall.'; exit 2; }
-      read -r -p 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' confirmation
+      [[ -r /dev/tty && -w /dev/tty ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall.'; exit 2; }
+      printf 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' >/dev/tty
+      IFS= read -r confirmation </dev/tty || true
       [[ "$confirmation" =~ ^[TtYy]$ ]] || { ui_warn 'Anulowano.'; exit 1; }
     fi
   fi
