@@ -85,8 +85,17 @@ after provider confirmation. A timeout retains the resource lock and quota
 reservation as reconciliation-required.
 
 When limits are active, modifying an unaccounted resource fails closed instead
-of manufacturing an incorrect baseline. Clone under active quota is forced
-through governed provisioning so the clone receives a distinct allocation.
+of manufacturing an incorrect baseline. Clone is always forced through governed
+provisioning so the clone receives a distinct allocation. Legacy Proxmox
+capacity-changing routes are rejected whenever they could bypass an active
+quota dimension.
+
+Provider templates expose different capacity shapes. Proxmox and VMware map
+CPU/RAM/disk directly. AWS and Azure currently expose normalized disk size but
+not normalized vCPU/RAM from instance/VM size names; OpenStack flavor capacity
+is likewise unresolved. Enabling or consuming a quota dimension that cannot be
+normalized fails closed with `QUOTA_DIMENSION_UNRESOLVED` rather than silently
+under-counting usage.
 
 ## API and RBAC
 
@@ -98,7 +107,8 @@ Project-scoped API:
 - `POST /api/v1/quotas/reservations/{id}/reconcile`
 
 Tenant ceiling mutation uses
-`PUT /api/v1/quotas/tenant/{dimension}`.
+`PUT /api/v1/quotas/tenant/{dimension}`. Project and tenant limits can be
+returned to the unbounded state with the corresponding `DELETE` endpoint.
 
 Permissions are `quotas.read`, `quotas.manage` and
 `quotas.tenant.manage`. Project roles cannot delegate
