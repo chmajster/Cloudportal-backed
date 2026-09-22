@@ -1117,3 +1117,47 @@
   overflow: auto;
   scroll-behavior: auto;
 }
+
+
+.my-resources-vm-list {
+  display: grid;
+  gap: 14px;
+}
+.my-resources-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+.my-resources-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.my-resources-bulk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.my-resource-select {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+.my-resource-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+@media (max-width: 760px) {
+  .my-resources-bulk-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}
