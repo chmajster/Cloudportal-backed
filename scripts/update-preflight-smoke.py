@@ -17,7 +17,13 @@ def main():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     backup = module.pre_update_backup()
-    module.validate_candidate_runtime(target_sha, backup, module.load_settings())
+    try:
+        module.validate_candidate_runtime(target_sha, backup, module.load_settings())
+    except Exception:
+        state = module.load_state()
+        for line in state.get('output') or []:
+            print(line)
+        raise
     state = module.load_state()
     assert state.get('runtime_preflight') == 'success'
     print('Updater runtime preflight: cloned DB migration and isolated candidate API passed.')
