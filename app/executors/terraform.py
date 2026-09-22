@@ -215,14 +215,15 @@ class TerraformExecutor(Executor):
             if name in {'PROXMOX_VE_SSH_PASSWORD', 'PROXMOX_VE_SSH_PRIVATE_KEY'} and value
         )
         runtime_variables = dict(deployment.variables or {})
-        guest_variables, guest_password = guest_credential_runtime_variables(deployment)
-        runtime_variables.update(guest_variables)
-        if guest_password:
-            # Keep the plaintext password out of deployment variables, job
-            # payloads and terraform.tfvars.json. Terraform reads it only from
-            # the process environment for this execution.
-            env['TF_VAR_ssh_password'] = guest_password
-            sensitive_values.append(guest_password)
+        if operation in {'terraform.plan', 'terraform.apply'}:
+            guest_variables, guest_password = guest_credential_runtime_variables(deployment)
+            runtime_variables.update(guest_variables)
+            if guest_password:
+                # Keep the plaintext password out of deployment variables, job
+                # payloads and terraform.tfvars.json. Terraform reads it only from
+                # the process environment for this execution.
+                env['TF_VAR_ssh_password'] = guest_password
+                sensitive_values.append(guest_password)
         with distributed_deployment_lock(deployment.id):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
