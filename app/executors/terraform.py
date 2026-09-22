@@ -104,9 +104,10 @@ def guest_credential_runtime_variables(deployment):
     if not private_key and not password:
         raise ExecutionFailed('Guest SSH credential has no password or private key')
 
-    variables = {'ssh_username': credential.username}
-    if private_key:
-        variables['ssh_public_key'] = public_key_from_private_key(private_key)
+    variables = {
+        'ssh_username': credential.username,
+        'ssh_public_key': public_key_from_private_key(private_key) if private_key else None,
+    }
     return variables, password
 
 
