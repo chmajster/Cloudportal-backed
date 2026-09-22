@@ -157,14 +157,14 @@ done
 interactive_action_menu() {
   ((initial_argc == 0)) || return 0
 
-  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+  if ! exec 3<>/dev/tty; then
     ui_fail 'Uruchomienie bez parametrów wymaga interaktywnego terminala.'
     ui_info 'W automatyzacji podaj jawny tryb, np. --non-interactive, --status albo --uninstall --yes.'
     exit 2
   fi
 
   ui_header 'Cloudportal-backed — wybór operacji'
-  cat >/dev/tty <<'EOF'
+  cat >&3 <<'EOF'
   [1] Instalacja / aktualizacja — systemd
   [2] Instalacja / aktualizacja — Docker
   [3] Status — systemd
@@ -178,50 +178,60 @@ EOF
 
   local choice=''
   while :; do
-    printf 'Wybierz operację [0-8]: ' >/dev/tty
-    if ! IFS= read -r choice </dev/tty; then
+    printf 'Wybierz operację [0-8]: ' >&3
+    if ! IFS= read -r choice <&3; then
+      exec 3>&-
       ui_fail 'Nie udało się odczytać wyboru z terminala.'
       exit 2
     fi
     case "$choice" in
       1)
         gui=1
+        exec 3>&-
         return 0
         ;;
       2)
         docker_mode=1
+        exec 3>&-
         return 0
         ;;
       3)
         status_mode=1
+        exec 3>&-
         return 0
         ;;
       4)
         docker_mode=1
         status_mode=1
+        exec 3>&-
         return 0
         ;;
       5)
         uninstall_mode=1
+        exec 3>&-
         return 0
         ;;
       6)
         uninstall_mode=1
         purge_data=1
+        exec 3>&-
         return 0
         ;;
       7)
         docker_mode=1
         uninstall_mode=1
+        exec 3>&-
         return 0
         ;;
       8)
         docker_mode=1
         uninstall_mode=1
         purge_data=1
+        exec 3>&-
         return 0
         ;;
       0)
+        exec 3>&-
         ui_info 'Nie wykonano żadnych zmian.'
         exit 0
         ;;
