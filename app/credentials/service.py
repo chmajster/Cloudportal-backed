@@ -1,6 +1,8 @@
 from fastapi import HTTPException
+from sqlalchemy import or_, select
+
 from app.api.common import public
-from app.models import now
+from app.models import Blueprint, Deployment, Job, now
 from app.security.core import decrypt_secret, encrypt_secret
 
 
@@ -69,3 +71,34 @@ def save_secret(db, c, value):
 
     c.encrypted_secret = encrypt_secret(value, c.id)
     c.secret_updated_at = now()
+
+
+def credential_in_use(db, id, *, pending_only=False):
+    """Return whether a credential is protected by an active or durable reference."""
+    deployments = select(Deployment.id).where(or_(
+        Deployment.credentials_id == id,
+        Deployment.workflow['ansible']['credentials_id'].as_integer() == id,
+        Deployment.workflow['blueprint']['guest_credential_id'].as_integer() == id,
+    ))
+    if pending_only:
+        deployments = deployments.where(Deployment.active_job_id.is_not(None))
+    else:
+        deployments = deployments.where(Deployment.status != 'destroyed')
+
+    active_job_credential = select(Job.id).where(
+        Job.status.in_(['waiting_approval', 'queued', 'running', 'cancelling']),
+        or_(
+            Job.payload['ansible']['credentials_id'].as_integer() == id,
+            Job.payload['blueprint']['guest_credential_id'].as_integer() == id,
+        ),
+    )
+    if db.scalar(deployments.limit(1)) or db.scalar(active_job_credential.limit(1)):
+        return True
+    if pending_only:
+        return False
+
+    blueprint_ref = select(Blueprint.id).where(or_(
+        Blueprint.deployment['guest_credential_id'].as_integer() == id,
+        Blueprint.deployment['ansible']['credentials_id'].as_integer() == id,
+    ))
+    return bool(db.scalar(blueprint_ref.limit(1)))
