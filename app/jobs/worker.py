@@ -1258,17 +1258,6 @@ def execute(job_id):
                 if job.operation == 'terraform.apply' and auto_resume.get('skip_provider_apply'):
                     workspace = restore_recovery_workspace(context)
                     context.stage('recovery.terraform_apply.skipped')
-                    inventory = register_managed_inventory(context, workspace)
-                    if inventory['vm_id'] is not None:
-                        context.log(
-                            f"inventory.vm.recovered: {inventory['node']} / VMID {inventory['vm_id']}"
-                        )
-                    else:
-                        context.log(f"inventory.resource.recovered: {inventory['external_id']}")
-                    if context.ansible:
-                        addresses = wait_for_ansible_transport(context, workspace)
-                        context.ansible.inventory = Inventory(hosts=addresses)
-                        AnsibleExecutor().execute('ansible.execute', context)
                 else:
                     workspace = executor.execute(job.operation, context)
                 if job.operation == 'terraform.import':
