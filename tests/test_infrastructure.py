@@ -793,3 +793,36 @@ def test_old_worker_cannot_clear_newer_active_job(client, headers, monkeypatch, 
         assert old.status == 'successful'
         assert dep.active_job_id == holder['job_id']
         assert dep.status == 'queued'
+
+
+
+def test_worker_admits_queued_job_missing_quota_rollout_marker(client, headers, monkeypatch, tmp_path):
+    from app.quotas.service import release_reservation
+
+    created = deployment(client, headers)
+    with session() as db:
+        job = db.get(Job, created['job']['id'])
+        reservation = db.get(QuotaReservation, job.payload['_quota_reservation_id'])
+        release_reservation(db, reservation.id)
+        payload = dict(job.payload or {})
+        payload.pop('_quota_checked', None)
+        payload.pop('_quota_reservation_id', None)
+        job.payload = payload
+        db.commit()
+
+    workspace = terraform_state_workspace(tmp_path, vm_id=808)
+    monkeypatch.setattr(TerraformExecutor, 'execute', lambda *args: workspace)
+
+    execute(created['job']['id'])
+
+    with session() as db:
+        job = db.get(Job, created['job']['id'])
+        reservation = db.query(QuotaReservation).filter_by(request_key=f"job:{job.id}").one()
+        allocation = db.query(QuotaAllocation).filter_by(
+            subject_type='deployment',
+            subject_id=created['id'],
+        ).one()
+        assert job.status == 'successful'
+        assert job.payload['_quota_checked'] is True
+        assert reservation.status == 'committed'
+        assert allocation.dimensions['vm_count'] == 1
