@@ -147,6 +147,7 @@ def validate_authorization(db, job):
         permissions = set(permissions_for_identity(db, identity, scope, write=True))
         bind_scope(db, scope)
         ensure_execution_ready(db, identity, scope)
+        target = None
         if job.deployment_id:
             target = db.get(Deployment, job.deployment_id)
             if target is None or (target.tenant_id, target.project_id) != (scope.tenant_id, scope.project_id):
@@ -160,6 +161,8 @@ def validate_authorization(db, job):
             raise ExecutionFailed('Ansible credential access has been revoked')
         blueprint = (job.payload or {}).get('blueprint') or {}
         guest_credential_id = blueprint.get('guest_credential_id')
+        if not guest_credential_id and target is not None:
+            guest_credential_id = (((target.workflow or {}).get('blueprint') or {}).get('guest_credential_id'))
         if guest_credential_id and not reference_visible(db, 'credential', guest_credential_id, scope):
             raise ExecutionFailed('Guest VM credential access has been revoked')
     except HTTPException:
