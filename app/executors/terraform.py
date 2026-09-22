@@ -125,6 +125,15 @@ def proxmox_ssh_preflight(credential, env):
     )
 
 
+def terraform_plan_command(binary, operation, recreate_address=None):
+    command = [binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
+    if operation == 'terraform.destroy':
+        command.append('-destroy')
+    elif recreate_address:
+        command.append('-replace=' + recreate_address)
+    return command
+
+
 class TerraformExecutor(Executor):
     binary = 'terraform'
 
@@ -287,11 +296,7 @@ class TerraformExecutor(Executor):
                             context.stage('terraform.plan.reuse')
                         else:
                             context.stage('terraform.plan')
-                            plan = [self.binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
-                            if operation == 'terraform.destroy':
-                                plan.append('-destroy')
-                            elif recreate_address:
-                                plan.append('-replace=' + recreate_address)
+                            plan = terraform_plan_command(self.binary, operation, recreate_address)
                             run_process(plan, workspace, env, context, sensitive_values)
                         if operation != 'terraform.plan':
                             context.stage(operation)
