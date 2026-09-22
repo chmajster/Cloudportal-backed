@@ -43,16 +43,21 @@
     };
   }
 
-  function syncWaitAgentControl(control, snippets, readiness = { ok: true }) {
+  function syncQemuGuestAgentInstallControl(control, snippets, readiness = { ok: true }) {
     if (!control) return;
-    const available = snippets.length > 0 && readiness?.ok !== false;
-    if (!available) control.checked = false;
-    control.disabled = !available;
-    control.title = !snippets.length
+    const snippetsAvailable = snippets.length > 0;
+    if (!snippetsAvailable) control.checked = false;
+    control.disabled = !snippetsAvailable;
+    control.title = !snippetsAvailable
       ? 'Brak storage z obsługą snippets'
       : readiness?.ok === false
         ? 'Preflight SSH Proxmox nieudany: ' + (readiness.reason || 'ssh_not_ready')
+          + '. Ustawienie można zapisać, ale wykonanie Blueprintu wymaga sprawnego SSH.'
         : '';
+  }
+
+  function syncWaitAgentControl(control, snippets, readiness = { ok: true }) {
+    syncQemuGuestAgentInstallControl(control, snippets, readiness);
   }
 
   function workflowChoicesForProvider(workflowTypes, provider, currentType = '') {
@@ -114,6 +119,7 @@
       guestSshCredentials,
       guestCredentialChoices,
       selectSnippetStorage,
+      syncQemuGuestAgentInstallControl,
       syncWaitAgentControl,
       workflowChoicesForProvider,
       requiredExecutionPermissions,
