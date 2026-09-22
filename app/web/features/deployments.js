@@ -110,12 +110,14 @@ async function deploymentsView() {
 
 function managedVmCard(item, providerNames, deploymentById) {
   const liveStatus = item.live?.status || item.lifecycle_status || 'unknown';
-  const canOpen = allowed('vms.read') && item.lifecycle_status === 'active' && hasCommand('inventory.openVm');
+  const active = item.lifecycle_status === 'active';
+  const canOpen = allowed('vms.read') && active && hasCommand('inventory.openVm');
+  const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm');
   const actions = [];
   if (canOpen) {
     actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', item, 'overview', 'my-resources'), 'primary'));
   }
-  if (canOpen && allowed('vms.console') && hasCommand('inventory.consoleVm')) {
+  if (canConsole) {
     actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
   }
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
