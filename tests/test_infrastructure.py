@@ -754,6 +754,8 @@ def test_openapi_describes_public_response_contract(client):
         assert forbidden not in schema['components']['schemas'][model]['properties']
     parameters = schema['paths']['/api/v1/deployments']['post']['parameters']
     assert any(p['name'] == 'Idempotency-Key' and p['required'] for p in parameters)
+    recreate_parameters = schema['paths']['/api/v1/deployments/{id}/recreate']['post']['parameters']
+    assert any(p['name'] == 'Idempotency-Key' and p['required'] for p in recreate_parameters)
 
 
 def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
