@@ -65,6 +65,25 @@ def tenant_limit(dimension: str, data: QuotaLimitInput, request: Request,
     return {'tenant_id': row.tenant_id, 'dimension': row.dimension, 'limit': row.limit_value}
 
 
+@router.delete('/quotas/project/{dimension}')
+def project_limit_delete(dimension: str, request: Request,
+                         actor=Depends(require('quotas.manage')), db=Depends(get_db, scope='function')):
+    row = service.clear_project_limit(db, request.state.resource_scope, dimension)
+    audit(db, request, 'quota.project_limit.deleted', 'projects', request.state.resource_scope.project_id)
+    return {'tenant_id': request.state.resource_scope.tenant_id,
+            'project_id': request.state.resource_scope.project_id,
+            'dimension': dimension, 'deleted': row is not None}
+
+
+@router.delete('/quotas/tenant/{dimension}')
+def tenant_limit_delete(dimension: str, request: Request,
+                        actor=Depends(require('quotas.tenant.manage')), db=Depends(get_db, scope='function')):
+    row = service.clear_tenant_limit(db, request.state.resource_scope, dimension)
+    audit(db, request, 'quota.tenant_limit.deleted', 'tenants', request.state.resource_scope.tenant_id)
+    return {'tenant_id': request.state.resource_scope.tenant_id,
+            'dimension': dimension, 'deleted': row is not None}
+
+
 @router.get('/quotas/reservations')
 def reservations(request: Request, status: Literal['reserved', 'uncertain', 'committed', 'released'] | None = None,
                  actor=Depends(require('quotas.read')), db=Depends(get_db, scope='function')):
