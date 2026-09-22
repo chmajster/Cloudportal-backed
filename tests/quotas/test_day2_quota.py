@@ -11,6 +11,7 @@ from app.quotas.models import ProjectQuotaUsage, QuotaAllocation, QuotaReservati
 from app.quotas.service import (
     QuotaDelta,
     commit_reservation,
+    day2_delta,
     reserve,
     set_project_limit,
 )
@@ -158,7 +159,7 @@ def test_day2_timeout_keeps_quota_reserved_and_marks_reconciliation_required(res
 
 def test_unaccounted_external_disk_delete_does_not_create_negative_quota(resource):
     with session() as db:
-        quota = service.day2_delta(
+        quota = day2_delta(
             db,
             SimpleNamespace(resource_id=resource[2]),
             'delete_disk',
