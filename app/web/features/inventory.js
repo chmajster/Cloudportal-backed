@@ -194,6 +194,23 @@ function storageLabel(storage) {
   return parts.join(' · ');
 }
 
+function recreateVm(item) {
+  const name = item.name || ('VM ' + item.vm_id);
+  confirmAction(
+    'Odtwórz VM od zera',
+    `VM „${name}” zostanie usunięta i utworzona ponownie z aktualnej definicji Terraform. Dane zapisane na dyskach tej VM mogą zostać bezpowrotnie utracone. Potwierdzić odtworzenie?`,
+    async () => {
+      const job = await api('/deployments/' + encodeURIComponent(item.deployment_id) + '/recreate', {
+        method: 'POST',
+        idempotent: true,
+        body: {},
+      });
+      toast('Odtworzenie VM zostało zlecone jako zadanie ' + short(job.id, 18) + '.');
+      await navigate('inventory');
+    },
+  );
+}
+
 function vmDetailActions(item) {
   const base = vmBase(item);
   const actions = [];
@@ -226,6 +243,13 @@ function vmDetailActions(item) {
       return false;
     },
   )));
+  const canRecreate = item.management_mode === 'terraform'
+    && item.deployment_id
+    && allowed('deployments.destroy')
+    && allowed('deployments.create')
+    && allowed('jobs.execute')
+    && allowed('terraform.execute');
+  if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
   if (allowed('vms.delete')) actions.push(button('Usuń VM', () => deleteVm(item), 'danger'));
   return actions;
 }
