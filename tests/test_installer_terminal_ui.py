@@ -36,6 +36,48 @@ def test_installer_has_preflight_status_help_and_uninstall_modes():
     assert 'show_status()' in INSTALLER
 
 
+def test_installer_without_arguments_opens_action_menu():
+    assert 'initial_argc=$#' in INSTALLER
+    assert 'interactive_action_menu()' in INSTALLER
+    assert '((initial_argc == 0)) || return 0' in INSTALLER
+    assert "exec 3<>/dev/tty" in INSTALLER
+    assert 'Instalacja / aktualizacja — systemd' in INSTALLER
+    assert 'Instalacja / aktualizacja — Docker' in INSTALLER
+    assert 'Odinstaluj — zachowaj bazę i dane' in INSTALLER
+    assert 'Odinstaluj całkowicie — usuń bazę i dane' in INSTALLER
+    assert 'Odinstaluj Docker — zachowaj wolumeny i konfigurację' in INSTALLER
+    assert 'Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację' in INSTALLER
+    assert "Wybierz operację [0-8]:" in INSTALLER
+
+
+def test_installer_without_arguments_requires_tty_in_automation():
+    env = dict(os.environ)
+    env['NO_COLOR'] = '1'
+    result = subprocess.run(
+        ['bash', str(INSTALLER_PATH)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        start_new_session=True,
+    )
+    assert result.returncode == 2
+    assert 'Uruchomienie bez parametrów wymaga interaktywnego terminala.' in result.stderr
+
+
+def test_docker_uninstall_confirmation_uses_controlling_tty():
+    assert "printf 'Wpisz USUN, aby trwale usunąć dane Docker: ' >/dev/tty" in INSTALLER
+    assert 'IFS= read -r confirmation </dev/tty || true' in INSTALLER
+    assert "printf 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' >/dev/tty" in INSTALLER
+
+
+def test_docker_key_validation_starts_postgres_without_running_migrations_first():
+    assert 'docker_compose_for "$release" "$candidate_env" up -d postgres' in INSTALLER
+    assert 'exec -T postgres pg_isready -U cloudportal -d cloudportal' in INSTALLER
+    assert 'run --rm --no-deps bootstrap python -m app.bootstrap --key-only' in INSTALLER
+    assert 'bez uruchamiania migracji' in INSTALLER
+
+
 def test_installer_failure_trap_is_actionable_without_dumping_commands():
     assert 'installer_error()' in INSTALLER
     assert 'Etap „$CURRENT_STAGE” przerwany' in INSTALLER
@@ -59,6 +101,7 @@ def test_help_is_plain_text_without_ansi_sequences():
     assert '--uninstall' in result.stdout
     assert '--non-interactive' in result.stdout
     assert '--yes, -y' in result.stdout
+    assert 'Bez parametrów instalator uruchamia interaktywne menu wyboru operacji.' in result.stdout
 
 
 

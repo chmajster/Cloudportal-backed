@@ -36,6 +36,8 @@ Cloudportal-backed installer
 Użycie:
   install.sh [opcje]
 
+Bez parametrów instalator uruchamia interaktywne menu wyboru operacji.
+
 Tryby:
   --status                    Pokaż stan instalacji i usług; niczego nie zmienia.
   --uninstall                 Odinstaluj Cloudportal; domyślnie zachowaj bazę, konfigurację i dane.
@@ -96,6 +98,7 @@ installer_error() {
 trap 'rc=$?; installer_error "$rc" "$LINENO"' ERR
 
 repo='chmajster/Cloudportal-backed'
+initial_argc=$#
 ref='main'
 backend_host=''
 backend_port=''
@@ -150,6 +153,96 @@ while (($#)); do
     *) ui_fail "Nieznana opcja: $1"; ui_info 'Uruchom --help, aby zobaczyć dostępne opcje.'; exit 2;;
   esac
 done
+
+interactive_action_menu() {
+  ((initial_argc == 0)) || return 0
+
+  if ! exec 3<>/dev/tty; then
+    ui_fail 'Uruchomienie bez parametrów wymaga interaktywnego terminala.'
+    ui_info 'W automatyzacji podaj jawny tryb, np. --non-interactive, --status albo --uninstall --yes.'
+    exit 2
+  fi
+
+  ui_header 'Cloudportal-backed — wybór operacji'
+  cat >&3 <<'EOF'
+  [1] Instalacja / aktualizacja — systemd
+  [2] Instalacja / aktualizacja — Docker
+  [3] Status — systemd
+  [4] Status — Docker
+  [5] Odinstaluj — zachowaj bazę i dane
+  [6] Odinstaluj całkowicie — usuń bazę i dane
+  [7] Odinstaluj Docker — zachowaj wolumeny i konfigurację
+  [8] Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację
+  [0] Wyjście
+EOF
+
+  local choice=''
+  while :; do
+    printf 'Wybierz operację [0-8]: ' >&3
+    if ! IFS= read -r choice <&3; then
+      exec 3>&-
+      ui_fail 'Nie udało się odczytać wyboru z terminala.'
+      exit 2
+    fi
+    case "$choice" in
+      1)
+        gui=1
+        exec 3>&-
+        return 0
+        ;;
+      2)
+        docker_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      3)
+        status_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      4)
+        docker_mode=1
+        status_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      5)
+        uninstall_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      6)
+        uninstall_mode=1
+        purge_data=1
+        exec 3>&-
+        return 0
+        ;;
+      7)
+        docker_mode=1
+        uninstall_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      8)
+        docker_mode=1
+        uninstall_mode=1
+        purge_data=1
+        exec 3>&-
+        return 0
+        ;;
+      0)
+        exec 3>&-
+        ui_info 'Nie wykonano żadnych zmian.'
+        exit 0
+        ;;
+      *)
+        ui_warn 'Nieprawidłowy wybór. Wpisz cyfrę od 0 do 8.'
+        ;;
+    esac
+  done
+}
+
+interactive_action_menu
 
 mode_count=$((status_mode + uninstall_mode + check_platform))
 ((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall albo --check-platform.'; exit 2; }
@@ -555,8 +648,9 @@ docker_uninstall() {
         ui_fail '--non-interactive --uninstall --purge-data wymaga --yes.'
         exit 2
       fi
-      [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall --purge-data.'; exit 2; }
-      read -r -p 'Wpisz USUN, aby trwale usunąć dane Docker: ' confirmation
+      [[ -r /dev/tty && -w /dev/tty ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall --purge-data.'; exit 2; }
+      printf 'Wpisz USUN, aby trwale usunąć dane Docker: ' >/dev/tty
+      IFS= read -r confirmation </dev/tty || true
       [[ "$confirmation" == USUN ]] || { ui_warn 'Anulowano.'; exit 1; }
     fi
   else
@@ -565,8 +659,9 @@ docker_uninstall() {
         ui_fail '--non-interactive --uninstall wymaga --yes.'
         exit 2
       fi
-      [[ -t 0 ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall.'; exit 2; }
-      read -r -p 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' confirmation
+      [[ -r /dev/tty && -w /dev/tty ]] || { ui_fail 'Bez TTY użyj --yes razem z --uninstall.'; exit 2; }
+      printf 'Zatrzymać i usunąć kontenery Cloudportal, zachowując wolumeny i konfigurację? [t/N] ' >/dev/tty
+      IFS= read -r confirmation </dev/tty || true
       [[ "$confirmation" =~ ^[TtYy]$ ]] || { ui_warn 'Anulowano.'; exit 1; }
     fi
   fi
@@ -790,7 +885,22 @@ EOF
   ui_ok 'Obraz Cloudportal został zbudowany.'
 
   ui_stage 5 "$stages" 'Klucz szyfrujący'
-  ui_info 'Tworzę lub weryfikuję master key bez generowania jednorazowych danych administratora.'
+  ui_info 'Uruchamiam wyłącznie PostgreSQL, bez migracji, aby bezpiecznie zweryfikować istniejący master key.'
+  docker_compose_for "$release" "$candidate_env" up -d postgres
+  local postgres_ready=0
+  for ((attempt=1; attempt<=30; attempt++)); do
+    if docker_compose_for "$release" "$candidate_env" exec -T postgres pg_isready -U cloudportal -d cloudportal >/dev/null 2>&1; then
+      postgres_ready=1
+      break
+    fi
+    sleep 1
+  done
+  ((postgres_ready == 1)) || {
+    ui_fail 'PostgreSQL kandydata Docker nie osiągnął stanu ready przed weryfikacją master key.'
+    docker_compose_for "$release" "$candidate_env" logs --tail=80 postgres || true
+    exit 1
+  }
+  ui_info 'Tworzę lub weryfikuję master key bez generowania jednorazowych danych administratora i bez uruchamiania migracji.'
   docker_compose_for "$release" "$candidate_env" run --rm --no-deps bootstrap python -m app.bootstrap --key-only
   ui_ok 'Master key jest gotowy; migracje wykona usługa migrate podczas startu kandydata.'
 
