@@ -84,7 +84,7 @@ async function deploymentsView() {
   );
 
   dom.content.replaceChildren(
-    heading('Wybierz gotowy produkt i utwórz nową maszynę lub usługę. Lista istniejących zasobów znajduje się w zakładce „Moje zasoby”.'),
+    heading('Wybierz gotowy produkt i utwórz nową maszynę lub usługę. Lista istniejących zasobów znajduje się w sekcji „Moje zasoby” w menu bocznym.'),
     productsPanel(products, canUseProducts)
   );
 }
@@ -1291,6 +1291,6 @@ registerCommand('deployments.create', createDeployment);
 registerCommand('deployments.open', showDeploymentDetails);
 registerCommand('ansible.run', runStandaloneAnsible);
 registerView({ id: 'deployments', label: 'Produkty', iconName: 'box', permission: 'deployments.read', order: 110 }, deploymentsView);
-registerView({ id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: 'deployments.read', order: 111, navigation: false }, myResourcesView);
+registerView({ id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: null, order: 111 }, myResourcesView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
 })();
