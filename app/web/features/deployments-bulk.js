@@ -4,6 +4,8 @@
 const selection = new Set();
 const DEFAULT_BATCH_SIZE = 25;
 
+document.addEventListener('cloudportal:app-hidden', () => selection.clear());
+
 const POWER_ACTIONS = Object.freeze([
   { id: 'power_on', label: 'Uruchom', kind: 'primary' },
   { id: 'shutdown', label: 'Wyłącz', kind: 'ghost' },
