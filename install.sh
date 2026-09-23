@@ -39,7 +39,8 @@ Użycie:
 Bez parametrów instalator uruchamia interaktywne menu wyboru operacji.
 
 Tryby:
-  --status                    Pokaż stan instalacji i usług; niczego nie zmienia.
+  --status                    Pokaż stan instalacji i usług; w trybie Docker domyślnie spróbuj auto-naprawy.
+  --no-auto-repair            Z --docker --status tylko diagnozuj; nie uruchamiaj ani nie odtwarzaj usług.
   --uninstall                 Odinstaluj Cloudportal; domyślnie zachowaj bazę, konfigurację i dane.
   --purge-data                Z --uninstall usuń także bazę, /etc, /var/lib i backupy.
   --yes, -y                   Pomiń potwierdzenie deinstalacji; wymagane bez TTY.
@@ -118,6 +119,8 @@ status_mode=0
 uninstall_mode=0
 assume_yes=0
 docker_mode=0
+docker_auto_repair=1
+docker_auto_repair_explicit=0
 update_in_progress=${CLOUDPORTAL_UPDATE_IN_PROGRESS:-0}
 [[ "$update_in_progress" == 1 ]] || update_in_progress=0
 update_channel_ref=${CLOUDPORTAL_UPDATE_CHANNEL_REF:-}
@@ -149,6 +152,7 @@ while (($#)); do
     --yes|-y) assume_yes=1; shift;;
     --purge-data) purge_data=1; shift;;
     --status) status_mode=1; shift;;
+    --no-auto-repair) docker_auto_repair=0; docker_auto_repair_explicit=1; shift;;
     --help|-h) usage; exit 0;;
     *) ui_fail "Nieznana opcja: $1"; ui_info 'Uruchom --help, aby zobaczyć dostępne opcje.'; exit 2;;
   esac
@@ -168,7 +172,7 @@ interactive_action_menu() {
   [1] Instalacja / aktualizacja — systemd
   [2] Instalacja / aktualizacja — Docker
   [3] Status — systemd
-  [4] Status — Docker
+  [4] Status / auto-naprawa — Docker
   [5] Odinstaluj — zachowaj bazę i dane
   [6] Odinstaluj całkowicie — usuń bazę i dane
   [7] Odinstaluj Docker — zachowaj wolumeny i konfigurację
@@ -250,6 +254,7 @@ mode_count=$((status_mode + uninstall_mode + check_platform))
 ((assume_yes == 0 || uninstall_mode == 1)) || { ui_fail '--yes/-y ma zastosowanie tylko z --uninstall.'; exit 2; }
 ((gui == 0 || uninstall_mode == 0)) || { ui_fail '--gui/-gui nie może być użyte razem z --uninstall.'; exit 2; }
 ((gui == 0 || docker_mode == 0)) || { ui_fail '--gui/-gui nie jest obsługiwane w trybie --docker.'; exit 2; }
+((docker_auto_repair_explicit == 0 || (docker_mode == 1 && status_mode == 1))) || { ui_fail '--no-auto-repair wymaga --docker --status.'; exit 2; }
 
 drain_script_input() {
   [[ -t 0 ]] || cat >/dev/null || true
@@ -610,7 +615,7 @@ docker_rollback_candidate() {
   fi
 }
 
-docker_status() {
+docker_status_check() {
   CURRENT_STAGE='status Docker'
   ui_header 'Cloudportal-backed — status Docker'
 
@@ -777,6 +782,132 @@ docker_status() {
   ui_info "Diagnostyka: docker compose -p $docker_project logs --tail=100"
   return 1
 }
+
+docker_repair() {
+  CURRENT_STAGE='auto-naprawa Docker'
+  ui_header 'Cloudportal-backed — auto-naprawa Docker'
+
+  local release expected_workers='1' public_port='8443'
+  local docker_ready=0 https_ready=0 running_workers=0
+  local ids=() state
+
+  if ! command -v docker >/dev/null 2>&1; then
+    ui_fail 'Brak polecenia Docker; auto-naprawa nie może zostać wykonana.'
+    return 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    ui_warn 'Docker Engine nie odpowiada; próbuję uruchomić usługę Docker.'
+    if [[ $EUID -eq 0 ]] && command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+      systemctl start docker.service docker.socket >/dev/null 2>&1 || true
+      for ((attempt=1; attempt<=10; attempt++)); do
+        if docker info >/dev/null 2>&1; then
+          docker_ready=1
+          break
+        fi
+        sleep 1
+      done
+    fi
+    if ((docker_ready == 0)); then
+      ui_fail 'Nie udało się przywrócić Docker Engine.'
+      ui_info 'Sprawdź: systemctl status docker oraz journalctl -u docker -n 100 --no-pager'
+      return 1
+    fi
+    ui_ok 'Docker Engine został przywrócony.'
+  fi
+
+  docker_compose_detect || {
+    ui_fail 'Docker Compose nie jest dostępny; auto-naprawa nie może zostać wykonana.'
+    return 1
+  }
+
+  release=$(docker_current_release)
+  [[ -n "$release" && -f "$release/docker-compose.yml" ]] || {
+    ui_fail "Brak aktywnego release Docker z docker-compose.yml w $docker_root/current."
+    return 1
+  }
+  [[ -r "$docker_env" ]] || {
+    ui_fail "Brak konfiguracji Docker: $docker_env"
+    return 1
+  }
+
+  expected_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
+  public_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
+  expected_workers=${expected_workers:-1}
+  public_port=${public_port:-8443}
+  docker_valid_workers "$expected_workers" || {
+    ui_fail "Nieprawidłowa wartość CP_WORKER_COUNT: ${expected_workers:-brak}"
+    return 1
+  }
+  docker_valid_port "$public_port" || {
+    ui_fail "Nieprawidłowa wartość CP_HTTPS_PORT: ${public_port:-brak}"
+    return 1
+  }
+
+  ui_info 'Przywracam deklarowany stan Docker Compose bez usuwania wolumenów ani konfiguracji.'
+  ui_info "Docelowa liczba workerów: $expected_workers"
+  if ! docker_compose up -d --remove-orphans --scale "worker=$expected_workers"; then
+    ui_fail 'Docker Compose nie zdołał odtworzyć deklarowanego stanu stacka.'
+    ui_info "Diagnostyka: docker compose -p $docker_project logs --tail=100"
+    return 1
+  fi
+  ui_ok 'Docker Compose przyjął operację naprawczą.'
+
+  ui_info 'Oczekuję na stabilizację usług i HTTPS healthcheck.'
+  for ((attempt=1; attempt<=45; attempt++)); do
+    mapfile -t ids < <(
+      docker ps -q \
+        --filter "label=com.docker.compose.project=$docker_project" \
+        --filter 'label=com.docker.compose.service=worker' 2>/dev/null || true
+    )
+    running_workers=0
+    for state in "${ids[@]}"; do
+      [[ "$(docker inspect --format '{{.State.Status}}' "$state" 2>/dev/null || true)" == running ]] && ((running_workers+=1))
+    done
+
+    if ((running_workers == expected_workers)) && \
+       curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
+      https_ready=1
+      break
+    fi
+    sleep 2
+  done
+
+  if ((https_ready == 1)); then
+    ui_ok "Stack odpowiedział na HTTPS healthcheck; workery running: $running_workers/$expected_workers."
+    return 0
+  fi
+
+  ui_fail "Stack nie ustabilizował się po auto-naprawie; workery running: $running_workers/$expected_workers."
+  docker_compose ps -a || true
+  ui_info "Diagnostyka: docker compose -p $docker_project logs --tail=100 postgres redis api worker dispatcher proxy"
+  return 1
+}
+
+docker_status() {
+  if docker_status_check; then
+    return 0
+  fi
+
+  if ((docker_auto_repair == 0)); then
+    ui_warn 'Auto-naprawa Docker jest wyłączona przez --no-auto-repair.'
+    return 1
+  fi
+
+  ui_warn 'Wykryto niesprawny stack Docker; uruchamiam jedną automatyczną próbę naprawy.'
+  docker_repair || ui_warn 'Operacja naprawcza nie osiągnęła pełnej gotowości; wykonuję końcową walidację.'
+
+  ui_header 'Cloudportal-backed — walidacja po auto-naprawie'
+  if docker_status_check; then
+    ui_ok 'Auto-naprawa Docker zakończyła się powodzeniem.'
+    return 0
+  fi
+
+  ui_fail 'Auto-naprawa Docker nie przywróciła kompletnego, zdrowego stacka.'
+  ui_info "Sprawdź logi: docker compose -p $docker_project logs --tail=100 postgres redis api worker dispatcher proxy"
+  return 1
+}
+
 
 docker_uninstall() {
   ui_header 'Cloudportal-backed — deinstalacja Docker'
