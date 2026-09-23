@@ -92,11 +92,16 @@ def test_docker_status_validates_every_required_service_and_health():
     assert 'Stack Docker jest niekompletny albo co najmniej jedna usługa jest niesprawna.' in INSTALLER
 
 
-def test_docker_status_auto_repair_restores_compose_state_and_can_be_disabled():
+def test_docker_status_auto_repair_restores_only_unhealthy_branches_and_can_be_disabled():
     assert 'docker_repair()' in INSTALLER
-    assert 'docker_compose up -d --remove-orphans --scale "worker=$expected_workers"' in INSTALLER
+    assert 'docker_service_ready()' in INSTALLER
+    assert 'docker_wait_service_ready()' in INSTALLER
+    assert "Naprawiam zależności selektywnie; zdrowe kontenery nie będą odtwarzane." in INSTALLER
+    assert 'docker_compose up -d --no-deps --scale "worker=$expected_workers" worker' in INSTALLER
+    assert 'docker_compose restart "$service"' in INSTALLER
+    assert 'docker_compose restart proxy' in INSTALLER
+    assert 'docker_compose up -d --remove-orphans --scale "worker=$expected_workers"' not in INSTALLER
     assert "Wykryto niesprawny stack Docker; uruchamiam jedną automatyczną próbę naprawy." in INSTALLER
-    assert "Docker Compose przyjął operację naprawczą." in INSTALLER
     assert "Auto-naprawa Docker zakończyła się powodzeniem." in INSTALLER
     assert "Auto-naprawa Docker jest wyłączona przez --no-auto-repair." in INSTALLER
     assert "systemctl start docker.service docker.socket" in INSTALLER
@@ -110,6 +115,15 @@ def test_docker_compose_long_running_infrastructure_has_restart_policy():
     assert '  redis:\n    image: redis:7-alpine\n    restart: unless-stopped' in compose
     assert '  proxy:\n    image: nginx:1.28-alpine\n    restart: unless-stopped' in compose
 
+
+def test_docker_compose_orders_application_startup_by_health():
+    compose = (ROOT / 'docker-compose.yml').read_text(encoding='utf-8')
+    assert compose.count('postgres: {condition: service_healthy}') >= 4
+    assert compose.count('redis: {condition: service_healthy}') >= 4
+    assert 'api: {condition: service_healthy}' in compose
+    assert 'urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=3)' in compose
+    assert 'start_period: 10s' in compose
+    assert 'start_period: 5s' in compose
 
 def test_installer_failure_trap_is_actionable_without_dumping_commands():
     assert 'installer_error()' in INSTALLER
