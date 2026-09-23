@@ -178,10 +178,16 @@ Tryb Docker:
 - buduje obraz, wykonuje migracje i bootstrap, uruchamia stack oraz skaluje usługę worker zgodnie z `--workers`;
 - wystawia wyłącznie HTTPS przez Nginx; port hosta ustawia `--port`.
 
-Status:
+Status z automatyczną naprawą:
 
 ```bash
 sudo ./install.sh --docker --status
+```
+
+Jeżeli status wykryje zatrzymane lub niesprawne usługi, instalator próbuje odtworzyć deklarowany stan Compose bez usuwania wolumenów ani konfiguracji, przywraca skalowanie workerów z `CP_WORKER_COUNT`, czeka na HTTPS healthcheck i wykonuje ponowną pełną walidację. Tryb wyłącznie diagnostyczny, bez zmian w kontenerach:
+
+```bash
+sudo ./install.sh --docker --status --no-auto-repair
 ```
 
 Odinstalowanie z zachowaniem nazwanych wolumenów i konfiguracji:
