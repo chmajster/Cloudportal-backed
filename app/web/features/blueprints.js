@@ -606,7 +606,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
           install_qemu_guest_agent: data.has('install_qemu_guest_agent'),
-          cloud_init_snippet_storage: data.has('install_qemu_guest_agent') ? cloudInitSnippetStorage : null,
+          cloud_init_snippet_storage: data.has('install_qemu_guest_agent') && !data.get('guest_credential_id') ? cloudInitSnippetStorage : null,
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,
