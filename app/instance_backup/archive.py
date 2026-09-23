@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import tarfile
+import uuid
 from pathlib import Path, PurePosixPath
 
 from app.config import settings
@@ -128,6 +129,12 @@ def inspect_archive(path: Path) -> dict:
         manifest = _load_json_member(archive, by_name["manifest.json"], MAX_MANIFEST_BYTES)
         if manifest.get("format") != FORMAT_NAME:
             raise ValueError("Unsupported backup format")
+        try:
+            normalized_uuid = str(uuid.UUID(str(manifest.get("backup_uuid") or "")))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("Backup UUID is invalid") from exc
+        if normalized_uuid != str(manifest.get("backup_uuid")).lower():
+            raise ValueError("Backup UUID is not canonical")
         version = manifest.get("format_version")
         if not isinstance(version, int) or version < 1 or version > FORMAT_VERSION:
             raise ValueError("Unsupported backup format version")
