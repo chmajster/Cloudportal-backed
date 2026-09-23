@@ -1119,13 +1119,7 @@
             checkboxField('Backend', 'visibility_backend', state.visibilityBackend),
             checkboxField('CloudPortal', 'visibility_cloudportal', state.visibilityCloudportal),
             checkboxField('API', 'visibility_api', state.visibilityApi),
-            checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', state.requiresApproval),
-            selectField('Auto-approval', 'auto_approve_for_executors', [
-              { value: 'inherit', label: 'Dziedzicz z projektu / ustawień globalnych' },
-              { value: 'true', label: 'Włączone dla tego Blueprintu' },
-              { value: 'false', label: 'Wyłączone dla tego Blueprintu' },
-            ], state.autoApproveForExecutors, { wide: true }),
-            field('Timeout approval (h)', 'approval_timeout_hours', { type: 'number', min: 1, max: 720, value: state.approvalTimeoutHours, wide: true, help: 'Puste pole oznacza dziedziczenie timeoutu z projektu, a następnie z ustawienia globalnego.' }),
+            checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', state.requiresApproval), ...window.BlueprintApprovalPolicyUI.wizardFields(state),
             selectField('Po błędzie wdrożenia', 'recovery_policy', [
               { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
               { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
@@ -1212,8 +1206,8 @@
             ['Role', roleNames.join(', ') || 'Bez ograniczenia'],
             ['Użytkownicy', userNames.join(', ') || 'Bez ograniczenia'],
             ['Approval', state.requiresApproval ? 'Wymagany' : 'Nie'],
-            ['Auto-approval', state.autoApproveForExecutors === 'inherit' ? 'Dziedziczony z projektu / globalnie' : (state.autoApproveForExecutors === 'true' ? 'Włączony w Blueprintcie' : 'Wyłączony w Blueprintcie')],
-            ['Timeout approval', String(state.approvalTimeoutHours ?? '').trim() ? state.approvalTimeoutHours + ' h' : 'Dziedziczony z projektu / globalnie'],
+            ['Auto-approval', window.BlueprintApprovalPolicyUI.autoSummary(state.autoApproveForExecutors)],
+            ['Timeout approval', window.BlueprintApprovalPolicyUI.timeoutSummary(state.approvalTimeoutHours)],
           ]],
         ];
 
