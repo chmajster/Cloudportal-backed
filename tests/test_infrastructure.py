@@ -921,6 +921,7 @@ def test_guest_credential_bootstrap_works_without_qemu_agent(monkeypatch, tmp_pa
         job=SimpleNamespace(payload={'blueprint': {'guest_credential_id': 42}}),
         stage=stages.append,
         check=lambda: None,
+        log=lambda value: None,
     )
 
     assert worker_module.ensure_qemu_guest_bootstrap(context, tmp_path, timeout=30) is True
