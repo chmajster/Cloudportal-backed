@@ -269,7 +269,8 @@ def test_blueprint_guest_ssh_credential_uses_ephemeral_bootstrap_account(client,
     snapshot = execution.json()['workflow']['blueprint']
     assert snapshot['guest_credential_id'] == guest.json()['id']
     assert snapshot['bootstrap_install_qemu_guest_agent'] is True
-    assert snapshot['guest_bootstrap_secret']
+    assert snapshot['guest_bootstrap_enabled'] is True
+    assert 'guest_bootstrap_secret' not in snapshot
 
     protected = client.delete(f"/api/v1/credentials/{guest.json()['id']}", headers=headers)
     assert protected.status_code == 409
@@ -320,7 +321,8 @@ def test_blueprint_guest_credential_accepts_password_only_ssh_without_persisting
     assert execution.json()['variables']['ssh_public_key'].startswith('ssh-ed25519 ')
     assert password not in execution.text
     assert execution.json()['workflow']['blueprint']['guest_credential_id'] == guest.json()['id']
-    assert execution.json()['workflow']['blueprint']['guest_bootstrap_secret']
+    assert execution.json()['workflow']['blueprint']['guest_bootstrap_enabled'] is True
+    assert 'guest_bootstrap_secret' not in execution.json()['workflow']['blueprint']
 
     with session() as db:
         deployment = db.get(Deployment, execution.json()['id'])
