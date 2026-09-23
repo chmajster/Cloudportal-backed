@@ -18,23 +18,6 @@
     return api(path, options).then(result => result.items || result).catch(() => fallback);
   }
 
-  function errorText(root, errors) {
-    root.querySelectorAll('.blueprint-wizard-field-error').forEach(value => value.remove());
-    const messages = Object.values(errors || {});
-    const summary = root.querySelector('[data-wizard-error-summary]');
-    if (summary) {
-      summary.hidden = !messages.length;
-      summary.replaceChildren(...messages.map(message => node('div', { text: message })));
-    }
-    for (const [name, message] of Object.entries(errors || {})) {
-      const control = root.querySelector('[name="' + CSS.escape(name) + '"]');
-      if (!control) continue;
-      const wrapper = control.closest('label') || control.parentElement;
-      wrapper?.append(node('span', { class: 'form-error blueprint-wizard-field-error', text: message }));
-      control.setAttribute('aria-invalid', 'true');
-    }
-  }
-
   function dualListGroup(title, name, rows, selected, description = '') {
     const picked = new Set((selected || []).map(value => String(value)));
     const labelFor = row => {
@@ -106,14 +89,8 @@
       body);
   }
 
-  function summaryRow(label, value) {
-    return node('div', { class: 'blueprint-wizard-review-row' },
-      node('span', { text: label }),
-      node('strong', { text: String(value ?? '—') }));
-  }
-
   async function openBlueprintWizard(options = {}) {
-    if (!parts.core || !parts.hostname || !parts.network || !parts.scope) {
+    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
       return;
     }
@@ -883,9 +860,6 @@
             })));
         advanced.querySelectorAll('input,textarea').forEach(control => control.addEventListener('input', () => saveStateFromInput(control)));
 
-        const runtimeParts = [];
-        if (state.selectApmidOnExecute) runtimeParts.push('APMID');
-        if (state.selectEnvironmentOnExecute) runtimeParts.push('Environment');
         const qemuAgentInfo = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'QEMU Guest Agent' }),
           node('span', { text: state.installQemuGuestAgent
@@ -1243,7 +1217,7 @@
           content.append(node('section', { class: 'blueprint-wizard-review-section' },
             node('h4', { text: title }),
             node('div', { class: 'blueprint-wizard-review-grid' },
-              ...rows.map(([label, value]) => summaryRow(label, value)))));
+              ...rows.map(([label, value]) => parts.ui.summaryRow(label, value)))));
         });
         content.append(node('section', { class: 'blueprint-wizard-review-section' },
           node('h4', { text: 'Workflow' }),
@@ -1395,7 +1369,7 @@
         navRoot.replaceChildren(renderNavigation());
         bodyRoot.replaceChildren(renderStepBody());
         renderFooter();
-        errorText(bodyRoot, state.errors);
+        parts.ui.errorText(bodyRoot, state.errors);
         const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         bodyRoot.scrollTo?.({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
       }
