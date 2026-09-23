@@ -1350,6 +1350,8 @@
           ['Blueprint', [
             ['Nazwa', state.name],
             ['Slug', state.slug],
+            ['Tenant', tenantLabel(state.tenantId)],
+            ['Projekt', projectLabel(state.projectId)],
             ['Opis', state.description || '—'],
           ]],
           ['Platforma', [
@@ -1365,15 +1367,19 @@
             ['Dysk', state.disk + ' GB'],
             ['Storage', state.storage],
             ['Network', state.network],
-            ['Environment', state.environment ? state.environment.toUpperCase() : '—'],
+            ['Environment', state.selectEnvironmentOnExecute
+              ? 'Wybierany podczas tworzenia VM'
+              : (state.environment ? state.environment.toUpperCase() : '—')],
             ['Environment przy tworzeniu VM', state.selectEnvironmentOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
-            ['APMID', state.apmid || '—'],
+            ['APMID', state.selectApmidOnExecute ? 'Wybierany podczas tworzenia VM' : (state.apmid || '—')],
             ['APMID przy tworzeniu VM', state.selectApmidOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
             ['Credential VM', state.guestCredentialId
               ? (data.credentials.find(value => String(value.id) === String(state.guestCredentialId))?.name || ('#' + state.guestCredentialId))
               : 'Brak'],
             ['QEMU Guest Agent', state.installQemuGuestAgent ? (state.waitAgent ? 'Instalacja przez cloud-init + oczekiwanie' : 'Instalacja przez cloud-init, bez oczekiwania') : (state.waitAgent ? 'Bez instalacji, oczekiwanie na agenta z template' : 'Wyłączony')],
-            ['Klasyfikacja', state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—'],
+            ['Klasyfikacja', state.selectApmidOnExecute || state.selectEnvironmentOnExecute
+              ? 'Wyliczana podczas tworzenia VM'
+              : (state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—')],
           ] : [
             ['Szablon IaC', state.terraformTemplateId],
             ['Parametry', Object.keys(state.genericVariables).length + ' ustawionych'],
@@ -1501,7 +1507,11 @@
         bodyRoot.replaceChildren(progress);
         try {
           progress.querySelector('span').textContent = 'Zapisywanie definicji i workflow…';
-          const created = await api('/blueprints', { method: 'POST', body: payload });
+          const created = await api('/blueprints', {
+            method: 'POST',
+            body: payload,
+            headers: parts.core.scopeHeaders(state),
+          });
           progress.replaceChildren(
             node('span', { class: 'blueprint-wizard-success-icon' }, appIcon('check')),
             node('h3', { text: 'Blueprint został utworzony i jest gotowy do użycia.' }),
@@ -1565,7 +1575,7 @@
       footerRoot = dom.modalActions;
       if (!dom.modal.open) dom.modal.showModal();
 
-      await discoverProvider(state.providerId);
+      await loadScopedResources(true);
       render();
     } catch (error) {
       toast(error.message, 'error');
