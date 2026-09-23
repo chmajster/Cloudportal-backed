@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import re
+import secrets
 import shlex
 
 import paramiko
@@ -18,7 +19,8 @@ BOOTSTRAP_PREFIX = 'cloudportal-bootstrap'
 def create_guest_bootstrap_secret(deployment_name: str) -> tuple[dict, str]:
     private_key, public_key = generate_ed25519_key_pair()
     safe = re.sub(r'[^a-z0-9]+', '', str(deployment_name or '').lower())[:8]
-    username = f'{BOOTSTRAP_PREFIX}-{safe}' if safe else BOOTSTRAP_PREFIX
+    suffix = secrets.token_hex(3)
+    username = f'{BOOTSTRAP_PREFIX[:16]}-{safe[:6]}-{suffix}' if safe else f'{BOOTSTRAP_PREFIX[:20]}-{suffix}'
     payload = json.dumps({'username': username, 'private_key': private_key}).encode()
     encrypted = encrypt_blob(payload, 'guest-bootstrap')
     return {'ssh_username': username, 'ssh_public_key': public_key}, base64.b64encode(encrypted).decode()
@@ -67,6 +69,8 @@ def _target_credential(db, credential_id):
 
 def provision_guest(context, address: str, bootstrap: dict, db, credential_id: int, install_qemu_agent: bool):
     credential, secret = _target_credential(db, credential_id)
+    if credential.username == bootstrap['username']:
+        raise ExecutionFailed('Guest credential username collides with the ephemeral bootstrap account')
     try:
         key = paramiko.Ed25519Key.from_private_key(io.StringIO(bootstrap['private_key']))
     except (paramiko.SSHException, ValueError):
