@@ -128,18 +128,34 @@ jobs:
           grep -Fq 'proxy: running' /tmp/cloudportal-docker-status-output
           grep -Fq 'Stack Docker kompletny i sprawny:' /tmp/cloudportal-docker-status-output
 
-          dispatcher_id=$(sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed --filter label=com.docker.compose.service=dispatcher --format '{{.ID}}' | head -n 1)
-          test -n "$dispatcher_id"
-          sudo docker stop "$dispatcher_id" >/dev/null
-          if sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status-failed-output 2>&1; then
-            echo 'Docker status accepted a stopped dispatcher.' >&2
+          for service in postgres redis proxy worker; do
+            mapfile -t service_ids < <(sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')
+            test "${#service_ids[@]}" -ge 1
+            sudo docker stop "${service_ids[@]}" >/dev/null
+          done
+
+          if sudo ./install.sh --docker --status --no-auto-repair > /tmp/cloudportal-docker-status-failed-output 2>&1; then
+            echo 'Docker read-only status accepted an intentionally broken stack.' >&2
             exit 1
           fi
-          grep -Fq 'dispatcher: status=exited, oczekiwano running.' /tmp/cloudportal-docker-status-failed-output
-          grep -Fq 'Stack Docker jest niekompletny albo co najmniej jedna usługa jest niesprawna.' /tmp/cloudportal-docker-status-failed-output
-          sudo docker start "$dispatcher_id" >/dev/null
+          grep -Fq 'postgres: status=exited, oczekiwano running.' /tmp/cloudportal-docker-status-failed-output
+          grep -Fq 'redis: status=exited, oczekiwano running.' /tmp/cloudportal-docker-status-failed-output
+          grep -Fq 'proxy: status=exited, oczekiwano running.' /tmp/cloudportal-docker-status-failed-output
+          grep -Fq 'worker: running=0/2' /tmp/cloudportal-docker-status-failed-output
+          grep -Fq 'HTTPS healthcheck nie odpowiada na porcie 9443.' /tmp/cloudportal-docker-status-failed-output
+          grep -Fq 'Auto-naprawa Docker jest wyłączona przez --no-auto-repair.' /tmp/cloudportal-docker-status-failed-output
+
           sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status-recovered-output 2>&1
-          grep -Fq 'dispatcher: running' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'Wykryto niesprawny stack Docker; uruchamiam jedną automatyczną próbę naprawy.' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'Docker Compose przyjął operację naprawczą.' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'Auto-naprawa Docker zakończyła się powodzeniem.' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'postgres: running, health=healthy' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'redis: running, health=healthy' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'proxy: running' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'worker: 2/2 kontenerów running' /tmp/cloudportal-docker-status-recovered-output
+          curl -kfsS https://localhost:9443/api/v1/health >/dev/null
+          worker_count=$(sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed --filter label=com.docker.compose.service=worker --format '{{.ID}}' | wc -l)
+          test "$worker_count" -eq 2
 
           openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
             -keyout "$custom_tls_dir/server.key" -out "$custom_tls_dir/server.crt" \

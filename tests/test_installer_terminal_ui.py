@@ -29,6 +29,7 @@ def test_installer_has_preflight_status_help_and_uninstall_modes():
     assert 'Połączenie HTTPS z api.github.com' in INSTALLER
     assert 'Wolne miejsce:' in INSTALLER
     assert '--status) status_mode=1' in INSTALLER
+    assert '--no-auto-repair) docker_auto_repair=0; docker_auto_repair_explicit=1' in INSTALLER
     assert '--uninstall) uninstall_mode=1' in INSTALLER
     assert '--force-uninstall) uninstall_mode=1; assume_yes=1' in INSTALLER
     assert '--yes|-y) assume_yes=1' in INSTALLER
@@ -43,6 +44,7 @@ def test_installer_without_arguments_opens_action_menu():
     assert "exec 3<>/dev/tty" in INSTALLER
     assert 'Instalacja / aktualizacja — systemd' in INSTALLER
     assert 'Instalacja / aktualizacja — Docker' in INSTALLER
+    assert 'Status / auto-naprawa — Docker' in INSTALLER
     assert 'Odinstaluj — zachowaj bazę i dane' in INSTALLER
     assert 'Odinstaluj całkowicie — usuń bazę i dane' in INSTALLER
     assert 'Odinstaluj Docker — zachowaj wolumeny i konfigurację' in INSTALLER
@@ -90,6 +92,25 @@ def test_docker_status_validates_every_required_service_and_health():
     assert 'Stack Docker jest niekompletny albo co najmniej jedna usługa jest niesprawna.' in INSTALLER
 
 
+def test_docker_status_auto_repair_restores_compose_state_and_can_be_disabled():
+    assert 'docker_repair()' in INSTALLER
+    assert 'docker_compose up -d --remove-orphans --scale "worker=$expected_workers"' in INSTALLER
+    assert "Wykryto niesprawny stack Docker; uruchamiam jedną automatyczną próbę naprawy." in INSTALLER
+    assert "Docker Compose przyjął operację naprawczą." in INSTALLER
+    assert "Auto-naprawa Docker zakończyła się powodzeniem." in INSTALLER
+    assert "Auto-naprawa Docker jest wyłączona przez --no-auto-repair." in INSTALLER
+    assert "systemctl start docker.service docker.socket" in INSTALLER
+    assert '((docker_auto_repair == 0)) || docker_acquire_install_lock' in INSTALLER
+    assert 'Auto-naprawa Docker wymaga roota.' in INSTALLER
+
+
+def test_docker_compose_long_running_infrastructure_has_restart_policy():
+    compose = (ROOT / 'docker-compose.yml').read_text(encoding='utf-8')
+    assert '  postgres:\n    image: postgres:16-alpine\n    restart: unless-stopped' in compose
+    assert '  redis:\n    image: redis:7-alpine\n    restart: unless-stopped' in compose
+    assert '  proxy:\n    image: nginx:1.28-alpine\n    restart: unless-stopped' in compose
+
+
 def test_installer_failure_trap_is_actionable_without_dumping_commands():
     assert 'installer_error()' in INSTALLER
     assert 'Etap „$CURRENT_STAGE” przerwany' in INSTALLER
@@ -110,6 +131,7 @@ def test_help_is_plain_text_without_ansi_sequences():
     )
     assert '\x1b[' not in result.stdout
     assert '--status' in result.stdout
+    assert '--no-auto-repair' in result.stdout
     assert '--uninstall' in result.stdout
     assert '--non-interactive' in result.stdout
     assert '--yes, -y' in result.stdout
