@@ -82,13 +82,13 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['provider_id'] == 7
     assert deployment['credentials_id'] == 5
     assert deployment['hostname_scheme_id'] == 11
-    assert deployment['hostname_values'] == {'env': 'prod'}
+    assert deployment['hostname_values'] == {}
     assert deployment['ipam_pool_id'] == 13
     assert deployment['guest_credential_id'] == 18
     assert deployment['variables']['install_qemu_guest_agent'] is True
     assert deployment['variables']['cloud_init_snippet_storage'] == 'local'
-    assert deployment['environment'] == 'dev'
-    assert deployment['apmid'] == 'IAASTEAM'
+    assert 'environment' not in deployment
+    assert 'apmid' not in deployment
     assert deployment['select_environment_on_execute'] is True
     assert deployment['select_apmid_on_execute'] is True
     assert deployment['name'] == '{{ hostname }}'
@@ -96,9 +96,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['ansible']['playbook'] == 'bootstrap-linux'
     assert deployment['ansible']['credentials_id'] == 17
     assert deployment['ansible']['variables']['hostname'] == '{{ hostname }}'
-    assert deployment['variables']['tags'] == [
-        'linux', 'production', 'apmid-iaasteam', 'env-dev', 'iaasteam.dev'
-    ]
+    assert deployment['variables']['tags'] == ['linux', 'production']
 
     workflow_types = [step['type'] for step in result['workflow']]
     assert workflow_types == [
@@ -196,6 +194,25 @@ const data = {
 console.log(JSON.stringify(core.buildDeployment(state, data)));
 """)
     assert result['hostname_values'] == {'environment': 'prod'}
+
+
+def test_wizard_scope_headers_are_emitted_only_for_complete_scope():
+    result = run_core("""
+const state = core.stateDefaults();
+const empty = core.scopeHeaders(state);
+state.tenantId = 'tenant-1';
+const partial = core.scopeHeaders(state);
+state.projectId = 'project-1';
+const complete = core.scopeHeaders(state);
+console.log(JSON.stringify({ empty, partial, complete }));
+""")
+
+    assert result['empty'] == {}
+    assert result['partial'] == {}
+    assert result['complete'] == {
+        'X-Tenant-ID': 'tenant-1',
+        'X-Project-ID': 'project-1',
+    }
 
 
 def test_wizard_runtime_classification_switches_default_to_fixed_values():
