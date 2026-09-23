@@ -5,6 +5,7 @@ from datetime import timedelta
 from app.database import session
 from app.instance_backup.archive import build_archive
 from app.instance_backup.models import InstanceBackup, utcnow
+from app.instance_backup.database import current_alembic_revision
 from app.instance_backup.paths import generated_dir
 from app.config import settings
 from conftest import new_user
@@ -26,7 +27,7 @@ def make_ready_backup(tmp_path, *, status="ready", expires_at=None):
         "created_at": "2026-09-23T22:45:00Z",
         "application": {
             "name": "Cloudportal-backed", "version": "test", "api_version": "v1",
-            "commit": "abcdef123456", "alembic_revision": "head",
+            "commit": "abcdef123456", "alembic_revision": current_alembic_revision(),
         },
         "source": {"hostname": "source01", "install_mode": "docker", "worker_count": 1},
         "secret": {"backend": "local", "material": "secrets/master.key"},
