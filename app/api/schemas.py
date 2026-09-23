@@ -148,6 +148,11 @@ class UserCreate(Input):
     last_name: Annotated[str, Field(max_length=100)] = ''
     is_service_account: bool = False
 
+    @field_validator('password', mode='before')
+    @classmethod
+    def empty_password(cls, value):
+        return None if value == '' else value
+
     @field_validator('username', 'email')
     @classmethod
     def lowercase(cls, value):
