@@ -78,6 +78,18 @@ def test_docker_key_validation_starts_postgres_without_running_migrations_first(
     assert 'bez uruchamiania migracji' in INSTALLER
 
 
+def test_docker_status_validates_every_required_service_and_health():
+    assert 'local required_services=(postgres redis migrate api worker dispatcher proxy)' in INSTALLER
+    assert 'local long_running_services=(postgres redis api dispatcher proxy)' in INSTALLER
+    assert 'docker_compose config --services' in INSTALLER
+    assert "health=healthy" in INSTALLER
+    assert "migrate: zakończony poprawnie, exit=0" in INSTALLER
+    assert 'worker: $running_workers/$expected_workers kontenerów running' in INSTALLER
+    assert '/api/v1/health' in INSTALLER
+    assert 'Stack Docker kompletny i sprawny:' in INSTALLER
+    assert 'Stack Docker jest niekompletny albo co najmniej jedna usługa jest niesprawna.' in INSTALLER
+
+
 def test_installer_failure_trap_is_actionable_without_dumping_commands():
     assert 'installer_error()' in INSTALLER
     assert 'Etap „$CURRENT_STAGE” przerwany' in INSTALLER
