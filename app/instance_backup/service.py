@@ -106,6 +106,56 @@ def _runtime_snapshot(meta: dict) -> dict:
     }
 
 
+_WORKSPACE_EXCLUDED_DIRS = {".terraform"}
+_WORKSPACE_EXCLUDED_FILES = {
+    ".execution.lock",
+    "terraform.tfvars.json",
+    ".cloudportal-terraform-init.tmp",
+    ".terraform.tfstate.restore",
+    ".execution.tfplan.restore",
+}
+
+
+def collect_workspace_material(staging) -> list[str]:
+    source_root = settings().data_dir / "workspaces"
+    if not source_root.exists():
+        return []
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise RuntimeError("Workspace root must be a real directory")
+
+    destination_root = staging / "workspaces"
+    members: list[str] = []
+    for root_value, dir_names, file_names in os.walk(source_root, topdown=True, followlinks=False):
+        root = Path(root_value)
+        kept_dirs = []
+        for name in dir_names:
+            path = root / name
+            if path.is_symlink():
+                raise RuntimeError(f"Refusing symlink in workspace tree: {path.relative_to(source_root)}")
+            if name in _WORKSPACE_EXCLUDED_DIRS:
+                continue
+            kept_dirs.append(name)
+        dir_names[:] = kept_dirs
+
+        for name in file_names:
+            if name in _WORKSPACE_EXCLUDED_FILES:
+                continue
+            source = root / name
+            if source.is_symlink() or not source.is_file():
+                raise RuntimeError(f"Refusing non-regular workspace file: {source.relative_to(source_root)}")
+            relative = source.relative_to(source_root)
+            destination = destination_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(destination.parent, 0o700)
+            with source.open("rb") as input_stream, destination.open("xb") as output_stream:
+                os.chmod(destination, 0o600)
+                shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
+                output_stream.flush()
+                os.fsync(output_stream.fileno())
+            members.append("workspaces/" + relative.as_posix())
+    return sorted(members)
+
+
 def _manifest(backup_uuid: str, meta: dict) -> dict:
     return {
         "format": "cloudportal-instance-backup",
@@ -160,6 +210,7 @@ def create_snapshot_archive(
         if stage_callback:
             stage_callback("configuration")
         _write_json(work / "configuration" / "runtime.json", _runtime_snapshot(meta))
+        workspace_members = collect_workspace_material(work)
 
         if stage_callback:
             stage_callback("secret_material")
@@ -168,7 +219,13 @@ def create_snapshot_archive(
         if stage_callback:
             stage_callback("manifest")
         manifest = _manifest(backup_uuid, meta)
-        members = ["database.dump", "configuration/runtime.json", *secret_members]
+        manifest["workspace_files"] = len(workspace_members)
+        members = [
+            "database.dump",
+            "configuration/runtime.json",
+            *workspace_members,
+            *secret_members,
+        ]
 
         size, archive_sha = build_archive(
             work,
