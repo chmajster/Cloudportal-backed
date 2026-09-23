@@ -825,6 +825,47 @@ def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
         proxmox_ssh_preflight(credential, {'PROXMOX_VE_SSH_PORT': '22'})
 
 
+def test_proxmox_guest_exec_and_password_use_guest_agent_api(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    credential, _, _ = resources(client, headers)
+    with session() as db:
+        row = db.get(Credential, credential['id'])
+        provider = ProxmoxProvider(row)
+
+    requests = []
+    statuses = iter([
+        {'exited': False},
+        {'exited': True, 'exitcode': 0, 'out-data': 'ok'},
+    ])
+
+    def fake_request(method, path, *, data=None, json_data=None):
+        requests.append((method, path, data, json_data))
+        if path.endswith('/agent/exec'):
+            return {'pid': 42}
+        if path.endswith('/agent/set-user-password'):
+            return {'result': None}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(provider, '_request', fake_request)
+    monkeypatch.setattr(provider, '_get', lambda path: next(statuses))
+    monkeypatch.setattr('app.providers.proxmox.sleep', lambda seconds: None)
+
+    status = provider.guest_exec('pve', 101, ['/bin/sh', '-c', 'id'], timeout=5)
+    assert status['exitcode'] == 0
+    assert requests[0][0] == 'POST'
+    assert requests[0][1].endswith('/nodes/pve/qemu/101/agent/exec')
+    assert requests[0][3] == {'command': ['/bin/sh', '-c', 'id']}
+
+    provider.set_guest_user_password('pve', 101, 'clouduser', 'secret-value')
+    assert requests[-1][1].endswith('/agent/set-user-password')
+    assert requests[-1][3] == {
+        'username': 'clouduser',
+        'password': 'secret-value',
+        'crypted': False,
+    }
+
+
 def test_provider_qemu_agent_readiness_endpoint(client, headers, monkeypatch):
     _, provider, _ = resources(client, headers)
 
