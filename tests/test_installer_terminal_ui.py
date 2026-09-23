@@ -96,6 +96,10 @@ def test_docker_status_auto_repair_restores_only_unhealthy_branches_and_can_be_d
     assert 'docker_repair()' in INSTALLER
     assert 'docker_service_ready()' in INSTALLER
     assert 'docker_wait_service_ready()' in INSTALLER
+    assert 'docker_backend_network_probe()' in INSTALLER
+    assert 'docker_compose run --rm --no-deps api python -c' in INSTALLER
+    assert 'docker_compose up -d --no-deps --force-recreate postgres redis' in INSTALLER
+    assert 'docker_compose up -d --no-deps --force-recreate --scale "worker=$expected_workers" worker' in INSTALLER
     assert "Naprawiam zależności selektywnie; zdrowe kontenery nie będą odtwarzane." in INSTALLER
     assert 'docker_compose up -d --no-deps --scale "worker=$expected_workers" worker' in INSTALLER
     assert 'docker_compose restart "$service"' in INSTALLER
