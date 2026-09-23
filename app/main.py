@@ -36,26 +36,47 @@ async def boundary(request: Request, call_next):
         if request.url.scheme != 'https' and not settings().allow_http and request.url.path != '/api/v1/health':
             response = JSONResponse({'detail': 'HTTPS required'}, status_code=400)
         else:
-            size = 0
-            body = []
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > 1024 * 1024:
-                    response = JSONResponse({'detail': 'Request exceeds 1 MiB'}, status_code=413)
-                    break
-                body.append(chunk)
-            else:
-                request._body = b''.join(body)
-                if request.url.path not in {'/api/v1/health', '/docs', '/openapi.json'}:
-                    from fastapi import HTTPException
-                    try:
-                        await run_in_threadpool(throttle, 'api:' + (request.client.host if request.client else ''), settings().request_limit, 60)
-                    except HTTPException as error:
-                        response = JSONResponse({'detail': error.detail}, status_code=error.status_code, headers=error.headers)
-                    else:
-                        response = await call_next(request)
+            # The instance-backup upload endpoint owns a much larger, streaming
+            # multipart limit. Do not buffer it in the generic 1 MiB JSON guard.
+            streaming_backup_upload = (
+                request.method == 'POST'
+                and request.url.path == '/api/v1/instance-backups/upload'
+                and request.headers.get('content-type', '').lower().startswith('multipart/form-data')
+            )
+            if streaming_backup_upload:
+                from fastapi import HTTPException
+                try:
+                    await run_in_threadpool(
+                        throttle,
+                        'api:' + (request.client.host if request.client else ''),
+                        settings().request_limit,
+                        60,
+                    )
+                except HTTPException as error:
+                    response = JSONResponse({'detail': error.detail}, status_code=error.status_code, headers=error.headers)
                 else:
                     response = await call_next(request)
+            else:
+                size = 0
+                body = []
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 1024 * 1024:
+                        response = JSONResponse({'detail': 'Request exceeds 1 MiB'}, status_code=413)
+                        break
+                    body.append(chunk)
+                else:
+                    request._body = b''.join(body)
+                    if request.url.path not in {'/api/v1/health', '/docs', '/openapi.json'}:
+                        from fastapi import HTTPException
+                        try:
+                            await run_in_threadpool(throttle, 'api:' + (request.client.host if request.client else ''), settings().request_limit, 60)
+                        except HTTPException as error:
+                            response = JSONResponse({'detail': error.detail}, status_code=error.status_code, headers=error.headers)
+                        else:
+                            response = await call_next(request)
+                    else:
+                        response = await call_next(request)
     except Exception:
         # Never log request bodies, authorization headers or exception strings containing secrets.
         response = JSONResponse({'detail': 'Internal service error', 'request_id': request_id}, status_code=500)
