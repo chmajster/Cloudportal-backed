@@ -7,7 +7,12 @@ from app.instance_backup.archive import build_archive
 from app.instance_backup.models import InstanceBackup, utcnow
 from app.instance_backup.database import current_alembic_revision
 from app.instance_backup.paths import generated_dir
-from app.instance_backup.restore import execute_restore, read_restore_status, write_restore_status
+from app.instance_backup.restore import (
+    _restore_workspaces,
+    execute_restore,
+    read_restore_status,
+    write_restore_status,
+)
 from app.config import settings
 
 
@@ -98,3 +103,21 @@ def test_failed_restore_uses_safety_backup_for_rollback(system, tmp_path, monkey
     assert status["status"] == "failed"
     assert status["rollback"] == "completed"
     assert len(calls) == 2
+
+
+def test_workspace_restore_replaces_target_tree(system, tmp_path):
+    target = settings().data_dir / "workspaces"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "old-state").write_text("old")
+
+    extracted = tmp_path / "extracted-workspace"
+    source = extracted / "workspaces" / "deployment-2"
+    source.mkdir(parents=True)
+    (source / "terraform.tfstate").write_text('{"version":4,"serial":2}')
+
+    _restore_workspaces(extracted, "workspace-test")
+
+    assert not (target / "old-state").exists()
+    restored = target / "deployment-2" / "terraform.tfstate"
+    assert restored.read_text() == '{"version":4,"serial":2}'
+    assert (restored.stat().st_mode & 0o777) == 0o600
