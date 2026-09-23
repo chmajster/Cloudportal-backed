@@ -1429,7 +1429,7 @@ def _guest_private_key(value):
     for loader in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey):
         try:
             return loader.from_private_key(io.StringIO(raw))
-        except (paramiko.SSHException, ValueError):
+        except (paramiko.SSHException, ValueError, TypeError):
             continue
     raise ExecutionFailed('Guest SSH credential contains an unsupported private key')
 
@@ -1475,15 +1475,14 @@ def _guest_target_credential(context):
     credential_id = blueprint.get('guest_credential_id')
     variables = context.deployment.variables or {}
     if not credential_id:
-        username = str(variables.get('ssh_username') or '').strip()
-        public_key = str(variables.get('ssh_public_key') or '').strip() or None
         return {
             'credential_id': None,
-            'username': username,
-            'public_key': public_key,
+            'username': str(variables.get('ssh_username') or '').strip(),
+            'public_key': str(variables.get('ssh_public_key') or '').strip() or None,
             'private_key': None,
             'password': None,
         }
+
     with session() as db:
         credential = db.get(Credential, int(credential_id))
         if credential is None:
@@ -1494,11 +1493,10 @@ def _guest_target_credential(context):
             raise ExecutionFailed('Guest SSH credential expired before bootstrap')
         secret = decrypt_secret(credential)
         private_key = secret.get('private_key')
-        public_key = public_key_from_private_key(private_key) if private_key else None
         return {
             'credential_id': credential.id,
             'username': str(credential.username or '').strip(),
-            'public_key': public_key,
+            'public_key': public_key_from_private_key(private_key) if private_key else None,
             'private_key': private_key,
             'password': secret.get('password'),
         }
@@ -1522,6 +1520,8 @@ def ensure_qemu_guest_bootstrap(context, workspace, timeout=600):
             'Guest SSH credential username must be a Linux account name '
             '(lowercase letters, digits, underscore and hyphen; max 32 characters)'
         )
+    if target_user == bootstrap_user:
+        raise ExecutionFailed('Guest SSH credential username collides with the temporary bootstrap account')
 
     configured = configured_deployment_ip(context)
     if configured:
@@ -1538,7 +1538,9 @@ def ensure_qemu_guest_bootstrap(context, workspace, timeout=600):
     address = wait_for_tcp_addresses(context, addresses, 22, timeout, 'bootstrap SSH')
 
     try:
-        bootstrap_key = _guest_private_key(bootstrap['private_key_path'].read_text(encoding='utf-8'))
+        bootstrap_key = _guest_private_key(
+            bootstrap['private_key_path'].read_text(encoding='utf-8')
+        )
     except OSError:
         raise ExecutionFailed('QEMU Guest Agent bootstrap private key could not be read') from None
 
@@ -1549,7 +1551,11 @@ def ensure_qemu_guest_bootstrap(context, workspace, timeout=600):
     while time.monotonic() < deadline:
         context.check()
         try:
-            client = _guest_ssh_connect(address, bootstrap_user, private_key=bootstrap_key)
+            client = _guest_ssh_connect(
+                address,
+                bootstrap_user,
+                private_key=bootstrap_key,
+            )
             break
         except (OSError, paramiko.SSHException) as exc:
             last_error = exc
@@ -1595,6 +1601,7 @@ else
   exit 44
 fi
 '''
+
     try:
         _guest_ssh_run(client, install_script, timeout=min(timeout, 600))
 
@@ -1605,17 +1612,26 @@ fi
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
 TARGET={quoted_user}
 if ! id "$TARGET" >/dev/null 2>&1; then
-  $SUDO useradd -m -s /bin/bash "$TARGET"
+  if command -v useradd >/dev/null 2>&1; then
+    $SUDO useradd -m -s /bin/sh "$TARGET"
+  elif command -v adduser >/dev/null 2>&1; then
+    $SUDO adduser -D "$TARGET"
+  else
+    echo "no supported user creation command" >&2
+    exit 45
+  fi
 fi
-HOME_DIR="$(getent passwd "$TARGET" | cut -d: -f6)"
+HOME_DIR="$(awk -F: -v user="$TARGET" '$1 == user { print $6 }' /etc/passwd)"
 if [ -z "$HOME_DIR" ]; then
   echo "cannot resolve target home directory" >&2
-  exit 45
+  exit 46
 fi
 if getent group sudo >/dev/null 2>&1; then
   $SUDO usermod -aG sudo "$TARGET"
 elif getent group wheel >/dev/null 2>&1; then
   $SUDO usermod -aG wheel "$TARGET"
+elif command -v addgroup >/dev/null 2>&1 && grep -q '^wheel:' /etc/group; then
+  $SUDO addgroup "$TARGET" wheel
 fi
 $SUDO install -d -m 700 -o "$TARGET" -g "$(id -gn "$TARGET")" "$HOME_DIR/.ssh"
 '''
@@ -1626,20 +1642,17 @@ $SUDO chown "$TARGET:$(id -gn "$TARGET")" "$HOME_DIR/.ssh/authorized_keys"
 $SUDO chmod 600 "$HOME_DIR/.ssh/authorized_keys"
 '''
             create_user += '''
-if [ "$TARGET" != "root" ]; then
+if [ "$TARGET" != "root" ] && [ -d /etc/sudoers.d ]; then
   printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET" | $SUDO tee "/etc/sudoers.d/90-cloudportal-$TARGET" >/dev/null
   $SUDO chmod 440 "/etc/sudoers.d/90-cloudportal-$TARGET"
 fi
 '''
             _guest_ssh_run(client, create_user)
+
             if target['password']:
-                password_command = (
-                    'if [ "$(id -u)" -eq 0 ]; then chpasswd; '
-                    'else sudo -n chpasswd; fi'
-                )
                 _guest_ssh_run(
                     client,
-                    password_command,
+                    'if [ "$(id -u)" -eq 0 ]; then chpasswd; else sudo -n chpasswd; fi',
                     stdin_text=f"{target_user}:{target['password']}\n",
                 )
 
@@ -1675,11 +1688,20 @@ fi
                 if verify is not None:
                     verify.close()
 
+        quoted_bootstrap = shlex.quote(bootstrap_user)
         cleanup_command = f'''set -eu
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
-$SUDO rm -f {shlex.quote('/home/' + bootstrap_user + '/.ssh/authorized_keys')}
-$SUDO passwd -l {shlex.quote(bootstrap_user)} >/dev/null 2>&1 || true
-$SUDO sh -c {shlex.quote('(sleep 8; userdel -r ' + bootstrap_user + ' >/dev/null 2>&1 || true) &')}
+BOOTSTRAP={quoted_bootstrap}
+HOME_DIR="$(awk -F: -v user="$BOOTSTRAP" '$1 == user {{ print $6 }}' /etc/passwd)"
+if [ -n "$HOME_DIR" ]; then
+  $SUDO rm -f "$HOME_DIR/.ssh/authorized_keys"
+fi
+$SUDO passwd -l "$BOOTSTRAP" >/dev/null 2>&1 || true
+if command -v userdel >/dev/null 2>&1; then
+  $SUDO sh -c "nohup sh -c 'sleep 8; userdel -r $BOOTSTRAP >/dev/null 2>&1 || true' >/dev/null 2>&1 &"
+elif command -v deluser >/dev/null 2>&1; then
+  $SUDO sh -c "nohup sh -c 'sleep 8; deluser --remove-home $BOOTSTRAP >/dev/null 2>&1 || true' >/dev/null 2>&1 &"
+fi
 '''
         _guest_ssh_run(client, cleanup_command)
     finally:
