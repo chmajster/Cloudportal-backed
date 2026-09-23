@@ -1068,7 +1068,7 @@
         const isProxmox = state.providerType === 'proxmox';
         const snippetAvailable = Boolean(state.cloudInitSnippetStorage);
         const sshReady = state.qemuAgentSshReady !== false;
-        const install = checkboxField('Instaluj qemu-guest-agent przez cloud-init', 'install_qemu_guest_agent', state.installQemuGuestAgent);
+        const install = checkboxField('Instaluj QEMU Guest Agent automatycznie', 'install_qemu_guest_agent', state.installQemuGuestAgent);
         const installControl = install.querySelector('input');
         installControl.disabled = !isProxmox;
         installControl.addEventListener('change', event => { state.installQemuGuestAgent = event.currentTarget.checked; render(); });
