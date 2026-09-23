@@ -848,57 +848,6 @@ fi
     try:
         _guest_ssh_run(client, install_script, timeout=min(timeout, 600))
 
-        if target_user:
-            quoted_user = shlex.quote(target_user)
-            quoted_key = shlex.quote(target['public_key'] or '')
-            create_user = f'''set -eu
-if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
-TARGET={quoted_user}
-if ! id "$TARGET" >/dev/null 2>&1; then
-  if command -v useradd >/dev/null 2>&1; then
-    $SUDO useradd -m -s /bin/sh "$TARGET"
-  elif command -v adduser >/dev/null 2>&1; then
-    $SUDO adduser -D "$TARGET"
-  else
-    echo "no supported user creation command" >&2
-    exit 45
-  fi
-fi
-HOME_DIR="$(awk -F: -v user="$TARGET" '$1 == user { print $6 }' /etc/passwd)"
-if [ -z "$HOME_DIR" ]; then
-  echo "cannot resolve target home directory" >&2
-  exit 46
-fi
-if getent group sudo >/dev/null 2>&1; then
-  $SUDO usermod -aG sudo "$TARGET"
-elif getent group wheel >/dev/null 2>&1; then
-  $SUDO usermod -aG wheel "$TARGET"
-elif command -v addgroup >/dev/null 2>&1 && grep -q '^wheel:' /etc/group; then
-  $SUDO addgroup "$TARGET" wheel
-fi
-$SUDO install -d -m 700 -o "$TARGET" -g "$(id -gn "$TARGET")" "$HOME_DIR/.ssh"
-'''
-            if target['public_key']:
-                create_user += f'''
-printf '%s\n' {quoted_key} | $SUDO tee "$HOME_DIR/.ssh/authorized_keys" >/dev/null
-$SUDO chown "$TARGET:$(id -gn "$TARGET")" "$HOME_DIR/.ssh/authorized_keys"
-$SUDO chmod 600 "$HOME_DIR/.ssh/authorized_keys"
-'''
-            create_user += '''
-if [ "$TARGET" != "root" ] && [ -d /etc/sudoers.d ]; then
-  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET" | $SUDO tee "/etc/sudoers.d/90-cloudportal-$TARGET" >/dev/null
-  $SUDO chmod 440 "/etc/sudoers.d/90-cloudportal-$TARGET"
-fi
-'''
-            _guest_ssh_run(client, create_user)
-
-            if target['password']:
-                _guest_ssh_run(
-                    client,
-                    'if [ "$(id -u)" -eq 0 ]; then chpasswd; else sudo -n chpasswd; fi',
-                    stdin_text=f"{target_user}:{target['password']}\n",
-                )
-
         node, vm_id, provider = _workflow_vm_identity(context, workspace)
         agent_deadline = time.monotonic() + min(timeout, 120)
         while time.monotonic() < agent_deadline:
@@ -911,44 +860,113 @@ fi
             time.sleep(2)
         else:
             raise ExecutionFailed('QEMU Guest Agent was installed but did not become ready')
+    finally:
+        client.close()
 
-        if target['credential_id']:
-            target_key = _guest_private_key(target['private_key'])
-            verify = None
-            try:
-                verify = _guest_ssh_connect(
-                    address,
+    if target_user:
+        quoted_user = shlex.quote(target_user)
+        quoted_key = shlex.quote(target['public_key'] or '')
+        create_user = f'''set -eu
+TARGET={quoted_user}
+if ! id "$TARGET" >/dev/null 2>&1; then
+  if command -v useradd >/dev/null 2>&1; then
+    useradd -m -s /bin/sh "$TARGET"
+  elif command -v adduser >/dev/null 2>&1; then
+    adduser -D "$TARGET"
+  else
+    echo "no supported user creation command" >&2
+    exit 45
+  fi
+fi
+HOME_DIR="$(awk -F: -v user="$TARGET" '$1 == user { print $6 }' /etc/passwd)"
+if [ -z "$HOME_DIR" ]; then
+  echo "cannot resolve target home directory" >&2
+  exit 46
+fi
+if command -v usermod >/dev/null 2>&1; then
+  if getent group sudo >/dev/null 2>&1; then
+    usermod -aG sudo "$TARGET"
+  elif getent group wheel >/dev/null 2>&1; then
+    usermod -aG wheel "$TARGET"
+  fi
+elif command -v addgroup >/dev/null 2>&1 && grep -q '^wheel:' /etc/group; then
+  addgroup "$TARGET" wheel
+fi
+install -d -m 700 -o "$TARGET" -g "$(id -gn "$TARGET")" "$HOME_DIR/.ssh"
+'''
+        if target['public_key']:
+            create_user += f'''
+printf '%s\n' {quoted_key} > "$HOME_DIR/.ssh/authorized_keys"
+chown "$TARGET:$(id -gn "$TARGET")" "$HOME_DIR/.ssh/authorized_keys"
+chmod 600 "$HOME_DIR/.ssh/authorized_keys"
+'''
+        create_user += '''
+if [ "$TARGET" != "root" ] && [ -d /etc/sudoers.d ]; then
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET" > "/etc/sudoers.d/90-cloudportal-$TARGET"
+  chmod 440 "/etc/sudoers.d/90-cloudportal-$TARGET"
+fi
+'''
+        try:
+            provider.guest_exec(
+                node,
+                vm_id,
+                ['/bin/sh', '-c', create_user],
+                timeout=min(timeout, 120),
+            )
+            if target['password']:
+                provider.set_guest_user_password(
+                    node,
+                    vm_id,
                     target_user,
-                    private_key=target_key,
-                    password=target['password'],
-                    host_key=host_key,
+                    target['password'],
                 )
-            except (OSError, paramiko.SSHException) as exc:
-                raise ExecutionFailed(
-                    'Target guest credential was created but SSH verification failed'
-                ) from exc
-            finally:
-                if verify is not None:
-                    verify.close()
+        except HTTPException as exc:
+            raise ExecutionFailed(
+                'QEMU Guest Agent could not create the target guest credential account'
+            ) from exc
 
-        quoted_bootstrap = shlex.quote(bootstrap_user)
-        cleanup_command = f'''set -eu
-if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
+    if target['credential_id']:
+        target_key = _guest_private_key(target['private_key'])
+        verify = None
+        try:
+            verify = _guest_ssh_connect(
+                address,
+                target_user,
+                private_key=target_key,
+                password=target['password'],
+                host_key=host_key,
+            )
+        except (OSError, paramiko.SSHException) as exc:
+            raise ExecutionFailed(
+                'Target guest credential was created but SSH verification failed'
+            ) from exc
+        finally:
+            if verify is not None:
+                verify.close()
+
+    quoted_bootstrap = shlex.quote(bootstrap_user)
+    cleanup_command = f'''set -eu
 BOOTSTRAP={quoted_bootstrap}
 HOME_DIR="$(awk -F: -v user="$BOOTSTRAP" '$1 == user {{ print $6 }}' /etc/passwd)"
 if [ -n "$HOME_DIR" ]; then
-  $SUDO rm -f "$HOME_DIR/.ssh/authorized_keys"
+  rm -f "$HOME_DIR/.ssh/authorized_keys"
 fi
-$SUDO passwd -l "$BOOTSTRAP" >/dev/null 2>&1 || true
+passwd -l "$BOOTSTRAP" >/dev/null 2>&1 || true
 if command -v userdel >/dev/null 2>&1; then
-  $SUDO sh -c "nohup sh -c 'sleep 8; userdel -r $BOOTSTRAP >/dev/null 2>&1 || true' >/dev/null 2>&1 &"
+  userdel -r "$BOOTSTRAP" >/dev/null 2>&1 || true
 elif command -v deluser >/dev/null 2>&1; then
-  $SUDO sh -c "nohup sh -c 'sleep 8; deluser --remove-home $BOOTSTRAP >/dev/null 2>&1 || true' >/dev/null 2>&1 &"
+  deluser --remove-home "$BOOTSTRAP" >/dev/null 2>&1 || true
 fi
 '''
-        _guest_ssh_run(client, cleanup_command)
-    finally:
-        client.close()
+    try:
+        provider.guest_exec(
+            node,
+            vm_id,
+            ['/bin/sh', '-c', cleanup_command],
+            timeout=min(timeout, 120),
+        )
+    except HTTPException as exc:
+        raise ExecutionFailed('Failed to remove temporary QEMU bootstrap account') from exc
 
     cleanup_qemu_bootstrap(workspace)
     context.log(
