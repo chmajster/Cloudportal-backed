@@ -117,6 +117,7 @@ QEMU_BOOTSTRAP_KEY = '.cloudportal-qemu-bootstrap-key'
 
 
 def qemu_bootstrap_paths(workspace):
+    workspace = Path(workspace)
     return workspace / QEMU_BOOTSTRAP_MARKER, workspace / QEMU_BOOTSTRAP_KEY
 
 
@@ -143,6 +144,7 @@ def load_qemu_bootstrap(workspace):
 
 
 def prepare_qemu_bootstrap(workspace, job_id, reason):
+    workspace = Path(workspace)
     workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
     existing = load_qemu_bootstrap(workspace)
     if existing:
