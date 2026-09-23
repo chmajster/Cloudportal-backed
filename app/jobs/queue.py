@@ -289,6 +289,8 @@ def dispatch_once():
     dispatch_event_broker_once()
     deliver_webhooks_once()
     cleanup_retention_once()
+    from app.instance_backup.service import cleanup_expired_backups
+    cleanup_expired_backups()
     redis_client().set('cp:dispatcher:heartbeat', 'alive', ex=30)
 
 
