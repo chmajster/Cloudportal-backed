@@ -727,7 +727,12 @@ def health_check_vm(context, workspace):
             'Blueprint health_check failed: VM is not running '
             f"(status={status.get('status') or 'unknown'})"
         )
-    if (context.deployment.variables or {}).get('install_qemu_guest_agent'):
+    blueprint_snapshot = ((context.deployment.workflow or {}).get('blueprint') or {})
+    qemu_agent_requested = bool(
+        (context.deployment.variables or {}).get('install_qemu_guest_agent')
+        or blueprint_snapshot.get('bootstrap_install_qemu_guest_agent')
+    )
+    if qemu_agent_requested:
         try:
             if not provider.guest_agent_ready(node, vm_id):
                 raise ExecutionFailed('Blueprint health_check failed: QEMU Guest Agent is not ready')
