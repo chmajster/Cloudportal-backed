@@ -61,7 +61,7 @@ async function blueprintsView() {
       { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
         ? (item.manager_role_ids || []).map(id => roleNames.get(Number(id)) || ('Rola #' + id)).join(', ')
         : badge('Bez roli dedykowanej', 'warning') },
-      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Approval wg polityki globalnej', 'warning') : badge('Bez approval', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
+      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, approvalPolicyBadge(item), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
@@ -82,6 +82,32 @@ function parseObject(value, label) {
 function parseArray(value, label) {
   try { const parsed = JSON.parse(value); if (!Array.isArray(parsed)) throw new Error(); return parsed; }
   catch { throw new Error(`${label} musi zawierać poprawną tablicę JSON.`); }
+}
+
+function approvalPolicyBadge(item) {
+  if (!item.requires_approval) return badge('Bez approval', 'info');
+  const ownPolicy = item.auto_approve_for_executors != null || item.approval_timeout_hours != null;
+  return badge(ownPolicy ? 'Approval wg polityki Blueprintu' : 'Approval wg projektu/globalnej', 'warning');
+}
+function approvalBooleanOverride(value) {
+  return value === 'inherit' || value == null || value === '' ? null : value === 'true';
+}
+function approvalTimeoutOverride(value) {
+  const normalized = String(value ?? '').trim();
+  return normalized ? Number(normalized) : null;
+}
+function approvalPolicyFields(item = null) {
+  return [
+    selectField('Auto-approval', 'auto_approve_for_executors', [
+      { value: 'inherit', label: 'Dziedzicz z projektu / ustawień globalnych' },
+      { value: 'true', label: 'Włączone dla tego Blueprintu' },
+      { value: 'false', label: 'Wyłączone dla tego Blueprintu' },
+    ], item?.auto_approve_for_executors == null ? 'inherit' : String(item.auto_approve_for_executors)),
+    field('Timeout approval (h)', 'approval_timeout_hours', {
+      type: 'number', min: 1, max: 720, value: item?.approval_timeout_hours ?? '',
+      help: 'Puste pole oznacza dziedziczenie timeoutu z projektu, a następnie z ustawienia globalnego.',
+    }),
+  ];
 }
 function hostnamePatternTokens(pattern) {
   const automatic = new Set(['number', 'random', 'year']);
@@ -312,6 +338,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
       checkboxField('API', 'visibility_api', item?.visibility?.api ?? true),
       checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', item?.requires_approval ?? false),
+      ...approvalPolicyFields(item),
       selectField('Po błędzie wdrożenia', 'recovery_policy', [
         { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
         { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
@@ -683,6 +710,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           },
           workflow,
           requires_approval: data.has('requires_approval'),
+          auto_approve_for_executors: approvalBooleanOverride(data.get('auto_approve_for_executors')),
+          approval_timeout_hours: approvalTimeoutOverride(data.get('approval_timeout_hours')),
           recovery_policy: data.get('recovery_policy'),
         };
         await api(item ? '/blueprints/' + item.id : '/blueprints', {
@@ -1126,6 +1155,7 @@ async function blueprintForm(item = null) {
           checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
           checkboxField('API', 'visibility_api', item?.visibility?.api ?? true),
           checkboxField('Wymaga akceptacji przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
+          ...approvalPolicyFields(item),
           selectField('Po błędzie wdrożenia', 'recovery_policy', [
             { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
             { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
@@ -1296,6 +1326,8 @@ async function blueprintForm(item = null) {
           deployment: deploymentPayload,
           workflow,
           requires_approval: form.elements.requires_approval.checked,
+          auto_approve_for_executors: approvalBooleanOverride(form.elements.auto_approve_for_executors.value),
+          approval_timeout_hours: approvalTimeoutOverride(form.elements.approval_timeout_hours.value),
           recovery_policy: form.elements.recovery_policy.value,
         };
         await api(item ? `/blueprints/${item.id}` : '/blueprints', {
