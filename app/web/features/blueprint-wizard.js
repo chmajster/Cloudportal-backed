@@ -534,6 +534,7 @@
       function validateStep(index) {
         const errors = {};
         if (index === 0) {
+          if (!state.tenantId || !state.projectId) errors.project_id = 'Wybierz Tenant i Projekt dla Blueprintu.';
           if (!state.name) errors.name = 'Podaj nazwę Blueprintu.';
           if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(state.slug)) errors.slug = 'Slug musi mieć 1–63 znaków i używać liter, cyfr, _, . lub -.';
         } else if (index === 1) {
@@ -554,8 +555,15 @@
             if (!Number.isFinite(Number(state.disk)) || Number(state.disk) < 1) errors.disk = 'Dysk musi mieć co najmniej 1 GiB.';
             if (!state.storage) errors.storage = 'Wybierz storage.';
             if (!state.network) errors.network = 'Wybierz sieć/bridge.';
-            if (!state.environment) errors.environment = 'Wybierz Environment.';
-            if (!state.apmid) errors.apmid = 'Podaj lub wybierz APMID.';
+            if (!state.selectEnvironmentOnExecute && !state.environment) errors.environment = 'Wybierz Environment.';
+            if (!state.selectApmidOnExecute && !state.apmid) errors.apmid = 'Podaj lub wybierz APMID.';
+            if (state.selectEnvironmentOnExecute
+                && !['test', 'dev', 'nonprod', 'prod'].some(name => data.vmClassification?.environments?.[name] !== false)) {
+              errors.select_environment_on_execute = 'Brak włączonych Environment do wyboru podczas tworzenia VM.';
+            }
+            if (state.selectApmidOnExecute && !(data.vmClassification?.apmids || []).length) {
+              errors.select_apmid_on_execute = 'Brak skonfigurowanych APMID do wyboru podczas tworzenia VM.';
+            }
           } else {
             const template = data.templates.find(value => value.id === state.terraformTemplateId);
             const required = parts.core.requiredTemplateVariables(template);
@@ -614,9 +622,51 @@
               { value: 'terraform', label: 'Terraform' },
               { value: 'opentofu', label: 'OpenTofu' },
             ], state.executor)));
+
+        const scopeFields = [];
+        const scopeTenants = tenantRowsForProjects();
+        const scopeProjects = projectsForTenant(state.tenantId);
+        if (scopeTenants.length > 1) {
+          const tenantField = selectField('Tenant', 'tenant_id',
+            scopeTenants.map(value => ({ value: String(value.id), label: value.name })),
+            state.tenantId, { required: true, wide: true });
+          tenantField.querySelector('select').addEventListener('change', async event => {
+            state.tenantId = event.currentTarget.value;
+            state.projectId = String(projectsForTenant(state.tenantId)[0]?.id || '');
+            state.errors = {};
+            try {
+              await loadScopedResources(true);
+            } catch (error) {
+              state.providerId = '';
+              state.errors = { project_id: error.message };
+            }
+            render();
+          });
+          scopeFields.push(tenantField);
+        }
+        if (scopeProjects.length > 1) {
+          const projectField = selectField('Projekt', 'project_id',
+            scopeProjects.map(value => ({ value: String(value.id), label: value.name })),
+            state.projectId, { required: true, wide: true });
+          projectField.querySelector('select').addEventListener('change', async event => {
+            state.projectId = event.currentTarget.value;
+            state.errors = {};
+            try {
+              await loadScopedResources(true);
+            } catch (error) {
+              state.providerId = '';
+              state.errors = { project_id: error.message };
+            }
+            render();
+          });
+          scopeFields.push(projectField);
+        }
+
         const content = node('div', { class: 'form-grid' },
           node('div', { class: 'blueprint-wizard-info wide' },
-            node('strong', { text: 'Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji.' })),
+            node('strong', { text: 'Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji.' }),
+            node('span', { text: 'Zakres: ' + tenantLabel(state.tenantId) + ' · ' + projectLabel(state.projectId) })),
+          ...scopeFields,
           name,
           checkboxField('Aktywny', 'is_active', state.active),
           field('Krótki opis', 'description', {
