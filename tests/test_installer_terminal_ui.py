@@ -104,6 +104,16 @@ def test_docker_status_auto_repair_restores_compose_state_and_can_be_disabled():
     assert 'Auto-naprawa Docker wymaga roota.' in INSTALLER
 
 
+def test_docker_compose_long_running_infrastructure_has_restart_policy():
+    compose = (ROOT / 'docker-compose.yml').read_text(encoding='utf-8')
+    for service in ('postgres', 'redis', 'proxy'):
+        marker = f'  {service}:'
+        start = compose.index(marker)
+        next_service = compose.find('\n  ', start + len(marker))
+        block = compose[start: next_service if next_service != -1 else len(compose)]
+        assert 'restart: unless-stopped' in block
+
+
 def test_installer_failure_trap_is_actionable_without_dumping_commands():
     assert 'installer_error()' in INSTALLER
     assert 'Etap „$CURRENT_STAGE” przerwany' in INSTALLER
