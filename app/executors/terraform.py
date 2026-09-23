@@ -87,7 +87,7 @@ def guest_credential_runtime_variables(deployment):
     # When guest bootstrap is enabled Terraform must keep the ephemeral cloud-init
     # account prepared by Blueprint execution. The final credential is installed
     # inside the VM by the worker after apply.
-    if blueprint.get('guest_bootstrap_secret'):
+    if blueprint.get('guest_bootstrap_enabled'):
         return {}, None
     credential_id = blueprint.get('guest_credential_id')
     if not credential_id:
