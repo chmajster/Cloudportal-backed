@@ -2,12 +2,12 @@
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import select, inspect
+from sqlalchemy import inspect, text
 from app.config import settings
 from app.database import engine
 from sqlalchemy.orm import Session
 from app.models import User
-from app.projects.models import Project, ProjectMembership
+from app.projects.models import ProjectMembership
 from app.projects.context_models import UserProjectContext
 from app.tenancy.models import TenantMembership
 from app.tenancy.permissions import DEFAULT_TENANT_ID
@@ -28,14 +28,15 @@ def test_context_additive_upgrade_downgrade_preserves_projects(tmp_path, monkeyp
                                      user_id=uid, status='disabled')); db.commit()
         command.upgrade(config, '8c42f39a50bd'); command.upgrade(config, '8c42f39a50bd')
         with Session(engine(), expire_on_commit=False) as db:
-            assert len(db.scalars(select(Project)).all()) == 1
+            assert db.execute(text('SELECT COUNT(*) FROM projects')).scalar_one() == 1
             assert db.get(User, uid).password_hash == 'untouched'
             assert db.get(ProjectMembership, (DEFAULT_PROJECT_ID, uid)).status == 'disabled'
             db.add(UserProjectContext(user_id=uid, tenant_id=DEFAULT_TENANT_ID, project_id=DEFAULT_PROJECT_ID)); db.commit()
         command.downgrade(config, '9a42d10e63bc')
         assert 'user_project_contexts' not in inspect(engine()).get_table_names()
         with Session(engine(), expire_on_commit=False) as db:
-            assert db.get(Project, DEFAULT_PROJECT_ID).is_system
+            default = db.execute(text('SELECT is_system FROM projects WHERE id = :id'), {'id': DEFAULT_PROJECT_ID}).mappings().one()
+            assert bool(default['is_system'])
             assert db.get(ProjectMembership, (DEFAULT_PROJECT_ID, uid)).status == 'disabled'
             assert db.get(User, uid).password_hash == 'untouched'
         command.upgrade(config, 'head')
