@@ -67,49 +67,81 @@ def _target_credential(db, credential_id):
     return credential, secret
 
 
+def _connect(client, address, username, *, private_key=None, password=None):
+    kwargs = {}
+    if private_key:
+        try:
+            kwargs['pkey'] = paramiko.Ed25519Key.from_private_key(io.StringIO(private_key))
+        except (paramiko.SSHException, ValueError):
+            try:
+                kwargs['pkey'] = paramiko.RSAKey.from_private_key(io.StringIO(private_key))
+            except (paramiko.SSHException, ValueError):
+                raise ExecutionFailed('SSH private key could not be loaded for guest bootstrap verification') from None
+    elif password:
+        kwargs['password'] = password
+    else:
+        raise ExecutionFailed('SSH authentication material is missing')
+    client.connect(
+        hostname=address,
+        port=22,
+        username=username,
+        timeout=15,
+        auth_timeout=15,
+        banner_timeout=15,
+        allow_agent=False,
+        look_for_keys=False,
+        **kwargs,
+    )
+
+
 def provision_guest(context, address: str, bootstrap: dict, db, credential_id: int, install_qemu_agent: bool):
     credential, secret = _target_credential(db, credential_id)
     if credential.username == bootstrap['username']:
         raise ExecutionFailed('Guest credential username collides with the ephemeral bootstrap account')
-    try:
-        key = paramiko.Ed25519Key.from_private_key(io.StringIO(bootstrap['private_key']))
-    except (paramiko.SSHException, ValueError):
-        raise ExecutionFailed('Guest bootstrap private key is invalid') from None
+    if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', credential.username):
+        raise ExecutionFailed('Guest SSH credential username is not a valid Linux account name')
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            hostname=address,
-            port=22,
-            username=bootstrap['username'],
-            pkey=key,
-            timeout=15,
-            auth_timeout=15,
-            banner_timeout=15,
-            allow_agent=False,
-            look_for_keys=False,
+        _connect(
+            client,
+            address,
+            bootstrap['username'],
+            private_key=bootstrap['private_key'],
         )
         username = credential.username
-        quoted_user = shlex.quote(username)
         _run(
             client,
-            f"sudo -n sh -c 'id -u {quoted_user} >/dev/null 2>&1 || useradd -m -s /bin/bash {quoted_user}'",
+            f"sudo -n sh -c 'id -u {username} >/dev/null 2>&1 || useradd -m -s /bin/bash {username}'",
         )
         _run(
             client,
-            f"sudo -n sh -c 'install -d -m 700 -o {quoted_user} -g {quoted_user} /home/{quoted_user}/.ssh'",
+            f"sudo -n install -d -m 700 -o {username} -g {username} /home/{username}/.ssh",
         )
+        _run(
+            client,
+            "sudo -n sh -c 'if getent group sudo >/dev/null; then usermod -aG sudo "
+            + username
+            + "; elif getent group wheel >/dev/null; then usermod -aG wheel "
+            + username
+            + "; fi'",
+        )
+
         private_key = secret.get('private_key')
         if private_key:
             public_key = public_key_from_private_key(private_key)
-            quoted_key = shlex.quote(public_key)
             _run(
                 client,
-                f"sudo -n sh -c 'printf %s\\n {quoted_key} > /home/{quoted_user}/.ssh/authorized_keys && "
-                f"chown {quoted_user}:{quoted_user} /home/{quoted_user}/.ssh/authorized_keys && "
-                f"chmod 600 /home/{quoted_user}/.ssh/authorized_keys'",
+                f"sudo -n tee /home/{username}/.ssh/authorized_keys >/dev/null",
+                stdin_text=public_key + '\n',
             )
+            _run(
+                client,
+                f"sudo -n chown {username}:{username} /home/{username}/.ssh/authorized_keys",
+            )
+            _run(client, f"sudo -n chmod 600 /home/{username}/.ssh/authorized_keys")
+
         password = secret.get('password')
         if password:
             _run(
@@ -118,6 +150,7 @@ def provision_guest(context, address: str, bootstrap: dict, db, credential_id: i
                 stdin_text=f'{username}:{password}\n',
                 sensitive=(password,),
             )
+
         if install_qemu_agent:
             _run(
                 client,
@@ -129,13 +162,37 @@ def provision_guest(context, address: str, bootstrap: dict, db, credential_id: i
                 "else exit 127; fi; "
                 "systemctl enable --now qemu-guest-agent'",
             )
-        _run(
-            client,
-            f"sudo -n sh -c 'userdel -r {shlex.quote(bootstrap['username'])} >/dev/null 2>&1 || true'",
-        )
     except paramiko.AuthenticationException:
         raise ExecutionFailed('Guest bootstrap SSH authentication failed') from None
     except (OSError, paramiko.SSHException) as exc:
         raise ExecutionFailed(f'Guest bootstrap SSH failed: {exc.__class__.__name__}') from None
     finally:
         client.close()
+
+    verify = paramiko.SSHClient()
+    verify.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        _connect(
+            verify,
+            address,
+            credential.username,
+            private_key=secret.get('private_key'),
+            password=secret.get('password'),
+        )
+        _run(verify, 'true')
+        _run(
+            verify,
+            f"sudo -n userdel -r -f {bootstrap['username']}",
+        )
+    except paramiko.AuthenticationException:
+        raise ExecutionFailed(
+            'Target guest credential was configured but SSH verification failed; '
+            'ephemeral bootstrap account was retained for recovery'
+        ) from None
+    except (OSError, paramiko.SSHException) as exc:
+        raise ExecutionFailed(
+            f'Target guest credential verification failed: {exc.__class__.__name__}; '
+            'ephemeral bootstrap account was retained for recovery'
+        ) from None
+    finally:
+        verify.close()
