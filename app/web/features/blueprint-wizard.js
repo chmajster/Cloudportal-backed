@@ -14,8 +14,8 @@
     ['Podsumowanie', 'Podsumowanie'],
   ];
 
-  function safeApi(path, fallback = []) {
-    return api(path).then(result => result.items || result).catch(() => fallback);
+  function safeApi(path, fallback = [], options = {}) {
+    return api(path, options).then(result => result.items || result).catch(() => fallback);
   }
 
   function errorText(root, errors) {
@@ -119,16 +119,13 @@
     }
 
     try {
-      const [providers, templates, schemes, pools, playbooks, credentials, roles, users, blueprints, vmClassification] = await Promise.all([
-        safeApi('/providers?limit=200'),
-        safeApi('/templates'),
-        allowed('hostnames.read') ? safeApi('/hostname-schemes?limit=200') : Promise.resolve([]),
-        allowed('ipam.read') ? safeApi('/ipam/pools?limit=200') : Promise.resolve([]),
+      const [tenants, projects, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
+        safeApi('/tenants?limit=200'),
+        safeApi('/projects?limit=200'),
+        safeApi('/project-context', { selected: null, version: 0 }),
         allowed('ansible.read') ? safeApi('/ansible/playbooks') : Promise.resolve([]),
-        safeApi('/credentials?limit=200'),
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
         allowed('users.read') ? safeApi('/users?limit=200') : Promise.resolve([]),
-        allowed('blueprints.read') ? safeApi('/blueprints?limit=200') : Promise.resolve([]),
         safeApi('/settings/vm-classification', {
           environments: { test: true, dev: true, nonprod: true, prod: true },
           apmids: [],
@@ -136,51 +133,151 @@
         }),
       ]);
 
-      if (!providers.length) throw new Error('Najpierw dodaj platformę infrastruktury.');
-      if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
-
-      const data = {
-        providers,
-        templates: templates.filter(value => value.enabled !== false),
-        schemes: schemes.filter(value => value.is_active),
-        pools,
-        playbooks: playbooks.filter(value => value.enabled !== false),
-        credentials,
-        roles,
-        users: users.filter(value => value.is_active !== false),
-        blueprints,
-        vmClassification,
-      };
       const state = parts.core.stateDefaults();
-      const preferred = providers.find(value => value.type === 'proxmox') || providers[0];
-      state.providerId = String(preferred.id);
-      state.providerType = preferred.type;
-      state.providerCredentialId = String(preferred.credentials_id || '');
-      state.terraformTemplateId = data.templates.find(value => value.provider === preferred.type)?.id || '';
-      state.hostnameSchemeId = String(data.schemes[0]?.id || '');
-      state.hostnameEnabled = Boolean(allowed('hostnames.read') && data.schemes.length);
-      const enabledEnvironments = ['test', 'dev', 'nonprod', 'prod']
-        .filter(name => data.vmClassification?.environments?.[name] !== false);
-      state.environment = enabledEnvironments[0] || '';
-      state.apmid = String(data.vmClassification?.apmids?.[0] || '');
-      state.hostnameValues.location = String(data.vmClassification?.hostname_defaults?.location || 'wro');
-      state.hostnameValues.role = String(data.vmClassification?.hostname_defaults?.role || 'server');
-      if (options.hostnameSchemeId) {
-        state.hostnameSchemeId = String(options.hostnameSchemeId);
-        state.hostnameEnabled = true;
+      const tenantById = new Map(tenants.map(value => [String(value.id), value]));
+      const activeProjects = projects.filter(value => {
+        if (value.status && value.status !== 'active') return false;
+        const tenant = tenantById.get(String(value.tenant_id));
+        return !tenant || !tenant.status || tenant.status === 'active';
+      });
+      if (!activeProjects.length) {
+        throw new Error('Brak aktywnego projektu, w którym można utworzyć Blueprint.');
       }
 
-      const dedicatedElsewhere = new Set(
-        blueprints.flatMap(value => value.manager_role_ids || []).map(Number)
-      );
+      const data = {
+        tenants: tenants.filter(value => !value.status || value.status === 'active'),
+        projects: activeProjects,
+        providers: [],
+        templates: [],
+        schemes: [],
+        pools: [],
+        playbooks: playbooks.filter(value => value.enabled !== false),
+        credentials: [],
+        roles,
+        users: users.filter(value => value.is_active !== false),
+        blueprints: [],
+        managerRoles: [],
+        vmClassification,
+      };
+
+      function projectsForTenant(tenantId) {
+        return data.projects.filter(value => String(value.tenant_id) === String(tenantId));
+      }
+
+      function tenantRowsForProjects() {
+        const ids = [...new Set(data.projects.map(value => String(value.tenant_id)))];
+        return ids.map(id => data.tenants.find(value => String(value.id) === id) || {
+          id,
+          name: id,
+        });
+      }
+
+      function tenantLabel(tenantId) {
+        return tenantRowsForProjects().find(value => String(value.id) === String(tenantId))?.name || String(tenantId || '—');
+      }
+
+      function projectLabel(projectId) {
+        return data.projects.find(value => String(value.id) === String(projectId))?.name || String(projectId || '—');
+      }
+
+      function normalizeScopeSelection(preferredProjectId = '') {
+        let project = data.projects.find(value => String(value.id) === String(preferredProjectId || ''));
+        if (!project && state.projectId) {
+          project = data.projects.find(value => String(value.id) === String(state.projectId));
+        }
+        if (!project && state.tenantId) {
+          project = projectsForTenant(state.tenantId)[0];
+        }
+        project ||= data.projects[0];
+        state.tenantId = String(project.tenant_id);
+        state.projectId = String(project.id);
+      }
+
+      normalizeScopeSelection(projectContext?.selected?.id);
+
       const managerRequired = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
-      data.managerRoles = roles.filter(role =>
-        !dedicatedElsewhere.has(Number(role.id))
-        && [...managerRequired].every(permission => (role.permissions || []).includes(permission)));
       const defaultManagerRoleNames = new Set(['Administrator', 'Infrastructure Administrator']);
-      state.managerRoleIds = data.managerRoles
-        .filter(role => defaultManagerRoleNames.has(role.name))
-        .map(role => Number(role.id));
+
+      function refreshManagerRoles(resetSelection = false) {
+        const dedicatedElsewhere = new Set(
+          data.blueprints.flatMap(value => value.manager_role_ids || []).map(Number)
+        );
+        data.managerRoles = data.roles.filter(role =>
+          !dedicatedElsewhere.has(Number(role.id))
+          && [...managerRequired].every(permission => (role.permissions || []).includes(permission)));
+        const available = new Set(data.managerRoles.map(role => Number(role.id)));
+        state.managerRoleIds = resetSelection
+          ? data.managerRoles.filter(role => defaultManagerRoleNames.has(role.name)).map(role => Number(role.id))
+          : state.managerRoleIds.filter(id => available.has(Number(id)));
+      }
+
+      function resetScopeDependentState() {
+        const preferred = data.providers.find(value => value.type === 'proxmox') || data.providers[0];
+        state.providerId = String(preferred.id);
+        state.providerType = preferred.type;
+        state.providerCredentialId = String(preferred.credentials_id || '');
+        state.terraformTemplateId = data.templates.find(value => value.provider === preferred.type)?.id || '';
+        state.node = '';
+        state.templates = [];
+        state.nodes = [];
+        state.storages = [];
+        state.snippetStorages = [];
+        state.networks = [];
+        state.selectedTemplateVmid = '';
+        state.selectedTemplateNode = '';
+        state.selectedTemplateName = '';
+        state.hostnameSchemeId = String(data.schemes[0]?.id || '');
+        state.hostnameEnabled = Boolean(allowed('hostnames.read') && data.schemes.length);
+        state.ipamPoolId = data.pools.some(value => String(value.id) === String(state.ipamPoolId))
+          ? state.ipamPoolId : '';
+        state.guestCredentialId = data.credentials.some(value => String(value.id) === String(state.guestCredentialId))
+          ? state.guestCredentialId : '';
+        state.ansibleCredentialId = data.credentials.some(value => String(value.id) === String(state.ansibleCredentialId))
+          ? state.ansibleCredentialId : '';
+
+        const enabledEnvironments = ['test', 'dev', 'nonprod', 'prod']
+          .filter(name => data.vmClassification?.environments?.[name] !== false);
+        state.environment = state.selectEnvironmentOnExecute ? '' : (enabledEnvironments[0] || '');
+        state.apmid = state.selectApmidOnExecute ? '' : String(data.vmClassification?.apmids?.[0] || '');
+        if (state.selectEnvironmentOnExecute) {
+          delete state.hostnameValues.env;
+          delete state.hostnameValues.environment;
+        } else if (state.environment) {
+          state.hostnameValues.env = state.environment;
+          state.hostnameValues.environment = state.environment;
+        }
+        state.hostnameValues.location = String(data.vmClassification?.hostname_defaults?.location || 'wro');
+        state.hostnameValues.role = String(data.vmClassification?.hostname_defaults?.role || 'server');
+
+        if (options.hostnameSchemeId && data.schemes.some(value => String(value.id) === String(options.hostnameSchemeId))) {
+          state.hostnameSchemeId = String(options.hostnameSchemeId);
+          state.hostnameEnabled = true;
+        }
+      }
+
+      async function loadScopedResources(resetManagerSelection = false) {
+        const requestOptions = { headers: parts.core.scopeHeaders(state) };
+        const [providers, templates, schemes, pools, credentials, blueprints] = await Promise.all([
+          safeApi('/providers?limit=200', [], requestOptions),
+          safeApi('/templates', [], requestOptions),
+          allowed('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
+          allowed('ipam.read') ? safeApi('/ipam/pools?limit=200', [], requestOptions) : Promise.resolve([]),
+          safeApi('/credentials?limit=200', [], requestOptions),
+          allowed('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
+        ]);
+        if (!providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
+        if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
+
+        data.providers = providers;
+        data.templates = templates.filter(value => value.enabled !== false);
+        data.schemes = schemes.filter(value => value.is_active);
+        data.pools = pools;
+        data.credentials = credentials;
+        data.blueprints = blueprints;
+        resetScopeDependentState();
+        refreshManagerRoles(resetManagerSelection);
+        await discoverProvider(state.providerId);
+      }
 
       let bodyRoot = null;
       let navRoot = null;
