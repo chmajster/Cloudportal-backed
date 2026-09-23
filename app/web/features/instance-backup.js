@@ -1,9 +1,13 @@
 'use strict';
 
 (() => {
+const BACKUP_STAGE_ORDER = [
+  'queued', 'preparing', 'database_dump', 'configuration',
+  'secret_material', 'manifest', 'checksums', 'archive', 'ready',
+];
 const BACKUP_STAGES = [
-  ['queued', 'Oczekiwanie'],
   ['preparing', 'Sprawdzono środowisko'],
+  ['preparing', 'Odczytano metadane aplikacji'],
   ['database_dump', 'Tworzenie dumpa PostgreSQL'],
   ['configuration', 'Zebranie konfiguracji'],
   ['secret_material', 'Zebranie wymaganych kluczy'],
@@ -43,18 +47,19 @@ function metaItem(label, value, mono = false) {
 }
 
 function stageList(currentCode, failed = false) {
-  const currentIndex = BACKUP_STAGES.findIndex(([code]) => code === currentCode);
+  const currentRank = BACKUP_STAGE_ORDER.indexOf(currentCode);
   return node('div', { class: 'instance-backup-stages' },
-    ...BACKUP_STAGES.map(([code, label], index) => {
+    ...BACKUP_STAGES.map(([code, label]) => {
+      const stageRank = BACKUP_STAGE_ORDER.indexOf(code);
       let marker = '[    ]';
       let stateClass = 'pending';
       if (!failed && currentCode === 'ready') {
         marker = '[ OK ]';
         stateClass = 'done';
-      } else if (index < currentIndex) {
+      } else if (stageRank >= 0 && currentRank > stageRank) {
         marker = '[ OK ]';
         stateClass = 'done';
-      } else if (index === currentIndex && !failed) {
+      } else if (stageRank >= 0 && currentRank === stageRank && !failed) {
         marker = '[ .. ]';
         stateClass = 'active';
       }
