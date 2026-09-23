@@ -20,7 +20,8 @@ NODE_SSH_VARIABLES = (
 def blueprint_snapshot(context) -> dict:
     """Prefer the immutable job snapshot, retaining deployment-only callers."""
     payload = getattr(context.job, 'payload', None) or {}
-    return payload.get('blueprint') or ((context.deployment.workflow or {}).get('blueprint') or {})
+    workflow = getattr(context.deployment, 'workflow', None) or {}
+    return payload.get('blueprint') or workflow.get('blueprint') or {}
 
 
 def validate_cloud_init_workflow(steps: Sequence[Mapping[str, Any]]) -> bool:
@@ -89,8 +90,14 @@ def node_ssh_environment(env: dict, source: Mapping[str, str], secret: Mapping[s
     for name in NODE_SSH_VARIABLES:
         if source.get(name):
             env[name] = source[name]
-    if secret.get('password') and not env.get('PROXMOX_VE_SSH_PASSWORD'):
-        env['PROXMOX_VE_SSH_USERNAME'] = str(username).split('@', 1)[0]
+    explicit_auth = (
+        env.get('PROXMOX_VE_SSH_PASSWORD')
+        or env.get('PROXMOX_VE_SSH_PRIVATE_KEY')
+        or env.get('PROXMOX_VE_SSH_AUTH_SOCK')
+        or str(env.get('PROXMOX_VE_SSH_AGENT') or '').lower() == 'true'
+    )
+    if secret.get('password') and not explicit_auth:
+        env.setdefault('PROXMOX_VE_SSH_USERNAME', str(username).split('@', 1)[0])
         env['PROXMOX_VE_SSH_PASSWORD'] = secret['password']
 
 
