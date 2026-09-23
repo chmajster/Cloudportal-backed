@@ -305,9 +305,10 @@
           return;
         }
         try {
+          const requestOptions = { headers: parts.core.scopeHeaders(state) };
           const [nodeResult, templateResult] = await Promise.all([
-            api('/providers/' + provider.id + '/nodes'),
-            api('/providers/' + provider.id + '/templates'),
+            api('/providers/' + provider.id + '/nodes', requestOptions),
+            api('/providers/' + provider.id + '/templates', requestOptions),
           ]);
           state.nodes = nodeResult.items || [];
           state.templates = templateResult.items || [];
@@ -335,10 +336,11 @@
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         if (!provider || provider.type !== 'proxmox' || !state.node) return;
         try {
+          const requestOptions = { headers: parts.core.scopeHeaders(state) };
           const [storageResult, networkResult, qemuReadiness] = await Promise.all([
-            api('/providers/' + provider.id + '/storages?node=' + encodeURIComponent(state.node)),
-            api('/providers/' + provider.id + '/networks?node=' + encodeURIComponent(state.node)),
-            api('/providers/' + provider.id + '/qemu-agent-readiness').catch(error => ({
+            api('/providers/' + provider.id + '/storages?node=' + encodeURIComponent(state.node), requestOptions),
+            api('/providers/' + provider.id + '/networks?node=' + encodeURIComponent(state.node), requestOptions),
+            api('/providers/' + provider.id + '/qemu-agent-readiness', requestOptions).catch(error => ({
               ok: false,
               reason: error.message || 'readiness_check_failed',
             })),
