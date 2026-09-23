@@ -1,10 +1,15 @@
 import uuid
 import json
 import hashlib
+import io
 import os
+import re
+import shlex
 import socket
 import time
 import ipaddress
+
+import paramiko
 from datetime import timedelta
 from types import SimpleNamespace
 from pathlib import Path
@@ -16,7 +21,8 @@ from app.config import settings
 from app.database import session
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
-from app.executors.terraform import OpenTofuExecutor, TerraformExecutor
+from app.executors.terraform import (OpenTofuExecutor, TerraformExecutor, cleanup_qemu_bootstrap,
+                                     load_qemu_bootstrap)
 from app.inventory_sync import state_outputs, sync_deployment_inventory
 from app.jobs.lifecycle import has_released_allocations
 from app.quotas.service import (account_confirmed_absent, commit_job_reservation,
@@ -27,7 +33,8 @@ from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReserv
                         ManagedResource, ManagedVM, Token, User, now)
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
-from app.security.core import effective_permissions
+from app.credentials.ssh import public_key_from_private_key
+from app.security.core import decrypt_secret, effective_permissions
 from app.terraform.state import delete_plan, persist_plan, restore_plan, restore_state
 
 
@@ -655,6 +662,350 @@ def wait_for_tcp_addresses(context, addresses, port, timeout, label):
     )
 
 
+POSIX_GUEST_USERNAME = re.compile(r'^[a-z_][a-z0-9_-]{0,31}$')
+
+
+def _guest_private_key(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    for loader in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey):
+        try:
+            return loader.from_private_key(io.StringIO(raw))
+        except (paramiko.SSHException, ValueError, TypeError):
+            continue
+    raise ExecutionFailed('Guest SSH credential contains an unsupported private key')
+
+
+def _guest_ssh_connect(address, username, *, private_key=None, password=None, host_key=None):
+    client = paramiko.SSHClient()
+    if host_key is None:
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    else:
+        client.get_host_keys().add(address, host_key.get_name(), host_key)
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    client.connect(
+        hostname=address,
+        port=22,
+        username=username,
+        password=password,
+        pkey=private_key,
+        timeout=10,
+        auth_timeout=10,
+        banner_timeout=10,
+        allow_agent=False,
+        look_for_keys=False,
+    )
+    return client
+
+
+def _guest_ssh_run(client, command, *, stdin_text=None, timeout=300):
+    stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    if stdin_text is not None:
+        stdin.write(stdin_text)
+        stdin.flush()
+        stdin.channel.shutdown_write()
+    status = stdout.channel.recv_exit_status()
+    error = stderr.read().decode('utf-8', errors='replace').strip()
+    if status != 0:
+        detail = error[-1200:] if error else f'exit status {status}'
+        raise ExecutionFailed('Guest bootstrap command failed: ' + detail)
+    return stdout.read().decode('utf-8', errors='replace')
+
+
+def _guest_target_credential(context):
+    blueprint = (context.job.payload or {}).get('blueprint') or {}
+    credential_id = blueprint.get('guest_credential_id')
+    variables = context.deployment.variables or {}
+    if not credential_id:
+        return {
+            'credential_id': None,
+            'username': str(variables.get('ssh_username') or '').strip(),
+            'public_key': str(variables.get('ssh_public_key') or '').strip() or None,
+            'private_key': None,
+            'password': None,
+        }
+
+    with session() as db:
+        credential = db.get(Credential, int(credential_id))
+        if credential is None:
+            raise ExecutionFailed('Guest SSH credential disappeared before bootstrap')
+        if credential.type != 'ssh':
+            raise ExecutionFailed('Guest bootstrap requires an SSH credential')
+        if credential.expires_at is not None and credential.expires_at <= now():
+            raise ExecutionFailed('Guest SSH credential expired before bootstrap')
+        secret = decrypt_secret(credential)
+        private_key = secret.get('private_key')
+        return {
+            'credential_id': credential.id,
+            'username': str(credential.username or '').strip(),
+            'public_key': public_key_from_private_key(private_key) if private_key else None,
+            'private_key': private_key,
+            'password': secret.get('password'),
+        }
+
+
+def _verify_guest_ssh_host_key(provider, node, vm_id, host_key):
+    key_paths = {
+        'ssh-ed25519': '/etc/ssh/ssh_host_ed25519_key.pub',
+        'ssh-rsa': '/etc/ssh/ssh_host_rsa_key.pub',
+        'ecdsa-sha2-nistp256': '/etc/ssh/ssh_host_ecdsa_key.pub',
+        'ecdsa-sha2-nistp384': '/etc/ssh/ssh_host_ecdsa_key.pub',
+        'ecdsa-sha2-nistp521': '/etc/ssh/ssh_host_ecdsa_key.pub',
+    }
+    key_type = host_key.get_name()
+    path = key_paths.get(key_type)
+    if path is None:
+        raise ExecutionFailed(
+            'Unsupported SSH host key type during QEMU bootstrap verification: ' + key_type
+        )
+    try:
+        status = provider.guest_exec(node, vm_id, ['/bin/cat', path], timeout=30)
+    except HTTPException as exc:
+        raise ExecutionFailed(
+            'Could not verify VM SSH host key through QEMU Guest Agent'
+        ) from exc
+    line = str(status.get('out-data') or '').strip()
+    parts = line.split()
+    if len(parts) < 2 or parts[1] != host_key.get_base64():
+        raise ExecutionFailed(
+            'VM SSH host key does not match the key observed during bootstrap'
+        )
+
+
+def ensure_qemu_guest_bootstrap(context, workspace, timeout=600):
+    bootstrap = load_qemu_bootstrap(workspace)
+    if bootstrap is None:
+        return False
+    if not (context.deployment.variables or {}).get('install_qemu_guest_agent'):
+        cleanup_qemu_bootstrap(workspace)
+        return False
+
+    target = _guest_target_credential(context)
+    bootstrap_user = bootstrap['username']
+    target_user = target['username']
+    if not POSIX_GUEST_USERNAME.fullmatch(bootstrap_user):
+        raise ExecutionFailed('Generated QEMU bootstrap username is invalid')
+    if target_user and not POSIX_GUEST_USERNAME.fullmatch(target_user):
+        raise ExecutionFailed(
+            'Guest SSH credential username must be a Linux account name '
+            '(lowercase letters, digits, underscore and hyphen; max 32 characters)'
+        )
+    if target_user == bootstrap_user:
+        raise ExecutionFailed('Guest SSH credential username collides with the temporary bootstrap account')
+
+    configured = configured_deployment_ip(context)
+    if configured:
+        wait_for_vm(context, workspace, timeout=timeout)
+        addresses = [configured]
+    else:
+        try:
+            addresses = wait_for_ip(context, workspace, timeout=min(timeout, 90))
+        except ExecutionFailed as exc:
+            raise ExecutionFailed(
+                'QEMU Guest Agent bootstrap cannot discover a DHCP address before the agent is installed. '
+                'Use a static/IPAM address or a template that already contains a working QEMU Guest Agent.'
+            ) from exc
+    address = wait_for_tcp_addresses(context, addresses, 22, timeout, 'bootstrap SSH')
+
+    try:
+        bootstrap_key = _guest_private_key(
+            bootstrap['private_key_path'].read_text(encoding='utf-8')
+        )
+    except OSError:
+        raise ExecutionFailed('QEMU Guest Agent bootstrap private key could not be read') from None
+
+    context.stage('workflow.qemu_guest_agent.bootstrap')
+    deadline = time.monotonic() + timeout
+    client = None
+    last_error = None
+    while time.monotonic() < deadline:
+        context.check()
+        try:
+            client = _guest_ssh_connect(
+                address,
+                bootstrap_user,
+                private_key=bootstrap_key,
+            )
+            break
+        except (OSError, paramiko.SSHException) as exc:
+            last_error = exc
+            time.sleep(2)
+    if client is None:
+        raise ExecutionFailed(
+            'Timed out authenticating temporary QEMU bootstrap account'
+            + (f': {last_error}' if last_error else '')
+        )
+
+    host_key = client.get_transport().get_remote_server_key()
+    install_script = r'''set -eu
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=""
+elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  SUDO="sudo -n"
+else
+  echo "bootstrap account has no passwordless sudo" >&2
+  exit 42
+fi
+if command -v apt-get >/dev/null 2>&1; then
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -y
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-guest-agent
+elif command -v dnf >/dev/null 2>&1; then
+  $SUDO dnf install -y qemu-guest-agent
+elif command -v yum >/dev/null 2>&1; then
+  $SUDO yum install -y qemu-guest-agent
+elif command -v zypper >/dev/null 2>&1; then
+  $SUDO zypper --non-interactive install qemu-guest-agent
+elif command -v apk >/dev/null 2>&1; then
+  $SUDO apk add qemu-guest-agent
+else
+  echo "unsupported package manager for qemu-guest-agent" >&2
+  exit 43
+fi
+if command -v systemctl >/dev/null 2>&1; then
+  $SUDO systemctl enable --now qemu-guest-agent
+elif command -v rc-update >/dev/null 2>&1; then
+  $SUDO rc-update add qemu-guest-agent default || true
+  $SUDO rc-service qemu-guest-agent restart
+else
+  echo "unsupported service manager for qemu-guest-agent" >&2
+  exit 44
+fi
+'''
+
+    try:
+        _guest_ssh_run(client, install_script, timeout=min(timeout, 600))
+
+        node, vm_id, provider = _workflow_vm_identity(context, workspace)
+        agent_deadline = time.monotonic() + min(timeout, 120)
+        while time.monotonic() < agent_deadline:
+            context.check()
+            try:
+                if provider.guest_agent_ready(node, vm_id):
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        else:
+            raise ExecutionFailed('QEMU Guest Agent was installed but did not become ready')
+    finally:
+        client.close()
+
+    _verify_guest_ssh_host_key(provider, node, vm_id, host_key)
+
+    if target_user:
+        quoted_user = shlex.quote(target_user)
+        quoted_key = shlex.quote(target['public_key'] or '')
+        create_user = f'''set -eu
+TARGET={quoted_user}
+if ! id "$TARGET" >/dev/null 2>&1; then
+  if command -v useradd >/dev/null 2>&1; then
+    useradd -m -s /bin/sh "$TARGET"
+  elif command -v adduser >/dev/null 2>&1; then
+    adduser -D "$TARGET"
+  else
+    echo "no supported user creation command" >&2
+    exit 45
+  fi
+fi
+HOME_DIR="$(awk -F: -v user="$TARGET" '$1 == user {{ print $6 }}' /etc/passwd)"
+if [ -z "$HOME_DIR" ]; then
+  echo "cannot resolve target home directory" >&2
+  exit 46
+fi
+if command -v usermod >/dev/null 2>&1; then
+  if getent group sudo >/dev/null 2>&1; then
+    usermod -aG sudo "$TARGET"
+  elif getent group wheel >/dev/null 2>&1; then
+    usermod -aG wheel "$TARGET"
+  fi
+elif command -v addgroup >/dev/null 2>&1 && grep -q '^wheel:' /etc/group; then
+  addgroup "$TARGET" wheel
+fi
+install -d -m 700 -o "$TARGET" -g "$(id -gn "$TARGET")" "$HOME_DIR/.ssh"
+'''
+        if target['public_key']:
+            create_user += f'''
+printf '%s\n' {quoted_key} > "$HOME_DIR/.ssh/authorized_keys"
+chown "$TARGET:$(id -gn "$TARGET")" "$HOME_DIR/.ssh/authorized_keys"
+chmod 600 "$HOME_DIR/.ssh/authorized_keys"
+'''
+        create_user += '''
+if [ "$TARGET" != "root" ] && [ -d /etc/sudoers.d ]; then
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET" > "/etc/sudoers.d/90-cloudportal-$TARGET"
+  chmod 440 "/etc/sudoers.d/90-cloudportal-$TARGET"
+fi
+'''
+        try:
+            provider.guest_exec(
+                node,
+                vm_id,
+                ['/bin/sh', '-c', create_user],
+                timeout=min(timeout, 120),
+            )
+            if target['password']:
+                provider.set_guest_user_password(
+                    node,
+                    vm_id,
+                    target_user,
+                    target['password'],
+                )
+        except HTTPException as exc:
+            raise ExecutionFailed(
+                'QEMU Guest Agent could not create the target guest credential account'
+            ) from exc
+
+    if target['credential_id']:
+        target_key = _guest_private_key(target['private_key'])
+        verify = None
+        try:
+            verify = _guest_ssh_connect(
+                address,
+                target_user,
+                private_key=target_key,
+                password=target['password'],
+                host_key=host_key,
+            )
+        except (OSError, paramiko.SSHException) as exc:
+            raise ExecutionFailed(
+                'Target guest credential was created but SSH verification failed'
+            ) from exc
+        finally:
+            if verify is not None:
+                verify.close()
+
+    quoted_bootstrap = shlex.quote(bootstrap_user)
+    cleanup_command = f'''set -eu
+BOOTSTRAP={quoted_bootstrap}
+HOME_DIR="$(awk -F: -v user="$BOOTSTRAP" '$1 == user {{ print $6 }}' /etc/passwd)"
+if [ -n "$HOME_DIR" ]; then
+  rm -f "$HOME_DIR/.ssh/authorized_keys"
+fi
+passwd -l "$BOOTSTRAP" >/dev/null 2>&1 || true
+if command -v userdel >/dev/null 2>&1; then
+  userdel -r "$BOOTSTRAP" >/dev/null 2>&1 || true
+elif command -v deluser >/dev/null 2>&1; then
+  deluser --remove-home "$BOOTSTRAP" >/dev/null 2>&1 || true
+fi
+'''
+    try:
+        provider.guest_exec(
+            node,
+            vm_id,
+            ['/bin/sh', '-c', cleanup_command],
+            timeout=min(timeout, 120),
+        )
+    except HTTPException as exc:
+        raise ExecutionFailed('Failed to remove temporary QEMU bootstrap account') from exc
+
+    cleanup_qemu_bootstrap(workspace)
+    context.log(
+        'qemu-guest-agent.bootstrap.completed: agent ready; target credential prepared; '
+        'temporary account cleanup scheduled'
+    )
+    return True
+
+
 def wait_for_ansible_transport(context, workspace, timeout=600, addresses=None):
     addresses = list(addresses or wait_for_ip(context, workspace, timeout=timeout))
     credential_type = getattr(context.ansible_credential, 'type', None)
@@ -897,6 +1248,11 @@ def run_blueprint_workflow(context, executor):
         runtime['plan_sha256'] = None
         delete_plan(context.deployment.id)
         runtime['workspace'] = workspace
+        ensure_qemu_guest_bootstrap(
+            context,
+            workspace,
+            timeout=min(settings().execution_timeout, 900),
+        )
         runtime['applied'] = True
         context.stage('inventory.synchronizing')
         inventory = register_managed_inventory(context, workspace)
@@ -918,6 +1274,11 @@ def run_blueprint_workflow(context, executor):
 
     def workspace_for(step_type):
         if runtime['workspace'] is not None and runtime['applied']:
+            ensure_qemu_guest_bootstrap(
+                context,
+                runtime['workspace'],
+                timeout=min(settings().execution_timeout, 900),
+            )
             return runtime['workspace']
         if explicit_apply_ids:
             raise ExecutionFailed(

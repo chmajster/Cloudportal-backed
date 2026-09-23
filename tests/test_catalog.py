@@ -5,7 +5,7 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert {'proxmox-vm', 'aws-ec2', 'azure-linux-vm', 'openstack-vm', 'vmware-vsphere-vm'} <= set(items)
     assert items['aws-ec2']['provider'] == 'aws'
     assert 'security_group_ids' in items['aws-ec2']['variables_schema']['properties']
-    assert items['proxmox-vm']['version'] == 4
+    assert items['proxmox-vm']['version'] == 5
     proxmox_properties = items['proxmox-vm']['variables_schema']['properties']
     assert {'tags', 'dns_servers', 'dns_domain', 'install_qemu_guest_agent', 'cloud_init_snippet_storage'} <= set(proxmox_properties)
 
@@ -24,6 +24,9 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert 'qemu-guest-agent' in terraform_source
     assert 'install_qemu_guest_agent' in terraform_source
     assert 'cloud_init_snippet_storage' in terraform_source
+    assert 'qemu_guest_agent_bootstrap' in terraform_source
+    assert 'bootstrap_username' in terraform_source
+    assert 'bootstrap_public_key' in terraform_source
     assert 'output "primary_ip"' in terraform_source
     assert 'value = local.configured_primary_ip' in terraform_source
     assert 'ipv4_addresses' not in terraform_source

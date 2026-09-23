@@ -1,4 +1,5 @@
 import json
+import stat
 import uuid
 from types import SimpleNamespace
 from datetime import timedelta
@@ -13,7 +14,9 @@ from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User
 from app.quotas.models import QuotaAllocation, QuotaReservation
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
-from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, terraform_plan_command, workspace_lock
+from app.executors.terraform import (TerraformExecutor, cleanup_qemu_bootstrap, load_qemu_bootstrap,
+                                     prepare_qemu_bootstrap, proxmox_ssh_preflight,
+                                     terraform_plan_command, workspace_lock)
 from app.deployments.recreate import recreate_resource_address
 from app.jobs.worker import execute
 from app.jobs.queue import reconcile_cancelled_jobs, reconcile_persisted_inventory, reconcile_stale_jobs
@@ -790,6 +793,22 @@ def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
     assert 'TimeoutError' not in output and 'Error connecting' not in output
 
 
+def test_qemu_guest_bootstrap_key_is_ephemeral_and_reused(tmp_path):
+    first = prepare_qemu_bootstrap(tmp_path, '6b517d82-6bf3-4a77-a85e-acdeef123456', 'ssh_auth_missing')
+    second = prepare_qemu_bootstrap(tmp_path, 'different-job-id', 'ssh_unreachable')
+
+    assert first['username'].startswith('cpbootstrap')
+    assert first['username'] == second['username']
+    assert first['public_key'] == second['public_key']
+    assert first['reason'] == 'ssh_auth_missing'
+    assert stat.S_IMODE(first['private_key_path'].stat().st_mode) == 0o600
+    assert load_qemu_bootstrap(tmp_path)['public_key'] == first['public_key']
+
+    cleanup_qemu_bootstrap(tmp_path)
+    assert load_qemu_bootstrap(tmp_path) is None
+    assert not first['private_key_path'].exists()
+
+
 def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
     credential = SimpleNamespace(endpoint='https://pve.example.com:8006')
 
@@ -804,6 +823,67 @@ def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
 
     with pytest.raises(ExecutionFailed, match='SSH preflight failed'):
         proxmox_ssh_preflight(credential, {'PROXMOX_VE_SSH_PORT': '22'})
+
+
+def test_qemu_bootstrap_verifies_ssh_host_key_through_guest_agent():
+    from app.jobs.worker import _verify_guest_ssh_host_key
+
+    class HostKey:
+        def get_name(self):
+            return 'ssh-ed25519'
+
+        def get_base64(self):
+            return 'AAAATESTKEY'
+
+    class Provider:
+        def guest_exec(self, node, vm_id, command, timeout=30):
+            assert node == 'pve'
+            assert vm_id == 101
+            assert command == ['/bin/cat', '/etc/ssh/ssh_host_ed25519_key.pub']
+            return {'exited': True, 'exitcode': 0, 'out-data': 'ssh-ed25519 AAAATESTKEY vm\n'}
+
+    _verify_guest_ssh_host_key(Provider(), 'pve', 101, HostKey())
+
+
+def test_proxmox_guest_exec_and_password_use_guest_agent_api(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    credential, _, _ = resources(client, headers)
+    with session() as db:
+        row = db.get(Credential, credential['id'])
+        provider = ProxmoxProvider(row)
+
+    requests = []
+    statuses = iter([
+        {'exited': False},
+        {'exited': True, 'exitcode': 0, 'out-data': 'ok'},
+    ])
+
+    def fake_request(method, path, *, data=None, json_data=None):
+        requests.append((method, path, data, json_data))
+        if path.endswith('/agent/exec'):
+            return {'pid': 42}
+        if path.endswith('/agent/set-user-password'):
+            return {'result': None}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(provider, '_request', fake_request)
+    monkeypatch.setattr(provider, '_get', lambda path: next(statuses))
+    monkeypatch.setattr('app.providers.proxmox.sleep', lambda seconds: None)
+
+    status = provider.guest_exec('pve', 101, ['/bin/sh', '-c', 'id'], timeout=5)
+    assert status['exitcode'] == 0
+    assert requests[0][0] == 'POST'
+    assert requests[0][1].endswith('/nodes/pve/qemu/101/agent/exec')
+    assert requests[0][3] == {'command': ['/bin/sh', '-c', 'id']}
+
+    provider.set_guest_user_password('pve', 101, 'clouduser', 'secret-value')
+    assert requests[-1][1].endswith('/agent/set-user-password')
+    assert requests[-1][3] == {
+        'username': 'clouduser',
+        'password': 'secret-value',
+        'crypted': False,
+    }
 
 
 def test_provider_qemu_agent_readiness_endpoint(client, headers, monkeypatch):

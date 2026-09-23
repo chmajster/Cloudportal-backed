@@ -2,7 +2,7 @@ import ipaddress
 import io
 import os
 import re
-from time import monotonic
+from time import monotonic, sleep
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
@@ -522,7 +522,7 @@ class ProxmoxProvider(InfrastructureProvider):
         except (KeyError, ValueError, TypeError):
             return {'ok': False, 'retryable': False, 'reason': 'invalid_response'}
 
-    def _request(self, method, path, *, data=None):
+    def _request(self, method, path, *, data=None, json_data=None):
         try:
             with httpx.Client(
                 verify=self.verify_ssl,
@@ -545,7 +545,13 @@ class ProxmoxProvider(InfrastructureProvider):
                     ticket = auth.json()['data']
                     client.cookies.set('PVEAuthCookie', ticket['ticket'])
                     headers['CSRFPreventionToken'] = ticket['CSRFPreventionToken']
-                response = client.request(method, self.endpoint + path, headers=headers, data=data)
+                response = client.request(
+                    method,
+                    self.endpoint + path,
+                    headers=headers,
+                    data=data,
+                    json=json_data,
+                )
                 response.raise_for_status()
                 body = response.json()
                 return body.get('data')
@@ -612,6 +618,50 @@ class ProxmoxProvider(InfrastructureProvider):
             f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/ping'
         )
         return data is not None
+
+    def guest_exec(self, node, vm_id, command, timeout=120):
+        argv = [str(value) for value in command if str(value)]
+        if not argv:
+            raise HTTPException(422, 'QEMU Guest Agent command cannot be empty')
+        base = f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent'
+        result = self._request(
+            'POST',
+            base + '/exec',
+            json_data={'command': argv},
+        ) or {}
+        try:
+            pid = int(result['pid'])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(502, 'QEMU Guest Agent did not return a command PID') from None
+
+        deadline = monotonic() + max(1, int(timeout))
+        while monotonic() < deadline:
+            status = self._get(base + '/exec-status?pid=' + str(pid)) or {}
+            if status.get('exited') is True:
+                exitcode = status.get('exitcode')
+                if exitcode not in {None, 0}:
+                    detail = str(status.get('err-data') or '').strip()
+                    raise HTTPException(
+                        502,
+                        'QEMU Guest Agent command failed'
+                        + (': ' + detail[-1000:] if detail else f' with exit code {exitcode}'),
+                    )
+                return status
+            sleep(1)
+        raise HTTPException(504, 'Timed out waiting for QEMU Guest Agent command')
+
+    def set_guest_user_password(self, node, vm_id, username, password):
+        if not username or not password:
+            raise HTTPException(422, 'Guest username and password are required')
+        return self._request(
+            'POST',
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/set-user-password',
+            json_data={
+                'username': str(username),
+                'password': str(password),
+                'crypted': False,
+            },
+        )
 
     def _primary_nic_mac(self, node, vm_id):
         try:

@@ -298,7 +298,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       field('Serwery DNS', 'dns_servers', { value: (variables.dns_servers || []).join(', '), placeholder: '1.1.1.1, 8.8.8.8' }),
       field('Domena wyszukiwania DNS', 'dns_domain', { value: variables.dns_domain || '', placeholder: 'lab.example.com' }),
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '5. Workflow' }), node('span', { text: 'Bez ponownego wybierania obrazu, hostname, tagów ani cloud-init.' })),
-      checkboxField('Instaluj qemu-guest-agent przez cloud-init', 'install_qemu_guest_agent', variables.install_qemu_guest_agent ?? true),
+      checkboxField('Instaluj QEMU Guest Agent automatycznie', 'install_qemu_guest_agent', variables.install_qemu_guest_agent ?? true),
       checkboxField('Czekaj na QEMU Guest Agent po Terraform apply', 'wait_agent', item ? (item.workflow || []).some(step => step.type === 'wait_for_agent') : true),
       playbookField, ansibleCredentialField,
       node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),

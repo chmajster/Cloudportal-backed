@@ -263,7 +263,7 @@
               || state.snippetStorages[0];
             state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || '');
           }
-          if (!state.snippetStorages.length) { state.cloudInitSnippetStorage = ''; state.installQemuGuestAgent = false; }
+          if (!state.snippetStorages.length) state.cloudInitSnippetStorage = '';
           state.networks = (networkResult.items || []).filter(value => value.iface);
           if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
             state.storage = String(state.storages[0]?.storage || state.storages[0]?.id || '');
@@ -480,9 +480,6 @@
           }
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
-          if (state.providerType === 'proxmox' && state.installQemuGuestAgent && !state.cloudInitSnippetStorage) {
-            errors.install_qemu_guest_agent = 'Instalacja QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.';
-          }
         }
         state.errors = errors;
         return !Object.keys(errors).length;
@@ -1071,9 +1068,9 @@
         const isProxmox = state.providerType === 'proxmox';
         const snippetAvailable = Boolean(state.cloudInitSnippetStorage);
         const sshReady = state.qemuAgentSshReady !== false;
-        const install = checkboxField('Instaluj qemu-guest-agent przez cloud-init', 'install_qemu_guest_agent', state.installQemuGuestAgent);
+        const install = checkboxField('Instaluj QEMU Guest Agent automatycznie', 'install_qemu_guest_agent', state.installQemuGuestAgent);
         const installControl = install.querySelector('input');
-        installControl.disabled = !isProxmox || !snippetAvailable;
+        installControl.disabled = !isProxmox;
         installControl.addEventListener('change', event => { state.installQemuGuestAgent = event.currentTarget.checked; render(); });
         const wait = checkboxField('Czekaj na QEMU Guest Agent po Terraform apply', 'wait_agent', state.waitAgent);
         const waitControl = wait.querySelector('input');
@@ -1089,12 +1086,9 @@
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki runtime, zależności, retry, timeout, rollback i conditions.'
               : 'Hostname, IPAM, cloud-init i tagi są przygotowywane przed runtime; workflow pokazuje tylko faktycznie wykonywane operacje.' })),
-          isProxmox && !snippetAvailable ? node('div', { class: 'callout warning' },
-            node('strong', { text: 'Automatyczna instalacja QEMU Guest Agent niedostępna' }),
-            node('p', { text: 'Na wybranym node nie wykryto storage obsługującego snippets. Możesz nadal czekać na agenta już obecnego w template, ale instalacja przez cloud-init wymaga content „Snippets”.' })) : null,
-          isProxmox && state.installQemuGuestAgent && !sshReady ? node('div', { class: 'callout warning' },
-            node('strong', { text: 'Preflight SSH Proxmox nie jest gotowy' }),
-            node('p', { text: 'Instalację można włączyć i zapisać w Blueprintcie, ale wykonanie będzie zablokowane do czasu poprawnego preflight SSH (' + (state.qemuAgentSshReason || 'ssh_not_ready') + '). Sprawdź SSH, firewall oraz PROXMOX_VE_SSH_*.' })) : null,
+          isProxmox && state.installQemuGuestAgent && (!snippetAvailable || !sshReady) ? node('div', { class: 'callout info' },
+            node('strong', { text: 'QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM' }),
+            node('p', { text: 'Brak gotowego uploadu snippetów/SSH do noda PVE (' + (state.qemuAgentSshReason || (snippetAvailable ? 'ssh_not_ready' : 'snippets_unavailable')) + '). Workflow utworzy jednorazowe konto przez natywny cloud-init, zainstaluje agenta w VM, utworzy konto docelowe z Credentiala i usunie konto tymczasowe. Przy DHCP template musi już udostępniać adres przez Guest Agent albo Blueprint powinien używać statycznego IP/IPAM.' })) : null,
           isProxmox ? install : null,
           isProxmox ? wait : null,
           toggle,

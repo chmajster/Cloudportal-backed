@@ -148,15 +148,6 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         )
     if data.deployment.ansible and provider.type != 'proxmox':
         raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
-    if (
-        data.deployment.template == 'proxmox-vm'
-        and data.deployment.variables.get('install_qemu_guest_agent') is True
-        and not data.deployment.variables.get('cloud_init_snippet_storage')
-    ):
-        raise HTTPException(
-            422,
-            'QEMU Guest Agent installation requires cloud_init_snippet_storage',
-        )
     if data.deployment.hostname_scheme_id:
         scheme = find(db, HostnameScheme, data.deployment.hostname_scheme_id)
         if not scheme.is_active:
@@ -340,15 +331,6 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         provider = find(db, Provider, parsed.provider_id)
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
-        if provider.type == 'proxmox' and parsed.variables.get('install_qemu_guest_agent'):
-            readiness = provider_for(find(db, Credential, parsed.credentials_id)).ssh_preflight()
-            if not readiness.get('ok'):
-                reason = readiness.get('reason') or 'ssh_not_ready'
-                raise HTTPException(
-                    409,
-                    'QEMU Guest Agent provisioning requires Proxmox SSH readiness; '
-                    f'preflight failed: {reason}',
-                )
         credential_ids = {parsed.credentials_id} | ({parsed.ansible.credentials_id} if parsed.ansible else set())
         if guest_credential_id:
             credential_ids.add(guest_credential_id)

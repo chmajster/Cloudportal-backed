@@ -349,12 +349,6 @@ class VMVariables(Input):
     dns_domain: Annotated[str | None, Field(max_length=253)] = None
     tags: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
 
-    @model_validator(mode='after')
-    def qemu_agent_snippet_storage(self):
-        if self.install_qemu_guest_agent and not self.cloud_init_snippet_storage:
-            raise ValueError('QEMU Guest Agent installation requires cloud_init_snippet_storage')
-        return self
-
     @field_validator('ssh_public_key')
     @classmethod
     def ssh_key(cls, value):

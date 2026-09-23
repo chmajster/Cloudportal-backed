@@ -461,13 +461,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Brak uprawnień do uruchomienia" in script
     assert script.count("workflowNeedsTags(") >= 2
     assert "Brak credentiali SSH z hasłem lub kluczem prywatnym" in script
-    assert "Automatyczna instalacja QEMU Guest Agent niedostępna" in script
-    assert "Preflight SSH Proxmox nie jest gotowy" in script
-    assert "storage obsługującego snippets" in script
+    assert "QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM" in script
+    assert "jednorazowe konto przez natywny cloud-init" in script
+    assert "statycznego IP/IPAM" in script
     assert "Credential ustawiany na VM" in script
     assert "blueprint-wizard-ssh-credential-users" in script
     assert "wybrać użytkownika z zapisanych Credentiali" in script
-    assert "Instaluj qemu-guest-agent przez cloud-init" in script
+    assert "Instaluj QEMU Guest Agent automatycznie" in script
     assert "Czekaj na QEMU Guest Agent po Terraform apply" in script
     assert "install_qemu_guest_agent" in script
     assert "cloud_init_snippet_storage" in script

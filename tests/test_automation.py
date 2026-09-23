@@ -694,7 +694,7 @@ def test_blueprint_hostname_defaults_must_match_pattern(client, headers):
     assert 'tokens not used' in response.text
 
 
-def test_blueprint_qemu_agent_requires_explicit_snippet_storage(client, headers):
+def test_blueprint_qemu_agent_allows_guest_bootstrap_without_snippet_storage(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     variables = {
         **deployment_payload['variables'],
@@ -717,8 +717,9 @@ def test_blueprint_qemu_agent_requires_explicit_snippet_storage(client, headers)
             {'id': 'agent', 'type': 'wait_for_agent', 'depends_on': ['apply']},
         ],
     })
-    assert response.status_code == 422
-    assert 'cloud_init_snippet_storage' in response.text
+    assert response.status_code == 201, response.text
+    assert response.json()['deployment']['variables']['install_qemu_guest_agent'] is True
+    assert response.json()['deployment']['variables'].get('cloud_init_snippet_storage') is None
 
 
 def test_blueprint_rejects_declarative_step_after_apply(client, headers):
@@ -798,7 +799,7 @@ def test_blueprint_allows_destroy_only_as_rollback_target(client, headers):
     assert valid.status_code == 201, valid.text
 
 
-def test_blueprint_execution_rejects_qemu_agent_when_ssh_preflight_fails(client, headers, monkeypatch):
+def test_blueprint_execution_does_not_block_on_proxmox_ssh_preflight(client, headers, monkeypatch):
     credential, provider, deployment_payload = resources(client, headers)
     created = client.post('/api/v1/blueprints', headers=headers, json={
         'slug': 'ssh-preflight-failure',
@@ -831,8 +832,8 @@ def test_blueprint_execution_rejects_qemu_agent_when_ssh_preflight_fails(client,
         headers=key(headers),
         json={},
     )
-    assert execution.status_code == 409
-    assert 'ssh_unreachable' in execution.text
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['variables']['install_qemu_guest_agent'] is True
 
 
 def test_blueprint_rejects_runtime_controls_on_legacy_markers(client, headers):

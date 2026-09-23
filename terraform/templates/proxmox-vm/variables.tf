@@ -28,6 +28,18 @@ variable "install_qemu_guest_agent" {
   type    = bool
   default = false
 }
+variable "qemu_guest_agent_bootstrap" {
+  type    = bool
+  default = false
+}
+variable "bootstrap_username" {
+  type    = string
+  default = "cloudportal-bootstrap"
+}
+variable "bootstrap_public_key" {
+  type    = string
+  default = null
+}
 variable "cloud_init_snippet_storage" {
   type    = string
   default = null

@@ -11,7 +11,7 @@ terraform {
 provider "proxmox" {}
 
 resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init" {
-  count        = var.install_qemu_guest_agent ? 1 : 0
+  count        = var.install_qemu_guest_agent && !var.qemu_guest_agent_bootstrap ? 1 : 0
   content_type = "snippets"
   datastore_id = var.cloud_init_snippet_storage
   node_name    = var.node
@@ -55,7 +55,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   agent { enabled = true }
   initialization {
     datastore_id        = var.storage
-    vendor_data_file_id = var.install_qemu_guest_agent ? proxmox_virtual_environment_file.qemu_guest_agent_cloud_init[0].id : null
+    vendor_data_file_id = var.install_qemu_guest_agent && !var.qemu_guest_agent_bootstrap ? proxmox_virtual_environment_file.qemu_guest_agent_cloud_init[0].id : null
     dynamic "dns" {
       for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
       content {
@@ -70,9 +70,9 @@ resource "proxmox_virtual_environment_vm" "vm" {
       }
     }
     user_account {
-      username = var.ssh_username
-      password = var.ssh_password
-      keys     = var.ssh_public_key == null ? [] : [var.ssh_public_key]
+      username = var.qemu_guest_agent_bootstrap ? var.bootstrap_username : var.ssh_username
+      password = var.qemu_guest_agent_bootstrap ? null : var.ssh_password
+      keys     = var.qemu_guest_agent_bootstrap ? compact([var.bootstrap_public_key]) : (var.ssh_public_key == null ? [] : [var.ssh_public_key])
     }
   }
 }
