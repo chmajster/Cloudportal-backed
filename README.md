@@ -82,13 +82,15 @@ curl -fsSL -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/
 ```
 
 
-Opcjonalny automatyczny backup PostgreSQL można włączyć podczas instalacji. Timer systemd uruchamia backup codziennie, a retencja usuwa wyłącznie katalogi backupów starsze niż wskazany limit:
+Opcjonalny historyczny backup samego PostgreSQL można nadal włączyć podczas instalacji. Timer systemd uruchamia go codziennie i utrzymuje zadaną retencję:
 
 ```bash
 sudo ./install.sh --host backend.example.com --enable-backups --backup-retention-days 14
 ```
 
-Ręczne komendy po instalacji: `cloudportal-backup` oraz destrukcyjne `cloudportal-restore --backup KATALOG --yes-replace-database`. Restore weryfikuje SHA-256 dumpa i fingerprint istniejącego master key; master key nie jest kopiowany do katalogu backupu.
+Pełny backup instancji i migracja między serwerami są obsługiwane przede wszystkim przez panel WWW: **Narzędzia → Backup i migracja**. Przycisk **Utwórz i pobierz backup** uruchamia asynchroniczny job i po zakończeniu pobiera jeden plik `.cpb` przez przeglądarkę. Nie jest wymagany SSH, SCP ani ręczne kopiowanie dumpa PostgreSQL. Restore działa w tym samym widoku przez upload lokalnego pliku `.cpb`, walidację, plan migracji, safety backup, wpisanie `RESTORE`, przywrócenie bazy, migracje Alembic i health validation.
+
+CLI `cloudportal-backup` / `cloudportal-restore` pozostaje narzędziem zgodnościowym dla starszego backupu samej bazy. Nie jest podstawowym workflow migracji całej instancji.
 
 Jeżeli repozytorium zostanie przełączone na prywatne, anonimowe pobranie zwróci 404. Wtedy zapisz w `/root/cloudportal-github.conf` (właściciel root, tryb 600) konfigurację curl z tokenem GitHub mającym wyłącznie dostęp Contents: read do tego repozytorium:
 
@@ -108,13 +110,26 @@ Instalator generuje certyfikat self-signed, jeżeli nie podano `--cert-file` i `
 
 Dopiero po udanym healthchecku instalator tworzy administratora z początkowymi danymi **`admin` / `admin`** oraz losowy **Initial Administrator Token**. Token jest wyświetlany tylko raz na standardowym wyjściu. Hasło jest przechowywane wyłącznie jako hash Argon2id, a token jako SHA-256; instalator nie zapisuje ich jawnie do plików ani logów. Sesja utworzona początkowym hasłem może wejść tylko do widoku konta i zmienić hasło. Initial Administrator Token nadal umożliwia jednorazową konfigurację połączenia PHP.
 
-Ponowne uruchomienie zachowuje bazę, konta, tokeny, klucz szyfrujący, Redis i Terraform state. Brak istniejącego master key zatrzymuje reinstalację zamiast tworzyć niezgodny klucz. Kod jest instalowany w wersjonowanych katalogach `/opt/cloudportal-backed/releases`; dane pozostają w `/var/lib/cloudportal-backed`. Kopia zapasowa musi obejmować **bazę, master key i workspaces**; klucz przechowuj oddzielnie od kopii bazy.
+Ponowne uruchomienie zachowuje bazę, konta, tokeny, klucz szyfrujący, Redis i Terraform state. Brak istniejącego master key zatrzymuje reinstalację zamiast tworzyć niezgodny klucz. Kod jest instalowany w wersjonowanych katalogach `/opt/cloudportal-backed/releases`; dane pozostają w `/var/lib/cloudportal-backed`. Pełny backup `.cpb` z panelu zawiera dump PostgreSQL, bezpieczny snapshot konfiguracji i — dla backendu `local` — `master.key`; dla AWS KMS/Vault zawiera tylko identyfikatory backendu, nigdy token Vault ani cloud credentials. Plik `.cpb` należy traktować jak sekret administracyjny.
 
 ## Lokalny panel administracyjny
 
 Backend udostępnia własny panel pod `https://HOST:PORT/ui/`; wejście na `/` przekierowuje do panelu. Przy pierwszym logowaniu użyj `admin` / `admin` i ustaw nowe hasło o długości co najmniej 12 znaków. Do czasu zmiany hasła pozostałe operacje sesji administratora są blokowane przez API. Panel umożliwia zarządzanie użytkownikami, rolami i permissions, tokenami API, credentialami, providerami, deploymentami, zadaniami i audytem oraz zmianę własnego hasła.
 
 Panel korzysta z tego samego API i tego samego RBAC co pozostali klienci — nie omija autoryzacji backendu. Elementy nawigacji i akcje są ukrywane zgodnie z efektywnymi permissions, ale każdą operację ponownie weryfikuje API. Access i refresh token są przechowywane wyłącznie w `sessionStorage`, więc zamknięcie karty usuwa lokalną sesję przeglądarki. Panel oraz jego zasoby są serwowane lokalnie przez backend, bez zewnętrznych skryptów i fontów.
+
+
+### Backup i migracja instancji
+
+Widok **Narzędzia → Backup i migracja** pokazuje metadane bieżącej instancji, rzeczywiste etapy budowania backupu oraz ostatnio wygenerowane pliki. Generowanie jest asynchroniczne: `POST /api/v1/instance-backups` zwraca `202`, a UI odpytuje status i pobiera gotowy plik z chronionego `GET /api/v1/instance-backups/{id}/download`. Backup nie jest kodowany do JSON/base64.
+
+Pliki gotowe do pobrania są przechowywane w kontrolowanym katalogu pod `/var/lib/cloudportal-backed/instance-backups/` z uprawnieniami katalogów `0700` i plików `0600`. Domyślna retencja downloadu wynosi 24 godziny (`CP_INSTANCE_BACKUP_DOWNLOAD_RETENTION_HOURS`). Dispatcher usuwa po niej fizyczny plik, pozostawiając metadane/audyt. Maksymalny upload to domyślnie 10 GiB (`CP_INSTANCE_BACKUP_MAX_UPLOAD_BYTES`) i jest egzekwowany podczas strumieniowania multipart.
+
+`.cpb` jest archiwum z wersjonowanym manifestem, dumpem PostgreSQL, bezsekretnym snapshotem ustawień runtime, SHA-256 każdego elementu i materiałem kryptograficznym wymaganym do migracji. Parser akceptuje wyłącznie zdefiniowaną whitelistę ścieżek, odrzuca linki, path traversal, nadmiarowe elementy, zły magic/type, brak manifestu, nieobsługiwany format i błędne checksumy.
+
+Restore najpierw uploaduje i waliduje plik, pokazuje źródło/cel oraz liczniki zasobów, zachowuje lokalne ustawienia nowego serwera (hostname, public URL, HTTPS port, worker count i konfigurację hosta Docker), a przed wykonaniem wymaga wpisania `RESTORE`. Domyślnie powstaje safety backup bieżącej instancji. Przy błędzie po rozpoczęciu destrukcyjnego restore worker próbuje rollback do safety backupu. Po odtworzeniu wykonywane są migracje Alembic, walidacja sekretów i health check.
+
+Uprawnienia są rozdzielone na `instance_backups.read/create/download/upload/verify/delete/restore`. Wbudowany Administrator otrzymuje je przez synchronizację RBAC; nie są domyślnie nadawane rolom o mniejszym zaufaniu. Audyt rejestruje utworzenie, pobranie, walidację, usunięcie, upload oraz rozpoczęcie/zakończenie/niepowodzenie restore bez treści backupu i bez wartości sekretów.
 
 ## Podłączenie PHP
 
