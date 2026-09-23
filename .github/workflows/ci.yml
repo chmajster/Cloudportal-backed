@@ -147,7 +147,8 @@ jobs:
 
           sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status-recovered-output 2>&1
           grep -Fq 'Wykryto niesprawny stack Docker; uruchamiam jedną automatyczną próbę naprawy.' /tmp/cloudportal-docker-status-recovered-output
-          grep -Fq 'Docker Compose przyjął operację naprawczą.' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'Naprawiam zależności selektywnie; zdrowe kontenery nie będą odtwarzane.' /tmp/cloudportal-docker-status-recovered-output
+          grep -Fq 'Sieć backend: nowy kontener osiąga PostgreSQL:5432 i Redis:6379.' /tmp/cloudportal-docker-status-recovered-output
           grep -Fq 'Auto-naprawa Docker zakończyła się powodzeniem.' /tmp/cloudportal-docker-status-recovered-output
           grep -Fq 'postgres: running, health=healthy' /tmp/cloudportal-docker-status-recovered-output
           grep -Fq 'redis: running, health=healthy' /tmp/cloudportal-docker-status-recovered-output
