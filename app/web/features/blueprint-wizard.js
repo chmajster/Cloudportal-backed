@@ -113,7 +113,7 @@
   }
 
   async function openBlueprintWizard(options = {}) {
-    if (!parts.core || !parts.hostname || !parts.network) {
+    if (!parts.core || !parts.hostname || !parts.network || !parts.scope) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
       return;
     }
@@ -134,19 +134,10 @@
       ]);
 
       const state = parts.core.stateDefaults();
-      const tenantById = new Map(tenants.map(value => [String(value.id), value]));
-      const activeProjects = projects.filter(value => {
-        if (value.status && value.status !== 'active') return false;
-        const tenant = tenantById.get(String(value.tenant_id));
-        return !tenant || !tenant.status || tenant.status === 'active';
-      });
-      if (!activeProjects.length) {
-        throw new Error('Brak aktywnego projektu, w którym można utworzyć Blueprint.');
-      }
-
+      const scopeData = parts.scope.prepare(tenants, projects, projectContext, state);
       const data = {
-        tenants: tenants.filter(value => !value.status || value.status === 'active'),
-        projects: activeProjects,
+        tenants: scopeData.tenants,
+        projects: scopeData.projects,
         providers: [],
         templates: [],
         schemes: [],
@@ -160,126 +151,7 @@
         vmClassification,
       };
 
-      function projectsForTenant(tenantId) {
-        return data.projects.filter(value => String(value.tenant_id) === String(tenantId));
-      }
-
-      function tenantRowsForProjects() {
-        const ids = [...new Set(data.projects.map(value => String(value.tenant_id)))];
-        return ids.map(id => data.tenants.find(value => String(value.id) === id) || {
-          id,
-          name: id,
-        });
-      }
-
-      function tenantLabel(tenantId) {
-        return tenantRowsForProjects().find(value => String(value.id) === String(tenantId))?.name || String(tenantId || '—');
-      }
-
-      function projectLabel(projectId) {
-        return data.projects.find(value => String(value.id) === String(projectId))?.name || String(projectId || '—');
-      }
-
-      function normalizeScopeSelection(preferredProjectId = '') {
-        let project = data.projects.find(value => String(value.id) === String(preferredProjectId || ''));
-        if (!project && state.projectId) {
-          project = data.projects.find(value => String(value.id) === String(state.projectId));
-        }
-        if (!project && state.tenantId) {
-          project = projectsForTenant(state.tenantId)[0];
-        }
-        project ||= data.projects[0];
-        state.tenantId = String(project.tenant_id);
-        state.projectId = String(project.id);
-      }
-
-      normalizeScopeSelection(projectContext?.selected?.id);
-
-      const managerRequired = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
-      const defaultManagerRoleNames = new Set(['Administrator', 'Infrastructure Administrator']);
-
-      function refreshManagerRoles(resetSelection = false) {
-        const dedicatedElsewhere = new Set(
-          data.blueprints.flatMap(value => value.manager_role_ids || []).map(Number)
-        );
-        data.managerRoles = data.roles.filter(role =>
-          !dedicatedElsewhere.has(Number(role.id))
-          && [...managerRequired].every(permission => (role.permissions || []).includes(permission)));
-        const available = new Set(data.managerRoles.map(role => Number(role.id)));
-        state.managerRoleIds = resetSelection
-          ? data.managerRoles.filter(role => defaultManagerRoleNames.has(role.name)).map(role => Number(role.id))
-          : state.managerRoleIds.filter(id => available.has(Number(id)));
-      }
-
-      function resetScopeDependentState() {
-        const preferred = data.providers.find(value => value.type === 'proxmox') || data.providers[0];
-        state.providerId = String(preferred.id);
-        state.providerType = preferred.type;
-        state.providerCredentialId = String(preferred.credentials_id || '');
-        state.terraformTemplateId = data.templates.find(value => value.provider === preferred.type)?.id || '';
-        state.node = '';
-        state.templates = [];
-        state.nodes = [];
-        state.storages = [];
-        state.snippetStorages = [];
-        state.networks = [];
-        state.selectedTemplateVmid = '';
-        state.selectedTemplateNode = '';
-        state.selectedTemplateName = '';
-        state.hostnameSchemeId = String(data.schemes[0]?.id || '');
-        state.hostnameEnabled = Boolean(allowed('hostnames.read') && data.schemes.length);
-        state.ipamPoolId = data.pools.some(value => String(value.id) === String(state.ipamPoolId))
-          ? state.ipamPoolId : '';
-        state.guestCredentialId = data.credentials.some(value => String(value.id) === String(state.guestCredentialId))
-          ? state.guestCredentialId : '';
-        state.ansibleCredentialId = data.credentials.some(value => String(value.id) === String(state.ansibleCredentialId))
-          ? state.ansibleCredentialId : '';
-
-        const enabledEnvironments = ['test', 'dev', 'nonprod', 'prod']
-          .filter(name => data.vmClassification?.environments?.[name] !== false);
-        state.environment = state.selectEnvironmentOnExecute ? '' : (enabledEnvironments[0] || '');
-        state.apmid = state.selectApmidOnExecute ? '' : String(data.vmClassification?.apmids?.[0] || '');
-        if (state.selectEnvironmentOnExecute) {
-          delete state.hostnameValues.env;
-          delete state.hostnameValues.environment;
-        } else if (state.environment) {
-          state.hostnameValues.env = state.environment;
-          state.hostnameValues.environment = state.environment;
-        }
-        state.hostnameValues.location = String(data.vmClassification?.hostname_defaults?.location || 'wro');
-        state.hostnameValues.role = String(data.vmClassification?.hostname_defaults?.role || 'server');
-
-        if (options.hostnameSchemeId && data.schemes.some(value => String(value.id) === String(options.hostnameSchemeId))) {
-          state.hostnameSchemeId = String(options.hostnameSchemeId);
-          state.hostnameEnabled = true;
-        }
-      }
-
-      async function loadScopedResources(resetManagerSelection = false) {
-        const requestOptions = { headers: parts.core.scopeHeaders(state) };
-        const [providers, templates, schemes, pools, credentials, blueprints] = await Promise.all([
-          safeApi('/providers?limit=200', [], requestOptions),
-          safeApi('/templates', [], requestOptions),
-          allowed('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
-          allowed('ipam.read') ? safeApi('/ipam/pools?limit=200', [], requestOptions) : Promise.resolve([]),
-          safeApi('/credentials?limit=200', [], requestOptions),
-          allowed('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
-        ]);
-
-        data.providers = providers;
-        data.templates = templates.filter(value => value.enabled !== false);
-        data.schemes = schemes.filter(value => value.is_active);
-        data.pools = pools;
-        data.credentials = credentials;
-        data.blueprints = blueprints;
-        if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
-        if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
-
-        resetScopeDependentState();
-        refreshManagerRoles(resetManagerSelection);
-        await discoverProvider(state.providerId);
-      }
-
+      let blueprintScope = null;
       let bodyRoot = null;
       let navRoot = null;
       let footerRoot = null;
@@ -631,49 +503,12 @@
               { value: 'opentofu', label: 'OpenTofu' },
             ], state.executor)));
 
-        const scopeFields = [];
-        const scopeTenants = tenantRowsForProjects();
-        const scopeProjects = projectsForTenant(state.tenantId);
-        if (scopeTenants.length > 1) {
-          const tenantField = selectField('Tenant', 'tenant_id',
-            scopeTenants.map(value => ({ value: String(value.id), label: value.name })),
-            state.tenantId, { required: true, wide: true });
-          tenantField.querySelector('select').addEventListener('change', async event => {
-            state.tenantId = event.currentTarget.value;
-            state.projectId = String(projectsForTenant(state.tenantId)[0]?.id || '');
-            state.errors = {};
-            try {
-              await loadScopedResources(true);
-            } catch (error) {
-              state.providerId = '';
-              state.errors = { project_id: error.message };
-            }
-            render();
-          });
-          scopeFields.push(tenantField);
-        }
-        if (scopeProjects.length > 1) {
-          const projectField = selectField('Projekt', 'project_id',
-            scopeProjects.map(value => ({ value: String(value.id), label: value.name })),
-            state.projectId, { required: true, wide: true });
-          projectField.querySelector('select').addEventListener('change', async event => {
-            state.projectId = event.currentTarget.value;
-            state.errors = {};
-            try {
-              await loadScopedResources(true);
-            } catch (error) {
-              state.providerId = '';
-              state.errors = { project_id: error.message };
-            }
-            render();
-          });
-          scopeFields.push(projectField);
-        }
+        const scopeFields = blueprintScope.renderFields();
 
         const content = node('div', { class: 'form-grid' },
           node('div', { class: 'blueprint-wizard-info wide' },
             node('strong', { text: 'Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji.' }),
-            node('span', { text: 'Zakres: ' + tenantLabel(state.tenantId) + ' · ' + projectLabel(state.projectId) })),
+            node('span', { text: 'Zakres: ' + blueprintScope.tenantLabel(state.tenantId) + ' · ' + blueprintScope.projectLabel(state.projectId) })),
           ...scopeFields,
           name,
           checkboxField('Aktywny', 'is_active', state.active),
@@ -1350,8 +1185,8 @@
           ['Blueprint', [
             ['Nazwa', state.name],
             ['Slug', state.slug],
-            ['Tenant', tenantLabel(state.tenantId)],
-            ['Projekt', projectLabel(state.projectId)],
+            ['Tenant', blueprintScope.tenantLabel(state.tenantId)],
+            ['Projekt', blueprintScope.projectLabel(state.projectId)],
             ['Opis', state.description || '—'],
           ]],
           ['Platforma', [
@@ -1575,7 +1410,10 @@
       footerRoot = dom.modalActions;
       if (!dom.modal.open) dom.modal.showModal();
 
-      await loadScopedResources(true);
+      blueprintScope = parts.scope.create({
+        state, data, options, allowed, safeApi, discoverProvider, render,
+      });
+      await blueprintScope.loadResources(true);
       render();
     } catch (error) {
       toast(error.message, 'error');
