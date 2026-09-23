@@ -31,7 +31,7 @@ from app.instance_backup.service import (
 )
 from app.instance_backup.validation import validate_restore_preflight
 from app.models import Audit, Credential, Token, User
-from app.security.core import decrypt_secret, redis_client
+from app.security.core import decrypt_secret, encryption_key, redis_client
 
 
 RESTORE_PROGRESS = {
@@ -193,6 +193,8 @@ def _upgrade_database() -> None:
 
 
 def _health_validation() -> None:
+    if settings().secret_backend == "local":
+        encryption_key()
     with session() as db:
         db.execute(text("SELECT 1"))
         revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
