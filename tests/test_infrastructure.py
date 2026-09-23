@@ -825,6 +825,26 @@ def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
         proxmox_ssh_preflight(credential, {'PROXMOX_VE_SSH_PORT': '22'})
 
 
+def test_qemu_bootstrap_verifies_ssh_host_key_through_guest_agent():
+    from app.jobs.worker import _verify_guest_ssh_host_key
+
+    class HostKey:
+        def get_name(self):
+            return 'ssh-ed25519'
+
+        def get_base64(self):
+            return 'AAAATESTKEY'
+
+    class Provider:
+        def guest_exec(self, node, vm_id, command, timeout=30):
+            assert node == 'pve'
+            assert vm_id == 101
+            assert command == ['/bin/cat', '/etc/ssh/ssh_host_ed25519_key.pub']
+            return {'exited': True, 'exitcode': 0, 'out-data': 'ssh-ed25519 AAAATESTKEY vm\n'}
+
+    _verify_guest_ssh_host_key(Provider(), 'pve', 101, HostKey())
+
+
 def test_proxmox_guest_exec_and_password_use_guest_agent_api(client, headers, monkeypatch):
     from app.providers.proxmox import ProxmoxProvider
 
