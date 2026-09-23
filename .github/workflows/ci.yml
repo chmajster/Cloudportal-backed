@@ -120,6 +120,26 @@ jobs:
 
           sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status-output 2>&1
           grep -Fq 'Runtime Docker:' /tmp/cloudportal-docker-status-output
+          grep -Fq 'postgres: running, health=healthy' /tmp/cloudportal-docker-status-output
+          grep -Fq 'redis: running, health=healthy' /tmp/cloudportal-docker-status-output
+          grep -Fq 'migrate: zakończony poprawnie, exit=0' /tmp/cloudportal-docker-status-output
+          grep -Fq 'worker: 2/2 kontenerów running' /tmp/cloudportal-docker-status-output
+          grep -Fq 'dispatcher: running' /tmp/cloudportal-docker-status-output
+          grep -Fq 'proxy: running' /tmp/cloudportal-docker-status-output
+          grep -Fq 'Stack Docker kompletny i sprawny:' /tmp/cloudportal-docker-status-output
+
+          dispatcher_id=$(sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed --filter label=com.docker.compose.service=dispatcher --format '{{.ID}}' | head -n 1)
+          test -n "$dispatcher_id"
+          sudo docker stop "$dispatcher_id" >/dev/null
+          if sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status-failed-output 2>&1; then
+            echo 'Docker status accepted a stopped dispatcher.' >&2
+            exit 1
+          fi
+          grep -Fq 'dispatcher: status=exited, oczekiwano running.' /tmp/cloudportal-docker-status-failed-output
+          grep -Fq 'Stack Docker jest niekompletny albo co najmniej jedna usługa jest niesprawna.' /tmp/cloudportal-docker-status-failed-output
+          sudo docker start "$dispatcher_id" >/dev/null
+          sudo ./install.sh --docker --status > /tmp/cloudportal-docker-status-recovered-output 2>&1
+          grep -Fq 'dispatcher: running' /tmp/cloudportal-docker-status-recovered-output
 
           openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
             -keyout "$custom_tls_dir/server.key" -out "$custom_tls_dir/server.crt" \
@@ -159,7 +179,7 @@ jobs:
       - name: Sanitized Docker installer diagnostics
         if: failure()
         run: |
-          for output in /tmp/cloudportal-docker-port-conflict-output /tmp/cloudportal-docker-lock-output /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status-output /tmp/cloudportal-docker-custom-tls-output /tmp/cloudportal-docker-reinstall-output /tmp/cloudportal-docker-uninstall-output /tmp/cloudportal-docker-purge-confirm-output /tmp/cloudportal-docker-purge-output; do
+          for output in /tmp/cloudportal-docker-port-conflict-output /tmp/cloudportal-docker-lock-output /tmp/cloudportal-docker-install-output /tmp/cloudportal-docker-status-output /tmp/cloudportal-docker-status-failed-output /tmp/cloudportal-docker-status-recovered-output /tmp/cloudportal-docker-custom-tls-output /tmp/cloudportal-docker-reinstall-output /tmp/cloudportal-docker-uninstall-output /tmp/cloudportal-docker-purge-confirm-output /tmp/cloudportal-docker-purge-output; do
             if sudo test -f "$output"; then
               echo "Docker installer diagnostics: $output"
               sudo sed -E \
