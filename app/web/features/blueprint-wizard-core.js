@@ -16,7 +16,7 @@
     site: 'Site',
   };
   const WORKFLOW_TYPES = [
-    'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
+    'cloud_init', 'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
     'wait_for_ip', 'wait_for_ssh', 'run_ansible_playbook', 'create_snapshot',
     'health_check', 'condition', 'approval', 'delay', 'notification',
     'terraform_destroy',
@@ -67,6 +67,7 @@
       steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout, rollback: null });
       previous = [id];
     };
+    if (options.cloudInit) add('cloud_init', 'cloud_init');
     add('apply', 'terraform_apply');
     if (options.waitAgent) add('agent', 'wait_for_agent');
     if (options.waitAgent || options.ansible) add('guest_ip', 'wait_for_ip');
@@ -270,7 +271,7 @@
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
         install_qemu_guest_agent: Boolean(state.installQemuGuestAgent),
-        cloud_init_snippet_storage: state.installQemuGuestAgent && !state.guestCredentialId ? state.cloudInitSnippetStorage : null,
+        cloud_init_snippet_storage: state.installQemuGuestAgent ? state.cloudInitSnippetStorage : null,
         tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
@@ -332,6 +333,7 @@
 
   function buildPayload(state, data) {
     const autoWorkflow = workflow({
+      cloudInit: state.providerType === 'proxmox',
       hostname: state.hostnameEnabled,
       ipam: state.ipMode === 'ipam',
       tags: Boolean(String(state.tags || '').trim()

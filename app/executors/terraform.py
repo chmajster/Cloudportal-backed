@@ -6,6 +6,9 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
+from app.automation.cloud_init import (blueprint_snapshot, node_ssh_environment,
+                                       validate_cloud_init_workflow, validate_cloud_init_workspace,
+                                       validate_snippet_storage)
 from app.catalog import resolve_template_source, template_definition, template_import_target
 from app.config import settings
 from app.credentials.ssh import generate_ed25519_key_pair, public_key_from_private_key
@@ -76,14 +79,15 @@ def mark_terraform_initialized(workspace, fingerprint, binary):
     os.replace(temporary, marker)
 
 
-def guest_credential_runtime_variables(deployment):
+def guest_credential_runtime_variables(deployment, *, blueprint=None):
     """Resolve guest-login secrets only for the active Terraform execution.
 
     The Blueprint/deployment stores only the credential id. A password is never
     copied into deployment.variables or the job payload. A private key is never
     passed to Terraform or the VM; only its derived public key is used.
     """
-    blueprint = ((deployment.workflow or {}).get('blueprint') or {})
+    if blueprint is None:
+        blueprint = ((deployment.workflow or {}).get('blueprint') or {})
     credential_id = blueprint.get('guest_credential_id')
     if not credential_id:
         return {}, None
@@ -198,11 +202,48 @@ def terraform_plan_command(binary, operation, recreate_address=None):
     return command
 
 
+def prepare_first_boot_cloud_init(context, workspace, credential, env, secret):
+    """Check first-boot dependencies before submitting any mutating Terraform work."""
+    try:
+        validate_cloud_init_workspace(workspace)
+        variables = context.deployment.variables or {}
+        if variables.get('install_qemu_guest_agent'):
+            storage = variables.get('cloud_init_snippet_storage')
+            if not storage:
+                validate_snippet_storage([], storage)
+            node_ssh_environment(env, os.environ, secret, credential.username)
+            from app.providers.proxmox import ProxmoxProvider
+            provider = ProxmoxProvider(credential)
+            try:
+                storages = provider.discover('storages', node=variables.get('node'))
+            except Exception:
+                raise ExecutionFailed(
+                    'Cloud-init preflight could not read snippets storage on the target Proxmox node; '
+                    'check provider connectivity and storage permissions'
+                ) from None
+            validate_snippet_storage(storages or [], storage)
+            readiness = provider.ssh_preflight(env)
+            if not readiness.get('ok'):
+                raise ExecutionFailed(
+                    'Cloud-init QEMU Guest Agent installation requires Proxmox node SSH: '
+                    + str(readiness.get('reason') or 'ssh_not_ready')
+                    + '. Configure PROXMOX_VE_SSH_* for the worker; guest SSH bootstrap fallback is disabled'
+                )
+    except ValueError as exc:
+        raise ExecutionFailed(str(exc)) from None
+    context.log(
+        'cloud-init.provisioning-mode: native; target credential configured at first boot; '
+        + ('QEMU Guest Agent installation via vendor-data' if variables.get('install_qemu_guest_agent')
+           else 'QEMU Guest Agent installation disabled')
+    )
+
+
 class TerraformExecutor(Executor):
     binary = 'terraform'
 
     def execute(self, operation, context):
         deployment, credential = context.deployment, context.credential
+        native_cloud_init = False
         workspace = settings().data_dir / 'workspaces' / deployment.workspace
         try:
             definition, source = template_definition(deployment.template)
@@ -237,10 +278,21 @@ class TerraformExecutor(Executor):
 
             qemu_bootstrap = None
             qemu_install = bool(deployment.variables.get('install_qemu_guest_agent'))
-            job_blueprint = (context.job.payload or {}).get('blueprint') or {}
+            job_blueprint = blueprint_snapshot(context)
             guest_credential_id = job_blueprint.get('guest_credential_id')
             bootstrap_required = bool(qemu_install or guest_credential_id)
-            if bootstrap_required and operation in {'terraform.plan', 'terraform.apply'}:
+            cloud_steps = job_blueprint.get('steps') or []
+            if any(step.get('type') == 'cloud_init' for step in cloud_steps):
+                # Snippet destroy/refresh also needs the node's SSH environment.
+                node_ssh_environment(env, os.environ, secret, credential.username)
+            if operation in {'terraform.plan', 'terraform.apply'}:
+                try:
+                    native_cloud_init = validate_cloud_init_workflow(cloud_steps)
+                except ValueError as exc:
+                    raise ExecutionFailed(str(exc)) from None
+            if native_cloud_init:
+                prepare_first_boot_cloud_init(context, workspace, credential, env, secret)
+            elif bootstrap_required and operation in {'terraform.plan', 'terraform.apply'}:
                 force_guest_bootstrap = bool(guest_credential_id)
 
                 # A selected guest credential must never depend on SSH to the
@@ -354,7 +406,12 @@ class TerraformExecutor(Executor):
         if operation in {'terraform.plan', 'terraform.apply'} and not (
             provider_type == 'proxmox' and qemu_bootstrap
         ):
-            guest_variables, guest_password = guest_credential_runtime_variables(deployment)
+            if native_cloud_init:
+                guest_variables, guest_password = guest_credential_runtime_variables(
+                    deployment, blueprint=job_blueprint,
+                )
+            else:
+                guest_variables, guest_password = guest_credential_runtime_variables(deployment)
             runtime_variables.update(guest_variables)
             if guest_password:
                 # Keep the plaintext password out of deployment variables, job

@@ -86,7 +86,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['ipam_pool_id'] == 13
     assert deployment['guest_credential_id'] == 18
     assert deployment['variables']['install_qemu_guest_agent'] is True
-    assert deployment['variables']['cloud_init_snippet_storage'] is None
+    assert deployment['variables']['cloud_init_snippet_storage'] == 'local'
     assert 'environment' not in deployment
     assert 'apmid' not in deployment
     assert deployment['select_environment_on_execute'] is True
@@ -100,6 +100,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
 
     workflow_types = [step['type'] for step in result['workflow']]
     assert workflow_types == [
+        'cloud_init',
         'terraform_apply',
         'wait_for_agent',
         'wait_for_ip',
@@ -336,6 +337,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert result['deployment']['variables']['install_qemu_guest_agent'] is False
     assert result['deployment']['variables']['cloud_init_snippet_storage'] is None
     assert [step['type'] for step in result['workflow']] == [
+        'cloud_init',
         'terraform_apply',
         'wait_for_agent',
         'wait_for_ip',
@@ -375,5 +377,5 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
 
     assert result['deployment']['variables']['install_qemu_guest_agent'] is True
     assert result['deployment']['variables']['cloud_init_snippet_storage'] == 'local'
-    assert [step['type'] for step in result['workflow']] == ['terraform_apply']
+    assert [step['type'] for step in result['workflow']] == ['cloud_init', 'terraform_apply']
 

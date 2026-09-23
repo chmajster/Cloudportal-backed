@@ -23,7 +23,19 @@ resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init" {
     packages:
       - qemu-guest-agent
     runcmd:
-      - [ systemctl, enable, --now, qemu-guest-agent ]
+      - |
+        set -eu
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl enable qemu-guest-agent || true
+          systemctl start qemu-guest-agent
+          systemctl is-active --quiet qemu-guest-agent
+        elif command -v rc-service >/dev/null 2>&1; then
+          rc-update add qemu-guest-agent default
+          rc-service qemu-guest-agent start
+        else
+          echo "Unsupported service manager for qemu-guest-agent" >&2
+          exit 1
+        fi
     EOF
 
     file_name = "cloudportal-${var.name}-qemu-guest-agent.yaml"
@@ -52,7 +64,13 @@ resource "proxmox_virtual_environment_vm" "vm" {
     bridge  = var.network
     vlan_id = var.vlan_id
   }
-  agent { enabled = true }
+  agent {
+    enabled = true
+    # Cloud-init installs QGA at first boot; the workflow owns IP readiness.
+    wait_for_ip {
+      disabled = true
+    }
+  }
   initialization {
     datastore_id        = var.storage
     vendor_data_file_id = var.install_qemu_guest_agent && !var.qemu_guest_agent_bootstrap ? proxmox_virtual_environment_file.qemu_guest_agent_cloud_init[0].id : null

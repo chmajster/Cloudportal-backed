@@ -89,7 +89,7 @@
   }
 
   async function openBlueprintWizard(options = {}) {
-    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui) {
+    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
       return;
     }
@@ -445,6 +445,7 @@
           }
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
+          Object.assign(errors, parts.cloudInit.validate(state));
         }
         state.errors = errors;
         return !Object.keys(errors).length;
@@ -985,6 +986,7 @@
 
       function currentAutoWorkflow() {
         return parts.core.workflow({
+          cloudInit: state.providerType === 'proxmox',
           hostname: state.hostnameEnabled,
           ipam: state.ipMode === 'ipam',
           tags: Boolean(
@@ -1012,7 +1014,7 @@
       }
 
       function workflowEditorRow(step, index) {
-        const proxmoxOnly = new Set(['wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+        const proxmoxOnly = new Set(['cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
           'run_ansible_playbook', 'create_snapshot', 'health_check']);
         const availableTypes = state.providerType === 'proxmox'
           ? parts.core.WORKFLOW_TYPES
@@ -1056,16 +1058,15 @@
           render();
         });
         const isProxmox = state.providerType === 'proxmox';
-        const snippetAvailable = Boolean(state.cloudInitSnippetStorage);
-        const sshReady = state.qemuAgentSshReady !== false;
         const install = checkboxField('Instaluj QEMU Guest Agent automatycznie', 'install_qemu_guest_agent', state.installQemuGuestAgent);
         const installControl = install.querySelector('input');
         installControl.disabled = !isProxmox;
-        installControl.addEventListener('change', event => { state.installQemuGuestAgent = event.currentTarget.checked; render(); });
+        installControl.addEventListener('change', event => { captureCurrentStep(); state.installQemuGuestAgent = event.currentTarget.checked; render(); });
         const wait = checkboxField('Czekaj na QEMU Guest Agent po Terraform apply', 'wait_agent', state.waitAgent);
         const waitControl = wait.querySelector('input');
         waitControl.disabled = !isProxmox;
         waitControl.addEventListener('change', event => {
+          captureCurrentStep();
           state.waitAgent = event.currentTarget.checked;
           if (!state.advancedWorkflow) state.workflow = currentAutoWorkflow();
           render();
@@ -1075,13 +1076,8 @@
             node('strong', { text: state.advancedWorkflow ? 'Workflow edytowany ręcznie' : 'Workflow budowany automatycznie' }),
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki runtime, zależności, retry, timeout, rollback i conditions.'
-              : 'Hostname, IPAM, cloud-init i tagi są przygotowywane przed runtime; workflow pokazuje tylko faktycznie wykonywane operacje.' })),
-          isProxmox && state.installQemuGuestAgent && (state.guestCredentialId || !snippetAvailable || !sshReady) ? node('div', { class: 'callout info' },
-            node('strong', { text: 'QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM' }),
-            node('p', { text: (state.guestCredentialId
-              ? 'Wybrano Credential VM, więc workflow celowo pomija upload snippets i SSH do noda PVE.'
-              : 'Brak gotowego uploadu snippetów/SSH do noda PVE (' + (state.qemuAgentSshReason || (snippetAvailable ? 'ssh_not_ready' : 'snippets_unavailable')) + ').')
-              + ' Workflow utworzy jednorazowe konto przez natywny cloud-init, zainstaluje agenta w VM, utworzy konto docelowe z Credentiala i usunie konto tymczasowe. Przy DHCP template musi już udostępniać adres przez Guest Agent albo Blueprint powinien używać statycznego IP/IPAM.' })) : null,
+              : 'Cloud-init przygotowuje konto i konfigurację pierwszego startu przed Terraform. Instalacja pakietów następuje wewnątrz VM przy jej pierwszym uruchomieniu.' })),
+          isProxmox ? parts.cloudInit.render({ state, data, capture: captureCurrentStep, rerender: render }) : null,
           isProxmox ? install : null,
           isProxmox ? wait : null,
           toggle,
