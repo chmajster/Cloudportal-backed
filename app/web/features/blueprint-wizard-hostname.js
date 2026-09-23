@@ -35,7 +35,9 @@
 
     const refreshSchemes = async () => {
       try {
-        const result = await api('/hostname-schemes?limit=200');
+        const result = await api('/hostname-schemes?limit=200', {
+          headers: core.scopeHeaders(state),
+        });
         data.schemes = result.items || [];
         const activeSchemes = data.schemes.filter(value => value.is_active);
         const stillAvailable = activeSchemes.some(value =>
@@ -97,6 +99,12 @@
               '{' + token + '}=' + (state.hostnameValues[token] || '—')).join(' · ') + '. Zmienisz je w Narzędzia → Location i Role.' })));
         }
         for (const token of tokens.filter(token => !['location', 'role'].includes(token))) {
+          if (state.selectEnvironmentOnExecute && ['env', 'environment'].includes(token)) {
+            tokenFields.append(node('div', { class: 'blueprint-wizard-info wide' },
+              node('strong', { text: 'Environment w hostname będzie ustawiony przy tworzeniu VM.' }),
+              node('span', { text: 'Wartość {' + token + '} zostanie pobrana z Environment wybranego podczas uruchomienia Blueprintu.' })));
+            continue;
+          }
           const wrapper = field(core.HOSTNAME_LABELS[token] || token, 'hostname_value_' + token, {
             value: state.hostnameValues[token] || '',
             required: true,
@@ -151,6 +159,7 @@
             const created = await api('/hostname-schemes', {
               method: 'POST',
               body: { name, pattern, next_number: next, padding, is_active: true },
+              headers: core.scopeHeaders(state),
             });
             data.schemes.push(created);
             state.hostnameSchemeId = String(created.id);
@@ -220,6 +229,7 @@
       } else {
         for (const token of parts.core.hostnameTokens(scheme.pattern)) {
           if (['location', 'role'].includes(token)) continue;
+          if (state.selectEnvironmentOnExecute && ['env', 'environment'].includes(token)) continue;
           if (!String(state.hostnameValues[token] || '').trim()) {
             errors['hostname_value_' + token] = 'Uzupełnij wartość dla {' + token + '}.';
           }
