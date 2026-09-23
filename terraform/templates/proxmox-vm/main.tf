@@ -52,7 +52,15 @@ resource "proxmox_virtual_environment_vm" "vm" {
     bridge  = var.network
     vlan_id = var.vlan_id
   }
-  agent { enabled = true }
+  agent {
+    enabled = true
+    # The worker owns guest bootstrap and readiness checks after apply.
+    # Waiting here can block installation of the agent we are waiting for.
+    # Keep the QGA channel enabled; skip only Terraform's guest IP lookup.
+    wait_for_ip {
+      disabled = true
+    }
+  }
   initialization {
     datastore_id        = var.storage
     vendor_data_file_id = var.install_qemu_guest_agent && !var.qemu_guest_agent_bootstrap ? proxmox_virtual_environment_file.qemu_guest_agent_cloud_init[0].id : null
