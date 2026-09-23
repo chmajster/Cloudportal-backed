@@ -29,14 +29,40 @@ function userActions(user) {
 }
 
 function createUser() {
+  const passwordField = field('Hasło początkowe (opcjonalnie)', 'password', {
+    type: 'password',
+    minlength: 12,
+    autocomplete: 'new-password',
+    wide: true,
+    help: 'Pozostaw puste, aby utworzyć konto bez hasła. Hasło można ustawić później przez reset.',
+  });
+  const serviceAccountField = checkboxField('Konto serwisowe (bez logowania hasłem)', 'is_service_account');
+  const passwordInput = passwordField.querySelector('[name="password"]');
+  const serviceAccountInput = serviceAccountField.querySelector('[name="is_service_account"]');
+  serviceAccountInput.addEventListener('change', () => {
+    passwordInput.disabled = serviceAccountInput.checked;
+    if (serviceAccountInput.checked) passwordInput.value = '';
+  });
+
   const fields = node('div', { class: 'form-grid' },
     field('Login', 'username', { required: true, maxlength: 63 }), field('E-mail', 'email', { type: 'email', required: true }),
     field('Imię', 'first_name', { maxlength: 100 }), field('Nazwisko', 'last_name', { maxlength: 100 }),
-    field('Hasło początkowe', 'password', { type: 'password', required: true, minlength: 12, autocomplete: 'new-password', wide: true }),
-    checkboxField('Konto serwisowe (bez logowania hasłem)', 'is_service_account'));
+    passwordField, serviceAccountField);
   openModal({ title: 'Nowy użytkownik', eyebrow: 'Tożsamość', body: fields, submitLabel: 'Utwórz', onSubmit: async data => {
-    await api('/users', { method: 'POST', body: { username: data.get('username'), email: data.get('email'), password: data.get('password'), first_name: data.get('first_name'), last_name: data.get('last_name'), is_service_account: data.has('is_service_account') } });
-    toast('Użytkownik utworzony.'); navigate('users');
+    const payload = {
+      username: data.get('username'),
+      email: data.get('email'),
+      first_name: data.get('first_name'),
+      last_name: data.get('last_name'),
+      is_service_account: data.has('is_service_account'),
+    };
+    const password = data.get('password');
+    if (password) payload.password = password;
+    await api('/users', { method: 'POST', body: payload });
+    toast(password || payload.is_service_account
+      ? 'Użytkownik utworzony.'
+      : 'Użytkownik utworzony bez hasła. Ustaw je później przez „Reset hasła”.');
+    navigate('users');
   }});
 }
 

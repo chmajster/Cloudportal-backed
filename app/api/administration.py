@@ -46,7 +46,9 @@ def user(id: int, actor=Depends(require('users.read')), db=Depends(get_db, scope
 def user_create(data: UserCreate, request: Request, actor=Depends(require('users.create')), db=Depends(get_db, scope='function')):
     def create():
         values = data.model_dump(exclude={'password'})
-        u = User(**values, password_hash=password_hasher.hash(data.password))
+        password = data.password or secrets.token_urlsafe(48)
+        values['must_change_password'] = bool(not data.password and not data.is_service_account)
+        u = User(**values, password_hash=password_hasher.hash(password))
         db.add(u)
         db.flush()
         audit(db, request, 'user.created', 'users', u.id)
