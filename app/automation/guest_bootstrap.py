@@ -127,6 +127,11 @@ def provision_guest(context, address: str, bootstrap: dict, db, credential_id: i
             + username
             + "; fi'",
         )
+        _run(
+            client,
+            f"sudo -n sh -c 'printf \"{username} ALL=(ALL) NOPASSWD:ALL\\n\" > /etc/sudoers.d/cloudportal-{username} && "
+            f"chmod 440 /etc/sudoers.d/cloudportal-{username}'",
+        )
 
         private_key = secret.get('private_key')
         if private_key:
