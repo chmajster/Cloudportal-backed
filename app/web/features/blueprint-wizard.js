@@ -1387,7 +1387,12 @@
       blueprintScope = parts.scope.create({
         state, data, options, allowed, safeApi, discoverProvider, render,
       });
-      await blueprintScope.loadResources(true);
+      try {
+        await blueprintScope.loadResources(true);
+      } catch (error) {
+        state.providerId = '';
+        state.errors = { project_id: error.message };
+      }
       render();
     } catch (error) {
       toast(error.message, 'error');
