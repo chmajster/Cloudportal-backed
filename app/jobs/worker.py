@@ -745,6 +745,34 @@ def _guest_target_credential(context):
         }
 
 
+def _verify_guest_ssh_host_key(provider, node, vm_id, host_key):
+    key_paths = {
+        'ssh-ed25519': '/etc/ssh/ssh_host_ed25519_key.pub',
+        'ssh-rsa': '/etc/ssh/ssh_host_rsa_key.pub',
+        'ecdsa-sha2-nistp256': '/etc/ssh/ssh_host_ecdsa_key.pub',
+        'ecdsa-sha2-nistp384': '/etc/ssh/ssh_host_ecdsa_key.pub',
+        'ecdsa-sha2-nistp521': '/etc/ssh/ssh_host_ecdsa_key.pub',
+    }
+    key_type = host_key.get_name()
+    path = key_paths.get(key_type)
+    if path is None:
+        raise ExecutionFailed(
+            'Unsupported SSH host key type during QEMU bootstrap verification: ' + key_type
+        )
+    try:
+        status = provider.guest_exec(node, vm_id, ['/bin/cat', path], timeout=30)
+    except HTTPException as exc:
+        raise ExecutionFailed(
+            'Could not verify VM SSH host key through QEMU Guest Agent'
+        ) from exc
+    line = str(status.get('out-data') or '').strip()
+    parts = line.split()
+    if len(parts) < 2 or parts[1] != host_key.get_base64():
+        raise ExecutionFailed(
+            'VM SSH host key does not match the key observed during bootstrap'
+        )
+
+
 def ensure_qemu_guest_bootstrap(context, workspace, timeout=600):
     bootstrap = load_qemu_bootstrap(workspace)
     if bootstrap is None:
@@ -862,6 +890,8 @@ fi
             raise ExecutionFailed('QEMU Guest Agent was installed but did not become ready')
     finally:
         client.close()
+
+    _verify_guest_ssh_host_key(provider, node, vm_id, host_key)
 
     if target_user:
         quoted_user = shlex.quote(target_user)
