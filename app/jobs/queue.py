@@ -9,10 +9,10 @@ from rq.exceptions import NoSuchJobError
 from rq.serializers import JSONSerializer
 from sqlalchemy import select, update
 from app.config import settings
-from app.blueprint_settings import blueprint_execution_settings
 from app.database import session
 from app.events.service import dispatch_event_broker_once
 from app.inventory_sync import repair_inventory_from_states
+from app.jobs.approval import approval_policy_for_job
 from app.jobs.recovery import queue_automatic_resume, record_persisted_state_recovery
 from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
 from app.operations.service import cleanup_retention_once, deliver_webhooks_once, materialize_scheduled_jobs, queue_job_webhooks, queue_system_alert_webhooks_once
@@ -152,7 +152,6 @@ def reconcile_deployment_job_statuses(db):
 
 
 def expire_waiting_approvals(db):
-    config = blueprint_execution_settings(db)
     rows = db.scalars(
         select(Job).where(
             Job.status == 'waiting_approval',
@@ -171,6 +170,7 @@ def expire_waiting_approvals(db):
                 expires_at = current_time
         else:
             basis = job.updated_at or job.created_at or current_time
+            config = approval_policy_for_job(db, job)
             expires_at = basis + timedelta(hours=config['approval_timeout_hours'])
         if expires_at > current_time:
             continue
