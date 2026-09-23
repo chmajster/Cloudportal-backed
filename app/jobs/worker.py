@@ -16,7 +16,6 @@ from pathlib import Path
 from sqlalchemy import select, update
 from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
-from app.blueprint_settings import blueprint_execution_settings
 from app.config import settings
 from app.database import session
 from app.executors.ansible import AnsibleExecutor
@@ -24,6 +23,7 @@ from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import (OpenTofuExecutor, TerraformExecutor, cleanup_qemu_bootstrap,
                                      load_qemu_bootstrap)
 from app.inventory_sync import state_outputs, sync_deployment_inventory
+from app.jobs.approval import approval_policy_for_job
 from app.jobs.lifecycle import has_released_allocations
 from app.quotas.service import (account_confirmed_absent, commit_job_reservation,
                                 mark_job_reservation_uncertain, prepare_job_reservation,
@@ -1343,7 +1343,7 @@ def run_blueprint_workflow(context, executor):
             current = db.scalar(select(Job).where(Job.id == context.job.id).with_for_update())
             if current is None:
                 raise ExecutionFailed('Job disappeared before approval pause')
-            config = blueprint_execution_settings(db)
+            config = approval_policy_for_job(db, current)
             expires_at = now() + timedelta(hours=config['approval_timeout_hours'])
             payload = dict(current.payload or {})
             payload['_approval'] = {
