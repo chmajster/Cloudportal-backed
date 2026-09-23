@@ -252,6 +252,8 @@ async def upload_backup(
         )
     except HTTPException:
         destination.unlink(missing_ok=True)
+        audit(db, request, "instance_backup.uploaded", "instance_backups", result="failed")
+        db.commit()
         raise
     except Exception as exc:
         destination.unlink(missing_ok=True)
@@ -261,9 +263,17 @@ async def upload_backup(
 
     audit(db, request, "instance_backup.uploaded", "instance_backups", row.id)
     db.commit()
+    try:
+        plan = restore_plan(row)
+        preflight = {"ok": True, "error": None}
+    except Exception as exc:
+        plan = migration_plan(manifest)
+        plan["warnings"] = [str(exc)[:500]]
+        preflight = {"ok": False, "error": str(exc)[:500]}
     return {
         "backup": public_status(row),
         "valid": True,
+        "preflight": preflight,
         "manifest": {
             "source": manifest.get("source") or {},
             "application": manifest.get("application") or {},
@@ -271,7 +281,7 @@ async def upload_backup(
             "counts": manifest.get("counts") or {},
             "created_at": manifest.get("created_at"),
         },
-        "plan": migration_plan(manifest),
+        "plan": plan,
     }
 
 
