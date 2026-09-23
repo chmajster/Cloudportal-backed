@@ -845,6 +845,108 @@ def test_qemu_bootstrap_verifies_ssh_host_key_through_guest_agent():
     _verify_guest_ssh_host_key(Provider(), 'pve', 101, HostKey())
 
 
+def test_guest_credential_bootstrap_works_without_qemu_agent(monkeypatch, tmp_path):
+    from app.jobs import worker as worker_module
+
+    key_path = tmp_path / 'bootstrap-key'
+    key_path.write_text('bootstrap-private-key')
+
+    class HostKey:
+        def get_name(self):
+            return 'ssh-ed25519'
+
+        def get_base64(self):
+            return 'AAAABOOTSTRAPHOST'
+
+    host_key = HostKey()
+
+    class Transport:
+        def get_remote_server_key(self):
+            return host_key
+
+    class Client:
+        def __init__(self, name):
+            self.name = name
+            self.closed = False
+
+        def get_transport(self):
+            return Transport()
+
+        def close(self):
+            self.closed = True
+
+    bootstrap_client = Client('bootstrap')
+    verify_client = Client('verify')
+    connect_calls = []
+    commands = []
+    cleaned = []
+    stages = []
+
+    monkeypatch.setattr(worker_module, 'load_qemu_bootstrap', lambda workspace: {
+        'username': 'cpbootstrap1234',
+        'public_key': 'ssh-ed25519 AAAABOOTSTRAP',
+        'private_key_path': key_path,
+        'reason': 'guest_credential_bootstrap',
+    })
+    monkeypatch.setattr(worker_module, '_guest_target_credential', lambda context: {
+        'credential_id': 42,
+        'username': 'vmadmin',
+        'public_key': 'ssh-ed25519 AAAATARGET',
+        'private_key': 'target-private-key',
+        'password': 'target-password',
+    })
+    monkeypatch.setattr(worker_module, 'configured_deployment_ip', lambda context: '10.0.0.25')
+    monkeypatch.setattr(worker_module, 'wait_for_vm', lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker_module,
+        'wait_for_tcp_addresses',
+        lambda context, addresses, port, timeout, label: '10.0.0.25',
+    )
+    monkeypatch.setattr(worker_module, '_guest_private_key', lambda value: object())
+
+    def connect(address, username, **kwargs):
+        connect_calls.append((address, username, kwargs))
+        return bootstrap_client if username == 'cpbootstrap1234' else verify_client
+
+    def run(client, command, *, stdin_text=None, timeout=300):
+        commands.append((client.name, command, stdin_text, timeout))
+        return ''
+
+    monkeypatch.setattr(worker_module, '_guest_ssh_connect', connect)
+    monkeypatch.setattr(worker_module, '_guest_ssh_run', run)
+    monkeypatch.setattr(worker_module, 'cleanup_qemu_bootstrap', lambda workspace: cleaned.append(workspace))
+
+    context = SimpleNamespace(
+        deployment=SimpleNamespace(variables={'install_qemu_guest_agent': False}),
+        job=SimpleNamespace(payload={'blueprint': {'guest_credential_id': 42}}),
+        stage=stages.append,
+        check=lambda: None,
+    )
+
+    assert worker_module.ensure_qemu_guest_bootstrap(context, tmp_path, timeout=30) is True
+    assert stages == ['workflow.guest_credential.bootstrap']
+    assert connect_calls[0][1] == 'cpbootstrap1234'
+    assert connect_calls[1][1] == 'vmadmin'
+    assert connect_calls[1][2]['host_key'] is host_key
+    assert any(
+        command == 'sudo -n /bin/sh -s' and stdin_text and 'TARGET=vmadmin' in stdin_text
+        for _client, command, stdin_text, _timeout in commands
+    )
+    assert any(
+        command == 'sudo -n chpasswd' and stdin_text == 'vmadmin:target-password\n'
+        for _client, command, stdin_text, _timeout in commands
+    )
+    assert any(
+        client == 'verify' and command == 'sudo -n /bin/sh -s'
+        and stdin_text and 'BOOTSTRAP=cpbootstrap1234' in stdin_text
+        for client, command, stdin_text, _timeout in commands
+    )
+    assert not any('qemu-guest-agent' in (stdin_text or '') for _client, _command, stdin_text, _timeout in commands)
+    assert cleaned == [tmp_path]
+    assert bootstrap_client.closed is True
+    assert verify_client.closed is True
+
+
 def test_proxmox_guest_exec_and_password_use_guest_agent_api(client, headers, monkeypatch):
     from app.providers.proxmox import ProxmoxProvider
 

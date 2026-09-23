@@ -237,22 +237,32 @@ class TerraformExecutor(Executor):
 
             qemu_bootstrap = None
             qemu_install = bool(deployment.variables.get('install_qemu_guest_agent'))
-            if qemu_install and operation in {'terraform.plan', 'terraform.apply'}:
-                ssh_names = (
-                    'PROXMOX_VE_SSH_USERNAME',
-                    'PROXMOX_VE_SSH_PASSWORD',
-                    'PROXMOX_VE_SSH_PRIVATE_KEY',
-                    'PROXMOX_VE_SSH_AGENT',
-                    'PROXMOX_VE_SSH_AUTH_SOCK',
-                )
-                for name in ssh_names:
-                    value = os.environ.get(name)
-                    if value:
-                        env[name] = value
+            job_blueprint = (context.job.payload or {}).get('blueprint') or {}
+            guest_credential_id = job_blueprint.get('guest_credential_id')
+            bootstrap_required = bool(qemu_install or guest_credential_id)
+            if bootstrap_required and operation in {'terraform.plan', 'terraform.apply'}:
+                force_guest_bootstrap = bool(guest_credential_id)
 
-                if secret.get('password') and not env.get('PROXMOX_VE_SSH_PASSWORD'):
-                    env['PROXMOX_VE_SSH_USERNAME'] = credential.username.split('@', 1)[0]
-                    env['PROXMOX_VE_SSH_PASSWORD'] = secret['password']
+                # A selected guest credential must never depend on SSH to the
+                # Proxmox node. The temporary account is created through native
+                # cloud-init and the requested account is finalized from inside
+                # the guest after apply.
+                if qemu_install and not force_guest_bootstrap:
+                    ssh_names = (
+                        'PROXMOX_VE_SSH_USERNAME',
+                        'PROXMOX_VE_SSH_PASSWORD',
+                        'PROXMOX_VE_SSH_PRIVATE_KEY',
+                        'PROXMOX_VE_SSH_AGENT',
+                        'PROXMOX_VE_SSH_AUTH_SOCK',
+                    )
+                    for name in ssh_names:
+                        value = os.environ.get(name)
+                        if value:
+                            env[name] = value
+
+                    if secret.get('password') and not env.get('PROXMOX_VE_SSH_PASSWORD'):
+                        env['PROXMOX_VE_SSH_USERNAME'] = credential.username.split('@', 1)[0]
+                        env['PROXMOX_VE_SSH_PASSWORD'] = secret['password']
 
                 marker_path, _ = qemu_bootstrap_paths(workspace)
                 saved_plan_apply = operation == 'terraform.apply' and bool(
@@ -260,11 +270,23 @@ class TerraformExecutor(Executor):
                 )
                 if saved_plan_apply:
                     qemu_bootstrap = load_qemu_bootstrap(workspace) if marker_path.exists() else None
+                    if force_guest_bootstrap and qemu_bootstrap is None:
+                        raise ExecutionFailed(
+                            'Saved Terraform plan is missing the temporary guest bootstrap key'
+                        )
                     use_snippet = qemu_bootstrap is None
                     readiness = {
                         'ok': use_snippet,
                         'reason': 'saved_plan_guest_bootstrap' if qemu_bootstrap else 'saved_plan_snippet',
                     }
+                elif force_guest_bootstrap:
+                    readiness = {'ok': False, 'reason': 'guest_credential_bootstrap'}
+                    use_snippet = False
+                    qemu_bootstrap = prepare_qemu_bootstrap(
+                        workspace,
+                        context.job.id,
+                        readiness['reason'],
+                    )
                 else:
                     snippet_storage = deployment.variables.get('cloud_init_snippet_storage')
                     if snippet_storage:
@@ -282,8 +304,10 @@ class TerraformExecutor(Executor):
                             readiness.get('reason') or 'ssh_not_ready',
                         )
                 mode = 'snippet' if use_snippet else 'guest-bootstrap'
+                subject = 'guest-credential' if force_guest_bootstrap else 'qemu-guest-agent'
                 context.log(
-                    'qemu-guest-agent.provisioning-mode: '
+                    subject
+                    + '.provisioning-mode: '
                     + mode
                     + '; reason='
                     + str(readiness.get('reason') or 'ready')
@@ -323,12 +347,13 @@ class TerraformExecutor(Executor):
         )
         runtime_variables = dict(deployment.variables or {})
         if provider_type == 'proxmox' and operation in {'terraform.plan', 'terraform.apply'}:
-            qemu_install = bool(deployment.variables.get('install_qemu_guest_agent'))
-            runtime_variables['qemu_guest_agent_bootstrap'] = bool(qemu_install and qemu_bootstrap)
-            if qemu_install and qemu_bootstrap:
+            runtime_variables['qemu_guest_agent_bootstrap'] = bool(qemu_bootstrap)
+            if qemu_bootstrap:
                 runtime_variables['bootstrap_username'] = qemu_bootstrap['username']
                 runtime_variables['bootstrap_public_key'] = qemu_bootstrap['public_key']
-        if operation in {'terraform.plan', 'terraform.apply'}:
+        if operation in {'terraform.plan', 'terraform.apply'} and not (
+            provider_type == 'proxmox' and qemu_bootstrap
+        ):
             guest_variables, guest_password = guest_credential_runtime_variables(deployment)
             runtime_variables.update(guest_variables)
             if guest_password:

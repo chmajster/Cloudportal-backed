@@ -86,7 +86,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['ipam_pool_id'] == 13
     assert deployment['guest_credential_id'] == 18
     assert deployment['variables']['install_qemu_guest_agent'] is True
-    assert deployment['variables']['cloud_init_snippet_storage'] == 'local'
+    assert deployment['variables']['cloud_init_snippet_storage'] is None
     assert 'environment' not in deployment
     assert 'apmid' not in deployment
     assert deployment['select_environment_on_execute'] is True
