@@ -2,7 +2,7 @@
   "id": "proxmox-vm",
   "name": "Proxmox VM clone",
   "provider": "proxmox",
-  "version": 4,
+  "version": 5,
   "schema_model": "app.api.schemas:VMVariables",
   "import": {
     "resource_address": "proxmox_virtual_environment_vm.vm",
