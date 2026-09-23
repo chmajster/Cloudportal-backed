@@ -11,6 +11,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
+from app.automation.guest_bootstrap import decrypt_guest_bootstrap_secret, provision_guest
 from app.blueprint_settings import blueprint_execution_settings
 from app.config import settings
 from app.database import session
@@ -516,6 +517,7 @@ def persist_workflow_runtime(context, runtime):
             'plan_sha256': runtime.get('plan_sha256'),
             'provider_applied': bool(runtime.get('applied')),
             'inventory_synced': bool(runtime.get('inventory_synced')),
+            'guest_bootstrapped': bool(runtime.get('guest_bootstrapped')),
             'ansible_ran': bool(runtime.get('ansible_ran')),
         })
         payload['_workflow_runtime'] = saved
@@ -789,6 +791,7 @@ def run_blueprint_workflow(context, executor):
     runtime = {
         'workspace': saved_workspace,
         'inventory_synced': bool(saved_runtime.get('inventory_synced')),
+        'guest_bootstrapped': bool(saved_runtime.get('guest_bootstrapped')),
         'addresses': None,
         'applied': provider_applied,
         'ansible_ran': bool(
@@ -883,6 +886,33 @@ def run_blueprint_workflow(context, executor):
         if not expected or actual != expected:
             raise ExecutionFailed('Approved Terraform plan checksum mismatch; generate and approve a new plan')
 
+    def ensure_guest_bootstrap():
+        blueprint_snapshot = (context.job.payload or {}).get('blueprint') or {}
+        encrypted = blueprint_snapshot.get('guest_bootstrap_secret')
+        credential_id = blueprint_snapshot.get('guest_credential_id')
+        if not encrypted or not credential_id or runtime.get('guest_bootstrapped'):
+            return
+        workspace = runtime.get('workspace')
+        if workspace is None:
+            raise ExecutionFailed('Guest bootstrap requires completed Terraform apply')
+        context.stage('workflow.guest_bootstrap.wait_for_ssh')
+        address = wait_for_ssh(context, workspace, timeout=600)
+        bootstrap = decrypt_guest_bootstrap_secret(encrypted)
+        context.stage('workflow.guest_bootstrap.configure')
+        with session() as bootstrap_db:
+            provision_guest(
+                context,
+                address,
+                bootstrap,
+                bootstrap_db,
+                int(credential_id),
+                bool(blueprint_snapshot.get('bootstrap_install_qemu_guest_agent')),
+            )
+        runtime['addresses'] = [address]
+        runtime['guest_bootstrapped'] = True
+        context.stage('workflow.guest_bootstrap.completed')
+        persist_workflow_runtime(context, runtime)
+
     def apply_and_sync(reason='explicit'):
         context.stage('workflow.terraform_apply')
         if reason != 'explicit':
@@ -906,6 +936,8 @@ def run_blueprint_workflow(context, executor):
                 commit_job_reservation(quota_db, quota_job)
                 quota_db.commit()
         runtime['inventory_synced'] = True
+        persist_workflow_runtime(context, runtime)
+        ensure_guest_bootstrap()
         if inventory['vm_id'] is not None:
             context.log(f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}")
         else:
@@ -958,6 +990,7 @@ def run_blueprint_workflow(context, executor):
                 'plan_sha256': plan_sha256,
                 'provider_applied': bool(runtime['applied']),
                 'inventory_synced': bool(runtime['inventory_synced']),
+                'guest_bootstrapped': bool(runtime['guest_bootstrapped']),
                 'ansible_ran': bool(runtime['ansible_ran']),
                 'approval_step': step_id,
             }
@@ -1169,6 +1202,11 @@ def run_blueprint_workflow(context, executor):
 
     if runtime['applied'] and not runtime['inventory_synced']:
         register_managed_inventory(context, runtime['workspace'])
+        runtime['inventory_synced'] = True
+        persist_workflow_runtime(context, runtime)
+
+    if runtime['applied']:
+        ensure_guest_bootstrap()
 
     if context.ansible and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
