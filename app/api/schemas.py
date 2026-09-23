@@ -688,14 +688,6 @@ class BlueprintDeployment(Input):
     select_apmid_on_execute: bool = False
     select_environment_on_execute: bool = False
 
-    @model_validator(mode='after')
-    def classification_source_is_unambiguous(self):
-        if self.select_apmid_on_execute and self.apmid is not None:
-            raise ValueError('APMID cannot be fixed when it is selected at Blueprint execution time')
-        if self.select_environment_on_execute and self.environment is not None:
-            raise ValueError('Environment cannot be fixed when it is selected at Blueprint execution time')
-        return self
-
 
 class BlueprintInput(Input):
     slug: Slug
