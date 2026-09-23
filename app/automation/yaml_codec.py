@@ -49,7 +49,11 @@ def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
         'spec',
     )
     _reject_unknown_keys(access, {'allowedRoleIds', 'allowedUserIds', 'managerRoleIds'}, 'spec.access')
-    _reject_unknown_keys(governance, {'requiresApproval', 'recoveryPolicy'}, 'spec.governance')
+    _reject_unknown_keys(
+        governance,
+        {'requiresApproval', 'autoApproveForExecutors', 'approvalTimeoutHours', 'recoveryPolicy'},
+        'spec.governance',
+    )
 
     return {
         'slug': metadata.get('slug') or metadata.get('name'),
@@ -64,6 +68,8 @@ def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
         'deployment': spec.get('deployment', {}),
         'workflow': spec.get('workflow', []),
         'requires_approval': governance.get('requiresApproval', False),
+        'auto_approve_for_executors': governance.get('autoApproveForExecutors'),
+        'approval_timeout_hours': governance.get('approvalTimeoutHours'),
         'recovery_policy': governance.get('recoveryPolicy', 'preserve'),
     }
 
@@ -124,6 +130,8 @@ def blueprint_yaml_document(blueprint: BlueprintInput | dict[str, Any], *, versi
             'workflow': data['workflow'],
             'governance': {
                 'requiresApproval': data['requires_approval'],
+                'autoApproveForExecutors': data['auto_approve_for_executors'],
+                'approvalTimeoutHours': data['approval_timeout_hours'],
                 'recoveryPolicy': data['recovery_policy'],
             },
         },
