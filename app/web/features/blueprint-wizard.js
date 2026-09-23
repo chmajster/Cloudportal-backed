@@ -14,27 +14,9 @@
     ['Podsumowanie', 'Podsumowanie'],
   ];
 
-  function safeApi(path, fallback = []) {
-    return api(path).then(result => result.items || result).catch(() => fallback);
+  function safeApi(path, fallback = [], options = {}) {
+    return api(path, options).then(result => result.items || result).catch(() => fallback);
   }
-
-  function errorText(root, errors) {
-    root.querySelectorAll('.blueprint-wizard-field-error').forEach(value => value.remove());
-    const messages = Object.values(errors || {});
-    const summary = root.querySelector('[data-wizard-error-summary]');
-    if (summary) {
-      summary.hidden = !messages.length;
-      summary.replaceChildren(...messages.map(message => node('div', { text: message })));
-    }
-    for (const [name, message] of Object.entries(errors || {})) {
-      const control = root.querySelector('[name="' + CSS.escape(name) + '"]');
-      if (!control) continue;
-      const wrapper = control.closest('label') || control.parentElement;
-      wrapper?.append(node('span', { class: 'form-error blueprint-wizard-field-error', text: message }));
-      control.setAttribute('aria-invalid', 'true');
-    }
-  }
-
   function dualListGroup(title, name, rows, selected, description = '') {
     const picked = new Set((selected || []).map(value => String(value)));
     const labelFor = row => {
@@ -106,29 +88,20 @@
       body);
   }
 
-  function summaryRow(label, value) {
-    return node('div', { class: 'blueprint-wizard-review-row' },
-      node('span', { text: label }),
-      node('strong', { text: String(value ?? '—') }));
-  }
-
   async function openBlueprintWizard(options = {}) {
-    if (!parts.core || !parts.hostname || !parts.network) {
+    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
       return;
     }
 
     try {
-      const [providers, templates, schemes, pools, playbooks, credentials, roles, users, blueprints, vmClassification] = await Promise.all([
-        safeApi('/providers?limit=200'),
-        safeApi('/templates'),
-        allowed('hostnames.read') ? safeApi('/hostname-schemes?limit=200') : Promise.resolve([]),
-        allowed('ipam.read') ? safeApi('/ipam/pools?limit=200') : Promise.resolve([]),
+      const [tenants, projects, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
+        safeApi('/tenants?limit=200'),
+        safeApi('/projects?limit=200'),
+        safeApi('/project-context', { selected: null, version: 0 }),
         allowed('ansible.read') ? safeApi('/ansible/playbooks') : Promise.resolve([]),
-        safeApi('/credentials?limit=200'),
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
         allowed('users.read') ? safeApi('/users?limit=200') : Promise.resolve([]),
-        allowed('blueprints.read') ? safeApi('/blueprints?limit=200') : Promise.resolve([]),
         safeApi('/settings/vm-classification', {
           environments: { test: true, dev: true, nonprod: true, prod: true },
           apmids: [],
@@ -136,52 +109,25 @@
         }),
       ]);
 
-      if (!providers.length) throw new Error('Najpierw dodaj platformę infrastruktury.');
-      if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
-
+      const state = parts.core.stateDefaults();
+      const scopeData = parts.scope.prepare(tenants, projects, projectContext, state);
       const data = {
-        providers,
-        templates: templates.filter(value => value.enabled !== false),
-        schemes: schemes.filter(value => value.is_active),
-        pools,
+        tenants: scopeData.tenants,
+        projects: scopeData.projects,
+        providers: [],
+        templates: [],
+        schemes: [],
+        pools: [],
         playbooks: playbooks.filter(value => value.enabled !== false),
-        credentials,
+        credentials: [],
         roles,
         users: users.filter(value => value.is_active !== false),
-        blueprints,
+        blueprints: [],
+        managerRoles: [],
         vmClassification,
       };
-      const state = parts.core.stateDefaults();
-      const preferred = providers.find(value => value.type === 'proxmox') || providers[0];
-      state.providerId = String(preferred.id);
-      state.providerType = preferred.type;
-      state.providerCredentialId = String(preferred.credentials_id || '');
-      state.terraformTemplateId = data.templates.find(value => value.provider === preferred.type)?.id || '';
-      state.hostnameSchemeId = String(data.schemes[0]?.id || '');
-      state.hostnameEnabled = Boolean(allowed('hostnames.read') && data.schemes.length);
-      const enabledEnvironments = ['test', 'dev', 'nonprod', 'prod']
-        .filter(name => data.vmClassification?.environments?.[name] !== false);
-      state.environment = enabledEnvironments[0] || '';
-      state.apmid = String(data.vmClassification?.apmids?.[0] || '');
-      state.hostnameValues.location = String(data.vmClassification?.hostname_defaults?.location || 'wro');
-      state.hostnameValues.role = String(data.vmClassification?.hostname_defaults?.role || 'server');
-      if (options.hostnameSchemeId) {
-        state.hostnameSchemeId = String(options.hostnameSchemeId);
-        state.hostnameEnabled = true;
-      }
 
-      const dedicatedElsewhere = new Set(
-        blueprints.flatMap(value => value.manager_role_ids || []).map(Number)
-      );
-      const managerRequired = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
-      data.managerRoles = roles.filter(role =>
-        !dedicatedElsewhere.has(Number(role.id))
-        && [...managerRequired].every(permission => (role.permissions || []).includes(permission)));
-      const defaultManagerRoleNames = new Set(['Administrator', 'Infrastructure Administrator']);
-      state.managerRoleIds = data.managerRoles
-        .filter(role => defaultManagerRoleNames.has(role.name))
-        .map(role => Number(role.id));
-
+      let blueprintScope = null;
       let bodyRoot = null;
       let navRoot = null;
       let footerRoot = null;
@@ -208,9 +154,10 @@
           return;
         }
         try {
+          const requestOptions = { headers: parts.core.scopeHeaders(state) };
           const [nodeResult, templateResult] = await Promise.all([
-            api('/providers/' + provider.id + '/nodes'),
-            api('/providers/' + provider.id + '/templates'),
+            api('/providers/' + provider.id + '/nodes', requestOptions),
+            api('/providers/' + provider.id + '/templates', requestOptions),
           ]);
           state.nodes = nodeResult.items || [];
           state.templates = templateResult.items || [];
@@ -238,10 +185,11 @@
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         if (!provider || provider.type !== 'proxmox' || !state.node) return;
         try {
+          const requestOptions = { headers: parts.core.scopeHeaders(state) };
           const [storageResult, networkResult, qemuReadiness] = await Promise.all([
-            api('/providers/' + provider.id + '/storages?node=' + encodeURIComponent(state.node)),
-            api('/providers/' + provider.id + '/networks?node=' + encodeURIComponent(state.node)),
-            api('/providers/' + provider.id + '/qemu-agent-readiness').catch(error => ({
+            api('/providers/' + provider.id + '/storages?node=' + encodeURIComponent(state.node), requestOptions),
+            api('/providers/' + provider.id + '/networks?node=' + encodeURIComponent(state.node), requestOptions),
+            api('/providers/' + provider.id + '/qemu-agent-readiness', requestOptions).catch(error => ({
               ok: false,
               reason: error.message || 'readiness_check_failed',
             })),
@@ -263,7 +211,7 @@
               || state.snippetStorages[0];
             state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || '');
           }
-          if (!state.snippetStorages.length) { state.cloudInitSnippetStorage = ''; state.installQemuGuestAgent = false; }
+          if (!state.snippetStorages.length) state.cloudInitSnippetStorage = '';
           state.networks = (networkResult.items || []).filter(value => value.iface);
           if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
             state.storage = String(state.storages[0]?.storage || state.storages[0]?.id || '');
@@ -342,13 +290,20 @@
             state.storage = root.querySelector('[name="storage"]')?.value || state.storage;
             state.network = root.querySelector('[name="network"]')?.value || state.network;
             state.vlanId = root.querySelector('[name="vlan_id"]')?.value || '';
-            state.environment = root.querySelector('[name="environment"]')?.value || state.environment;
-            state.apmid = root.querySelector('[name="apmid"]')?.value.trim().toUpperCase() || state.apmid;
             state.selectEnvironmentOnExecute = root.querySelector('[name="select_environment_on_execute"]')?.checked ?? state.selectEnvironmentOnExecute;
             state.selectApmidOnExecute = root.querySelector('[name="select_apmid_on_execute"]')?.checked ?? state.selectApmidOnExecute;
+            state.environment = state.selectEnvironmentOnExecute
+              ? ''
+              : (root.querySelector('[name="environment"]')?.value || state.environment);
+            state.apmid = state.selectApmidOnExecute
+              ? ''
+              : (root.querySelector('[name="apmid"]')?.value.trim().toUpperCase() || state.apmid);
             if (state.environment) {
               state.hostnameValues.env = state.environment;
               state.hostnameValues.environment = state.environment;
+            } else if (state.selectEnvironmentOnExecute) {
+              delete state.hostnameValues.env;
+              delete state.hostnameValues.environment;
             }
             state.tags = root.querySelector('[name="tags"]')?.value.trim() || '';
             state.sshUsername = root.querySelector('[name="ssh_username"]')?.value.trim() || 'clouduser';
@@ -435,6 +390,7 @@
       function validateStep(index) {
         const errors = {};
         if (index === 0) {
+          if (!state.tenantId || !state.projectId) errors.project_id = 'Wybierz Tenant i Projekt dla Blueprintu.';
           if (!state.name) errors.name = 'Podaj nazwę Blueprintu.';
           if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(state.slug)) errors.slug = 'Slug musi mieć 1–63 znaków i używać liter, cyfr, _, . lub -.';
         } else if (index === 1) {
@@ -455,8 +411,15 @@
             if (!Number.isFinite(Number(state.disk)) || Number(state.disk) < 1) errors.disk = 'Dysk musi mieć co najmniej 1 GiB.';
             if (!state.storage) errors.storage = 'Wybierz storage.';
             if (!state.network) errors.network = 'Wybierz sieć/bridge.';
-            if (!state.environment) errors.environment = 'Wybierz Environment.';
-            if (!state.apmid) errors.apmid = 'Podaj lub wybierz APMID.';
+            if (!state.selectEnvironmentOnExecute && !state.environment) errors.environment = 'Wybierz Environment.';
+            if (!state.selectApmidOnExecute && !state.apmid) errors.apmid = 'Podaj lub wybierz APMID.';
+            if (state.selectEnvironmentOnExecute
+                && !['test', 'dev', 'nonprod', 'prod'].some(name => data.vmClassification?.environments?.[name] !== false)) {
+              errors.select_environment_on_execute = 'Brak włączonych Environment do wyboru podczas tworzenia VM.';
+            }
+            if (state.selectApmidOnExecute && !(data.vmClassification?.apmids || []).length) {
+              errors.select_apmid_on_execute = 'Brak skonfigurowanych APMID do wyboru podczas tworzenia VM.';
+            }
           } else {
             const template = data.templates.find(value => value.id === state.terraformTemplateId);
             const required = parts.core.requiredTemplateVariables(template);
@@ -480,9 +443,6 @@
           }
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
-          if (state.providerType === 'proxmox' && state.installQemuGuestAgent && !state.cloudInitSnippetStorage) {
-            errors.install_qemu_guest_agent = 'Instalacja QEMU Guest Agent wymaga storage z obsługą snippets na wybranym node.';
-          }
         }
         state.errors = errors;
         return !Object.keys(errors).length;
@@ -515,9 +475,14 @@
               { value: 'terraform', label: 'Terraform' },
               { value: 'opentofu', label: 'OpenTofu' },
             ], state.executor)));
+
+        const scopeFields = blueprintScope.renderFields();
+
         const content = node('div', { class: 'form-grid' },
           node('div', { class: 'blueprint-wizard-info wide' },
-            node('strong', { text: 'Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji.' })),
+            node('strong', { text: 'Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji.' }),
+            node('span', { text: 'Zakres: ' + blueprintScope.tenantLabel(state.tenantId) + ' · ' + blueprintScope.projectLabel(state.projectId) })),
+          ...scopeFields,
           name,
           checkboxField('Aktywny', 'is_active', state.active),
           field('Krótki opis', 'description', {
@@ -746,21 +711,25 @@
           field('VLAN ID (opcjonalnie)', 'vlan_id', { type: 'number', min: 1, max: 4094, value: state.vlanId }),
           selectField('Storage', 'storage', storageChoices, state.storage, { required: true, placeholder: 'Wybierz storage' }),
           selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' }),
-          selectField('Environment', 'environment',
-            ['test', 'dev', 'nonprod', 'prod']
-              .filter(name => data.vmClassification?.environments?.[name] !== false)
-              .map(name => ({ value: name, label: name.toUpperCase() })),
-            state.environment, { required: true, placeholder: 'Brak włączonych Environment' }),
-          (data.vmClassification?.apmids || []).length
-            ? selectField('APMID', 'apmid',
-                data.vmClassification.apmids.map(value => ({ value, label: value })),
-                state.apmid, { required: true, placeholder: 'Wybierz APMID' })
-            : field('APMID', 'apmid', {
-                value: state.apmid,
-                required: true,
-                placeholder: 'IAASTEAM',
-                help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
-              })
+          !state.selectEnvironmentOnExecute
+            ? selectField('Environment', 'environment',
+                ['test', 'dev', 'nonprod', 'prod']
+                  .filter(name => data.vmClassification?.environments?.[name] !== false)
+                  .map(name => ({ value: name, label: name.toUpperCase() })),
+                state.environment, { required: true, placeholder: 'Brak włączonych Environment' })
+            : null,
+          !state.selectApmidOnExecute
+            ? ((data.vmClassification?.apmids || []).length
+                ? selectField('APMID', 'apmid',
+                    data.vmClassification.apmids.map(value => ({ value, label: value })),
+                    state.apmid, { required: true, placeholder: 'Wybierz APMID' })
+                : field('APMID', 'apmid', {
+                    value: state.apmid,
+                    required: true,
+                    placeholder: 'IAASTEAM',
+                    help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
+                  }))
+            : null
         );
 
         const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(
@@ -805,6 +774,25 @@
         [runtimeEnvironment, runtimeApmid].forEach(wrapper => {
           wrapper.querySelector('input').addEventListener('change', event => {
             saveStateFromInput(event.currentTarget);
+            if (event.currentTarget.name === 'select_environment_on_execute') {
+              if (state.selectEnvironmentOnExecute) {
+                state.environment = '';
+                delete state.hostnameValues.env;
+                delete state.hostnameValues.environment;
+              } else {
+                state.environment = ['test', 'dev', 'nonprod', 'prod']
+                  .find(name => data.vmClassification?.environments?.[name] !== false) || '';
+                if (state.environment) {
+                  state.hostnameValues.env = state.environment;
+                  state.hostnameValues.environment = state.environment;
+                }
+              }
+            }
+            if (event.currentTarget.name === 'select_apmid_on_execute') {
+              state.apmid = state.selectApmidOnExecute
+                ? ''
+                : String(data.vmClassification?.apmids?.[0] || '');
+            }
             render();
           });
         });
@@ -868,9 +856,6 @@
             })));
         advanced.querySelectorAll('input,textarea').forEach(control => control.addEventListener('input', () => saveStateFromInput(control)));
 
-        const runtimeParts = [];
-        if (state.selectApmidOnExecute) runtimeParts.push('APMID');
-        if (state.selectEnvironmentOnExecute) runtimeParts.push('Environment');
         const qemuAgentInfo = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'QEMU Guest Agent' }),
           node('span', { text: state.installQemuGuestAgent
@@ -881,10 +866,10 @@
 
         const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'Klasyfikacja VM' }),
-          node('span', { text: state.apmid && state.environment
-            ? state.apmid + '.' + state.environment.toUpperCase()
-              + (runtimeParts.length ? ' · przy tworzeniu VM wybierane: ' + runtimeParts.join(' i ') : ' · wartości stałe z Blueprintu')
-            : 'Wybierz APMID i Environment. Tagi Proxmox zostaną dodane automatycznie.' }));
+          node('span', { text: [
+            state.selectApmidOnExecute ? 'APMID: wybierany przy tworzeniu VM' : 'APMID: ' + (state.apmid || 'nieustawiony'),
+            state.selectEnvironmentOnExecute ? 'Environment: wybierany przy tworzeniu VM' : 'Environment: ' + (state.environment ? state.environment.toUpperCase() : 'nieustawiony'),
+          ].join(' · ') }));
 
         return node('div', { class: 'blueprint-wizard-step-stack' },
           node('div', { class: 'blueprint-wizard-presets' },
@@ -1071,9 +1056,9 @@
         const isProxmox = state.providerType === 'proxmox';
         const snippetAvailable = Boolean(state.cloudInitSnippetStorage);
         const sshReady = state.qemuAgentSshReady !== false;
-        const install = checkboxField('Instaluj qemu-guest-agent przez cloud-init', 'install_qemu_guest_agent', state.installQemuGuestAgent);
+        const install = checkboxField('Instaluj QEMU Guest Agent automatycznie', 'install_qemu_guest_agent', state.installQemuGuestAgent);
         const installControl = install.querySelector('input');
-        installControl.disabled = !isProxmox || !snippetAvailable;
+        installControl.disabled = !isProxmox;
         installControl.addEventListener('change', event => { state.installQemuGuestAgent = event.currentTarget.checked; render(); });
         const wait = checkboxField('Czekaj na QEMU Guest Agent po Terraform apply', 'wait_agent', state.waitAgent);
         const waitControl = wait.querySelector('input');
@@ -1089,12 +1074,9 @@
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki runtime, zależności, retry, timeout, rollback i conditions.'
               : 'Hostname, IPAM, cloud-init i tagi są przygotowywane przed runtime; workflow pokazuje tylko faktycznie wykonywane operacje.' })),
-          isProxmox && !snippetAvailable ? node('div', { class: 'callout warning' },
-            node('strong', { text: 'Automatyczna instalacja QEMU Guest Agent niedostępna' }),
-            node('p', { text: 'Na wybranym node nie wykryto storage obsługującego snippets. Możesz nadal czekać na agenta już obecnego w template, ale instalacja przez cloud-init wymaga content „Snippets”.' })) : null,
-          isProxmox && state.installQemuGuestAgent && !sshReady ? node('div', { class: 'callout warning' },
-            node('strong', { text: 'Preflight SSH Proxmox nie jest gotowy' }),
-            node('p', { text: 'Instalację można włączyć i zapisać w Blueprintcie, ale wykonanie będzie zablokowane do czasu poprawnego preflight SSH (' + (state.qemuAgentSshReason || 'ssh_not_ready') + '). Sprawdź SSH, firewall oraz PROXMOX_VE_SSH_*.' })) : null,
+          isProxmox && state.installQemuGuestAgent && (!snippetAvailable || !sshReady) ? node('div', { class: 'callout info' },
+            node('strong', { text: 'QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM' }),
+            node('p', { text: 'Brak gotowego uploadu snippetów/SSH do noda PVE (' + (state.qemuAgentSshReason || (snippetAvailable ? 'ssh_not_ready' : 'snippets_unavailable')) + '). Workflow utworzy jednorazowe konto przez natywny cloud-init, zainstaluje agenta w VM, utworzy konto docelowe z Credentiala i usunie konto tymczasowe. Przy DHCP template musi już udostępniać adres przez Guest Agent albo Blueprint powinien używać statycznego IP/IPAM.' })) : null,
           isProxmox ? install : null,
           isProxmox ? wait : null,
           toggle,
@@ -1170,6 +1152,8 @@
           ['Blueprint', [
             ['Nazwa', state.name],
             ['Slug', state.slug],
+            ['Tenant', blueprintScope.tenantLabel(state.tenantId)],
+            ['Projekt', blueprintScope.projectLabel(state.projectId)],
             ['Opis', state.description || '—'],
           ]],
           ['Platforma', [
@@ -1185,15 +1169,19 @@
             ['Dysk', state.disk + ' GB'],
             ['Storage', state.storage],
             ['Network', state.network],
-            ['Environment', state.environment ? state.environment.toUpperCase() : '—'],
+            ['Environment', state.selectEnvironmentOnExecute
+              ? 'Wybierany podczas tworzenia VM'
+              : (state.environment ? state.environment.toUpperCase() : '—')],
             ['Environment przy tworzeniu VM', state.selectEnvironmentOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
-            ['APMID', state.apmid || '—'],
+            ['APMID', state.selectApmidOnExecute ? 'Wybierany podczas tworzenia VM' : (state.apmid || '—')],
             ['APMID przy tworzeniu VM', state.selectApmidOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
             ['Credential VM', state.guestCredentialId
               ? (data.credentials.find(value => String(value.id) === String(state.guestCredentialId))?.name || ('#' + state.guestCredentialId))
               : 'Brak'],
             ['QEMU Guest Agent', state.installQemuGuestAgent ? (state.waitAgent ? 'Instalacja przez cloud-init + oczekiwanie' : 'Instalacja przez cloud-init, bez oczekiwania') : (state.waitAgent ? 'Bez instalacji, oczekiwanie na agenta z template' : 'Wyłączony')],
-            ['Klasyfikacja', state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—'],
+            ['Klasyfikacja', state.selectApmidOnExecute || state.selectEnvironmentOnExecute
+              ? 'Wyliczana podczas tworzenia VM'
+              : (state.apmid && state.environment ? state.apmid + '.' + state.environment.toUpperCase() : '—')],
           ] : [
             ['Szablon IaC', state.terraformTemplateId],
             ['Parametry', Object.keys(state.genericVariables).length + ' ustawionych'],
@@ -1222,7 +1210,7 @@
           content.append(node('section', { class: 'blueprint-wizard-review-section' },
             node('h4', { text: title }),
             node('div', { class: 'blueprint-wizard-review-grid' },
-              ...rows.map(([label, value]) => summaryRow(label, value)))));
+              ...rows.map(([label, value]) => parts.ui.summaryRow(label, value)))));
         });
         content.append(node('section', { class: 'blueprint-wizard-review-section' },
           node('h4', { text: 'Workflow' }),
@@ -1321,7 +1309,11 @@
         bodyRoot.replaceChildren(progress);
         try {
           progress.querySelector('span').textContent = 'Zapisywanie definicji i workflow…';
-          const created = await api('/blueprints', { method: 'POST', body: payload });
+          const created = await api('/blueprints', {
+            method: 'POST',
+            body: payload,
+            headers: parts.core.scopeHeaders(state),
+          });
           progress.replaceChildren(
             node('span', { class: 'blueprint-wizard-success-icon' }, appIcon('check')),
             node('h3', { text: 'Blueprint został utworzony i jest gotowy do użycia.' }),
@@ -1370,7 +1362,7 @@
         navRoot.replaceChildren(renderNavigation());
         bodyRoot.replaceChildren(renderStepBody());
         renderFooter();
-        errorText(bodyRoot, state.errors);
+        parts.ui.errorText(bodyRoot, state.errors);
         const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         bodyRoot.scrollTo?.({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
       }
@@ -1385,7 +1377,11 @@
       footerRoot = dom.modalActions;
       if (!dom.modal.open) dom.modal.showModal();
 
-      await discoverProvider(state.providerId);
+      blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, discoverProvider, render });
+      try { await blueprintScope.loadResources(true); } catch (error) {
+        state.providerId = '';
+        state.errors = { project_id: error.message };
+      }
       render();
     } catch (error) {
       toast(error.message, 'error');

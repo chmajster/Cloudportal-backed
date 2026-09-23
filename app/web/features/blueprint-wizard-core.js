@@ -165,6 +165,8 @@
       preset: 'standard',
       environment: '',
       apmid: 'LEO',
+      tenantId: '',
+      projectId: '',
       selectEnvironmentOnExecute: false,
       selectApmidOnExecute: false,
       tags: '',
@@ -208,6 +210,14 @@
     };
   }
 
+  function scopeHeaders(state) {
+    if (!state?.tenantId || !state?.projectId) return {};
+    return {
+      'X-Tenant-ID': String(state.tenantId),
+      'X-Project-ID': String(state.projectId),
+    };
+  }
+
   function requiredTemplateVariables(template) {
     return new Set(template?.variables_schema?.required || []);
   }
@@ -238,15 +248,14 @@
     let variables;
     if (provider.type === 'proxmox') {
       const tags = String(state.tags || '').split(/[,\n]+/).map(value => value.trim().toLowerCase()).filter(Boolean);
-      if (state.apmid && state.environment) {
-        const apmid = String(state.apmid).trim().toLowerCase();
-        const environment = String(state.environment).trim().toLowerCase();
+      const fixedApmid = state.selectApmidOnExecute ? '' : String(state.apmid || '').trim();
+      const fixedEnvironment = state.selectEnvironmentOnExecute ? '' : String(state.environment || '').trim();
+      if (fixedApmid && fixedEnvironment) {
+        const apmid = fixedApmid.toLowerCase();
+        const environment = fixedEnvironment.toLowerCase();
         tags.push('apmid-' + apmid, 'env-' + environment, apmid + '.' + environment);
       }
       const uniqueTags = [...new Set(tags)];
-      if (state.installQemuGuestAgent && !state.guestCredentialId && !state.cloudInitSnippetStorage) {
-        throw new Error('Instalacja QEMU Guest Agent wymaga storage obsługującego snippets na wybranym node.');
-      }
       variables = {
         name: state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName,
         node: state.node,
@@ -259,7 +268,7 @@
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
         install_qemu_guest_agent: Boolean(state.installQemuGuestAgent),
-        cloud_init_snippet_storage: state.installQemuGuestAgent && !state.guestCredentialId ? state.cloudInitSnippetStorage : null,
+        cloud_init_snippet_storage: state.installQemuGuestAgent ? state.cloudInitSnippetStorage : null,
         tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
@@ -277,6 +286,12 @@
       }
     }
 
+    const hostnameValues = hostnameDefaultsForSelectedScheme(state, data);
+    if (state.selectEnvironmentOnExecute) {
+      delete hostnameValues.env;
+      delete hostnameValues.environment;
+    }
+
     const deployment = {
       name: state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName,
       provider_id: Number(state.providerId),
@@ -284,13 +299,13 @@
       template: template.id,
       variables,
       executor: state.executor,
-      hostname_values: hostnameDefaultsForSelectedScheme(state, data),
+      hostname_values: hostnameValues,
     };
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
     if (state.guestCredentialId) deployment.guest_credential_id = Number(state.guestCredentialId);
-    if (state.apmid) deployment.apmid = String(state.apmid).trim().toUpperCase();
-    if (state.environment) deployment.environment = String(state.environment).trim().toLowerCase();
+    if (!state.selectApmidOnExecute && state.apmid) deployment.apmid = String(state.apmid).trim().toUpperCase();
+    if (!state.selectEnvironmentOnExecute && state.environment) deployment.environment = String(state.environment).trim().toLowerCase();
     deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute);
     deployment.select_environment_on_execute = Boolean(state.selectEnvironmentOnExecute);
 
@@ -317,7 +332,8 @@
     const autoWorkflow = workflow({
       hostname: state.hostnameEnabled,
       ipam: state.ipMode === 'ipam',
-      tags: Boolean(String(state.tags || '').trim() || (state.apmid && state.environment)),
+      tags: Boolean(String(state.tags || '').trim()
+        || (!state.selectApmidOnExecute && !state.selectEnvironmentOnExecute && state.apmid && state.environment)),
       waitAgent: state.providerType === 'proxmox' && state.waitAgent,
       ansible: state.ansibleEnabled,
     });
@@ -358,6 +374,7 @@
     schemaType,
     coerceSchemaValue,
     defaultGenericVariables,
+    scopeHeaders,
     requiredTemplateVariables,
     hostnameDefaultsForSelectedScheme,
     stateDefaults,

@@ -67,6 +67,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/blueprint-wizard-core.js',
         'features/blueprint-wizard-hostname.js',
         'features/blueprint-wizard-network.js',
+        'features/blueprint-wizard-scope.js',
+        'features/blueprint-wizard-ui.js',
         'features/blueprint-wizard.js',
         'features/blueprints.js',
         'features/hostnames.js',
@@ -402,6 +404,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Odśwież patterny'" in script
     assert "Lista patternów hostname odświeżona." in script
     assert "registerExtension('blueprint-wizard-network'" in script
+    assert "registerExtension('blueprint-wizard-scope'" in script
+    assert "registerExtension('blueprint-wizard-ui'" in script
     assert "registerExtension('blueprint-wizard'" in script
     assert "registerExtension('blueprint-vra-designer'" in script
     assert "body: JSON.stringify(state.blueprint)" not in script
@@ -426,7 +430,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "dualListGroup('Dozwolone role'" in script
     assert "dualListGroup('Role zarządzające Blueprintem'" in script
     assert "new Set(['Administrator', 'Infrastructure Administrator'])" in script
-    assert "state.managerRoleIds = data.managerRoles" in script
+    assert "state.managerRoleIds = resetSelection" in script
     assert "const defaultManagerRoleIds = item" in script
     assert "dualListGroup('Dozwoleni użytkownicy'" in script
     assert "'Dodaj zaznaczone'" in script
@@ -435,9 +439,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'Usuń wszystkie'" in script
     assert "'Podsumowanie', 'Podsumowanie'" in script
     assert "Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji." in script
+    assert "selectField('Tenant', 'tenant_id'" in script
+    assert "selectField('Projekt', 'project_id'" in script
+    assert "'X-Tenant-ID': String(state.tenantId)" in script
+    assert "'X-Project-ID': String(state.projectId)" in script
+    assert "!state.selectEnvironmentOnExecute" in script
+    assert "!state.selectApmidOnExecute" in script
     assert "state.slug = parts.core.slugify" in script
-    assert "api('/providers/' + provider.id + '/nodes')" in script
-    assert "api('/providers/' + provider.id + '/templates')" in script
+    assert "api('/providers/' + provider.id + '/nodes', requestOptions)" in script
+    assert "api('/providers/' + provider.id + '/templates', requestOptions)" in script
     assert "VMID " in script
     assert "presetButton('small', 'Mała', 1, 2048, 20)" in script
     assert "presetButton('standard', 'Standardowa', 2, 4096, 40)" in script
@@ -461,13 +471,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Brak uprawnień do uruchomienia" in script
     assert script.count("workflowNeedsTags(") >= 2
     assert "Brak credentiali SSH z hasłem lub kluczem prywatnym" in script
-    assert "Automatyczna instalacja QEMU Guest Agent niedostępna" in script
-    assert "Preflight SSH Proxmox nie jest gotowy" in script
-    assert "storage obsługującego snippets" in script
+    assert "QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM" in script
+    assert "jednorazowe konto przez natywny cloud-init" in script
+    assert "statycznego IP/IPAM" in script
     assert "Credential ustawiany na VM" in script
     assert "blueprint-wizard-ssh-credential-users" in script
     assert "wybrać użytkownika z zapisanych Credentiali" in script
-    assert "Instaluj qemu-guest-agent przez cloud-init" in script
+    assert "Instaluj QEMU Guest Agent automatycznie" in script
     assert "Czekaj na QEMU Guest Agent po Terraform apply" in script
     assert "install_qemu_guest_agent" in script
     assert "cloud_init_snippet_storage" in script
