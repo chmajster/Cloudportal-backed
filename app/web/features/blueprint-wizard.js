@@ -265,8 +265,6 @@
           safeApi('/credentials?limit=200', [], requestOptions),
           allowed('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
         ]);
-        if (!providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
-        if (!templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 
         data.providers = providers;
         data.templates = templates.filter(value => value.enabled !== false);
@@ -274,6 +272,9 @@
         data.pools = pools;
         data.credentials = credentials;
         data.blueprints = blueprints;
+        if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
+        if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
+
         resetScopeDependentState();
         refreshManagerRoles(resetManagerSelection);
         await discoverProvider(state.providerId);
