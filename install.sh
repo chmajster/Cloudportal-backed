@@ -707,7 +707,14 @@ docker_status_check() {
       continue
     fi
 
-    if [[ "$service" == postgres || "$service" == redis || "$service" == api ]]; then
+    if [[ "$service" == postgres || "$service" == redis ]]; then
+      if [[ "$health" == healthy ]]; then
+        ui_ok "$service: running, health=healthy"
+      else
+        ui_fail "$service: running, health=${health:-unknown}; oczekiwano healthy."
+        failed=1
+      fi
+    elif [[ "$service" == api && "$health" != none ]]; then
       if [[ "$health" == healthy ]]; then
         ui_ok "$service: running, health=healthy"
       else
@@ -806,7 +813,11 @@ docker_service_ready() {
 
   if ((require_health)); then
     health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${ids[0]}" 2>/dev/null || true)
-    [[ "$health" == healthy ]] || return 1
+    if ((require_health == 1)); then
+      [[ "$health" == healthy ]] || return 1
+    elif [[ "$health" != none ]]; then
+      [[ "$health" == healthy ]] || return 1
+    fi
   fi
 }
 
@@ -978,7 +989,7 @@ docker_repair() {
     ui_ok 'migrate: naprawiona, exit=0.'
   fi
 
-  if ((infra_repaired || migrate_repaired)) || ! docker_service_ready api 1; then
+  if ((infra_repaired || migrate_repaired)) || ! docker_service_ready api 2; then
     mapfile -t ids < <(
       docker ps -aq \
         --filter "label=com.docker.compose.project=$docker_project" \
@@ -1005,12 +1016,12 @@ docker_repair() {
     api_repaired=1
   fi
 
-  if ! docker_wait_service_ready api 1 45; then
+  if ! docker_wait_service_ready api 2 45; then
     ui_fail 'API nie osiągnęło stanu running/healthy.'
     docker_compose logs --tail=100 api || true
     return 1
   fi
-  ui_ok 'api: running, health=healthy.'
+  ui_ok 'api: running i gotowe do obsługi ruchu.'
 
   mapfile -t ids < <(
     docker ps -aq \
