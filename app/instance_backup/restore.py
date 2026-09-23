@@ -40,8 +40,9 @@ RESTORE_PROGRESS = {
     "safety_backup": 15,
     "extract": 28,
     "database_restore": 52,
-    "secret_restore": 66,
-    "migrations": 78,
+    "workspace_restore": 60,
+    "secret_restore": 68,
+    "migrations": 80,
     "session_continuity": 86,
     "health": 95,
     "completed": 100,
@@ -55,6 +56,7 @@ RESTORE_LABELS = {
     "safety_backup": "Backup bezpieczeństwa bieżącej instancji",
     "extract": "Przygotowanie danych do odtworzenia",
     "database_restore": "Przywracanie PostgreSQL",
+    "workspace_restore": "Przywracanie workspace Terraform",
     "secret_restore": "Przywracanie materiału kryptograficznego",
     "migrations": "Migracje bazy danych",
     "session_continuity": "Przywracanie sesji administratora",
@@ -186,6 +188,58 @@ def _restore_session_snapshot(snapshot: dict | None) -> tuple[bool, int | None]:
         return True, user.id
 
 
+def _restore_workspaces(extracted: Path, operation_id: str) -> None:
+    source = extracted / "workspaces"
+    target = settings().data_dir / "workspaces"
+    if target.is_symlink():
+        raise RuntimeError("Refusing symlinked target workspace directory")
+
+    replacement = settings().data_dir / f".workspaces-restore-{operation_id}"
+    previous = settings().data_dir / f".workspaces-previous-{operation_id}"
+    shutil.rmtree(replacement, ignore_errors=True)
+    shutil.rmtree(previous, ignore_errors=True)
+    replacement.mkdir(parents=True, mode=0o700)
+    os.chmod(replacement, 0o700)
+
+    if source.exists():
+        if source.is_symlink() or not source.is_dir():
+            raise RuntimeError("Backup workspace payload is invalid")
+        for item in source.rglob("*"):
+            relative = item.relative_to(source)
+            destination = replacement / relative
+            if item.is_symlink():
+                raise RuntimeError("Backup workspace payload contains a symlink")
+            if item.is_dir():
+                destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+                os.chmod(destination, 0o700)
+            elif item.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                os.chmod(destination.parent, 0o700)
+                with item.open("rb") as input_stream, destination.open("xb") as output_stream:
+                    os.chmod(destination, 0o600)
+                    shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
+                    output_stream.flush()
+                    os.fsync(output_stream.fileno())
+            else:
+                raise RuntimeError("Backup workspace payload contains a non-regular entry")
+
+    moved_previous = False
+    try:
+        if target.exists():
+            os.replace(target, previous)
+            moved_previous = True
+        os.replace(replacement, target)
+        os.chmod(target, 0o700)
+    except Exception:
+        if moved_previous and not target.exists() and previous.exists():
+            os.replace(previous, target)
+        raise
+    else:
+        shutil.rmtree(previous, ignore_errors=True)
+    finally:
+        shutil.rmtree(replacement, ignore_errors=True)
+
+
 def _upgrade_database() -> None:
     engine().dispose()
     command.upgrade(Config(str(settings().source_dir / "alembic.ini")), "head")
@@ -302,6 +356,9 @@ def execute_restore(backup_id: int, restore_uuid: str, safety_backup: bool = Tru
         destructive_started = True
         restore_database(extracted / "database.dump")
 
+        write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="workspace_restore")
+        _restore_workspaces(extracted, restore_uuid)
+
         write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="secret_restore")
         previous_key = install_local_key(extracted)
 
@@ -360,6 +417,7 @@ def execute_restore(backup_id: int, restore_uuid: str, safety_backup: bool = Tru
                     shutil.rmtree(rollback_extracted)
                 extract_archive(safety_path, rollback_extracted)
                 restore_database(rollback_extracted / "database.dump")
+                _restore_workspaces(rollback_extracted, "rollback-" + restore_uuid)
                 restore_previous_local_key(previous_key)
                 _upgrade_database()
                 _health_validation()
