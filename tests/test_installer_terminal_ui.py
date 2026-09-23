@@ -121,7 +121,7 @@ def test_docker_compose_orders_application_startup_by_health():
     assert compose.count('postgres: {condition: service_healthy}') >= 4
     assert compose.count('redis: {condition: service_healthy}') >= 4
     assert 'api: {condition: service_healthy}' in compose
-    assert 'urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=3)' in compose
+    assert 'socket.create_connection(("127.0.0.1", 8765), 3)' in compose
     assert 'start_period: 10s' in compose
     assert 'start_period: 5s' in compose
 
