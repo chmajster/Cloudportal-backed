@@ -22,6 +22,13 @@ REQUIRED_MEMBERS = {"manifest.json", "checksums.json", "database.dump", "configu
 ALLOWED_MEMBERS = REQUIRED_MEMBERS | {"secrets/master.key"}
 
 
+def _allowed_member(name: str) -> bool:
+    if name in ALLOWED_MEMBERS:
+        return True
+    path = PurePosixPath(name)
+    return len(path.parts) >= 2 and path.parts[0] == "workspaces"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -116,7 +123,7 @@ def inspect_archive(path: Path) -> dict:
         for member in members:
             if not member.isfile() or member.issym() or member.islnk() or not _safe_member_name(member.name):
                 raise ValueError("Backup contains an unsafe archive entry")
-            if member.name not in ALLOWED_MEMBERS or member.name in by_name:
+            if not _allowed_member(member.name) or member.name in by_name:
                 raise ValueError("Backup contains an unexpected archive entry")
             total += member.size
             if total > max_uncompressed:
