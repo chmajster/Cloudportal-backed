@@ -3,7 +3,12 @@ from datetime import timedelta
 from app.database import session
 from app.instance_backup.models import InstanceBackup, utcnow
 from app.instance_backup.paths import generated_dir
-from app.instance_backup.service import cleanup_expired_backups, generated_filename, public_status
+from app.instance_backup.service import (
+    cleanup_expired_backups,
+    collect_workspace_material,
+    generated_filename,
+    public_status,
+)
 
 
 def test_generated_filename_is_sanitized_cpb_name():
@@ -59,3 +64,26 @@ def test_nonexpired_backup_remains_available(system):
         db.commit()
     assert cleanup_expired_backups() == 0
     assert path.exists()
+
+
+def test_workspace_snapshot_copies_durable_files_and_skips_runtime_secrets(system, tmp_path):
+    workspace = __import__("app.config", fromlist=["settings"]).settings().data_dir / "workspaces" / "deployment-1"
+    workspace.mkdir(parents=True)
+    (workspace / "terraform.tfstate").write_text('{"version":4}')
+    (workspace / ".cloudportal-qemu-bootstrap-key").write_text("private-key")
+    (workspace / "terraform.tfvars.json").write_text('{"password":"plaintext"}')
+    (workspace / ".execution.lock").write_text("")
+    cache = workspace / ".terraform" / "providers"
+    cache.mkdir(parents=True)
+    (cache / "provider").write_bytes(b"binary")
+
+    staging = tmp_path / "workspace-staging"
+    staging.mkdir()
+    members = collect_workspace_material(staging)
+
+    assert "workspaces/deployment-1/terraform.tfstate" in members
+    assert "workspaces/deployment-1/.cloudportal-qemu-bootstrap-key" in members
+    assert not any("terraform.tfvars.json" in item for item in members)
+    assert not any(".terraform/" in item for item in members)
+    assert not any(".execution.lock" in item for item in members)
+    assert (staging / "workspaces/deployment-1/terraform.tfstate").read_text() == '{"version":4}'
