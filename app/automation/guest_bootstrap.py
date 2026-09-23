@@ -3,7 +3,6 @@ import io
 import json
 import re
 import secrets
-import shlex
 
 import paramiko
 
@@ -134,12 +133,13 @@ def provision_guest(context, address: str, bootstrap: dict, db, credential_id: i
         )
 
         private_key = secret.get('private_key')
+        final_public_key = None
         if private_key:
-            public_key = public_key_from_private_key(private_key)
+            final_public_key = public_key_from_private_key(private_key)
             _run(
                 client,
                 f"sudo -n tee /home/{username}/.ssh/authorized_keys >/dev/null",
-                stdin_text=public_key + '\n',
+                stdin_text=final_public_key + '\n',
             )
             _run(
                 client,
@@ -201,3 +201,9 @@ def provision_guest(context, address: str, bootstrap: dict, db, credential_id: i
         ) from None
     finally:
         verify.close()
+
+    return {
+        'ssh_username': credential.username,
+        'ssh_public_key': final_public_key,
+    }
+
