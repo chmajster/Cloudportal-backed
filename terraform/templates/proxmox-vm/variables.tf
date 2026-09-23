@@ -64,3 +64,25 @@ variable "tags" {
   type    = list(string)
   default = []
 }
+
+# Worker-only NoCloud media references; not accepted as public VM inputs.
+variable "cloud_init_seed_path" {
+  type    = string
+  default = null
+}
+variable "cloud_init_seed_checksum" {
+  type    = string
+  default = null
+}
+variable "cloud_init_seed_storage" {
+  type    = string
+  default = null
+}
+variable "cloud_init_seed_interface" {
+  type    = string
+  default = null
+}
+variable "cloud_init_seed_mac" {
+  type    = string
+  default = null
+}

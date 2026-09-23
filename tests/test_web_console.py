@@ -487,7 +487,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "snippetStorages" in script
     assert "ansibleVariables.hostname = '{{ hostname }}'" in script
     assert "add('clone', 'clone_vm')" not in script
-    assert "add('cloud_init', 'cloud_init')" not in script
+    assert "if (options.cloudInit) add('cloud_init', 'cloud_init')" in script
+    assert "registerExtension('blueprint-wizard-cloud-init'" in script
+    assert 'Użytkownik, hasło lub klucz z Dostępów' in script
+    assert 'NoCloud ISO (CIDATA) przez API Proxmoxa' in script
+    assert 'Podgląd Cloud-init bez sekretów' in script
+    assert '!parts.cloudInit.enabled(state) && isProxmox' in script
     assert "add('apply', 'terraform_apply')" in script
     assert "add('guest_ip', 'wait_for_ip')" in script
     assert "Legacy / niedostępne dla" in script

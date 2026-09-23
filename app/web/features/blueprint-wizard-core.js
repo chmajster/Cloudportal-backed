@@ -194,6 +194,7 @@
       playbookId: '',
       ansibleCredentialId: '',
       ansibleVariables: {},
+      cloudInitEnabled: true,
       installQemuGuestAgent: true,
       waitAgent: true,
       advancedWorkflow: false,
@@ -271,7 +272,7 @@
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
         install_qemu_guest_agent: Boolean(state.installQemuGuestAgent),
-        cloud_init_snippet_storage: state.installQemuGuestAgent ? state.cloudInitSnippetStorage : null,
+        cloud_init_snippet_storage: !parts.cloudInit?.enabled(state) && state.installQemuGuestAgent && !state.guestCredentialId ? state.cloudInitSnippetStorage : null,
         tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
@@ -333,11 +334,11 @@
 
   function buildPayload(state, data) {
     const autoWorkflow = workflow({
-      cloudInit: state.providerType === 'proxmox',
       hostname: state.hostnameEnabled,
       ipam: state.ipMode === 'ipam',
       tags: Boolean(String(state.tags || '').trim()
         || (!state.selectApmidOnExecute && !state.selectEnvironmentOnExecute && state.apmid && state.environment)),
+      cloudInit: state.providerType === 'proxmox' && state.cloudInitEnabled !== false,
       waitAgent: state.providerType === 'proxmox' && state.waitAgent,
       ansible: state.ansibleEnabled,
     });

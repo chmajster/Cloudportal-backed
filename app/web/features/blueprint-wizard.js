@@ -255,6 +255,7 @@
           dns_domain: 'dnsDomain',
           ansible_enabled: 'ansibleEnabled',
           ansible_credentials_id: 'ansibleCredentialId',
+          cloud_init_enabled: 'cloudInitEnabled',
           install_qemu_guest_agent: 'installQemuGuestAgent',
           wait_agent: 'waitAgent',
           advanced_workflow: 'advancedWorkflow',
@@ -328,6 +329,8 @@
             state.ansibleVariables[input.dataset.ansibleVariable] = input.value.trim();
           });
         } else if (state.step === 6) {
+          const cloudCredential = root.querySelector('[name="cloud_init_guest_credential_id"]');
+          if (cloudCredential) state.guestCredentialId = cloudCredential.value;
           state.installQemuGuestAgent = root.querySelector('[name="install_qemu_guest_agent"]')?.checked ?? state.installQemuGuestAgent;
           state.waitAgent = root.querySelector('[name="wait_agent"]')?.checked ?? state.waitAgent;
           state.advancedWorkflow = root.querySelector('[name="advanced_workflow"]')?.checked ?? state.advancedWorkflow;
@@ -386,6 +389,7 @@
         if (!state.workflow.some(value => ['create_vm', 'clone_vm', 'terraform_apply'].includes(value.type))) {
           errors.workflow = 'Workflow musi zawierać krok tworzący lub stosujący VM.';
         }
+        Object.assign(errors, parts.cloudInit.validate(state));
         return errors;
       }
 
@@ -445,7 +449,6 @@
           }
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
-          Object.assign(errors, parts.cloudInit.validate(state));
         }
         state.errors = errors;
         return !Object.keys(errors).length;
@@ -862,7 +865,7 @@
         const qemuAgentInfo = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'QEMU Guest Agent' }),
           node('span', { text: state.installQemuGuestAgent
-            ? 'Automatyczna instalacja przez cloud-init: włączona. Snippet storage: ' + (state.cloudInitSnippetStorage || 'brak')
+            ? (parts.cloudInit.enabled(state) ? 'Automatyczna instalacja z NoCloud ISO przez API Proxmoxa' : 'Starszy tryb instalacji agenta; snippet storage: ' + (state.cloudInitSnippetStorage || 'brak'))
               + '. Oczekiwanie w workflow: ' + (state.waitAgent ? 'włączone.' : 'wyłączone.')
             : (state.waitAgent ? 'Automatyczna instalacja jest wyłączona. Workflow będzie czekać na QEMU Guest Agent już obecny w obrazie/template.'
               : 'Automatyczna instalacja i oczekiwanie na QEMU Guest Agent są wyłączone.') }));
@@ -986,7 +989,6 @@
 
       function currentAutoWorkflow() {
         return parts.core.workflow({
-          cloudInit: state.providerType === 'proxmox',
           hostname: state.hostnameEnabled,
           ipam: state.ipMode === 'ipam',
           tags: Boolean(
@@ -996,21 +998,10 @@
             || state.selectApmidOnExecute
             || state.selectEnvironmentOnExecute
           ),
+          cloudInit: state.providerType === 'proxmox' && state.cloudInitEnabled !== false,
           waitAgent: state.providerType === 'proxmox' && state.waitAgent,
           ansible: state.ansibleEnabled,
         });
-      }
-
-      function workflowVisual(steps) {
-        const visual = node('div', { class: 'blueprint-wizard-workflow-visual' });
-        steps.forEach((step, index) => {
-          visual.append(node('div', { class: 'blueprint-wizard-workflow-card' },
-            node('span', { class: 'workflow-dag-index', text: String(index + 1) }),
-            node('strong', { text: parts.core.workflowLabel(step.type) }),
-            node('small', { text: step.depends_on?.length ? 'po: ' + step.depends_on.join(', ') : 'start' })));
-          if (index < steps.length - 1) visual.append(node('span', { class: 'blueprint-wizard-workflow-arrow', text: '↓' }));
-        });
-        return visual;
       }
 
       function workflowEditorRow(step, index) {
@@ -1058,16 +1049,19 @@
           render();
         });
         const isProxmox = state.providerType === 'proxmox';
+        const snippetAvailable = Boolean(state.cloudInitSnippetStorage);
+        const sshReady = state.qemuAgentSshReady !== false;
         const install = checkboxField('Instaluj QEMU Guest Agent automatycznie', 'install_qemu_guest_agent', state.installQemuGuestAgent);
         const installControl = install.querySelector('input');
         installControl.disabled = !isProxmox;
-        installControl.addEventListener('change', event => { captureCurrentStep(); state.installQemuGuestAgent = event.currentTarget.checked; render(); });
+        installControl.addEventListener('change', event => { const checked = event.currentTarget.checked; captureCurrentStep(); state.installQemuGuestAgent = checked; render(); });
         const wait = checkboxField('Czekaj na QEMU Guest Agent po Terraform apply', 'wait_agent', state.waitAgent);
         const waitControl = wait.querySelector('input');
         waitControl.disabled = !isProxmox;
         waitControl.addEventListener('change', event => {
+          const checked = event.currentTarget.checked;
           captureCurrentStep();
-          state.waitAgent = event.currentTarget.checked;
+          state.waitAgent = checked;
           if (!state.advancedWorkflow) state.workflow = currentAutoWorkflow();
           render();
         });
@@ -1076,12 +1070,18 @@
             node('strong', { text: state.advancedWorkflow ? 'Workflow edytowany ręcznie' : 'Workflow budowany automatycznie' }),
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki runtime, zależności, retry, timeout, rollback i conditions.'
-              : 'Cloud-init przygotowuje konto i konfigurację pierwszego startu przed Terraform. Instalacja pakietów następuje wewnątrz VM przy jej pierwszym uruchomieniu.' })),
-          isProxmox ? parts.cloudInit.render({ state, data, capture: captureCurrentStep, rerender: render }) : null,
+              : 'Hostname, IPAM, cloud-init i tagi są przygotowywane przed runtime; workflow pokazuje tylko faktycznie wykonywane operacje.' })),
+          !parts.cloudInit.enabled(state) && isProxmox && state.installQemuGuestAgent && (state.guestCredentialId || !snippetAvailable || !sshReady) ? node('div', { class: 'callout info' },
+            node('strong', { text: 'QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM' }),
+            node('p', { text: (state.guestCredentialId
+              ? 'Wybrano Credential VM, więc workflow celowo pomija upload snippets i SSH do noda PVE.'
+              : 'Brak gotowego uploadu snippetów/SSH do noda PVE (' + (state.qemuAgentSshReason || (snippetAvailable ? 'ssh_not_ready' : 'snippets_unavailable')) + ').')
+              + ' Workflow utworzy jednorazowe konto przez natywny cloud-init, zainstaluje agenta w VM, utworzy konto docelowe z Credentiala i usunie konto tymczasowe. Przy DHCP template musi już udostępniać adres przez Guest Agent albo Blueprint powinien używać statycznego IP/IPAM.' })) : null,
+          parts.cloudInit.render({ state, data, rerender: render, capture: captureCurrentStep }),
           isProxmox ? install : null,
           isProxmox ? wait : null,
           toggle,
-          workflowVisual(state.advancedWorkflow ? state.workflow : auto));
+          parts.ui.workflowVisual(state.advancedWorkflow ? state.workflow : auto));
 
         if (state.advancedWorkflow) {
           const editor = node('div', { class: 'editor-list' },
@@ -1176,6 +1176,7 @@
             ['Environment przy tworzeniu VM', state.selectEnvironmentOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
             ['APMID', state.selectApmidOnExecute ? 'Wybierany podczas tworzenia VM' : (state.apmid || '—')],
             ['APMID przy tworzeniu VM', state.selectApmidOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
+            ['Cloud-init', parts.cloudInit.enabled(state) ? 'NoCloud ISO przez API; konfiguracja przy pierwszym starcie' : 'Starszy tryb'],
             ['Credential VM', state.guestCredentialId
               ? (data.credentials.find(value => String(value.id) === String(state.guestCredentialId))?.name || ('#' + state.guestCredentialId))
               : 'Brak'],
@@ -1216,7 +1217,7 @@
         });
         content.append(node('section', { class: 'blueprint-wizard-review-section' },
           node('h4', { text: 'Workflow' }),
-          workflowVisual(steps)));
+          parts.ui.workflowVisual(steps)));
         return content;
       }
 

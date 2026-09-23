@@ -142,7 +142,7 @@ console.log(JSON.stringify({enabled, disabled: parts.cloudInit.preview(state, cr
     assert 'finaluser' in result['enabled']
     assert yaml.safe_load(result['enabled'])['packages'] == ['qemu-guest-agent']
     assert 'packages:' not in result['disabled']
-    assert 'systemctl start qemu-guest-agent' in result['enabled']
+    assert ['systemctl', 'start', 'qemu-guest-agent'] in yaml.safe_load(result['enabled'])['runcmd']
 
 
 def test_ui_adds_cloud_init_before_both_plan_and_apply_without_losing_approval():
@@ -152,7 +152,7 @@ state.workflow = [
  {id:'plan', type:'terraform_plan', depends_on:[]},
  {id:'approve', type:'approval', depends_on:['plan']},
  {id:'apply', type:'terraform_apply', depends_on:['approve']}];
-parts.cloudInit.addStep(state); parts.cloudInit.addStep(state);
+parts.cloudInit.toggleStep(state, true); parts.cloudInit.toggleStep(state, true);
 console.log(JSON.stringify({steps:state.workflow, errors:parts.cloudInit.validate(state)}));
 ''')
     assert len(result['steps']) == 4
@@ -161,30 +161,32 @@ console.log(JSON.stringify({steps:state.workflow, errors:parts.cloudInit.validat
     assert validate_cloud_init_workflow(result['steps'])
 
 
-def test_ui_reports_missing_snippets_before_submission():
+def test_ui_does_not_require_snippets_for_native_iso():
     result = run_ui('''
 const state = parts.core.stateDefaults(); state.providerType = 'proxmox'; state.cloudInitSnippetStorage = '';
 const enabled = parts.cloudInit.validate(state); state.installQemuGuestAgent = false;
 console.log(JSON.stringify({enabled, disabled:parts.cloudInit.validate(state)}));
 ''')
-    assert 'cloud_init_snippet_storage' in result['enabled']
+    assert result['enabled'] == {}
     assert result['disabled'] == {}
 
 
 def test_template_installs_agent_at_first_boot_but_does_not_wait_in_terraform():
     source = (ROOT / 'terraform/templates/proxmox-vm/main.tf').read_text()
-    document = textwrap.dedent(source.split('data = <<-EOF\n', 1)[1].split('\n    EOF', 1)[0])
-    config = yaml.safe_load(document)
+    from app.executors.cloud_init import render_seed
+    files = render_seed({'name': 'guest', 'install_qemu_guest_agent': True},
+                        instance_id='test', mac_address='02:00:11:22:33:44')
+    config = yaml.safe_load(files['user-data'])
     assert config['packages'] == ['qemu-guest-agent']
-    command = config['runcmd'][0]
-    assert isinstance(command, str)
-    assert 'systemctl enable qemu-guest-agent || true' in command
+    command = config['runcmd'][0][2]
+    assert 'systemctl enable qemu-guest-agent' in command
     assert 'systemctl start qemu-guest-agent\n' in command
     assert 'systemctl is-active --quiet qemu-guest-agent' in command
     assert 'wait_for_ip {\n      disabled = true' in source
     assert 'enabled = true' in source
-    assert 'private_key' not in document
-    assert 'password' not in document
+    assert 'content_type = "iso"' in source
+    assert 'proxmox_virtual_environment_file.cloud_init_seed[0].id' in source
+    assert 'private_key' not in files['user-data']
 
 
 @pytest.fixture
@@ -192,14 +194,15 @@ def executor_case(tmp_path, monkeypatch):
     from app.executors import terraform as module
     import app.providers.proxmox as proxmox
     variables = {'name': 'guest', 'node': 'pve01', 'install_qemu_guest_agent': True,
-                 'cloud_init_snippet_storage': 'local', 'ipv4_address': None}
+                 'cloud_init_snippet_storage': None, 'ipv4_address': None,
+                 'storage': 'local-lvm', 'template_id': 9001}
     blueprint = {'guest_credential_id': 17, 'steps': workflow()}
     logs, calls = [], []
-    deployment = SimpleNamespace(id='deployment-id', workspace='workspace', template='proxmox-vm',
+    deployment = SimpleNamespace(id='deployment-id', workspace='workspace', provider='proxmox', template='proxmox-vm',
                                  variables=variables, workflow={'blueprint': copy.deepcopy(blueprint)})
     credential = SimpleNamespace(type='proxmox', endpoint='https://pve.invalid:8006', username='api@pve', verify_ssl=True)
     context = SimpleNamespace(job=SimpleNamespace(id='job-id', payload={'blueprint': blueprint}),
-                              deployment=deployment, credential=credential, log=logs.append, stage=logs.append)
+                              deployment=deployment, credential=credential, check=lambda: None, log=logs.append, stage=logs.append)
     source = tmp_path / 'source'
     source.mkdir()
     (source / 'main.tf').write_text('terraform {}\n')
@@ -216,15 +219,22 @@ def executor_case(tmp_path, monkeypatch):
     monkeypatch.setattr(module, 'guest_credential_runtime_variables', guest_variables)
 
     class Provider:
-        ready = True
+        available = True
+        offline = False
         def __init__(self, value):
             assert value is credential
         def discover(self, resource, node=None):
             assert (resource, node) == ('storages', 'pve01')
-            return [{'storage': 'local', 'content': 'snippets', 'active': 1}]
+            if self.offline:
+                raise OSError('Provider unavailable')
+            return [{'storage': 'local', 'content': 'iso', 'active': 1}] if self.available else []
+        def vm_config(self, node, vm_id):
+            assert (node, vm_id) == ('pve01', 9001)
+            return {'ostype': 'l26', 'ide2': 'local-lvm:vm-9001-cloudinit,media=cdrom'}
         def ssh_preflight(self, env):
-            assert 'guest-password-secret' not in env.values()
-            return {'ok': self.ready, 'reason': None if self.ready else 'ssh_auth_missing'}
+            pytest.fail('Native Cloud-init must not require node SSH')
+        def guest_addresses(self, *args):
+            pytest.fail('Native Cloud-init must not require a known guest DHCP address')
     monkeypatch.setattr(proxmox, 'ProxmoxProvider', Provider)
 
     def run(command, workspace, env, _context, sensitive):
@@ -236,6 +246,19 @@ def executor_case(tmp_path, monkeypatch):
     return module, context, calls, logs, Provider
 
 
+def seed_config(path):
+    import io
+    import pycdlib
+    iso = pycdlib.PyCdlib()
+    iso.open(str(path))
+    try:
+        output = io.BytesIO()
+        iso.get_file_from_iso_fp(output, rr_path='/user-data')
+        return yaml.safe_load(output.getvalue())
+    finally:
+        iso.close()
+
+
 def test_dhcp_native_credentials_never_create_bootstrap_account(executor_case):
     module, context, calls, logs, _ = executor_case
     original = copy.deepcopy(context.deployment.variables)
@@ -243,11 +266,12 @@ def test_dhcp_native_credentials_never_create_bootstrap_account(executor_case):
     assert [call[0][1] for call in calls] == ['init', 'plan', 'apply']
     for _, variables, env, sensitive in calls:
         assert variables['qemu_guest_agent_bootstrap'] is False
-        assert variables['ssh_username'] == 'finaluser'
+        assert variables['cloud_init_seed_path'].endswith('.iso')
         assert 'bootstrap_username' not in variables
         assert 'guest-password-secret' not in json.dumps(variables)
-        assert env['TF_VAR_ssh_password'] == 'guest-password-secret'
-        assert 'guest-password-secret' in sensitive
+        assert 'TF_VAR_ssh_password' not in env
+        assert 'guest-password-secret' not in json.dumps(env)
+        assert seed_config(variables['cloud_init_seed_path'])['users'][0]['name'] == 'finaluser'
     assert context.deployment.variables == original
     assert 'guest-password-secret' not in json.dumps(context.job.payload)
     assert 'guest-password-secret' not in '\n'.join(logs)
@@ -255,17 +279,18 @@ def test_dhcp_native_credentials_never_create_bootstrap_account(executor_case):
     assert not (workspace / module.QEMU_BOOTSTRAP_KEY).exists()
 
 
-@pytest.mark.parametrize('failure', ['missing_storage', 'node_ssh', 'legacy_marker'])
+@pytest.mark.parametrize('failure', ['missing_storage', 'provider_offline', 'legacy_marker', 'legacy_key'])
 def test_native_preflight_failure_never_starts_terraform(executor_case, failure):
     module, context, calls, _, provider = executor_case
     if failure == 'missing_storage':
-        context.deployment.variables['cloud_init_snippet_storage'] = None
-    elif failure == 'node_ssh':
-        provider.ready = False
+        provider.available = False
+    elif failure == 'provider_offline':
+        provider.offline = True
     else:
         workspace = module.settings().data_dir / 'workspaces' / context.deployment.workspace
         workspace.mkdir(parents=True)
-        (workspace / module.QEMU_BOOTSTRAP_MARKER).write_text('{}')
+        name = module.QEMU_BOOTSTRAP_KEY if failure == 'legacy_key' else module.QEMU_BOOTSTRAP_MARKER
+        (workspace / name).write_text('existing-recovery-data')
     with pytest.raises(module.ExecutionFailed):
         module.TerraformExecutor().execute('terraform.apply', context)
     assert calls == []
@@ -274,9 +299,10 @@ def test_native_preflight_failure_never_starts_terraform(executor_case, failure)
 def test_native_account_without_agent_install_does_not_need_node_ssh(executor_case):
     module, context, calls, _, provider = executor_case
     context.deployment.variables.update(install_qemu_guest_agent=False, cloud_init_snippet_storage=None)
-    provider.ready = False
     module.TerraformExecutor().execute('terraform.apply', context)
-    assert calls[-1][1]['ssh_username'] == 'finaluser'
+    config = seed_config(calls[-1][1]['cloud_init_seed_path'])
+    assert config['users'][0]['name'] == 'finaluser'
+    assert 'packages' not in config
     assert calls[-1][1]['qemu_guest_agent_bootstrap'] is False
 
 
@@ -284,6 +310,7 @@ def test_native_saved_plan_is_reused_not_replanned(executor_case):
     module, context, calls, logs, _ = executor_case
     workspace = module.settings().data_dir / 'workspaces' / context.deployment.workspace
     workspace.mkdir(parents=True)
+    module.prepare_native_seed(context, workspace, {'ssh_username': 'finaluser', 'ssh_public_key': None}, 'guest-password-secret')
     (workspace / 'execution.tfplan').write_bytes(b'approved-plan-fixture')
     context.apply_saved_terraform_plan = True
     module.TerraformExecutor().execute('terraform.apply', context)

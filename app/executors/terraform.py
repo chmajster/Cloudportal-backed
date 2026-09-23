@@ -6,15 +6,13 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
-from app.automation.cloud_init import (blueprint_snapshot, node_ssh_environment,
-                                       validate_cloud_init_workflow, validate_cloud_init_workspace,
-                                       validate_snippet_storage)
 from app.catalog import resolve_template_source, template_definition, template_import_target
 from app.config import settings
 from app.credentials.ssh import generate_ed25519_key_pair, public_key_from_private_key
 from app.database import session
 from app.deployments.recreate import recreate_resource_address
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
+from app.executors.cloud_init import blueprint_snapshot, native_cloud_init_requested, prepare_native_seed
 from app.models import Credential, now
 from app.security.core import decrypt_secret
 from app.terraform.state import distributed_deployment_lock, persist_state, restore_state
@@ -202,48 +200,11 @@ def terraform_plan_command(binary, operation, recreate_address=None):
     return command
 
 
-def prepare_first_boot_cloud_init(context, workspace, credential, env, secret):
-    """Check first-boot dependencies before submitting any mutating Terraform work."""
-    try:
-        validate_cloud_init_workspace(workspace)
-        variables = context.deployment.variables or {}
-        if variables.get('install_qemu_guest_agent'):
-            storage = variables.get('cloud_init_snippet_storage')
-            if not storage:
-                validate_snippet_storage([], storage)
-            node_ssh_environment(env, os.environ, secret, credential.username)
-            from app.providers.proxmox import ProxmoxProvider
-            provider = ProxmoxProvider(credential)
-            try:
-                storages = provider.discover('storages', node=variables.get('node'))
-            except Exception:
-                raise ExecutionFailed(
-                    'Cloud-init preflight could not read snippets storage on the target Proxmox node; '
-                    'check provider connectivity and storage permissions'
-                ) from None
-            validate_snippet_storage(storages or [], storage)
-            readiness = provider.ssh_preflight(env)
-            if not readiness.get('ok'):
-                raise ExecutionFailed(
-                    'Cloud-init QEMU Guest Agent installation requires Proxmox node SSH: '
-                    + str(readiness.get('reason') or 'ssh_not_ready')
-                    + '. Configure PROXMOX_VE_SSH_* for the worker; guest SSH bootstrap fallback is disabled'
-                )
-    except ValueError as exc:
-        raise ExecutionFailed(str(exc)) from None
-    context.log(
-        'cloud-init.provisioning-mode: native; target credential configured at first boot; '
-        + ('QEMU Guest Agent installation via vendor-data' if variables.get('install_qemu_guest_agent')
-           else 'QEMU Guest Agent installation disabled')
-    )
-
-
 class TerraformExecutor(Executor):
     binary = 'terraform'
 
     def execute(self, operation, context):
         deployment, credential = context.deployment, context.credential
-        native_cloud_init = False
         workspace = settings().data_dir / 'workspaces' / deployment.workspace
         try:
             definition, source = template_definition(deployment.template)
@@ -264,6 +225,7 @@ class TerraformExecutor(Executor):
         provider_type = definition['provider']
         if credential.type != provider_type:
             raise ExecutionFailed('Credential type does not match Terraform template provider')
+        native_seed = operation in {'terraform.plan', 'terraform.apply'} and native_cloud_init_requested(context)
         if provider_type == 'proxmox':
             env['PROXMOX_VE_ENDPOINT'] = credential.endpoint.rstrip('/') + '/'
             env['PROXMOX_VE_INSECURE'] = 'false' if credential.verify_ssl else 'true'
@@ -278,21 +240,10 @@ class TerraformExecutor(Executor):
 
             qemu_bootstrap = None
             qemu_install = bool(deployment.variables.get('install_qemu_guest_agent'))
-            job_blueprint = blueprint_snapshot(context)
+            job_blueprint = (context.job.payload or {}).get('blueprint') or {}
             guest_credential_id = job_blueprint.get('guest_credential_id')
             bootstrap_required = bool(qemu_install or guest_credential_id)
-            cloud_steps = job_blueprint.get('steps') or []
-            if any(step.get('type') == 'cloud_init' for step in cloud_steps):
-                # Snippet destroy/refresh also needs the node's SSH environment.
-                node_ssh_environment(env, os.environ, secret, credential.username)
-            if operation in {'terraform.plan', 'terraform.apply'}:
-                try:
-                    native_cloud_init = validate_cloud_init_workflow(cloud_steps)
-                except ValueError as exc:
-                    raise ExecutionFailed(str(exc)) from None
-            if native_cloud_init:
-                prepare_first_boot_cloud_init(context, workspace, credential, env, secret)
-            elif bootstrap_required and operation in {'terraform.plan', 'terraform.apply'}:
+            if bootstrap_required and not native_seed and operation in {'terraform.plan', 'terraform.apply'}:
                 force_guest_bootstrap = bool(guest_credential_id)
 
                 # A selected guest credential must never depend on SSH to the
@@ -403,15 +354,10 @@ class TerraformExecutor(Executor):
             if qemu_bootstrap:
                 runtime_variables['bootstrap_username'] = qemu_bootstrap['username']
                 runtime_variables['bootstrap_public_key'] = qemu_bootstrap['public_key']
-        if operation in {'terraform.plan', 'terraform.apply'} and not (
+        if operation in {'terraform.plan', 'terraform.apply'} and not native_seed and not (
             provider_type == 'proxmox' and qemu_bootstrap
         ):
-            if native_cloud_init:
-                guest_variables, guest_password = guest_credential_runtime_variables(
-                    deployment, blueprint=job_blueprint,
-                )
-            else:
-                guest_variables, guest_password = guest_credential_runtime_variables(deployment)
+            guest_variables, guest_password = guest_credential_runtime_variables(deployment)
             runtime_variables.update(guest_variables)
             if guest_password:
                 # Keep the plaintext password out of deployment variables, job
@@ -423,6 +369,22 @@ class TerraformExecutor(Executor):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
                 restore_state(deployment.id, workspace)
+                if native_seed:
+                    if any(path.exists() for path in qemu_bootstrap_paths(workspace)):
+                        raise ExecutionFailed(
+                            'Legacy guest bootstrap is still pending; preserve its workspace and '
+                            'finish recovery before starting a new Cloud-init deployment'
+                        )
+                    context.stage('cloud-init.preparing')
+                    guest_variables, guest_password = guest_credential_runtime_variables(
+                        deployment, blueprint=blueprint_snapshot(context),
+                    )
+                    runtime_variables.update(prepare_native_seed(
+                        context, workspace, guest_variables, guest_password,
+                    ))
+                    # Native media contains a password hash; never place the
+                    # cleartext password in Terraform env, tfvars, or state.
+                    guest_password = None
                 # Code is root-owned and approved; keep an existing provider lock on updates.
                 for path in source.glob('*.tf'):
                     shutil.copyfile(path, workspace / path.name)

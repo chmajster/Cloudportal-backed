@@ -2,139 +2,73 @@
 
 ## Configure a Blueprint
 
-Open **Blueprinty > Nowy Blueprint — kreator > Workflow**. For Proxmox, the
-standard workflow begins with a `cloud_init` declaration. The **Cloud-init:
-pierwszy start systemu** panel selects the final guest account from **Dane
-dostępowe**. An SSH credential can contain a password, a private key, or both.
-Only its ID is saved in the Blueprint. A manual username/public-key option also
-remains available.
+Open **Blueprinty > Nowy Blueprint > Workflow**. Use **Cloud-init — użytkownik
+i przygotowanie systemu** and **Utwórz Cloud-init przy pierwszym starcie VM**.
+Select **Użytkownik, hasło lub klucz z Dostępów** to create the final guest
+account from a saved SSH credential. The Blueprint stores its ID only.
+Manual username/public key configuration remains available in VM settings.
 
-Enable **Instaluj QEMU Guest Agent automatycznie** and select **Storage
-vendor-data (snippets)** to install the agent at first boot. The preview shows
-what is generated without displaying passwords/private keys. The separate
-**Czekaj na QEMU Guest Agent po Terraform apply** option controls the workflow's
-post-apply readiness stage; installation and waiting remain separate settings.
-
-The usual sequence is:
+Enable **Instaluj QEMU Guest Agent automatycznie** to include the package and
+service enable/start/readiness commands in user-data. The separate **Czekaj na
+QEMU Guest Agent po Terraform apply** option controls the post-apply check.
 
 ```text
 cloud_init -> terraform_apply -> wait_for_agent -> wait_for_ip -> optional Ansible
 ```
 
-In advanced workflows, Cloud-init can be added with **Dodaj Cloud-init przed
-Terraform**. The helper retains existing dependencies, including approvals.
-Cloud-init must precede both `terraform_plan` and `terraform_apply` when a saved
-plan is used. It is a declaration, not a retryable or conditional guest SSH step.
-The API rejects invalid ordering, duplicate declarations, conditions and retries.
+Cloud-init is prepared before every Terraform plan/apply. In advanced workflows,
+the Cloud-init toggle adds the predecessor without discarding plan/approval
+dependencies. Conditions, retry and rollback are invalid for this declaration.
+Existing native Blueprints open in the full editor even through the classic
+quick-edit entry point, preserving their complete dependency graph.
 
-Existing native Cloud-init Blueprints open in the full editor even through the
-old quick-edit entry point: the quick form rebuilds the DAG and would otherwise
-silently discard Cloud-init or plan/approval dependencies. The classic action
-selector also exposes **Cloud-init: pierwszy start systemu** for Proxmox.
+## Transport and credentials
 
-## What executes
+The integrated implementation uses #155's locally generated **NoCloud ISO**,
+not #156's earlier vendor-data/snippets transport. The worker writes user-data,
+meta-data and network-config to a CIDATA ISO. Terraform uploads it through the
+Proxmox HTTP API and attaches it before first boot. Neither node SSH, snippets,
+a known DHCP address nor a guest SSH session is required by this path.
 
-Native Proxmox Cloud-init generates guest user-data for the final username,
-password and/or derived public key. The selected account is not replaced with a
-`cpbootstrap` account in this path. No guest private key is sent to Terraform or
-the VM. The password is resolved only during execution, passed through the
-existing sensitive runtime mechanism and excluded from Blueprint JSON, job
-payloads, previews and normal logs. Terraform plans/states are still sensitive
-artifacts and must retain the application's existing protected persistence and
-backup controls.
+The final account is configured directly; no temporary cpbootstrap account is
+created. Guest passwords become salted SHA-512-crypt hashes before entering the
+seed. Cleartext passwords and guest private keys do not enter Terraform tfvars,
+the Terraform process environment or browser previews. A private credential key
+is used only to derive the public key installed in the guest. The ISO contains
+a password hash and must remain access-controlled. Local ISO/manifest files
+use mode 0600; state, saved plans and backups remain sensitive artifacts.
 
-When `install_qemu_guest_agent` is enabled, a separate vendor-data snippet adds:
+QEMU Guest Agent stays enabled on the VM, but Terraform's own IP polling is
+disabled. Worker readiness checks remain responsible for confirming QGA and
+obtaining the guest IP. Static/indirect systemd units are not incorrectly
+enabled; start and active checks still run. OpenRC is also supported.
 
-```yaml
-#cloud-config
-package_update: true
-packages:
-  - qemu-guest-agent
-runcmd:
-  - |
-    set -eu
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl enable qemu-guest-agent || true
-      systemctl start qemu-guest-agent
-      systemctl is-active --quiet qemu-guest-agent
-    elif command -v rc-service >/dev/null 2>&1; then
-      rc-update add qemu-guest-agent default
-      rc-service qemu-guest-agent start
-    else
-      echo "Unsupported service manager for qemu-guest-agent" >&2
-      exit 1
-    fi
-```
+## Prerequisites and recovery
 
-A static systemd unit may not support `enable`, so only that operation is
-allowed to fail; service startup and active-state checks are not ignored.
+Use a clean Linux Cloud-init/NoCloud template and active ISO-capable storage on
+the target Proxmox node. The API credential must be able to inspect the template,
+read storage and upload ISO media. The worker selects suitable ISO storage;
+it does not require the VM disk datastore to support ISO content.
+Networking, DNS and package repositories inside the guest must work for package
+installation. This mode does not implement Windows/Cloudbase-init.
 
-The Terraform QGA channel remains enabled, with `agent.wait_for_ip.disabled =
-true`. Terraform does not wait for a guest agent that first-boot initialization
-is still installing. Workflow readiness checks run after apply, and the worker
-then obtains the guest's DHCP address through QGA. No initial SSH connection to
-the guest or pre-known DHCP address is required for this Cloud-init path.
+A persistent workspace at the same path across workers is required for saved
+plans. Approved applies reuse the exact original media, checksum and configuration
+fingerprint; missing or changed seed files fail closed rather than regenerate a
+plan or silently change a credential. Pending legacy bootstrap markers AND keys
+are retained and prevent unsafe switching to first-boot provisioning.
 
-## Infrastructure prerequisites
-
-The template must support Cloud-init, be prepared for a fresh first boot and use
-a supported guest operating system. The VM needs working networking/DNS and
-access to package repositories to install `qemu-guest-agent`.
-
-The bundled bpg/proxmox provider uploads vendor-data snippets over SSH to the
-**Proxmox node**, not to the guest. An enabled, active storage with `snippets`
-content and working node SSH are prerequisites for automatic package
-installation. Configure node SSH separately in the worker environment using
-`PROXMOX_VE_SSH_*`; an API token is not an SSH password, and the selected VM
-credential is never substituted as the node credential. Explicit SSH credentials
-are preferred over the existing provider-password fallback.
-
-Preflight checks storage visibility/content/status for the target node and
-node SSH readiness before starting Terraform. Upload itself still requires
-write permissions and the correct target-node SSH routing; the snippet is a
-Terraform dependency of VM creation. Missing prerequisites stop execution
-instead of silently falling back to the DHCP-dependent guest bootstrap.
-
-Native account configuration with QGA installation disabled does not itself
-require a vendor-data snippet or node SSH. If a workflow then waits for QGA or
-uses DHCP discovery, the template must already contain a functioning agent.
-
-References: bpg/terraform-provider-proxmox v0.111.1,
-`docs/resources/virtual_environment_file.md` (Snippets), `docs/index.md` (SSH),
-`docs/resources/virtual_environment_vm.md` (initialization and agent.wait_for_ip);
-cloud-init's Cloud-config examples (packages, runcmd, users and passwords).
-
-## Existing guests, jobs and approved plans
-
-Changing a Blueprint does not rerun first-boot Cloud-init on an existing guest,
-repair an already failed job or change an immutable job snapshot. Legacy
-workflows without a `cloud_init` declaration retain their old execution path.
-Existing bootstrap metadata/keys are not deleted when switching modes: the
-executor refuses the switch and requests recovery instead.
-
-Never delete/recreate existing guests, drop Terraform state/locks, force a job
-status to success, or replace an approved saved plan automatically. Reconcile
-the existing VM/state before retrying an interrupted deployment. A changed
-credential or Cloud-init configuration intended for an approved saved plan
-requires the normal new-plan and approval process.
+Updating a Blueprint does not retrofit an already booted guest or rewrite an
+immutable existing job. Legacy workflows without an explicit cloud_init step
+retain their old behavior. Legacy snippet provisioning may still require node
+SSH; this is not a prerequisite for the new ISO path. Do not delete existing VMs,
+remove state/locks or force job success to recover a failed deployment.
 
 ## Validation
 
-`tests/test_cloud_init_workflow.py` covers ordering, storage validation, DHCP
-without guest SSH bootstrap, credential isolation, approved-plan reuse and
-rendered vendor-data. `tests/test_cloud_init_compatibility.py` covers the API
-schema, explicit node authentication and preservation of an edited DAG.
-`tests/test_blueprint_wizard_contract.py` checks the actual wizard payload.
-
-```sh
-python -m pytest -q --tb=short tests/test_cloud_init_workflow.py tests/test_cloud_init_compatibility.py tests/test_blueprint_wizard_contract.py
-python scripts/check-module-boundaries.py
-find app/web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
-terraform fmt -check -recursive terraform
-bash scripts/validate-terraform-templates.sh
-pytest -q --tb=short
-```
-
-Unit/contract tests mock Proxmox and are not a substitute for a live deployment.
-The pull request records the actual CI results and remaining live-validation
-limitations. No production server or existing VM was modified by this change.
+The combined tests retain API dependency validation and editor-preservation
+coverage from #156, plus ISO round-trip, password isolation, primary-NIC
+configuration, service startup and saved-plan protection from #155. Regression
+assertions require the explicit Cloud-init step and the final API-only transport.
+Full Backend CI must pass before merge. These automated tests use mocked Proxmox;
+no live guest deployment or production rollout is implied by a successful CI run.
