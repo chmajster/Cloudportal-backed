@@ -37,11 +37,11 @@ jobs:
               changes[name] = raw.decode()
           name = 'app/web/features/blueprints.js'
           before = 'async function proxmoxBlueprintForm(item = null, options = {}) {\n  try {'
-          after = "async function proxmoxBlueprintForm(item = null, options = {}) {\n  // The quick form regenerates the DAG and drops Cloud-init. Preserve native\n  // first-boot declarations and approved-plan dependencies in the full editor.\n  if ((item?.workflow || []).some(step => step.type === 'cloud_init')) return blueprintForm(item);\n  try {"
+          after = "async function proxmoxBlueprintForm(item = null, options = {}) {\n  if ((item?.workflow || []).some(step => step.type === 'cloud_init')) return blueprintForm(item);\n  try {"
           assert changes[name].count(before) == 1
           changes[name] = changes[name].replace(before, after)
           before = "    const workflowTypes = [\n      ['terraform_plan'"
-          after = "    const workflowTypes = [\n      ['cloud_init', 'Cloud-init: pierwszy start systemu'],\n      ['terraform_plan'"
+          after = "    const workflowTypes = [\n      ['cloud_init', 'Cloud-init: pierwszy start systemu'], ['terraform_plan'"
           assert changes[name].count(before) == 1
           changes[name] = changes[name].replace(before, after)
           name = 'app/web/features/blueprint-provisioning-guards.js'
