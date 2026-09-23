@@ -908,7 +908,7 @@ if ! id "$TARGET" >/dev/null 2>&1; then
     exit 45
   fi
 fi
-HOME_DIR="$(awk -F: -v user="$TARGET" '$1 == user { print $6 }' /etc/passwd)"
+HOME_DIR="$(awk -F: -v user="$TARGET" '$1 == user {{ print $6 }}' /etc/passwd)"
 if [ -z "$HOME_DIR" ]; then
   echo "cannot resolve target home directory" >&2
   exit 46
