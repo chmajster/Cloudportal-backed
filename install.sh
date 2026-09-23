@@ -655,7 +655,9 @@ docker_status() {
   fi
 
   if [[ -n "$release" && -f "$release/docker-compose.yml" && -r "$docker_env" ]]; then
-    if mapfile -t compose_services < <(docker_compose config --services 2>/dev/null); then
+    local compose_services_output=''
+    if compose_services_output=$(docker_compose config --services 2>/dev/null); then
+      mapfile -t compose_services <<< "$compose_services_output"
       for service in "${required_services[@]}"; do
         if printf '%s\n' "${compose_services[@]}" | grep -Fxq "$service"; then
           ui_ok "Definicja Compose: $service"
@@ -722,7 +724,7 @@ docker_status() {
     fi
   fi
 
-  if [[ "$expected_workers" =~ ^[0-9]+$ ]] && ((expected_workers >= 1)); then
+  if [[ "$expected_workers" =~ ^[0-9]+$ ]] && ((10#$expected_workers >= 1)); then
     mapfile -t ids < <(
       docker ps -aq         --filter "label=com.docker.compose.project=$docker_project"         --filter 'label=com.docker.compose.service=worker' 2>/dev/null || true
     )
