@@ -151,11 +151,12 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     if (
         data.deployment.template == 'proxmox-vm'
         and data.deployment.variables.get('install_qemu_guest_agent') is True
+        and not data.deployment.guest_credential_id
         and not data.deployment.variables.get('cloud_init_snippet_storage')
     ):
         raise HTTPException(
             422,
-            'QEMU Guest Agent installation requires cloud_init_snippet_storage',
+            'QEMU Guest Agent installation without a guest credential requires cloud_init_snippet_storage',
         )
     if data.deployment.hostname_scheme_id:
         scheme = find(db, HostnameScheme, data.deployment.hostname_scheme_id)
