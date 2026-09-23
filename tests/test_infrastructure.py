@@ -881,6 +881,7 @@ def test_guest_credential_bootstrap_works_without_qemu_agent(monkeypatch, tmp_pa
     commands = []
     cleaned = []
     stages = []
+    logs = []
 
     monkeypatch.setattr(worker_module, 'load_qemu_bootstrap', lambda workspace: {
         'username': 'cpbootstrap1234',
@@ -921,7 +922,7 @@ def test_guest_credential_bootstrap_works_without_qemu_agent(monkeypatch, tmp_pa
         job=SimpleNamespace(payload={'blueprint': {'guest_credential_id': 42}}),
         stage=stages.append,
         check=lambda: None,
-        log=lambda value: None,
+        log=logs.append,
     )
 
     assert worker_module.ensure_qemu_guest_bootstrap(context, tmp_path, timeout=30) is True
@@ -944,6 +945,7 @@ def test_guest_credential_bootstrap_works_without_qemu_agent(monkeypatch, tmp_pa
     )
     assert not any('qemu-guest-agent' in (stdin_text or '') for _client, _command, stdin_text, _timeout in commands)
     assert cleaned == [tmp_path]
+    assert any('guest-bootstrap.completed' in message for message in logs)
     assert bootstrap_client.closed is True
     assert verify_client.closed is True
 

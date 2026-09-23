@@ -1078,9 +1078,12 @@
             node('span', { text: state.advancedWorkflow
               ? 'Możesz zmieniać kroki runtime, zależności, retry, timeout, rollback i conditions.'
               : 'Hostname, IPAM, cloud-init i tagi są przygotowywane przed runtime; workflow pokazuje tylko faktycznie wykonywane operacje.' })),
-          isProxmox && state.installQemuGuestAgent && (!snippetAvailable || !sshReady) ? node('div', { class: 'callout info' },
+          isProxmox && state.installQemuGuestAgent && (state.guestCredentialId || !snippetAvailable || !sshReady) ? node('div', { class: 'callout info' },
             node('strong', { text: 'QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM' }),
-            node('p', { text: 'Brak gotowego uploadu snippetów/SSH do noda PVE (' + (state.qemuAgentSshReason || (snippetAvailable ? 'ssh_not_ready' : 'snippets_unavailable')) + '). Workflow utworzy jednorazowe konto przez natywny cloud-init, zainstaluje agenta w VM, utworzy konto docelowe z Credentiala i usunie konto tymczasowe. Przy DHCP template musi już udostępniać adres przez Guest Agent albo Blueprint powinien używać statycznego IP/IPAM.' })) : null,
+            node('p', { text: (state.guestCredentialId
+              ? 'Wybrano Credential VM, więc workflow celowo pomija upload snippets i SSH do noda PVE.'
+              : 'Brak gotowego uploadu snippetów/SSH do noda PVE (' + (state.qemuAgentSshReason || (snippetAvailable ? 'ssh_not_ready' : 'snippets_unavailable')) + ').')
+              + ' Workflow utworzy jednorazowe konto przez natywny cloud-init, zainstaluje agenta w VM, utworzy konto docelowe z Credentiala i usunie konto tymczasowe. Przy DHCP template musi już udostępniać adres przez Guest Agent albo Blueprint powinien używać statycznego IP/IPAM.' })) : null,
           isProxmox ? install : null,
           isProxmox ? wait : null,
           toggle,

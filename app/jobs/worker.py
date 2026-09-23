@@ -1025,9 +1025,10 @@ fi
             except HTTPException as exc:
                 raise ExecutionFailed('Failed to remove temporary QEMU bootstrap account') from exc
         elif verify is not None:
+            cleanup_shell = '/bin/sh -s' if target_user == 'root' else 'sudo -n /bin/sh -s'
             _guest_ssh_run(
                 verify,
-                'sudo -n /bin/sh -s',
+                cleanup_shell,
                 stdin_text=cleanup_command,
                 timeout=min(timeout, 120),
             )
@@ -1047,6 +1048,7 @@ fi
         + 'temporary account removed'
     )
     return True
+
 
 def wait_for_ansible_transport(context, workspace, timeout=600, addresses=None):
     addresses = list(addresses or wait_for_ip(context, workspace, timeout=timeout))
