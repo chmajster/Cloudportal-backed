@@ -707,7 +707,7 @@ docker_status_check() {
       continue
     fi
 
-    if [[ "$service" == postgres || "$service" == redis ]]; then
+    if [[ "$service" == postgres || "$service" == redis || "$service" == api ]]; then
       if [[ "$health" == healthy ]]; then
         ui_ok "$service: running, health=healthy"
       else
@@ -790,13 +790,47 @@ docker_status_check() {
   return 1
 }
 
+docker_service_ready() {
+  local service=$1 require_health=${2:-0}
+  local ids=() state health
+
+  mapfile -t ids < <(
+    docker ps -aq \
+      --filter "label=com.docker.compose.project=$docker_project" \
+      --filter "label=com.docker.compose.service=$service" 2>/dev/null || true
+  )
+  (("${#ids[@]}" == 1)) || return 1
+
+  state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
+  [[ "$state" == running ]] || return 1
+
+  if ((require_health)); then
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${ids[0]}" 2>/dev/null || true)
+    [[ "$health" == healthy ]] || return 1
+  fi
+}
+
+docker_wait_service_ready() {
+  local service=$1 require_health=${2:-0} attempts=${3:-30}
+  local attempt
+
+  for ((attempt=1; attempt<=attempts; attempt++)); do
+    if docker_service_ready "$service" "$require_health"; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 docker_repair() {
   CURRENT_STAGE='auto-naprawa Docker'
   ui_header 'Cloudportal-backed — auto-naprawa Docker'
 
   local release expected_workers='1' public_port='8443'
-  local docker_ready=0 https_ready=0 running_workers=0
-  local ids=() state
+  local docker_ready=0 https_ready=0 running_workers=0 total_workers=0
+  local infra_repaired=0 migrate_repaired=0 api_repaired=0
+  local ids=() state health exit_code service attempt
 
   if ! command -v docker >/dev/null 2>&1; then
     ui_fail 'Brak polecenia Docker; auto-naprawa nie może zostać wykonana.'
@@ -851,41 +885,257 @@ docker_repair() {
     return 1
   }
 
-  ui_info 'Przywracam deklarowany stan Docker Compose bez usuwania wolumenów ani konfiguracji.'
-  ui_info "Docelowa liczba workerów: $expected_workers"
-  if ! docker_compose up -d --remove-orphans --scale "worker=$expected_workers"; then
-    ui_fail 'Docker Compose nie zdołał odtworzyć deklarowanego stanu stacka.'
-    ui_info "Diagnostyka: docker compose -p $docker_project logs --tail=100"
+  ui_info 'Naprawiam zależności selektywnie; zdrowe kontenery nie będą odtwarzane.'
+
+  for service in postgres redis; do
+    if docker_service_ready "$service" 1; then
+      ui_ok "$service: już działa i jest healthy."
+      continue
+    fi
+
+    mapfile -t ids < <(
+      docker ps -aq \
+        --filter "label=com.docker.compose.project=$docker_project" \
+        --filter "label=com.docker.compose.service=$service" 2>/dev/null || true
+    )
+    state=''
+    health=''
+    if (("${#ids[@]}" == 1)); then
+      state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
+      health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${ids[0]}" 2>/dev/null || true)
+    fi
+
+    ui_warn "$service: wymaga naprawy (status=${state:-missing}, health=${health:-unknown})."
+    if (("${#ids[@]}" == 1)) && [[ "$state" == running ]]; then
+      docker_compose restart "$service" || {
+        ui_fail "Nie udało się zrestartować usługi $service."
+        return 1
+      }
+    else
+      docker_compose up -d "$service" || {
+        ui_fail "Nie udało się uruchomić usługi $service."
+        return 1
+      }
+    fi
+
+    if ! docker_wait_service_ready "$service" 1 30; then
+      ui_fail "$service nie osiągnął stanu running/healthy po naprawie."
+      docker_compose logs --tail=80 "$service" || true
+      return 1
+    fi
+    ui_ok "$service: przywrócony do running/healthy."
+    infra_repaired=1
+  done
+
+  mapfile -t ids < <(
+    docker ps -aq \
+      --filter "label=com.docker.compose.project=$docker_project" \
+      --filter 'label=com.docker.compose.service=migrate' 2>/dev/null || true
+  )
+  state=''
+  exit_code=''
+  if (("${#ids[@]}" == 1)); then
+    state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
+    exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${ids[0]}" 2>/dev/null || true)
+  fi
+
+  if [[ "$state" == exited && "$exit_code" == 0 ]]; then
+    ui_ok 'migrate: poprzednia migracja zakończona poprawnie.'
+  else
+    ui_warn "migrate: odtwarzam migrację (status=${state:-missing}, exit=${exit_code:-unknown})."
+    docker_compose up -d --no-deps migrate || {
+      ui_fail 'Nie udało się uruchomić migracji.'
+      return 1
+    }
+    migrate_repaired=1
+
+    for ((attempt=1; attempt<=45; attempt++)); do
+      mapfile -t ids < <(
+        docker ps -aq \
+          --filter "label=com.docker.compose.project=$docker_project" \
+          --filter 'label=com.docker.compose.service=migrate' 2>/dev/null || true
+      )
+      if (("${#ids[@]}" == 1)); then
+        state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
+        exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${ids[0]}" 2>/dev/null || true)
+        if [[ "$state" == exited && "$exit_code" == 0 ]]; then
+          break
+        fi
+        if [[ "$state" == exited && "$exit_code" != 0 ]]; then
+          ui_fail "Migracja zakończyła się błędem, exit=$exit_code."
+          docker_compose logs --tail=100 migrate || true
+          return 1
+        fi
+      fi
+      sleep 2
+    done
+
+    if [[ "$state" != exited || "$exit_code" != 0 ]]; then
+      ui_fail 'Migracja nie zakończyła się poprawnie w oczekiwanym czasie.'
+      docker_compose logs --tail=100 migrate || true
+      return 1
+    fi
+    ui_ok 'migrate: naprawiona, exit=0.'
+  fi
+
+  if ((infra_repaired || migrate_repaired)) || ! docker_service_ready api 1; then
+    mapfile -t ids < <(
+      docker ps -aq \
+        --filter "label=com.docker.compose.project=$docker_project" \
+        --filter 'label=com.docker.compose.service=api' 2>/dev/null || true
+    )
+    state=''
+    if (("${#ids[@]}" == 1)); then
+      state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
+    fi
+
+    if (("${#ids[@]}" == 1)) && [[ "$state" == running ]]; then
+      ui_info 'API: restart po naprawie zależności lub niesprawnym healthchecku.'
+      docker_compose restart api || {
+        ui_fail 'Nie udało się zrestartować API.'
+        return 1
+      }
+    else
+      ui_info 'API: uruchamiam brakujący lub zatrzymany kontener.'
+      docker_compose up -d --no-deps api || {
+        ui_fail 'Nie udało się uruchomić API.'
+        return 1
+      }
+    fi
+    api_repaired=1
+  fi
+
+  if ! docker_wait_service_ready api 1 45; then
+    ui_fail 'API nie osiągnęło stanu running/healthy.'
+    docker_compose logs --tail=100 api || true
     return 1
   fi
-  ui_ok 'Docker Compose przyjął operację naprawczą.'
+  ui_ok 'api: running, health=healthy.'
 
-  ui_info 'Oczekuję na stabilizację usług i HTTPS healthcheck.'
-  for ((attempt=1; attempt<=45; attempt++)); do
+  mapfile -t ids < <(
+    docker ps -aq \
+      --filter "label=com.docker.compose.project=$docker_project" \
+      --filter 'label=com.docker.compose.service=worker' 2>/dev/null || true
+  )
+  total_workers=${#ids[@]}
+  running_workers=0
+  for state in "${ids[@]}"; do
+    [[ "$(docker inspect --format '{{.State.Status}}' "$state" 2>/dev/null || true)" == running ]] && ((running_workers+=1))
+  done
+
+  if ((infra_repaired || migrate_repaired)); then
+    if ((total_workers > 0)); then
+      ui_info 'worker: restart po naprawie zależności.'
+      docker_compose restart worker || true
+    fi
+    running_workers=0
+  fi
+
+  if ((running_workers != expected_workers || total_workers != expected_workers || infra_repaired || migrate_repaired)); then
+    ui_info "worker: przywracam skalę $expected_workers."
+    docker_compose up -d --no-deps --scale "worker=$expected_workers" worker || {
+      ui_fail 'Nie udało się przywrócić workerów.'
+      return 1
+    }
+  fi
+
+  for ((attempt=1; attempt<=30; attempt++)); do
     mapfile -t ids < <(
-      docker ps -q \
+      docker ps -aq \
         --filter "label=com.docker.compose.project=$docker_project" \
         --filter 'label=com.docker.compose.service=worker' 2>/dev/null || true
     )
+    total_workers=${#ids[@]}
     running_workers=0
     for state in "${ids[@]}"; do
       [[ "$(docker inspect --format '{{.State.Status}}' "$state" 2>/dev/null || true)" == running ]] && ((running_workers+=1))
     done
+    ((running_workers == expected_workers && total_workers == expected_workers)) && break
+    sleep 2
+  done
+  if ((running_workers != expected_workers || total_workers != expected_workers)); then
+    ui_fail "worker: running=$running_workers/$expected_workers, wszystkich kontenerów=$total_workers."
+    docker_compose logs --tail=100 worker || true
+    return 1
+  fi
+  ui_ok "worker: $running_workers/$expected_workers kontenerów running."
 
-    if ((running_workers == expected_workers)) && \
-       curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
+  if ((infra_repaired || migrate_repaired)) || ! docker_service_ready dispatcher 0; then
+    if docker_service_ready dispatcher 0; then
+      ui_info 'dispatcher: restart po naprawie zależności.'
+      docker_compose restart dispatcher || {
+        ui_fail 'Nie udało się zrestartować dispatchera.'
+        return 1
+      }
+    else
+      ui_info 'dispatcher: uruchamiam brakujący lub zatrzymany kontener.'
+      docker_compose up -d --no-deps dispatcher || {
+        ui_fail 'Nie udało się uruchomić dispatchera.'
+        return 1
+      }
+    fi
+  fi
+  if ! docker_wait_service_ready dispatcher 0 30; then
+    ui_fail 'dispatcher nie osiągnął stanu running.'
+    docker_compose logs --tail=100 dispatcher || true
+    return 1
+  fi
+  ui_ok 'dispatcher: running.'
+
+  if ((api_repaired)); then
+    if docker_service_ready proxy 0; then
+      ui_info 'proxy: restart po naprawie API, aby odświeżyć upstream.'
+      docker_compose restart proxy || {
+        ui_fail 'Nie udało się zrestartować proxy.'
+        return 1
+      }
+    else
+      docker_compose up -d --no-deps proxy || {
+        ui_fail 'Nie udało się uruchomić proxy.'
+        return 1
+      }
+    fi
+  elif ! docker_service_ready proxy 0; then
+    ui_info 'proxy: uruchamiam brakujący lub zatrzymany kontener.'
+    docker_compose up -d --no-deps proxy || {
+      ui_fail 'Nie udało się uruchomić proxy.'
+      return 1
+    }
+  fi
+
+  if ! docker_wait_service_ready proxy 0 20; then
+    ui_fail 'proxy nie osiągnął stanu running.'
+    docker_compose logs --tail=100 proxy || true
+    return 1
+  fi
+
+  ui_info 'Oczekuję na końcowy HTTPS healthcheck.'
+  for ((attempt=1; attempt<=30; attempt++)); do
+    if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
       https_ready=1
       break
     fi
     sleep 2
   done
 
+  if ((https_ready == 0)); then
+    ui_warn 'HTTPS nadal nie odpowiada; wykonuję jeden celowany restart proxy.'
+    docker_compose restart proxy || true
+    for ((attempt=1; attempt<=15; attempt++)); do
+      if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
+        https_ready=1
+        break
+      fi
+      sleep 2
+    done
+  fi
+
   if ((https_ready == 1)); then
     ui_ok "Stack odpowiedział na HTTPS healthcheck; workery running: $running_workers/$expected_workers."
     return 0
   fi
 
-  ui_fail "Stack nie ustabilizował się po auto-naprawie; workery running: $running_workers/$expected_workers."
+  ui_fail 'HTTPS healthcheck nadal nie odpowiada po selektywnej auto-naprawie.'
   docker_compose ps -a || true
   ui_info "Diagnostyka: docker compose -p $docker_project logs --tail=100 postgres redis api worker dispatcher proxy"
   return 1
