@@ -1,31 +1,49 @@
 'use strict';
 
 (() => {
-  const CLIENT_NAVIGATION_ROUTES = Object.freeze([
-    'deployments',
-    'my-resources',
-    'providers',
-    'jobs',
-    'blueprints',
-    'catalog',
-    'credentials',
-    'tokens',
-    'schedules',
-    'webhooks',
-    'users',
-    'roles',
-    'tools',
-    'settings',
-    'observability',
-    'audit',
-    'account',
-    'tenants',
-    'projects',
+  const GROUPS = Object.freeze([
+    { id: 'resources', label: 'ZASOBY', rank: 0, routes: Object.freeze([
+      'deployments',
+      'my-resources',
+      'jobs',
+    ]) },
+    { id: 'automation', label: 'AUTOMATYZACJA', rank: 1, routes: Object.freeze([
+      'providers',
+      'blueprints',
+      'catalog',
+      'schedules',
+      'webhooks',
+    ]) },
+    { id: 'access', label: 'DOSTĘP I BEZPIECZEŃSTWO', rank: 2, routes: Object.freeze([
+      'credentials',
+      'tokens',
+      'users',
+      'roles',
+    ]) },
+    { id: 'organization', label: 'ORGANIZACJA', rank: 3, routes: Object.freeze([
+      'tenants',
+      'projects',
+    ]) },
+    { id: 'operations', label: 'OPERACJE', rank: 4, routes: Object.freeze([
+      'observability',
+      'audit',
+    ]) },
+    { id: 'administration', label: 'ADMINISTRACJA', rank: 5, routes: Object.freeze([
+      'tools',
+      'settings',
+    ]) },
+    { id: 'account', label: 'KONTO', rank: 6, routes: Object.freeze([
+      'account',
+    ]) },
   ]);
 
-  const GROUPS = Object.freeze([
-    { id: 'client', label: '', rank: 0, routes: CLIENT_NAVIGATION_ROUTES },
-  ]);
+  const CLIENT_NAVIGATION_ROUTES = Object.freeze(
+    GROUPS.flatMap(group => group.routes)
+  );
+
+  const NAVIGATION_GROUP = new Map(
+    GROUPS.flatMap(group => group.routes.map(routeId => [routeId, group]))
+  );
 
   const ROUTE_PATHS = Object.freeze({
     dashboard: '/dashboard',
@@ -104,6 +122,14 @@
       : Number(route?.order ?? 999);
   }
 
+  function navigationGroup(route) {
+    return NAVIGATION_GROUP.get(navigationParent(route))?.label || '';
+  }
+
+  function navigationRank(route) {
+    return NAVIGATION_GROUP.get(navigationParent(route))?.rank ?? GROUPS.length;
+  }
+
   function pageEyebrow(route) {
     if (!route) return 'Portal klienta';
     if (route.id === 'dashboard') return 'Stan systemu';
@@ -117,8 +143,8 @@
     routes: CLIENT_NAVIGATION_ROUTES,
   });
   window.uiNavigationVisible = route => NAVIGATION_POSITION.has(route?.id);
-  window.uiNavigationGroup = () => '';
-  window.uiNavigationRank = () => 0;
+  window.uiNavigationGroup = navigationGroup;
+  window.uiNavigationRank = navigationRank;
   window.uiNavigationOrder = navigationPosition;
   window.uiRoutePath = routePath;
   window.uiResolveView = resolveView;
