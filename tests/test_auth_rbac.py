@@ -190,6 +190,70 @@ def test_password_reset_consumed_and_revokes(client,headers):
     assert client.post('/api/v1/auth/login',json={'username':'viewer','password':'new-password-1234'}).status_code==200
 
 
+def test_user_creation_without_initial_password(client, headers):
+    response = client.post('/api/v1/users', headers=headers, json={
+        'username': 'passwordless',
+        'email': 'passwordless@example.com',
+    })
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created['must_change_password'] is True
+
+    with session() as db:
+        user = db.get(User, created['id'])
+        assert user is not None
+        assert user.password_hash
+        assert not verify_password('known-password-1234', user.password_hash)
+
+    assert client.post('/api/v1/auth/login', json={
+        'username': 'passwordless',
+        'password': 'known-password-1234',
+    }).status_code == 401
+
+    reset = client.post(
+        f'/api/v1/users/{created["id"]}/reset-password',
+        headers=headers,
+    )
+    assert reset.status_code == 200, reset.text
+    changed = client.post('/api/v1/auth/reset-password', json={
+        'token': reset.json()['reset_token'],
+        'password': 'configured-password-1234',
+    })
+    assert changed.status_code == 200, changed.text
+    login = client.post('/api/v1/auth/login', json={
+        'username': 'passwordless',
+        'password': 'configured-password-1234',
+    })
+    assert login.status_code == 200, login.text
+    assert login.json()['user']['must_change_password'] is False
+
+
+def test_empty_password_is_treated_as_omitted(client, headers):
+    response = client.post('/api/v1/users', headers=headers, json={
+        'username': 'empty-password',
+        'email': 'empty-password@example.com',
+        'password': '',
+    })
+    assert response.status_code == 201, response.text
+    assert response.json()['must_change_password'] is True
+
+
+def test_service_account_does_not_require_password(client, headers):
+    response = client.post('/api/v1/users', headers=headers, json={
+        'username': 'service-no-password',
+        'email': 'service-no-password@example.com',
+        'is_service_account': True,
+    })
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created['is_service_account'] is True
+    assert created['must_change_password'] is False
+    assert client.post('/api/v1/auth/login', json={
+        'username': 'service-no-password',
+        'password': 'arbitrary-password-1234',
+    }).status_code == 401
+
+
 def test_ldap_settings_secret_and_jit_rbac(client, headers, monkeypatch):
     payload = {
         'enabled': True,
