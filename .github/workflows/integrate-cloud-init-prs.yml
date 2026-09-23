@@ -40,7 +40,7 @@ jobs:
           fi
           git checkout "$source_sha" -- app/executors/terraform.py app/web/features/blueprint-wizard-cloud-init.js app/web/features/blueprint-wizard-core.js app/web/features/blueprint-wizard.js terraform/templates/proxmox-vm/main.tf
           python scripts/integrate_cloud_init_prs.py
-          git rm .github/workflows/merge-validation-source.yml scripts/integrate_cloud_init_prs.py
+          git rm -f .github/workflows/merge-validation-source.yml scripts/integrate_cloud_init_prs.py
           git add app tests docs
           test -z "$(git diff --name-only --diff-filter=U)"
           git diff --quiet HEAD -- install.sh docker-compose.yml .github/workflows/ci.yml tests/test_installer_terminal_ui.py
