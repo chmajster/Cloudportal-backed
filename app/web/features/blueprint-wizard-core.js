@@ -244,7 +244,7 @@
         tags.push('apmid-' + apmid, 'env-' + environment, apmid + '.' + environment);
       }
       const uniqueTags = [...new Set(tags)];
-      if (state.installQemuGuestAgent && !state.cloudInitSnippetStorage) {
+      if (state.installQemuGuestAgent && !state.guestCredentialId && !state.cloudInitSnippetStorage) {
         throw new Error('Instalacja QEMU Guest Agent wymaga storage obsługującego snippets na wybranym node.');
       }
       variables = {
@@ -259,7 +259,7 @@
         network: state.network,
         ssh_username: state.sshUsername || 'clouduser',
         install_qemu_guest_agent: Boolean(state.installQemuGuestAgent),
-        cloud_init_snippet_storage: state.installQemuGuestAgent ? state.cloudInitSnippetStorage : null,
+        cloud_init_snippet_storage: state.installQemuGuestAgent && !state.guestCredentialId ? state.cloudInitSnippetStorage : null,
         tags: uniqueTags,
       };
       if (state.vlanId) variables.vlan_id = Number(state.vlanId);
