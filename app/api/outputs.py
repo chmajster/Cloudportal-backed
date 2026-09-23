@@ -332,6 +332,8 @@ class BlueprintOutput(Output):
     deployment: dict[str, Any]
     workflow: list[dict[str, Any]]
     requires_approval: bool
+    auto_approve_for_executors: bool | None
+    approval_timeout_hours: int | None
     recovery_policy: Literal['preserve', 'destroy_on_failure']
     created_by: int
     created_at: datetime
