@@ -1,4 +1,5 @@
 import json
+import stat
 import uuid
 from types import SimpleNamespace
 from datetime import timedelta
@@ -13,7 +14,9 @@ from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User
 from app.quotas.models import QuotaAllocation, QuotaReservation
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
-from app.executors.terraform import TerraformExecutor, proxmox_ssh_preflight, terraform_plan_command, workspace_lock
+from app.executors.terraform import (TerraformExecutor, cleanup_qemu_bootstrap, load_qemu_bootstrap,
+                                     prepare_qemu_bootstrap, proxmox_ssh_preflight,
+                                     terraform_plan_command, workspace_lock)
 from app.deployments.recreate import recreate_resource_address
 from app.jobs.worker import execute
 from app.jobs.queue import reconcile_cancelled_jobs, reconcile_persisted_inventory, reconcile_stale_jobs
@@ -788,6 +791,22 @@ def test_idle_worker_and_dispatcher_are_visible_in_health(client, headers):
         worker.terminate()
         output, _ = worker.communicate(timeout=15)
     assert 'TimeoutError' not in output and 'Error connecting' not in output
+
+
+def test_qemu_guest_bootstrap_key_is_ephemeral_and_reused(tmp_path):
+    first = prepare_qemu_bootstrap(tmp_path, '6b517d82-6bf3-4a77-a85e-acdeef123456', 'ssh_auth_missing')
+    second = prepare_qemu_bootstrap(tmp_path, 'different-job-id', 'ssh_unreachable')
+
+    assert first['username'].startswith('cpbootstrap')
+    assert first['username'] == second['username']
+    assert first['public_key'] == second['public_key']
+    assert first['reason'] == 'ssh_auth_missing'
+    assert stat.S_IMODE(first['private_key_path'].stat().st_mode) == 0o600
+    assert load_qemu_bootstrap(tmp_path)['public_key'] == first['public_key']
+
+    cleanup_qemu_bootstrap(tmp_path)
+    assert load_qemu_bootstrap(tmp_path) is None
+    assert not first['private_key_path'].exists()
 
 
 def test_proxmox_qemu_agent_ssh_preflight_fails_early(monkeypatch):
