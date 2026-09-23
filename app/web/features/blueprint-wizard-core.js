@@ -204,6 +204,8 @@
       allowedUserIds: [],
       managerRoleIds: [],
       requiresApproval: false,
+      autoApproveForExecutors: 'inherit',
+      approvalTimeoutHours: '',
       recoveryPolicy: 'preserve',
       executor: 'terraform',
       submitting: false,
@@ -355,6 +357,8 @@
       deployment: buildDeployment(state, data),
       workflow: selectedWorkflow,
       requires_approval: state.requiresApproval,
+      auto_approve_for_executors: state.autoApproveForExecutors === 'inherit' ? null : state.autoApproveForExecutors === 'true',
+      approval_timeout_hours: String(state.approvalTimeoutHours ?? '').trim() ? Number(state.approvalTimeoutHours) : null,
       recovery_policy: state.recoveryPolicy,
     };
   }
