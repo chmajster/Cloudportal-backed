@@ -262,8 +262,7 @@
           visibility_cloudportal: 'visibilityCloudportal',
           visibility_api: 'visibilityApi',
           requires_approval: 'requiresApproval',
-          auto_approve_for_executors: 'autoApproveForExecutors',
-          approval_timeout_hours: 'approvalTimeoutHours',
+          auto_approve_for_executors: 'autoApproveForExecutors', approval_timeout_hours: 'approvalTimeoutHours',
           recovery_policy: 'recoveryPolicy',
           new_scheme_name: 'newSchemeName',
           new_scheme_pattern: 'newSchemePattern',
@@ -364,8 +363,7 @@
           state.allowedUserIds = ids('allowed_user_ids');
           state.managerRoleIds = ids('manager_role_ids');
           state.requiresApproval = root.querySelector('[name="requires_approval"]')?.checked ?? state.requiresApproval;
-          state.autoApproveForExecutors = root.querySelector('[name="auto_approve_for_executors"]')?.value || state.autoApproveForExecutors;
-          state.approvalTimeoutHours = root.querySelector('[name="approval_timeout_hours"]')?.value ?? state.approvalTimeoutHours;
+          window.BlueprintApprovalPolicyUI.captureState(root, state);
           state.recoveryPolicy = root.querySelector('[name="recovery_policy"]')?.value || state.recoveryPolicy;
         }
       }
@@ -1209,8 +1207,7 @@
             ['Role', roleNames.join(', ') || 'Bez ograniczenia'],
             ['Użytkownicy', userNames.join(', ') || 'Bez ograniczenia'],
             ['Approval', state.requiresApproval ? 'Wymagany' : 'Nie'],
-            ['Auto-approval', window.BlueprintApprovalPolicyUI.autoSummary(state.autoApproveForExecutors)],
-            ['Timeout approval', window.BlueprintApprovalPolicyUI.timeoutSummary(state.approvalTimeoutHours)],
+            ...window.BlueprintApprovalPolicyUI.summaryRows(state),
           ]],
         ];
 

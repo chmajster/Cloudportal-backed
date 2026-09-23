@@ -56,6 +56,18 @@
     return String(value ?? '').trim() ? value + ' h' : 'Dziedziczony z projektu / globalnie';
   }
 
+  function captureState(root, state) {
+    state.autoApproveForExecutors = root.querySelector('[name="auto_approve_for_executors"]')?.value || state.autoApproveForExecutors;
+    state.approvalTimeoutHours = root.querySelector('[name="approval_timeout_hours"]')?.value ?? state.approvalTimeoutHours;
+  }
+
+  function summaryRows(state) {
+    return [
+      ['Auto-approval', autoSummary(state.autoApproveForExecutors)],
+      ['Timeout approval', timeoutSummary(state.approvalTimeoutHours)],
+    ];
+  }
+
   window.BlueprintApprovalPolicyUI = Object.freeze({
     fields,
     wizardFields,
@@ -64,6 +76,8 @@
     badgeFor,
     autoSummary,
     timeoutSummary,
+    captureState,
+    summaryRows,
   });
 
   registerExtension('blueprint-approval-policy-ui', () => {});
