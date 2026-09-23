@@ -2,7 +2,7 @@ import ipaddress
 import io
 import os
 import re
-from time import monotonic
+from time import monotonic, sleep
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
@@ -634,8 +634,8 @@ class ProxmoxProvider(InfrastructureProvider):
         except (KeyError, TypeError, ValueError):
             raise HTTPException(502, 'QEMU Guest Agent did not return a command PID') from None
 
-        deadline = time.monotonic() + max(1, int(timeout))
-        while time.monotonic() < deadline:
+        deadline = monotonic() + max(1, int(timeout))
+        while monotonic() < deadline:
             status = self._get(base + '/exec-status?pid=' + str(pid)) or {}
             if status.get('exited') is True:
                 exitcode = status.get('exitcode')
@@ -647,7 +647,7 @@ class ProxmoxProvider(InfrastructureProvider):
                         + (': ' + detail[-1000:] if detail else f' with exit code {exitcode}'),
                     )
                 return status
-            time.sleep(1)
+            sleep(1)
         raise HTTPException(504, 'Timed out waiting for QEMU Guest Agent command')
 
     def set_guest_user_password(self, node, vm_id, username, password):
