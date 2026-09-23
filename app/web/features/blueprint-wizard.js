@@ -262,6 +262,8 @@
           visibility_cloudportal: 'visibilityCloudportal',
           visibility_api: 'visibilityApi',
           requires_approval: 'requiresApproval',
+          auto_approve_for_executors: 'autoApproveForExecutors',
+          approval_timeout_hours: 'approvalTimeoutHours',
           recovery_policy: 'recoveryPolicy',
           new_scheme_name: 'newSchemeName',
           new_scheme_pattern: 'newSchemePattern',
@@ -362,6 +364,8 @@
           state.allowedUserIds = ids('allowed_user_ids');
           state.managerRoleIds = ids('manager_role_ids');
           state.requiresApproval = root.querySelector('[name="requires_approval"]')?.checked ?? state.requiresApproval;
+          state.autoApproveForExecutors = root.querySelector('[name="auto_approve_for_executors"]')?.value || state.autoApproveForExecutors;
+          state.approvalTimeoutHours = root.querySelector('[name="approval_timeout_hours"]')?.value ?? state.approvalTimeoutHours;
           state.recoveryPolicy = root.querySelector('[name="recovery_policy"]')?.value || state.recoveryPolicy;
         }
       }
@@ -1116,6 +1120,12 @@
             checkboxField('CloudPortal', 'visibility_cloudportal', state.visibilityCloudportal),
             checkboxField('API', 'visibility_api', state.visibilityApi),
             checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', state.requiresApproval),
+            selectField('Auto-approval', 'auto_approve_for_executors', [
+              { value: 'inherit', label: 'Dziedzicz z projektu / ustawień globalnych' },
+              { value: 'true', label: 'Włączone dla tego Blueprintu' },
+              { value: 'false', label: 'Wyłączone dla tego Blueprintu' },
+            ], state.autoApproveForExecutors, { wide: true }),
+            field('Timeout approval (h)', 'approval_timeout_hours', { type: 'number', min: 1, max: 720, value: state.approvalTimeoutHours, wide: true, help: 'Puste pole oznacza dziedziczenie timeoutu z projektu, a następnie z ustawienia globalnego.' }),
             selectField('Po błędzie wdrożenia', 'recovery_policy', [
               { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
               { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
@@ -1202,6 +1212,8 @@
             ['Role', roleNames.join(', ') || 'Bez ograniczenia'],
             ['Użytkownicy', userNames.join(', ') || 'Bez ograniczenia'],
             ['Approval', state.requiresApproval ? 'Wymagany' : 'Nie'],
+            ['Auto-approval', state.autoApproveForExecutors === 'inherit' ? 'Dziedziczony z projektu / globalnie' : (state.autoApproveForExecutors === 'true' ? 'Włączony w Blueprintcie' : 'Wyłączony w Blueprintcie')],
+            ['Timeout approval', String(state.approvalTimeoutHours ?? '').trim() ? state.approvalTimeoutHours + ' h' : 'Dziedziczony z projektu / globalnie'],
           ]],
         ];
 
