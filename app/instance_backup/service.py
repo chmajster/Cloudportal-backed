@@ -6,6 +6,7 @@ import shutil
 import socket
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from rq import Queue
 from rq.serializers import JSONSerializer
