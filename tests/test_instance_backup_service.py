@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from app.config import settings
 from app.database import session
 from app.instance_backup.models import InstanceBackup, utcnow
 from app.instance_backup.paths import generated_dir
@@ -67,7 +68,7 @@ def test_nonexpired_backup_remains_available(system):
 
 
 def test_workspace_snapshot_copies_durable_files_and_skips_runtime_secrets(system, tmp_path):
-    workspace = __import__("app.config", fromlist=["settings"]).settings().data_dir / "workspaces" / "deployment-1"
+    workspace = settings().data_dir / "workspaces" / "deployment-1"
     workspace.mkdir(parents=True)
     (workspace / "terraform.tfstate").write_text('{"version":4}')
     (workspace / ".cloudportal-qemu-bootstrap-key").write_text("private-key")
