@@ -701,6 +701,8 @@ class BlueprintInput(Input):
     deployment: BlueprintDeployment
     workflow: Annotated[list[BlueprintStep], Field(min_length=1, max_length=100)]
     requires_approval: bool = False
+    auto_approve_for_executors: bool | None = None
+    approval_timeout_hours: int | None = Field(default=None, ge=1, le=720)
     recovery_policy: Literal['preserve', 'destroy_on_failure'] = 'preserve'
 
     @model_validator(mode='after')
