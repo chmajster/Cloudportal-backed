@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from app.catalog import resolve_template_source, template_definition, template_import_target
 from app.config import settings
-from app.credentials.ssh import public_key_from_private_key
+from app.credentials.ssh import generate_ed25519_key_pair, public_key_from_private_key
 from app.database import session
 from app.deployments.recreate import recreate_resource_address
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
@@ -112,6 +112,68 @@ def guest_credential_runtime_variables(deployment):
     return variables, password
 
 
+QEMU_BOOTSTRAP_MARKER = '.cloudportal-qemu-bootstrap.json'
+QEMU_BOOTSTRAP_KEY = '.cloudportal-qemu-bootstrap-key'
+
+
+def qemu_bootstrap_paths(workspace):
+    return workspace / QEMU_BOOTSTRAP_MARKER, workspace / QEMU_BOOTSTRAP_KEY
+
+
+def load_qemu_bootstrap(workspace):
+    marker_path, key_path = qemu_bootstrap_paths(workspace)
+    if not marker_path.exists():
+        return None
+    if not key_path.exists():
+        raise ExecutionFailed('QEMU Guest Agent bootstrap key is missing from the Terraform workspace')
+    try:
+        marker = json.loads(marker_path.read_text())
+    except (OSError, ValueError, TypeError):
+        raise ExecutionFailed('QEMU Guest Agent bootstrap metadata is invalid') from None
+    username = str(marker.get('username') or '').strip()
+    public_key = str(marker.get('public_key') or '').strip()
+    if not username or not public_key:
+        raise ExecutionFailed('QEMU Guest Agent bootstrap metadata is incomplete')
+    return {
+        'username': username,
+        'public_key': public_key,
+        'private_key_path': key_path,
+        'reason': str(marker.get('reason') or 'guest_bootstrap'),
+    }
+
+
+def prepare_qemu_bootstrap(workspace, job_id, reason):
+    workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+    existing = load_qemu_bootstrap(workspace)
+    if existing:
+        return existing
+    private_key, public_key = generate_ed25519_key_pair()
+    marker_path, key_path = qemu_bootstrap_paths(workspace)
+    username = 'cpbootstrap' + str(job_id).replace('-', '')[:8].lower()
+    key_path.write_text(private_key, encoding='utf-8')
+    os.chmod(key_path, 0o600)
+    marker_path.write_text(json.dumps({
+        'username': username,
+        'public_key': public_key,
+        'reason': reason,
+    }, sort_keys=True), encoding='utf-8')
+    os.chmod(marker_path, 0o600)
+    return {
+        'username': username,
+        'public_key': public_key,
+        'private_key_path': key_path,
+        'reason': reason,
+    }
+
+
+def cleanup_qemu_bootstrap(workspace):
+    for path in qemu_bootstrap_paths(workspace):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def proxmox_ssh_preflight(credential, env):
     from app.providers.proxmox import ProxmoxProvider
     readiness = ProxmoxProvider(credential).ssh_preflight(env)
@@ -171,7 +233,9 @@ class TerraformExecutor(Executor):
                 env['PROXMOX_VE_USERNAME'] = credential.username
                 env['PROXMOX_VE_PASSWORD'] = secret['password']
 
-            if deployment.variables.get('install_qemu_guest_agent'):
+            qemu_bootstrap = None
+            qemu_install = bool(deployment.variables.get('install_qemu_guest_agent'))
+            if qemu_install and operation in {'terraform.plan', 'terraform.apply'}:
                 ssh_names = (
                     'PROXMOX_VE_SSH_USERNAME',
                     'PROXMOX_VE_SSH_PASSWORD',
@@ -188,17 +252,40 @@ class TerraformExecutor(Executor):
                     env['PROXMOX_VE_SSH_USERNAME'] = credential.username.split('@', 1)[0]
                     env['PROXMOX_VE_SSH_PASSWORD'] = secret['password']
 
-                has_ssh_auth = bool(
-                    env.get('PROXMOX_VE_SSH_PASSWORD')
-                    or env.get('PROXMOX_VE_SSH_PRIVATE_KEY')
-                    or env.get('PROXMOX_VE_SSH_AGENT', '').lower() == 'true'
+                marker_path, _ = qemu_bootstrap_paths(workspace)
+                saved_plan_apply = operation == 'terraform.apply' and bool(
+                    getattr(context, 'apply_saved_terraform_plan', False)
                 )
-                if not has_ssh_auth:
-                    raise ExecutionFailed(
-                        'Automatic qemu-guest-agent cloud-init requires SSH access to the Proxmox node '
-                        'for snippet upload. Use a password-based Proxmox credential or configure '
-                        'PROXMOX_VE_SSH_* for the worker.'
-                    )
+                if saved_plan_apply:
+                    qemu_bootstrap = load_qemu_bootstrap(workspace) if marker_path.exists() else None
+                    use_snippet = qemu_bootstrap is None
+                    readiness = {
+                        'ok': use_snippet,
+                        'reason': 'saved_plan_guest_bootstrap' if qemu_bootstrap else 'saved_plan_snippet',
+                    }
+                else:
+                    snippet_storage = deployment.variables.get('cloud_init_snippet_storage')
+                    if snippet_storage:
+                        from app.providers.proxmox import ProxmoxProvider
+                        readiness = ProxmoxProvider(credential).ssh_preflight(env)
+                    else:
+                        readiness = {'ok': False, 'reason': 'snippet_storage_missing'}
+                    use_snippet = bool(snippet_storage and readiness.get('ok'))
+                    if use_snippet:
+                        cleanup_qemu_bootstrap(workspace)
+                    else:
+                        qemu_bootstrap = prepare_qemu_bootstrap(
+                            workspace,
+                            context.job.id,
+                            readiness.get('reason') or 'ssh_not_ready',
+                        )
+                mode = 'snippet' if use_snippet else 'guest-bootstrap'
+                context.log(
+                    'qemu-guest-agent.provisioning-mode: '
+                    + mode
+                    + '; reason='
+                    + str(readiness.get('reason') or 'ready')
+                )
         elif provider_type == 'aws':
             env['AWS_ACCESS_KEY_ID'] = secret['access_key_id']
             env['AWS_SECRET_ACCESS_KEY'] = secret['secret_access_key']
@@ -233,6 +320,12 @@ class TerraformExecutor(Executor):
             if name in {'PROXMOX_VE_SSH_PASSWORD', 'PROXMOX_VE_SSH_PRIVATE_KEY'} and value
         )
         runtime_variables = dict(deployment.variables or {})
+        if provider_type == 'proxmox' and operation in {'terraform.plan', 'terraform.apply'}:
+            qemu_install = bool(deployment.variables.get('install_qemu_guest_agent'))
+            runtime_variables['qemu_guest_agent_bootstrap'] = bool(qemu_install and qemu_bootstrap)
+            if qemu_install and qemu_bootstrap:
+                runtime_variables['bootstrap_username'] = qemu_bootstrap['username']
+                runtime_variables['bootstrap_public_key'] = qemu_bootstrap['public_key']
         if operation in {'terraform.plan', 'terraform.apply'}:
             guest_variables, guest_password = guest_credential_runtime_variables(deployment)
             runtime_variables.update(guest_variables)
