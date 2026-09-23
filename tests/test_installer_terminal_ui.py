@@ -100,6 +100,8 @@ def test_docker_status_auto_repair_restores_compose_state_and_can_be_disabled():
     assert "Auto-naprawa Docker zakończyła się powodzeniem." in INSTALLER
     assert "Auto-naprawa Docker jest wyłączona przez --no-auto-repair." in INSTALLER
     assert "systemctl start docker.service docker.socket" in INSTALLER
+    assert '((docker_auto_repair == 0)) || docker_acquire_install_lock' in INSTALLER
+    assert 'Auto-naprawa Docker wymaga roota.' in INSTALLER
 
 
 def test_installer_failure_trap_is_actionable_without_dumping_commands():
