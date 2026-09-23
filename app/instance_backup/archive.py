@@ -34,13 +34,24 @@ def _json_file(path: Path, payload: dict) -> None:
     chmod_file(path)
 
 
-def build_archive(staging: Path, destination: Path, manifest: dict, member_names: list[str]) -> tuple[int, str]:
+def build_archive(
+    staging: Path,
+    destination: Path,
+    manifest: dict,
+    member_names: list[str],
+    *,
+    on_stage=None,
+) -> tuple[int, str]:
     member_names = sorted(set(member_names))
     _json_file(staging / "manifest.json", manifest)
     checksum_names = sorted(set(member_names + ["manifest.json"]))
+    if on_stage:
+        on_stage("checksums")
     checksums = {name: sha256_file(staging / name) for name in checksum_names}
     _json_file(staging / "checksums.json", {"algorithm": "sha256", "files": checksums})
     archive_names = sorted(set(checksum_names + ["checksums.json"]))
+    if on_stage:
+        on_stage("archive")
 
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = destination.with_name(destination.name + ".partial")
