@@ -124,7 +124,7 @@ function progressPanel(item, onManualDownload) {
   return panel;
 }
 
-function sourceDetails(manifest) {
+function sourceDetails(manifest, backup) {
   const source = manifest?.source || {};
   const app = manifest?.application || {};
   const secret = manifest?.secret || {};
@@ -135,7 +135,8 @@ function sourceDetails(manifest) {
     metaItem('Data backupu', manifest?.created_at),
     metaItem('Alembic revision', app.alembic_revision, true),
     metaItem('Secret backend', secret.backend),
-    metaItem('Tryb instalacji', source.install_mode));
+    metaItem('Tryb instalacji', source.install_mode),
+    metaItem('Rozmiar', formatBytes(backup?.size_bytes)));
 }
 
 function countRows(counts) {
@@ -217,13 +218,14 @@ function planPanel(uploaded, onStart) {
     autocomplete: 'off',
     spellcheck: false,
   });
+  const preflightOk = uploaded.preflight?.ok !== false;
   const start = button('Rozpocznij migrację', () => onStart({
     confirmation: confirmation.value,
     safety_backup: safety.checked,
   }), 'danger');
   start.disabled = true;
   confirmation.addEventListener('input', () => {
-    start.disabled = confirmation.value !== 'RESTORE';
+    start.disabled = confirmation.value !== 'RESTORE' || !preflightOk || !allowed('instance_backups.restore');
   });
 
   const plan = uploaded.plan || {};
@@ -236,7 +238,7 @@ function planPanel(uploaded, onStart) {
         node('h2', { text: 'Backup poprawny' }),
         node('p', { class: 'muted', text: uploaded.backup?.filename || '' })),
       badge('Zweryfikowany', 'ok')),
-    sourceDetails(uploaded.manifest),
+    sourceDetails(uploaded.manifest, uploaded.backup),
     node('hr'),
     node('h3', { text: 'Plan migracji' }),
     node('div', { class: 'instance-backup-compare' },
@@ -249,6 +251,8 @@ function planPanel(uploaded, onStart) {
         node('strong', { text: target.hostname || '—' }),
         node('span', { text: (target.install_mode || '—') + ' · ' + (target.application_version || '—') }))),
     countRows(plan.counts),
+    ...(plan.warnings || []).map(message =>
+      node('p', { class: 'instance-backup-warning', text: 'Preflight: ' + message })),
     node('div', { class: 'instance-backup-preserved' },
       node('strong', { text: 'Ustawienia lokalne nowego serwera zostaną zachowane:' }),
       node('ul', {},
