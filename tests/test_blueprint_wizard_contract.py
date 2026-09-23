@@ -230,7 +230,7 @@ console.log(JSON.stringify(core.buildDeployment(state, data)));
     assert result['select_apmid_on_execute'] is False
 
 
-def test_wizard_rejects_qemu_agent_without_snippet_storage():
+def test_wizard_allows_qemu_agent_guest_bootstrap_without_snippet_storage():
     node = shutil.which('node')
     if not node:
         pytest.skip('node is required for Blueprint wizard contract tests')
@@ -266,9 +266,7 @@ try {{
 """
     result = subprocess.run([node, '-e', script], check=True, capture_output=True, text=True)
     payload = json.loads(result.stdout)
-    assert payload['ok'] is False
-    assert 'storage' in payload['message'].lower()
-    assert 'snippets' in payload['message'].lower()
+    assert payload['ok'] is True
 
 
 def test_wizard_ansible_does_not_force_guest_agent():
