@@ -442,13 +442,20 @@
             state.storage = root.querySelector('[name="storage"]')?.value || state.storage;
             state.network = root.querySelector('[name="network"]')?.value || state.network;
             state.vlanId = root.querySelector('[name="vlan_id"]')?.value || '';
-            state.environment = root.querySelector('[name="environment"]')?.value || state.environment;
-            state.apmid = root.querySelector('[name="apmid"]')?.value.trim().toUpperCase() || state.apmid;
             state.selectEnvironmentOnExecute = root.querySelector('[name="select_environment_on_execute"]')?.checked ?? state.selectEnvironmentOnExecute;
             state.selectApmidOnExecute = root.querySelector('[name="select_apmid_on_execute"]')?.checked ?? state.selectApmidOnExecute;
+            state.environment = state.selectEnvironmentOnExecute
+              ? ''
+              : (root.querySelector('[name="environment"]')?.value || state.environment);
+            state.apmid = state.selectApmidOnExecute
+              ? ''
+              : (root.querySelector('[name="apmid"]')?.value.trim().toUpperCase() || state.apmid);
             if (state.environment) {
               state.hostnameValues.env = state.environment;
               state.hostnameValues.environment = state.environment;
+            } else if (state.selectEnvironmentOnExecute) {
+              delete state.hostnameValues.env;
+              delete state.hostnameValues.environment;
             }
             state.tags = root.querySelector('[name="tags"]')?.value.trim() || '';
             state.sshUsername = root.querySelector('[name="ssh_username"]')?.value.trim() || 'clouduser';
@@ -896,21 +903,25 @@
           field('VLAN ID (opcjonalnie)', 'vlan_id', { type: 'number', min: 1, max: 4094, value: state.vlanId }),
           selectField('Storage', 'storage', storageChoices, state.storage, { required: true, placeholder: 'Wybierz storage' }),
           selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' }),
-          selectField('Environment', 'environment',
-            ['test', 'dev', 'nonprod', 'prod']
-              .filter(name => data.vmClassification?.environments?.[name] !== false)
-              .map(name => ({ value: name, label: name.toUpperCase() })),
-            state.environment, { required: true, placeholder: 'Brak włączonych Environment' }),
-          (data.vmClassification?.apmids || []).length
-            ? selectField('APMID', 'apmid',
-                data.vmClassification.apmids.map(value => ({ value, label: value })),
-                state.apmid, { required: true, placeholder: 'Wybierz APMID' })
-            : field('APMID', 'apmid', {
-                value: state.apmid,
-                required: true,
-                placeholder: 'IAASTEAM',
-                help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
-              })
+          !state.selectEnvironmentOnExecute
+            ? selectField('Environment', 'environment',
+                ['test', 'dev', 'nonprod', 'prod']
+                  .filter(name => data.vmClassification?.environments?.[name] !== false)
+                  .map(name => ({ value: name, label: name.toUpperCase() })),
+                state.environment, { required: true, placeholder: 'Brak włączonych Environment' })
+            : null,
+          !state.selectApmidOnExecute
+            ? ((data.vmClassification?.apmids || []).length
+                ? selectField('APMID', 'apmid',
+                    data.vmClassification.apmids.map(value => ({ value, label: value })),
+                    state.apmid, { required: true, placeholder: 'Wybierz APMID' })
+                : field('APMID', 'apmid', {
+                    value: state.apmid,
+                    required: true,
+                    placeholder: 'IAASTEAM',
+                    help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
+                  }))
+            : null
         );
 
         const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(
@@ -955,6 +966,25 @@
         [runtimeEnvironment, runtimeApmid].forEach(wrapper => {
           wrapper.querySelector('input').addEventListener('change', event => {
             saveStateFromInput(event.currentTarget);
+            if (event.currentTarget.name === 'select_environment_on_execute') {
+              if (state.selectEnvironmentOnExecute) {
+                state.environment = '';
+                delete state.hostnameValues.env;
+                delete state.hostnameValues.environment;
+              } else {
+                state.environment = ['test', 'dev', 'nonprod', 'prod']
+                  .find(name => data.vmClassification?.environments?.[name] !== false) || '';
+                if (state.environment) {
+                  state.hostnameValues.env = state.environment;
+                  state.hostnameValues.environment = state.environment;
+                }
+              }
+            }
+            if (event.currentTarget.name === 'select_apmid_on_execute') {
+              state.apmid = state.selectApmidOnExecute
+                ? ''
+                : String(data.vmClassification?.apmids?.[0] || '');
+            }
             render();
           });
         });
@@ -1031,10 +1061,10 @@
 
         const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'Klasyfikacja VM' }),
-          node('span', { text: state.apmid && state.environment
-            ? state.apmid + '.' + state.environment.toUpperCase()
-              + (runtimeParts.length ? ' · przy tworzeniu VM wybierane: ' + runtimeParts.join(' i ') : ' · wartości stałe z Blueprintu')
-            : 'Wybierz APMID i Environment. Tagi Proxmox zostaną dodane automatycznie.' }));
+          node('span', { text: [
+            state.selectApmidOnExecute ? 'APMID: wybierany przy tworzeniu VM' : 'APMID: ' + (state.apmid || 'nieustawiony'),
+            state.selectEnvironmentOnExecute ? 'Environment: wybierany przy tworzeniu VM' : 'Environment: ' + (state.environment ? state.environment.toUpperCase() : 'nieustawiony'),
+          ].join(' · ') }));
 
         return node('div', { class: 'blueprint-wizard-step-stack' },
           node('div', { class: 'blueprint-wizard-presets' },
