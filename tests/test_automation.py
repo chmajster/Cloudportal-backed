@@ -218,7 +218,7 @@ def test_blueprint_quick_toggle(client, headers):
     assert enabled.json()['is_active'] is True
 
 
-def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, headers, monkeypatch):
+def test_blueprint_guest_ssh_credential_uses_ephemeral_bootstrap_account(client, headers):
     from app.credentials.ssh import generate_ed25519_key_pair
 
     provider_credential, provider, deployment_payload = resources(client, headers)
@@ -254,22 +254,22 @@ def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, head
     })
     assert created.status_code == 201, created.text
 
-    monkeypatch.setattr(
-        'app.api.automation.provider_for',
-        lambda credential: type('Provider', (), {'ssh_preflight': lambda self: {'ok': True}})(),
-    )
-
     execution = client.post(
         f"/api/v1/blueprints/{created.json()['id']}/execute",
         headers=key(headers),
         json={},
     )
     assert execution.status_code == 202, execution.text
-    assert execution.json()['variables']['ssh_username'] == 'vmadmin'
-    assert execution.json()['variables']['ssh_public_key'] == ' '.join(public_key.split()[:2])
-    assert execution.json()['variables']['install_qemu_guest_agent'] is True
-    assert execution.json()['variables']['cloud_init_snippet_storage'] == 'local'
-    assert execution.json()['workflow']['blueprint']['guest_credential_id'] == guest.json()['id']
+    assert execution.json()['variables']['ssh_username'].startswith('cloudportal-boots')
+    assert execution.json()['variables']['ssh_username'] != 'vmadmin'
+    assert execution.json()['variables']['ssh_public_key'].startswith('ssh-ed25519 ')
+    assert execution.json()['variables']['ssh_public_key'] != ' '.join(public_key.split()[:2])
+    assert execution.json()['variables']['install_qemu_guest_agent'] is False
+    assert execution.json()['variables']['cloud_init_snippet_storage'] is None
+    snapshot = execution.json()['workflow']['blueprint']
+    assert snapshot['guest_credential_id'] == guest.json()['id']
+    assert snapshot['bootstrap_install_qemu_guest_agent'] is True
+    assert snapshot['guest_bootstrap_secret']
 
     protected = client.delete(f"/api/v1/credentials/{guest.json()['id']}", headers=headers)
     assert protected.status_code == 409
@@ -316,19 +316,19 @@ def test_blueprint_guest_credential_accepts_password_only_ssh_without_persisting
         json={},
     )
     assert execution.status_code == 202, execution.text
-    assert execution.json()['variables']['ssh_username'] == 'vmadmin'
-    assert execution.json()['variables']['ssh_public_key'] is None
+    assert execution.json()['variables']['ssh_username'].startswith('cloudportal-boots')
+    assert execution.json()['variables']['ssh_public_key'].startswith('ssh-ed25519 ')
     assert password not in execution.text
     assert execution.json()['workflow']['blueprint']['guest_credential_id'] == guest.json()['id']
+    assert execution.json()['workflow']['blueprint']['guest_bootstrap_secret']
 
     with session() as db:
         deployment = db.get(Deployment, execution.json()['id'])
         assert password not in str(deployment.variables)
         assert password not in str(deployment.workflow)
         runtime_variables, runtime_password = guest_credential_runtime_variables(deployment)
-    assert runtime_variables['ssh_username'] == 'vmadmin'
-    assert runtime_variables['ssh_public_key'] is None
-    assert runtime_password == password
+    assert runtime_variables == {}
+    assert runtime_password is None
 
 
 def test_blueprint_runtime_apmid_is_required_by_ui_and_applied_by_backend(client, headers):
