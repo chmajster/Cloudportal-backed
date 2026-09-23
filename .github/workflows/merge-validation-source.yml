@@ -1,0 +1,29 @@
+name: Merge validation source
+on:
+  push:
+    branches: [fix/proxmox-terraform-agent-wait]
+    paths: [.github/workflows/merge-validation-source.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b3bb53c25b43569022e8bb2077f96fefa9100e96
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export tracked source at both PR heads and their merge base
+        run: |
+          set -eu
+          mkdir -p source-export
+          git archive b3bb53c25b43569022e8bb2077f96fefa9100e96 | gzip > source-export/pr155.tar.gz
+          git archive 29d629d571103a2347b39a2e230f80606555b7ec | gzip > source-export/pr156.tar.gz
+          git archive 96985a1b3d18c822e0863c65d5e5064cc4bbc1af | gzip > source-export/main.tar.gz
+          git rev-parse HEAD > source-export/commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: merge-validation-source
+          path: source-export/
+          retention-days: 1
