@@ -613,29 +613,169 @@ docker_rollback_candidate() {
 docker_status() {
   CURRENT_STAGE='status Docker'
   ui_header 'Cloudportal-backed — status Docker'
+
+  local failed=0
+  local release public_port='8443' public_host='' expected_workers='1'
+  local required_services=(postgres redis migrate api worker dispatcher proxy)
+  local long_running_services=(postgres redis api dispatcher proxy)
+  local compose_services=()
+  local ids=()
+  local service state health exit_code
+  local running_workers=0 total_workers=0
+
   docker_compose_detect || {
-    ui_warn 'Docker Compose nie jest dostępny.'
+    ui_fail 'Docker Compose nie jest dostępny.'
     return 1
   }
-  local release
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || {
+    ui_fail 'Docker Engine nie odpowiada.'
+    ui_info 'Sprawdź: systemctl status docker oraz docker info'
+    return 1
+  }
+
   release=$(docker_current_release)
   if [[ -n "$release" && -d "$release" ]]; then
     ui_ok "Runtime Docker: $release"
   else
-    ui_warn "Brak aktywnego release Docker w $docker_root/current."
+    ui_fail "Brak aktywnego release Docker w $docker_root/current."
+    failed=1
   fi
+
   if [[ -r "$docker_env" ]]; then
-    local public_port
+    public_host=$(sed -n 's/^CP_PUBLIC_HOST=//p' "$docker_env" | tail -n 1)
     public_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
-    ui_info "Port HTTPS: ${public_port:-8443}"
+    expected_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
+    public_port=${public_port:-8443}
+    expected_workers=${expected_workers:-1}
+    ui_info "Endpoint HTTPS: https://${public_host:-localhost}:$public_port"
+    ui_info "Oczekiwana liczba workerów: $expected_workers"
   else
-    ui_warn "Brak $docker_env"
+    ui_fail "Brak konfiguracji Docker: $docker_env"
+    failed=1
   fi
+
   if [[ -n "$release" && -f "$release/docker-compose.yml" && -r "$docker_env" ]]; then
-    docker_compose ps || true
+    local compose_services_output=''
+    if compose_services_output=$(docker_compose config --services 2>/dev/null); then
+      mapfile -t compose_services <<< "$compose_services_output"
+      for service in "${required_services[@]}"; do
+        if printf '%s\n' "${compose_services[@]}" | grep -Fxq "$service"; then
+          ui_ok "Definicja Compose: $service"
+        else
+          ui_fail "Brak wymaganej usługi w Compose: $service"
+          failed=1
+        fi
+      done
+    else
+      ui_fail 'Nie udało się odczytać listy usług z Docker Compose.'
+      failed=1
+    fi
   else
-    docker ps --filter "label=com.docker.compose.project=$docker_project" || true
+    ui_fail 'Nie można zweryfikować definicji Compose bez aktywnego release i konfiguracji.'
+    failed=1
   fi
+
+  ui_header 'Cloudportal-backed — usługi Docker'
+
+  for service in "${long_running_services[@]}"; do
+    mapfile -t ids < <(
+      docker ps -aq         --filter "label=com.docker.compose.project=$docker_project"         --filter "label=com.docker.compose.service=$service" 2>/dev/null || true
+    )
+    if (("${#ids[@]}" != 1)); then
+      ui_fail "$service: oczekiwano 1 kontenera, znaleziono ${#ids[@]}."
+      failed=1
+      continue
+    fi
+
+    state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${ids[0]}" 2>/dev/null || true)
+    if [[ "$state" != running ]]; then
+      ui_fail "$service: status=${state:-unknown}, oczekiwano running."
+      failed=1
+      continue
+    fi
+
+    if [[ "$service" == postgres || "$service" == redis ]]; then
+      if [[ "$health" == healthy ]]; then
+        ui_ok "$service: running, health=healthy"
+      else
+        ui_fail "$service: running, health=${health:-unknown}; oczekiwano healthy."
+        failed=1
+      fi
+    else
+      ui_ok "$service: running"
+    fi
+  done
+
+  mapfile -t ids < <(
+    docker ps -aq       --filter "label=com.docker.compose.project=$docker_project"       --filter 'label=com.docker.compose.service=migrate' 2>/dev/null || true
+  )
+  if (("${#ids[@]}" != 1)); then
+    ui_fail "migrate: oczekiwano 1 kontenera, znaleziono ${#ids[@]}."
+    failed=1
+  else
+    state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
+    exit_code=$(docker inspect --format '{{.State.ExitCode}}' "${ids[0]}" 2>/dev/null || true)
+    if [[ "$state" == exited && "$exit_code" == 0 ]]; then
+      ui_ok 'migrate: zakończony poprawnie, exit=0'
+    else
+      ui_fail "migrate: status=${state:-unknown}, exit=${exit_code:-unknown}; oczekiwano exited/0."
+      failed=1
+    fi
+  fi
+
+  if [[ "$expected_workers" =~ ^[0-9]+$ ]] && ((10#$expected_workers >= 1)); then
+    mapfile -t ids < <(
+      docker ps -aq         --filter "label=com.docker.compose.project=$docker_project"         --filter 'label=com.docker.compose.service=worker' 2>/dev/null || true
+    )
+    total_workers=${#ids[@]}
+    running_workers=0
+    for service in "${ids[@]}"; do
+      state=$(docker inspect --format '{{.State.Status}}' "$service" 2>/dev/null || true)
+      [[ "$state" == running ]] && ((running_workers+=1))
+    done
+    if ((running_workers == expected_workers && total_workers == expected_workers)); then
+      ui_ok "worker: $running_workers/$expected_workers kontenerów running"
+    else
+      ui_fail "worker: running=$running_workers/$expected_workers, wszystkich kontenerów=$total_workers."
+      failed=1
+    fi
+  else
+    ui_fail "Nieprawidłowa wartość CP_WORKER_COUNT: ${expected_workers:-brak}"
+    failed=1
+  fi
+
+  if [[ "$public_port" =~ ^[0-9]+$ ]] && command -v curl >/dev/null 2>&1; then
+    if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
+      ui_ok "HTTPS healthcheck: /api/v1/health odpowiada na porcie $public_port"
+    else
+      ui_fail "HTTPS healthcheck nie odpowiada na porcie $public_port."
+      failed=1
+    fi
+  else
+    ui_fail 'Nie można wykonać HTTPS healthchecku: brak curl albo nieprawidłowy CP_HTTPS_PORT.'
+    failed=1
+  fi
+
+  ui_info 'Bieżący stan kontenerów Compose:'
+  if [[ -n "$release" && -f "$release/docker-compose.yml" && -r "$docker_env" ]]; then
+    docker_compose ps -a || {
+      ui_fail 'docker compose ps -a zakończył się błędem.'
+      failed=1
+    }
+  else
+    docker ps -a --filter "label=com.docker.compose.project=$docker_project" || true
+  fi
+
+  ui_header 'Podsumowanie statusu Docker'
+  if ((failed == 0)); then
+    ui_ok "Stack Docker kompletny i sprawny: postgres, redis, migrate, api, worker x$expected_workers, dispatcher, proxy."
+    return 0
+  fi
+
+  ui_fail 'Stack Docker jest niekompletny albo co najmniej jedna usługa jest niesprawna.'
+  ui_info "Diagnostyka: docker compose -p $docker_project logs --tail=100"
+  return 1
 }
 
 docker_uninstall() {
@@ -976,8 +1116,10 @@ EOF
 
 if ((docker_mode)); then
   if ((status_mode)); then
-    docker_status
-    exit $?
+    if docker_status; then
+      exit 0
+    fi
+    exit 1
   fi
   docker_acquire_install_lock
   if ((uninstall_mode)); then
