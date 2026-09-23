@@ -1,22 +1,42 @@
-# Terraform apply waits although the Proxmox VM already exists
+# Proxmox first-boot Cloud-init and Terraform agent waits
 
-## Symptom and cause
+## Configure a new workflow
 
-A job remains at `Terraform: zastosuj` and Terraform emits `Still creating...`
-after the VM appears in Proxmox. This message alone does not prove that all
-provider operations have finished: inspect the Proxmox task and guest status.
+In **Nowy Blueprint -> Workflow**, enable **Utwórz Cloud-init przy pierwszym
+starcie VM** (enabled by default for the bundled Proxmox template). Select
+**Użytkownik, hasło lub klucz z Dostępów**. The selection is the same guest SSH
+credential shown in the VM parameters; the Blueprint stores only its ID.
 
-In the bundled Proxmox VM template, `agent { enabled = true }` previously left
-provider IP polling enabled. bpg/proxmox 0.111.1 defaults the agent data timeout
-to 15 minutes. The worker calls `ensure_qemu_guest_bootstrap()` only after
-`executor.execute('terraform.apply', context)` returns. A guest agent that is
-meant to be installed by that bootstrap can therefore block Terraform before
-its own installation starts.
+Enable **Instaluj QEMU Guest Agent automatycznie** to include the package and
+service activation in Cloud-init. The password-free preview updates with this
+option. The generated runtime workflow is:
 
-## Template fix
+```text
+Cloud-init configuration -> Terraform apply -> Wait Agent -> Wait IP -> Ansible (optional)
+```
 
-Keep the guest-agent channel enabled, but leave guest IP discovery and readiness
-to the worker:
+In advanced mode, Cloud-init is an available step type. There must be exactly
+one unconditional Cloud-init step, preceding every Terraform plan/apply step.
+The configuration panel can add/remove this step and wires its dependencies.
+Cloud-init is first-boot configuration, not an SSH script run after VM creation.
+
+## How DHCP without a preinstalled agent works
+
+The worker creates a NoCloud ISO labelled `CIDATA`, containing `user-data`,
+`meta-data` and `network-config`. Terraform uploads it as ISO content through the
+Proxmox HTTP API, then attaches it before the cloned VM starts. This path does
+not need Proxmox SSH, snippet storage, guest SSH or a known guest address.
+
+The seed creates the target user directly. No temporary `cpbootstrap` account is
+used. With installation selected, Cloud-init installs `qemu-guest-agent`, enables
+its service where supported, starts it, and checks that it is active. Static and
+indirect systemd units are started without treating their lack of an install
+section as an error; OpenRC is also supported by the generated service script.
+
+DHCP/static/IPAM configuration targets the primary NIC by its explicit MAC.
+The worker discovers the DHCP address through QGA only after the guest has had
+an opportunity to install and start QGA. The Terraform template keeps the agent
+channel enabled but does not itself wait for the agent's network data:
 
 ```hcl
 agent {
@@ -27,63 +47,68 @@ agent {
 }
 ```
 
-This is supported by the pinned `~> 0.111.0` provider. It skips the provider's
-agent IP lookup during apply and refresh; it does not disable QGA on the VM,
-install QGA, skip actual Terraform completion, or mark a job successful.
+## Prerequisites and limits
 
-The provider's agent-derived `ipv4_addresses`, `ipv6_addresses`, and
-`network_interface_names` are empty with this option. The bundled template does
-not use them for outputs: `vm_id` remains available, and `primary_ip` comes from
-the configured static address. DHCP discovery remains the worker's concern.
+- Use a Linux cloud image with working Cloud-init/NoCloud support and a clean
+  first-boot state. This change does not install Cloud-init into arbitrary images.
+  Windows/Cloudbase-init is not implemented by this path.
+- The target node needs active ISO-capable storage. The worker prefers the VM's
+  storage if it supports ISO, then `local`, then another active ISO storage.
+  The API credential needs permissions to read the source VM and storage and to
+  upload ISO images. Missing ISO storage is reported before Terraform clones a VM.
+- The guest needs DHCP or valid static/IPAM networking and access to its package
+  repositories to install the agent. Guest package/DNS/firewall failures remain
+  real errors; the workflow does not force a successful job status.
+- The inherited Cloud-init CD-ROM is replaced with the seed ISO. Multiple inherited
+  Cloud-init drives or no safe CD-ROM slot are rejected, not overwritten blindly.
 
-Provider reference: `bpg/terraform-provider-proxmox`, tag `v0.111.1`,
-`docs/resources/virtual_environment_vm.md`, `agent.wait_for_ip.disabled`.
+## Credentials and approved plans
 
-## DHCP is a separate bootstrap prerequisite
+Cleartext guest passwords are never written to Blueprint variables, job payloads,
+Terraform tfvars/environment/state, or the browser preview by this path. The
+worker hashes them with SHA-512-crypt (100000 rounds and a random per-deployment
+salt). Only public keys derived from selected private keys enter the guest.
 
-With `guest-bootstrap`, the worker must reach the temporary account over SSH
-before it can install the agent. Its current DHCP discovery uses QGA. If the
-template has no functioning agent and no static/IPAM address was supplied,
-skipping Terraform's IP wait cannot discover the guest address on its own.
+The seed ISO contains the password hash and public key. Protect access to ISO
+storage and use strong passwords: a password hash is still sensitive material.
+Local seed files and their manifest use mode `0600` in the deployment workspace.
+The API token follows the existing provider environment/redaction behavior.
 
-Use a static/IPAM address reachable from the worker, or a cloud-init template
-with QEMU Guest Agent already installed and running. The snippet-based install
-path is another existing option where its Proxmox SSH/storage prerequisites are
-met; selecting a target guest credential currently forces guest-bootstrap.
-Do not work around this by treating a missing IP as success or by scanning an
-unrelated network. The current bootstrap reports an actionable DHCP discovery
-failure rather than completing guest configuration without connectivity.
+Keep the worker data volume/workspace persistent and shared at the same path
+between workers. The manifest pins the generated ISO checksum. An approved saved
+plan must use the same ISO bytes and credential material; missing/changed media
+or a changed credential fails closed. There is no silent regeneration or plan
+substitution during approved apply. Restore the original workspace/media when
+recovering an approved plan. ISO resources are managed by Terraform and removed
+when their deployment is destroyed.
 
-## An already-running job
+## Existing failed or running jobs
 
-Updating the application/template does not rewrite a running Terraform process
-or a previously saved plan. Inspect the current job and Proxmox tasks first.
-When the guest OS is accessible, check whether `qemu-guest-agent` is installed
-and active inside the VM. For an Ubuntu/Debian guest, installing and starting it
-may allow an apply still waiting for agent data to complete:
+An application update does not rewrite an already-running Terraform process,
+existing job snapshot or approved plan. Existing workflows without the explicit
+Cloud-init predecessor retain the legacy snippet/SSH-bootstrap behavior. In that
+legacy mode, DHCP without a working agent can still produce:
 
-```sh
-sudo apt-get update
-sudo apt-get install -y qemu-guest-agent
-sudo systemctl start qemu-guest-agent
-sudo systemctl status qemu-guest-agent --no-pager
+```text
+Guest bootstrap cannot discover a DHCP address before SSH provisioning.
 ```
 
-These commands run **inside the guest VM**, not on the Proxmox host. They do not
-change an already-failed job into a successful one and are not a guarantee that
-other VM initialization errors are absent.
-
-Do not delete the VM, remove state/locks, run a second apply, or force a completed
-job status merely because the VM is visible. After an interrupted/failed run,
-check the persisted Terraform state and resource mapping before retrying. Check
-whether the plan proposes replacement or creation and review any configured
-rollback/destroy-on-failure policy. Never bypass approval or silently substitute
-a newly generated plan for an approved saved plan.
+Use the new Cloud-init workflow for a new deployment. Do not delete an existing
+VM, remove Terraform state/locks, or run concurrent apply merely to bypass the
+old error. Inspect the persisted state and existing VM first. Retrofitting this
+first-boot mode onto a managed VM is rejected unless an explicit rebuild was
+requested; this feature never initiates that rebuild on its own. Guest day-2
+configuration or recovery of the existing deployment is a separate operation.
 
 ## Validation
 
-`tests/test_proxmox_terraform_agent_wait.py` provides static regression contracts
-for the enabled QGA channel, unconditional provider wait bypass, and preserved
-outputs. Full Backend CI additionally validates Terraform templates and the
-backend suite. A real Proxmox deployment is still required to validate guest
-networking and SSH/bootstrap end to end.
+`tests/test_native_cloud_init.py` covers generated users/networking/agent commands,
+ISO readback and permissions, saved-media integrity, existing-VM safety, executor
+credential handling, and JavaScript workflow contracts. The original four
+Terraform agent-wait regression tests are retained. Backend CI also validates
+Terraform templates, all browser JavaScript, the backend suite and installers.
+These checks do not replace an end-to-end test on a real Proxmox guest.
+
+Primary references: Cloud-init NoCloud and module documentation; bpg/proxmox
+v0.111.1 `docs/resources/virtual_environment_file.md` (ISO uploads use HTTP) and
+`docs/resources/virtual_environment_vm.md` (`agent.wait_for_ip.disabled`).
