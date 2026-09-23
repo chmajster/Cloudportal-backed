@@ -100,3 +100,32 @@ def test_project_revisions_last_manager_openapi_and_parent_guard(system):
     assert client.delete(f"/api/v1/tenants/{t['id']}?expected_version=1", headers=headers).status_code == 409
     paths = client.get('/openapi.json').json()['paths']
     assert '/api/v1/projects' in paths and '/api/v1/project-context/resolve' in paths
+
+
+def test_project_blueprint_approval_policy_round_trip(system):
+    client, headers, _ = system
+    tenant = create_tenant(client, headers, 'approval-policy')
+    created = client.post('/api/v1/projects', headers=headers, json={
+        'tenant_id': tenant['id'],
+        'name': 'approval-policy',
+        'slug': 'approval-policy',
+        'blueprint_auto_approve_for_executors': False,
+        'blueprint_approval_timeout_hours': 9,
+    })
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body['blueprint_auto_approve_for_executors'] is False
+    assert body['blueprint_approval_timeout_hours'] == 9
+
+    values = {k: body[k] for k in (
+        'name', 'slug', 'status', 'description', 'labels', 'metadata', 'default_environment'
+    )}
+    values |= {
+        'expected_version': body['version'],
+        'blueprint_auto_approve_for_executors': None,
+        'blueprint_approval_timeout_hours': None,
+    }
+    updated = client.put(f"/api/v1/projects/{body['id']}", headers=headers, json=values)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['blueprint_auto_approve_for_executors'] is None
+    assert updated.json()['blueprint_approval_timeout_hours'] is None
