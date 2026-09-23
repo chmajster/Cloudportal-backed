@@ -13,7 +13,12 @@ from app.tenancy.service import tenant_output
 
 
 def project_output(project):
-    return tenant_output(project) | {'tenant_id': project.tenant_id, 'default_environment': project.default_environment}
+    return tenant_output(project) | {
+        'tenant_id': project.tenant_id,
+        'default_environment': project.default_environment,
+        'blueprint_auto_approve_for_executors': project.blueprint_auto_approve_for_executors,
+        'blueprint_approval_timeout_hours': project.blueprint_approval_timeout_hours,
+    }
 
 
 def page(items, total, limit, offset):

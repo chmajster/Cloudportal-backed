@@ -25,6 +25,8 @@ class Project(Timestamp, Base):
     labels: Mapped[dict] = mapped_column(JSON, default=dict)
     metadata_json: Mapped[dict] = mapped_column('metadata', JSON, default=dict)
     default_environment: Mapped[str] = mapped_column(String(32), default='dev')
+    blueprint_auto_approve_for_executors: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    blueprint_approval_timeout_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)

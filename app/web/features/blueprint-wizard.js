@@ -262,6 +262,7 @@
           visibility_cloudportal: 'visibilityCloudportal',
           visibility_api: 'visibilityApi',
           requires_approval: 'requiresApproval',
+          auto_approve_for_executors: 'autoApproveForExecutors', approval_timeout_hours: 'approvalTimeoutHours',
           recovery_policy: 'recoveryPolicy',
           new_scheme_name: 'newSchemeName',
           new_scheme_pattern: 'newSchemePattern',
@@ -362,6 +363,7 @@
           state.allowedUserIds = ids('allowed_user_ids');
           state.managerRoleIds = ids('manager_role_ids');
           state.requiresApproval = root.querySelector('[name="requires_approval"]')?.checked ?? state.requiresApproval;
+          window.BlueprintApprovalPolicyUI.captureState(root, state);
           state.recoveryPolicy = root.querySelector('[name="recovery_policy"]')?.value || state.recoveryPolicy;
         }
       }
@@ -1118,7 +1120,7 @@
             checkboxField('Backend', 'visibility_backend', state.visibilityBackend),
             checkboxField('CloudPortal', 'visibility_cloudportal', state.visibilityCloudportal),
             checkboxField('API', 'visibility_api', state.visibilityApi),
-            checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', state.requiresApproval),
+            checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', state.requiresApproval), ...window.BlueprintApprovalPolicyUI.wizardFields(state),
             selectField('Po błędzie wdrożenia', 'recovery_policy', [
               { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
               { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
@@ -1205,6 +1207,7 @@
             ['Role', roleNames.join(', ') || 'Bez ograniczenia'],
             ['Użytkownicy', userNames.join(', ') || 'Bez ograniczenia'],
             ['Approval', state.requiresApproval ? 'Wymagany' : 'Nie'],
+            ...window.BlueprintApprovalPolicyUI.summaryRows(state),
           ]],
         ];
 

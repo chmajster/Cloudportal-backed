@@ -8,6 +8,8 @@ from app.tenancy.schemas import TenantFields, TenantOutput, TenantAuditOutput
 
 class ProjectFields(TenantFields):
     default_environment: str = Field(default='dev', min_length=1, max_length=32, pattern=r'^[a-z][a-z0-9_-]*$')
+    blueprint_auto_approve_for_executors: bool | None = None
+    blueprint_approval_timeout_hours: int | None = Field(default=None, ge=1, le=720)
 
 
 class ProjectCreate(ProjectFields):
@@ -21,6 +23,8 @@ class ProjectUpdate(ProjectFields):
 class ProjectOutput(TenantOutput):
     tenant_id: UUID
     default_environment: str
+    blueprint_auto_approve_for_executors: bool | None
+    blueprint_approval_timeout_hours: int | None
 
 
 class ProjectPage(BaseModel):

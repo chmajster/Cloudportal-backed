@@ -242,6 +242,8 @@ class Blueprint(ResourceScope, Timestamp, Base):
     deployment: Mapped[dict] = mapped_column(JSON, default=dict)
     workflow: Mapped[list] = mapped_column(JSON, default=list)
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_approve_for_executors: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    approval_timeout_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recovery_policy: Mapped[str] = mapped_column(String(32), default="preserve")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
 

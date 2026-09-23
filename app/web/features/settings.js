@@ -204,7 +204,7 @@ async function settingsView() {
   const blueprints = settingsCard(
     'box',
     'Blueprinty',
-    'Globalna polityka zatwierdzania uruchomień Blueprintów.',
+    'Globalna polityka domyślna. Projekt i pojedynczy Blueprint mogą ją nadpisać.',
     node('div', { class: 'settings-values' },
       settingsValue(
         'Automatyczne zatwierdzanie wykonania',
@@ -250,7 +250,7 @@ async function settingsView() {
             });
             openModal({
               title: 'Timeout approval Blueprintów',
-              eyebrow: 'Globalna polityka Blueprintów',
+              eyebrow: 'Globalna polityka domyślna Blueprintów',
               body,
               submitLabel: 'Zapisz timeout',
               onSubmit: async data => {

@@ -1,13 +1,13 @@
 from schema_helpers import legacy_deployment, historical_deployment
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from app.config import settings
 from app.database import engine, session
 from app.models import Credential, Deployment, Provider, User, UserRole
 from app.tenancy.models import TenantMembership
 from app.tenancy.permissions import DEFAULT_TENANT_ID
-from app.projects.models import Project, ProjectMembership, ProjectRoleAssignment
+from app.projects.models import ProjectMembership, ProjectRoleAssignment
 from app.projects.permissions import DEFAULT_PROJECT_ID
 
 
@@ -20,9 +20,12 @@ def test_projects_upgrade_preserves_legacy_identity_and_assigns_default_membersh
         command.upgrade(Config('alembic.ini'), '9a42d10e63bc')
         command.upgrade(Config('alembic.ini'), '9a42d10e63bc')
         with session() as db:
-            default = db.get(Project, DEFAULT_PROJECT_ID)
-            assert default.tenant_id == DEFAULT_TENANT_ID and default.is_system and default.slug == 'default'
-            assert db.scalar(select(func.count()).select_from(Project)) == 1
+            default = db.execute(
+                text('SELECT tenant_id, is_system, slug FROM projects WHERE id = :id'),
+                {'id': DEFAULT_PROJECT_ID},
+            ).mappings().one()
+            assert default['tenant_id'] == DEFAULT_TENANT_ID and bool(default['is_system']) and default['slug'] == 'default'
+            assert db.execute(text('SELECT COUNT(*) FROM projects')).scalar_one() == 1
             assert db.get(TenantMembership, (DEFAULT_TENANT_ID, uid)).status == 'active'
             assert db.get(ProjectMembership, (DEFAULT_PROJECT_ID, uid)).tenant_id == DEFAULT_TENANT_ID
             assert db.scalar(select(func.count()).select_from(ProjectRoleAssignment)) == 0

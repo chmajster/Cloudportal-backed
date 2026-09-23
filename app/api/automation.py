@@ -349,6 +349,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                                         'variables': blueprint_variables, 'steps': row.workflow,
                                                         'guest_credential_id': guest_credential_id,
                                                         'requires_approval': row.requires_approval,
+                                                        'auto_approve_for_executors': row.auto_approve_for_executors,
+                                                        'approval_timeout_hours': row.approval_timeout_hours,
                                                         'recovery_policy': row.recovery_policy}},
                                 created_by=actor.user_id, executor=parsed.executor)
         db.add(deployment)

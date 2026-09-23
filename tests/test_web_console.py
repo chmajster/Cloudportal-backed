@@ -584,6 +584,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Automatyczne zatwierdzanie wykonania" in script
     assert "Uruchamia bez pytania o approval" in script
     assert "Włącz auto-approval" in script
+    assert "Globalna polityka domyślna. Projekt i pojedynczy Blueprint mogą ją nadpisać." in script
+    assert "Dziedzicz ustawienie globalne" in script
+    assert "Dziedzicz z projektu / ustawień globalnych" in script
+    assert "blueprint_auto_approve_for_executors" in script
+    assert "blueprint_approval_timeout_hours" in script
     assert "Wyłącz auto-approval" in script
     assert "Timeout ręcznego approval" in script
     assert "Zmień timeout" in script

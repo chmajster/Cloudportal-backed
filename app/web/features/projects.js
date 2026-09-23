@@ -79,6 +79,8 @@
           node('dt', { text: 'Project' }), node('dd', { class: 'mono', text: item.id }),
           node('dt', { text: 'Status' }), node('dd', { text: labels[item.status] }),
           node('dt', { text: 'Środowisko' }), node('dd', { text: item.default_environment }),
+          node('dt', { text: 'Auto-approval Blueprintów' }), node('dd', { text: item.blueprint_auto_approve_for_executors == null ? 'Dziedziczone globalnie' : (item.blueprint_auto_approve_for_executors ? 'Włączone dla projektu' : 'Wyłączone dla projektu') }),
+          node('dt', { text: 'Timeout approval Blueprintów' }), node('dd', { text: item.blueprint_approval_timeout_hours == null ? 'Dziedziczony globalnie' : item.blueprint_approval_timeout_hours + ' h' }),
           node('dt', { text: 'Wersja' }), node('dd', { text: item.version })),
         node('h3', { text: 'Efektywne uprawnienia projektowe' }),
         node('pre', { class: 'projects-json', text: scope.permissions.join('\n') }),
@@ -108,6 +110,12 @@
       field('Nazwa', 'name', { value: item?.name || '', required: true, maxlength: 100 }),
       field('Slug', 'slug', { value: item?.slug || '', required: true, maxlength: 63 }),
       field('Środowisko domyślne', 'default_environment', { value: item?.default_environment || 'dev', required: true, maxlength: 32 }),
+      selectField('Auto-approval Blueprintów', 'blueprint_auto_approve_for_executors', [
+        { value: 'inherit', label: 'Dziedzicz ustawienie globalne' },
+        { value: 'true', label: 'Włączone w tym projekcie' },
+        { value: 'false', label: 'Wyłączone w tym projekcie' },
+      ], item?.blueprint_auto_approve_for_executors == null ? 'inherit' : String(item.blueprint_auto_approve_for_executors)),
+      field('Timeout approval Blueprintów (h)', 'blueprint_approval_timeout_hours', { type: 'number', min: 1, max: 720, value: item?.blueprint_approval_timeout_hours ?? '', help: 'Puste pole oznacza dziedziczenie wartości globalnej.' }),
       selectField('Status', 'status', canDisable ? statuses : statuses.filter(s => s.value !== 'disabled'), item?.status || 'active'),
       field('Opis', 'description', { tag: 'textarea', value: item?.description || '', maxlength: 4000, wide: true }),
       field('Etykiety — JSON', 'labels', { tag: 'textarea', value: JSON.stringify(item?.labels || {}, null, 2), wide: true }),
@@ -117,6 +125,8 @@
       const values = {
         name: item?.is_system ? item.name : data.get('name'), slug: item?.is_system ? item.slug : data.get('slug'),
         status: item?.is_system ? item.status : data.get('status'), default_environment: data.get('default_environment'),
+        blueprint_auto_approve_for_executors: data.get('blueprint_auto_approve_for_executors') === 'inherit' ? null : data.get('blueprint_auto_approve_for_executors') === 'true',
+        blueprint_approval_timeout_hours: data.get('blueprint_approval_timeout_hours') ? Number(data.get('blueprint_approval_timeout_hours')) : null,
         description: data.get('description'), labels: jsonObject(data.get('labels')), metadata: jsonObject(data.get('metadata')),
       };
       if (item) values.expected_version = item.version; else values.tenant_id = data.get('tenant_id');

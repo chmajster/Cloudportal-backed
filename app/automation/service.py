@@ -16,7 +16,8 @@ from app.vm_classification import vm_classification_settings
 
 HOSTNAME_FIELDS = 'id scheme_id hostname values status resource_id created_by created_at updated_at released_at'
 BLUEPRINT_FIELDS = ('id slug name description version is_active visibility allowed_role_ids allowed_user_ids '
-                    'variables_schema deployment workflow requires_approval recovery_policy created_by created_at updated_at')
+                    'variables_schema deployment workflow requires_approval auto_approve_for_executors approval_timeout_hours '
+                    'recovery_policy created_by created_at updated_at')
 
 
 def as_public(row, fields):

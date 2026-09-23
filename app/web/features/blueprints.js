@@ -61,7 +61,7 @@ async function blueprintsView() {
       { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
         ? (item.manager_role_ids || []).map(id => roleNames.get(Number(id)) || ('Rola #' + id)).join(', ')
         : badge('Bez roli dedykowanej', 'warning') },
-      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, item.requires_approval ? badge('Approval wg polityki globalnej', 'warning') : badge('Bez approval', 'info'), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
+      { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, window.BlueprintApprovalPolicyUI.badgeFor(item), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
@@ -311,7 +311,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       checkboxField('Panel backendu', 'visibility_backend', item?.visibility?.backend ?? true),
       checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
       checkboxField('API', 'visibility_api', item?.visibility?.api ?? true),
-      checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', item?.requires_approval ?? false),
+      checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', item?.requires_approval ?? false), ...window.BlueprintApprovalPolicyUI.fields(item),
       selectField('Po błędzie wdrożenia', 'recovery_policy', [
         { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
         { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
@@ -682,7 +682,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             ansible,
           },
           workflow,
-          requires_approval: data.has('requires_approval'),
+          requires_approval: data.has('requires_approval'), auto_approve_for_executors: window.BlueprintApprovalPolicyUI.parseAuto(data.get('auto_approve_for_executors')), approval_timeout_hours: window.BlueprintApprovalPolicyUI.parseTimeout(data.get('approval_timeout_hours')),
           recovery_policy: data.get('recovery_policy'),
         };
         await api(item ? '/blueprints/' + item.id : '/blueprints', {
@@ -1125,7 +1125,7 @@ async function blueprintForm(item = null) {
           checkboxField('Panel backendu', 'visibility_backend', item?.visibility?.backend ?? true),
           checkboxField('CloudPortal', 'visibility_cloudportal', item?.visibility?.cloudportal ?? false),
           checkboxField('API', 'visibility_api', item?.visibility?.api ?? true),
-          checkboxField('Wymaga akceptacji przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false),
+          checkboxField('Wymaga akceptacji przy uruchomieniu', 'requires_approval', item?.requires_approval ?? false), ...window.BlueprintApprovalPolicyUI.fields(item),
           selectField('Po błędzie wdrożenia', 'recovery_policy', [
             { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
             { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
@@ -1295,7 +1295,7 @@ async function blueprintForm(item = null) {
           variables_schema: variablesSchema,
           deployment: deploymentPayload,
           workflow,
-          requires_approval: form.elements.requires_approval.checked,
+          requires_approval: form.elements.requires_approval.checked, auto_approve_for_executors: window.BlueprintApprovalPolicyUI.parseAuto(form.elements.auto_approve_for_executors.value), approval_timeout_hours: window.BlueprintApprovalPolicyUI.parseTimeout(form.elements.approval_timeout_hours.value),
           recovery_policy: form.elements.recovery_policy.value,
         };
         await api(item ? `/blueprints/${item.id}` : '/blueprints', {

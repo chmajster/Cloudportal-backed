@@ -8,6 +8,8 @@ from app.jobs import worker
 from app.jobs.worker import execute
 from app.jobs.queue import expire_waiting_approvals
 from app.models import Deployment, Job, TerraformPlan
+from app.projects.models import Project
+from app.projects.permissions import DEFAULT_PROJECT_ID
 from conftest import new_user
 
 
@@ -684,3 +686,67 @@ def test_worker_revalidates_blueprint_before_execution(client, headers, monkeypa
         job = db.get(Job, job_id)
         assert job.status == 'failed'
         assert 'no longer active' in job.error
+
+
+def test_project_approval_policy_overrides_global_default(client, headers):
+    setting = client.put('/api/v1/settings/blueprints', headers=headers,
+                         json={'auto_approve_for_executors': False, 'approval_timeout_hours': 48})
+    assert setting.status_code == 200, setting.text
+    with session() as db:
+        project = db.get(Project, DEFAULT_PROJECT_ID)
+        project.blueprint_auto_approve_for_executors = True
+        project.blueprint_approval_timeout_hours = 12
+        db.commit()
+
+    credential, provider = infrastructure(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
+        credential, provider, slug='project-approval-policy', name='Project approval policy',
+        requires_approval=True,
+    ))
+    assert created.status_code == 201, created.text
+    launched = client.post(f"/api/v1/blueprints/{created.json()['id']}/execute",
+                           headers=idem(headers), json={})
+    assert launched.status_code == 202, launched.text
+    assert launched.json()['job']['status'] == 'queued'
+    with session() as db:
+        policy = db.get(Job, launched.json()['job']['id']).payload['_approval_policy']
+        assert policy == {
+            'auto_approve_for_executors': True,
+            'approval_timeout_hours': 12,
+            'auto_approve_source': 'project',
+            'approval_timeout_source': 'project',
+        }
+
+
+def test_blueprint_approval_policy_overrides_project(client, headers):
+    setting = client.put('/api/v1/settings/blueprints', headers=headers,
+                         json={'auto_approve_for_executors': True, 'approval_timeout_hours': 48})
+    assert setting.status_code == 200, setting.text
+    with session() as db:
+        project = db.get(Project, DEFAULT_PROJECT_ID)
+        project.blueprint_auto_approve_for_executors = True
+        project.blueprint_approval_timeout_hours = 12
+        db.commit()
+
+    credential, provider = infrastructure(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json=blueprint_payload(
+        credential, provider, slug='blueprint-approval-policy', name='Blueprint approval policy',
+        requires_approval=True, auto_approve_for_executors=False, approval_timeout_hours=3,
+    ))
+    assert created.status_code == 201, created.text
+    assert created.json()['auto_approve_for_executors'] is False
+    assert created.json()['approval_timeout_hours'] == 3
+    launched = client.post(f"/api/v1/blueprints/{created.json()['id']}/execute",
+                           headers=idem(headers), json={})
+    assert launched.status_code == 202, launched.text
+    assert launched.json()['job']['status'] == 'waiting_approval'
+    with session() as db:
+        job = db.get(Job, launched.json()['job']['id'])
+        assert job.payload['_approval_policy'] == {
+            'auto_approve_for_executors': False,
+            'approval_timeout_hours': 3,
+            'auto_approve_source': 'blueprint',
+            'approval_timeout_source': 'blueprint',
+        }
+        assert job.payload['_approval']['status'] == 'pending'
+        assert job.payload['_approval']['expires_at']
