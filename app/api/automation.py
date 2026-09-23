@@ -381,7 +381,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
                                                         'variables': blueprint_variables, 'steps': row.workflow,
                                                         'guest_credential_id': guest_credential_id,
-                                                        'guest_bootstrap_secret': guest_bootstrap_secret,
+                                                        'guest_bootstrap_enabled': bool(guest_bootstrap_secret),
                                                         'bootstrap_install_qemu_guest_agent': bootstrap_install_qemu_agent,
                                                         'requires_approval': row.requires_approval,
                                                         'recovery_policy': row.recovery_policy}},
@@ -389,9 +389,12 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         db.add(deployment)
         db.flush()
         deployment.state_location = f'database://terraform-states/{deployment.id}'
+        job_blueprint = dict(deployment.workflow['blueprint'])
+        if guest_bootstrap_secret:
+            job_blueprint['guest_bootstrap_secret'] = guest_bootstrap_secret
         job = new_job(db, request, actor, 'terraform.apply', deployment,
                       {'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
-                       'blueprint': deployment.workflow['blueprint']})
+                       'blueprint': job_blueprint})
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
         if ip_allocation:
