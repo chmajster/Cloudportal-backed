@@ -18,6 +18,7 @@ def run_core(expression: str):
 global.window = {{}};
 global.registerExtension = (_name, initialize) => initialize();
 eval(require('fs').readFileSync({json.dumps(str(CORE))}, 'utf8'));
+eval(require('fs').readFileSync({json.dumps(str(CORE.with_name('blueprint-wizard-cloud-init.js')))}, 'utf8'));
 const core = window.BlueprintWizardParts.core;
 {expression}
 """
@@ -100,6 +101,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
 
     workflow_types = [step['type'] for step in result['workflow']]
     assert workflow_types == [
+        'cloud_init',
         'terraform_apply',
         'wait_for_agent',
         'wait_for_ip',
@@ -255,6 +257,7 @@ def test_wizard_allows_qemu_agent_guest_bootstrap_without_snippet_storage():
 global.window = {{}};
 global.registerExtension = (_name, initialize) => initialize();
 eval(require('fs').readFileSync({json.dumps(str(CORE))}, 'utf8'));
+eval(require('fs').readFileSync({json.dumps(str(CORE.with_name('blueprint-wizard-cloud-init.js')))}, 'utf8'));
 const core = window.BlueprintWizardParts.core;
 const state = core.stateDefaults();
 state.providerId = '7';
@@ -336,6 +339,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert result['deployment']['variables']['install_qemu_guest_agent'] is False
     assert result['deployment']['variables']['cloud_init_snippet_storage'] is None
     assert [step['type'] for step in result['workflow']] == [
+        'cloud_init',
         'terraform_apply',
         'wait_for_agent',
         'wait_for_ip',
@@ -374,6 +378,6 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
 """)
 
     assert result['deployment']['variables']['install_qemu_guest_agent'] is True
-    assert result['deployment']['variables']['cloud_init_snippet_storage'] == 'local'
-    assert [step['type'] for step in result['workflow']] == ['terraform_apply']
+    assert result['deployment']['variables']['cloud_init_snippet_storage'] is None
+    assert [step['type'] for step in result['workflow']] == ['cloud_init', 'terraform_apply']
 

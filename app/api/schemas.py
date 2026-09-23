@@ -777,6 +777,9 @@ class BlueprintInput(Input):
             if step.type in declarative and any(by_id[parent].type == 'terraform_apply' for parent in ancestors(step.id)):
                 raise ValueError('Declarative VM steps must run before terraform_apply')
 
+        from app.automation.cloud_init import validate_cloud_init_workflow
+        validate_cloud_init_workflow([step.model_dump() for step in self.workflow])
+
         approval_steps = [step for step in self.workflow if step.type == 'approval']
         if approval_steps and not self.requires_approval:
             raise ValueError('Workflow approval step requires requires_approval=true')

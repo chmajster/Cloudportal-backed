@@ -137,7 +137,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         raise HTTPException(422, 'New Blueprints must contain an explicit terraform_apply step')
 
     proxmox_only_steps = {
-        'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+        'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
         'run_ansible_playbook', 'create_snapshot', 'health_check',
     }
     invalid_provider_steps = sorted(workflow_types & proxmox_only_steps) if provider.type != 'proxmox' else []

@@ -75,7 +75,7 @@
   }
 
   function workflowChoicesForProvider(workflowTypes, provider, currentType = '') {
-    const proxmoxOnly = new Set(['wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+    const proxmoxOnly = new Set(['cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
       'run_ansible_playbook', 'create_snapshot', 'health_check']);
     const available = provider === 'proxmox'
       ? workflowTypes

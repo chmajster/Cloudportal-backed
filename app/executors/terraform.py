@@ -12,6 +12,7 @@ from app.credentials.ssh import generate_ed25519_key_pair, public_key_from_priva
 from app.database import session
 from app.deployments.recreate import recreate_resource_address
 from app.executors.base import Executor, ExecutionFailed, execution_environment, run_process
+from app.executors.cloud_init import blueprint_snapshot, native_cloud_init_requested, prepare_native_seed
 from app.models import Credential, now
 from app.security.core import decrypt_secret
 from app.terraform.state import distributed_deployment_lock, persist_state, restore_state
@@ -76,14 +77,15 @@ def mark_terraform_initialized(workspace, fingerprint, binary):
     os.replace(temporary, marker)
 
 
-def guest_credential_runtime_variables(deployment):
+def guest_credential_runtime_variables(deployment, *, blueprint=None):
     """Resolve guest-login secrets only for the active Terraform execution.
 
     The Blueprint/deployment stores only the credential id. A password is never
     copied into deployment.variables or the job payload. A private key is never
     passed to Terraform or the VM; only its derived public key is used.
     """
-    blueprint = ((deployment.workflow or {}).get('blueprint') or {})
+    if blueprint is None:
+        blueprint = ((deployment.workflow or {}).get('blueprint') or {})
     credential_id = blueprint.get('guest_credential_id')
     if not credential_id:
         return {}, None
@@ -223,6 +225,7 @@ class TerraformExecutor(Executor):
         provider_type = definition['provider']
         if credential.type != provider_type:
             raise ExecutionFailed('Credential type does not match Terraform template provider')
+        native_seed = operation in {'terraform.plan', 'terraform.apply'} and native_cloud_init_requested(context)
         if provider_type == 'proxmox':
             env['PROXMOX_VE_ENDPOINT'] = credential.endpoint.rstrip('/') + '/'
             env['PROXMOX_VE_INSECURE'] = 'false' if credential.verify_ssl else 'true'
@@ -240,7 +243,7 @@ class TerraformExecutor(Executor):
             job_blueprint = (context.job.payload or {}).get('blueprint') or {}
             guest_credential_id = job_blueprint.get('guest_credential_id')
             bootstrap_required = bool(qemu_install or guest_credential_id)
-            if bootstrap_required and operation in {'terraform.plan', 'terraform.apply'}:
+            if bootstrap_required and not native_seed and operation in {'terraform.plan', 'terraform.apply'}:
                 force_guest_bootstrap = bool(guest_credential_id)
 
                 # A selected guest credential must never depend on SSH to the
@@ -351,7 +354,7 @@ class TerraformExecutor(Executor):
             if qemu_bootstrap:
                 runtime_variables['bootstrap_username'] = qemu_bootstrap['username']
                 runtime_variables['bootstrap_public_key'] = qemu_bootstrap['public_key']
-        if operation in {'terraform.plan', 'terraform.apply'} and not (
+        if operation in {'terraform.plan', 'terraform.apply'} and not native_seed and not (
             provider_type == 'proxmox' and qemu_bootstrap
         ):
             guest_variables, guest_password = guest_credential_runtime_variables(deployment)
@@ -366,6 +369,22 @@ class TerraformExecutor(Executor):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
                 restore_state(deployment.id, workspace)
+                if native_seed:
+                    if any(path.exists() for path in qemu_bootstrap_paths(workspace)):
+                        raise ExecutionFailed(
+                            'Legacy guest bootstrap is still pending; preserve its workspace and '
+                            'finish recovery before starting a new Cloud-init deployment'
+                        )
+                    context.stage('cloud-init.preparing')
+                    guest_variables, guest_password = guest_credential_runtime_variables(
+                        deployment, blueprint=blueprint_snapshot(context),
+                    )
+                    runtime_variables.update(prepare_native_seed(
+                        context, workspace, guest_variables, guest_password,
+                    ))
+                    # Native media contains a password hash; never place the
+                    # cleartext password in Terraform env, tfvars, or state.
+                    guest_password = None
                 # Code is root-owned and approved; keep an existing provider lock on updates.
                 for path in source.glob('*.tf'):
                     shutil.copyfile(path, workspace / path.name)

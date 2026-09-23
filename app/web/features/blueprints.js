@@ -126,6 +126,7 @@ function blueprintWorkflow(options) {
   return steps;
 }
 async function proxmoxBlueprintForm(item = null, options = {}) {
+  if ((item?.workflow || []).some(step => step.type === 'cloud_init')) return blueprintForm(item);
   try {
     const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult, blueprintResult, vmClassification] = await Promise.all([
       api('/providers?limit=200'),
@@ -859,7 +860,7 @@ async function blueprintForm(item = null) {
     };
 
     const workflowTypes = [
-      ['terraform_plan', 'Terraform plan'], ['terraform_apply', 'Terraform apply'],
+      ['cloud_init', 'Cloud-init: pierwszy start systemu'], ['terraform_plan', 'Terraform plan'], ['terraform_apply', 'Terraform apply'],
       ['wait_for_vm', 'Czekaj na VM'], ['wait_for_agent', 'Czekaj na guest agent'],
       ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
       ['run_ansible_playbook', 'Uruchom Ansible'], ['create_snapshot', 'Utwórz snapshot'],

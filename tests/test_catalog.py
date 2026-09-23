@@ -5,7 +5,7 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert {'proxmox-vm', 'aws-ec2', 'azure-linux-vm', 'openstack-vm', 'vmware-vsphere-vm'} <= set(items)
     assert items['aws-ec2']['provider'] == 'aws'
     assert 'security_group_ids' in items['aws-ec2']['variables_schema']['properties']
-    assert items['proxmox-vm']['version'] == 5
+    assert items['proxmox-vm']['version'] == 6
     proxmox_properties = items['proxmox-vm']['variables_schema']['properties']
     assert {'tags', 'dns_servers', 'dns_domain', 'install_qemu_guest_agent', 'cloud_init_snippet_storage'} <= set(proxmox_properties)
 
@@ -30,6 +30,11 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert 'output "primary_ip"' in terraform_source
     assert 'value = local.configured_primary_ip' in terraform_source
     assert 'ipv4_addresses' not in terraform_source
+    # Version 6 adds API-uploaded NoCloud media without removing the legacy path.
+    assert 'resource "proxmox_virtual_environment_file" "cloud_init_seed"' in terraform_source
+    assert 'content_type = "iso"' in terraform_source
+    assert 'proxmox_virtual_environment_file.cloud_init_seed[0].id' in terraform_source
+    assert 'variable "cloud_init_seed_checksum"' in terraform_source
 
     playbooks = client.get('/api/v1/ansible/playbooks', headers=headers)
     assert playbooks.status_code == 200
