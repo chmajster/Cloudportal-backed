@@ -2,7 +2,7 @@ name: Materialize reviewed Cloud-init edits
 on:
   push:
     branches: ['fix/proxmox-terraform-agent-wait']
-    paths: ['scripts/materialize-cloud-init.py', '.github/workflows/materialize-cloud-init.yml']
+    paths: ['scripts/materialize-cloud-init.py', 'scripts/split-cloud-init-ui.py', '.github/workflows/materialize-cloud-init.yml']
 permissions:
   contents: write
 concurrency:
@@ -24,6 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/materialize-cloud-init.py
+          python scripts/split-cloud-init-ui.py
           terraform fmt terraform/templates/proxmox-vm
           python -m compileall -q app
           python scripts/check-module-boundaries.py
@@ -32,7 +33,7 @@ jobs:
       - name: Commit only reviewed source files to the task branch
         run: |
           set -euo pipefail
-          git add app/executors/terraform.py app/web/features/blueprint-wizard-core.js app/web/features/blueprint-wizard.js terraform/templates/proxmox-vm/main.tf terraform/templates/proxmox-vm/variables.tf terraform/templates/proxmox-vm/template.json requirements.txt Dockerfile
+          git add app/executors/terraform.py app/web/features/blueprint-wizard-core.js app/web/features/blueprint-wizard.js app/web/features/blueprint-wizard-ui.js terraform/templates/proxmox-vm/main.tf terraform/templates/proxmox-vm/variables.tf terraform/templates/proxmox-vm/template.json requirements.txt Dockerfile
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'feat(cloud-init): integrate native first-boot media and workflow configuration'
           git push origin HEAD:refs/heads/fix/proxmox-terraform-agent-wait
       - name: Export the exact reviewed source for local regression checks
