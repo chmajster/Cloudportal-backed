@@ -900,7 +900,7 @@ def run_blueprint_workflow(context, executor):
         bootstrap = decrypt_guest_bootstrap_secret(encrypted)
         context.stage('workflow.guest_bootstrap.configure')
         with session() as bootstrap_db:
-            provision_guest(
+            final_guest = provision_guest(
                 context,
                 address,
                 bootstrap,
@@ -908,6 +908,32 @@ def run_blueprint_workflow(context, executor):
                 int(credential_id),
                 bool(blueprint_snapshot.get('bootstrap_install_qemu_guest_agent')),
             )
+            deployment_row = bootstrap_db.get(Deployment, context.deployment.id)
+            if deployment_row is None:
+                raise ExecutionFailed('Deployment disappeared during guest bootstrap finalization')
+            deployment_variables = dict(deployment_row.variables or {})
+            deployment_variables.update(final_guest)
+            deployment_row.variables = deployment_variables
+            deployment_workflow = dict(deployment_row.workflow or {})
+            deployment_blueprint = dict(deployment_workflow.get('blueprint') or {})
+            deployment_blueprint['guest_bootstrap_enabled'] = False
+            deployment_workflow['blueprint'] = deployment_blueprint
+            deployment_row.workflow = deployment_workflow
+
+            current_job = bootstrap_db.get(Job, context.job.id)
+            if current_job is None:
+                raise ExecutionFailed('Job disappeared during guest bootstrap finalization')
+            payload = dict(current_job.payload or {})
+            job_blueprint = dict(payload.get('blueprint') or {})
+            job_blueprint.pop('guest_bootstrap_secret', None)
+            job_blueprint['guest_bootstrap_enabled'] = False
+            payload['blueprint'] = job_blueprint
+            current_job.payload = payload
+            bootstrap_db.commit()
+
+            context.deployment.variables = deployment_variables
+            context.deployment.workflow = deployment_workflow
+            context.job.payload = payload
         runtime['addresses'] = [address]
         runtime['guest_bootstrapped'] = True
         context.stage('workflow.guest_bootstrap.completed')
