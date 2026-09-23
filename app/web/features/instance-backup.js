@@ -290,25 +290,34 @@ function restoreProgressPanel(item) {
 
 function backupTable(items, actions) {
   if (!items.length) return node('div', { class: 'empty', text: 'Brak utworzonych backupów.' });
+
+  const rows = items.map(item => node('tr', {},
+    node('td', { text: formatDate(item.created_at) }),
+    node('td', {}, node('span', { class: 'mono', text: item.filename })),
+    node('td', { text: (item.application_version || '—') + (item.git_commit ? ' @ ' + item.git_commit.slice(0, 7) : '') }),
+    node('td', { text: formatBytes(item.size_bytes) }),
+    node('td', {}, node('span', {
+      class: 'mono',
+      text: item.sha256 ? 'SHA256: ' + item.sha256.slice(0, 12) + '…' : '—',
+    })),
+    node('td', {}, badge(
+      item.status,
+      item.download_ready ? 'ok' : item.status === 'failed' ? 'danger' : 'warning',
+    )),
+    node('td', { text: formatDate(item.expires_at) }),
+    node('td', {},
+      node('div', { class: 'instance-backup-row-actions' },
+        button('Pobierz', () => actions.download(item), '', !item.download_ready),
+        button('Zweryfikuj', () => actions.verify(item), '', !item.download_ready),
+        button(actions.deleteLabel(item), () => actions.remove(item), 'danger')))));
+
   return node('div', { class: 'table-wrap instance-backup-table-wrap' },
     node('table', { class: 'table instance-backup-table' },
-      node('thead', {}, node('tr', {},
-        ...['Data', 'Plik', 'Wersja', 'Rozmiar', 'Checksum', 'Status', 'Wygasa', 'Akcje']
-          .map(text => node('th', { text })))),
-      node('tbody', {},
-        ...items.map(item => node('tr', {},
-          node('td', { text: formatDate(item.created_at) }),
-          node('td', {}, node('span', { class: 'mono', text: item.filename })),
-          node('td', { text: (item.application_version || '—') + (item.git_commit ? ' @ ' + item.git_commit.slice(0, 7) : '') }),
-          node('td', { text: formatBytes(item.size_bytes) }),
-          node('td', {}, node('span', { class: 'mono', text: item.sha256 ? 'SHA256: ' + item.sha256.slice(0, 12) + '…' : '—' })),
-          node('td', {}, badge(item.status, item.download_ready ? 'ok' : item.status === 'failed' ? 'danger' : 'warning')),
-          node('td', { text: formatDate(item.expires_at) }),
-          node('td', {},
-            node('div', { class: 'instance-backup-row-actions' },
-              button('Pobierz', () => actions.download(item), '', !item.download_ready),
-              button('Zweryfikuj', () => actions.verify(item), '', !item.download_ready),
-              button(actions.deleteLabel(item), () => actions.remove(item), 'danger')))))))));
+      node('thead', {},
+        node('tr', {},
+          ...['Data', 'Plik', 'Wersja', 'Rozmiar', 'Checksum', 'Status', 'Wygasa', 'Akcje']
+            .map(text => node('th', { text })))),
+      node('tbody', {}, ...rows)));
 }
 
 async function instanceBackupView() {
