@@ -239,37 +239,57 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "window.uiRoutePath" in core
     assert "window.uiNavigationOrder" in script
     assert "window.uiNavigationVisible = route => NAVIGATION_POSITION.has(route?.id);" in navigation
-    assert "window.uiNavigationGroup = () => '';" in navigation
+    assert "window.uiNavigationGroup = navigationGroup;" in navigation
+    assert "window.uiNavigationRank = navigationRank;" in navigation
+    assert "label: 'ZASOBY'" in navigation
+    assert "label: 'AUTOMATYZACJA'" in navigation
+    assert "label: 'DOSTĘP I BEZPIECZEŃSTWO'" in navigation
+    assert "label: 'ORGANIZACJA'" in navigation
+    assert "label: 'OPERACJE'" in navigation
+    assert "label: 'ADMINISTRACJA'" in navigation
+    assert "label: 'KONTO'" in navigation
     assert "window.cloudportalHttp" in script
     assert "window.pollingService" in script
     assert "window.uiStatusMeta" in script
     assert "window.uiPageHeading" in script
     assert "'my-resources': '/resources'" in script
     assert "'blueprints': '/blueprints'" in script or "blueprints: '/blueprints'" in script
-    assert """const CLIENT_NAVIGATION_ROUTES = Object.freeze([
-    'deployments',
-    'my-resources',
-    'providers',
-    'jobs',
-    'blueprints',
-    'catalog',
-    'credentials',
-    'tokens',
-    'schedules',
-    'webhooks',
-    'users',
-    'roles',
-    'tools',
-    'settings',
-    'observability',
-    'audit',
-    'account',
-    'tenants',
-    'projects',
-  ]);""" in navigation
+    assert """{ id: 'resources', label: 'ZASOBY', rank: 0, routes: Object.freeze([
+      'deployments',
+      'my-resources',
+      'jobs',
+    ]) }""" in navigation
+    assert """{ id: 'automation', label: 'AUTOMATYZACJA', rank: 1, routes: Object.freeze([
+      'providers',
+      'blueprints',
+      'catalog',
+      'schedules',
+      'webhooks',
+    ]) }""" in navigation
+    assert """{ id: 'access', label: 'DOSTĘP I BEZPIECZEŃSTWO', rank: 2, routes: Object.freeze([
+      'credentials',
+      'tokens',
+      'users',
+      'roles',
+    ]) }""" in navigation
+    assert """{ id: 'organization', label: 'ORGANIZACJA', rank: 3, routes: Object.freeze([
+      'tenants',
+      'projects',
+    ]) }""" in navigation
+    assert """{ id: 'operations', label: 'OPERACJE', rank: 4, routes: Object.freeze([
+      'observability',
+      'audit',
+    ]) }""" in navigation
+    assert """{ id: 'administration', label: 'ADMINISTRACJA', rank: 5, routes: Object.freeze([
+      'tools',
+      'settings',
+    ]) }""" in navigation
+    assert """{ id: 'account', label: 'KONTO', rank: 6, routes: Object.freeze([
+      'account',
+    ]) }""" in navigation
     assert "tenants: '/tenants'" in navigation
     assert "projects: '/projects'" in navigation
-    assert "'Administracja'" not in navigation
+    assert "label: 'ADMINISTRACJA'" in navigation
     assert '.page-heading' in stylesheet
     assert '.filter-bar' in stylesheet
     assert '.ui-tabs' in stylesheet
