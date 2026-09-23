@@ -1,0 +1,44 @@
+name: Materialize reviewed Cloud-init edits
+on:
+  push:
+    branches: ['fix/proxmox-terraform-agent-wait']
+    paths: ['scripts/materialize-cloud-init.py', '.github/workflows/materialize-cloud-init.yml']
+permissions:
+  contents: write
+concurrency:
+  group: cloud-init-source-edit
+  cancel-in-progress: false
+jobs:
+  edit:
+    if: github.repository == 'chmajster/Cloudportal-backed' && github.ref == 'refs/heads/fix/proxmox-terraform-agent-wait'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.13.5'
+      - name: Apply SHA-guarded edits and check syntax
+        run: |
+          set -euo pipefail
+          python scripts/materialize-cloud-init.py
+          terraform fmt terraform/templates/proxmox-vm
+          python -m compileall -q app
+          python scripts/check-module-boundaries.py
+          find app/web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          git diff --check
+      - name: Commit only reviewed source files to the task branch
+        run: |
+          set -euo pipefail
+          git add app/executors/terraform.py app/web/features/blueprint-wizard-core.js app/web/features/blueprint-wizard.js terraform/templates/proxmox-vm/main.tf terraform/templates/proxmox-vm/variables.tf terraform/templates/proxmox-vm/template.json requirements.txt Dockerfile
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'feat(cloud-init): integrate native first-boot media and workflow configuration'
+          git push origin HEAD:refs/heads/fix/proxmox-terraform-agent-wait
+      - name: Export the exact reviewed source for local regression checks
+        run: git archive --format=tar --output=/tmp/cloud-init-source.tar HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-init-source
+          path: /tmp/cloud-init-source.tar
+          retention-days: 1
