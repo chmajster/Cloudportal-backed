@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -152,8 +153,20 @@ def inspect_archive(path: Path) -> dict:
         expected_names = set(by_name) - {"checksums.json"}
         if set(expected) != expected_names:
             raise ValueError("Backup checksum manifest is incomplete")
-        if (manifest.get("secret") or {}).get("backend") == "local" and "secrets/master.key" not in by_name:
-            raise ValueError("Local-key backup is missing master.key")
+        if (manifest.get("secret") or {}).get("backend") == "local":
+            if "secrets/master.key" not in by_name:
+                raise ValueError("Local-key backup is missing master.key")
+            key_member = by_name["secrets/master.key"]
+            if key_member.size > 256:
+                raise ValueError("master.key has invalid size")
+            key_stream = archive.extractfile(key_member)
+            raw_key = key_stream.read(257).strip() if key_stream is not None else b""
+            try:
+                decoded_key = base64.b64decode(raw_key, validate=True)
+            except Exception as exc:
+                raise ValueError("master.key has invalid encoding") from exc
+            if len(decoded_key) != 32:
+                raise ValueError("master.key has invalid length")
         return manifest
 
 
