@@ -5,6 +5,7 @@ from datetime import timedelta
 from app.database import session
 from app.instance_backup.archive import build_archive
 from app.instance_backup.models import InstanceBackup, utcnow
+from app.instance_backup.database import current_alembic_revision
 from app.instance_backup.paths import generated_dir
 from app.instance_backup.restore import execute_restore, read_restore_status, write_restore_status
 from app.config import settings
@@ -24,7 +25,7 @@ def make_restore_source(tmp_path):
         "format_version": 1,
         "backup_uuid": backup_uuid,
         "created_at": "2026-09-23T22:45:00Z",
-        "application": {"name": "Cloudportal-backed", "version": "source", "api_version": "v1", "commit": "abc", "alembic_revision": "old"},
+        "application": {"name": "Cloudportal-backed", "version": "source", "api_version": "v1", "commit": "abc", "alembic_revision": current_alembic_revision()},
         "source": {"hostname": "source01", "install_mode": "docker"},
         "secret": {"backend": "local", "material": "secrets/master.key"},
         "counts": {"users": 18, "credentials": 9, "providers": 4, "projects": 6, "tenants": 3, "blueprints": 12, "deployments": 37, "terraform_state": 24},
