@@ -834,13 +834,22 @@ docker_wait_service_ready() {
   return 1
 }
 
+docker_backend_network_probe() {
+  docker_compose run --rm --no-deps api python -c '
+import socket
+for host, port in (("postgres", 5432), ("redis", 6379)):
+    sock = socket.create_connection((host, port), 5)
+    sock.close()
+' >/dev/null 2>&1
+}
+
 docker_repair() {
   CURRENT_STAGE='auto-naprawa Docker'
   ui_header 'Cloudportal-backed — auto-naprawa Docker'
 
   local release expected_workers='1' public_port='8443'
   local docker_ready=0 https_ready=0 running_workers=0 total_workers=0
-  local infra_repaired=0 migrate_repaired=0 api_repaired=0
+  local infra_repaired=0 network_repaired=0 migrate_repaired=0 api_repaired=0
   local ids=() state health exit_code service attempt
 
   if ! command -v docker >/dev/null 2>&1; then
@@ -938,6 +947,32 @@ docker_repair() {
     infra_repaired=1
   done
 
+  if docker_backend_network_probe; then
+    ui_ok 'Sieć backend: nowy kontener osiąga PostgreSQL:5432 i Redis:6379.'
+  else
+    ui_warn 'Sieć backend: timeout/odmowa połączenia z PostgreSQL lub Redis mimo healthchecków.'
+    ui_info 'Wymuszam odtworzenie wyłącznie kontenerów PostgreSQL i Redis; wolumeny pozostają bez zmian.'
+    docker_compose up -d --no-deps --force-recreate postgres redis || {
+      ui_fail 'Nie udało się odtworzyć kontenerów PostgreSQL/Redis.'
+      return 1
+    }
+
+    if ! docker_wait_service_ready postgres 1 30 || ! docker_wait_service_ready redis 1 30; then
+      ui_fail 'PostgreSQL lub Redis nie wrócił do stanu healthy po odtworzeniu.'
+      docker_compose logs --tail=100 postgres redis || true
+      return 1
+    fi
+
+    if ! docker_backend_network_probe; then
+      ui_fail 'Ścieżka sieciowa backend → PostgreSQL/Redis nadal nie działa po odtworzeniu kontenerów.'
+      ui_info "Diagnostyka sieci: docker network inspect ${docker_project}_backend"
+      return 1
+    fi
+    ui_ok 'Sieć backend została przywrócona.'
+    infra_repaired=1
+    network_repaired=1
+  fi
+
   mapfile -t ids < <(
     docker ps -aq \
       --filter "label=com.docker.compose.project=$docker_project" \
@@ -1000,7 +1035,13 @@ docker_repair() {
       state=$(docker inspect --format '{{.State.Status}}' "${ids[0]}" 2>/dev/null || true)
     fi
 
-    if (("${#ids[@]}" == 1)) && [[ "$state" == running ]]; then
+    if ((network_repaired)); then
+      ui_info 'API: odtwarzam kontener po naprawie ścieżki sieciowej.'
+      docker_compose up -d --no-deps --force-recreate api || {
+        ui_fail 'Nie udało się odtworzyć API.'
+        return 1
+      }
+    elif (("${#ids[@]}" == 1)) && [[ "$state" == running ]]; then
       ui_info 'API: restart po naprawie zależności lub niesprawnym healthchecku.'
       docker_compose restart api || {
         ui_fail 'Nie udało się zrestartować API.'
@@ -1034,20 +1075,26 @@ docker_repair() {
     [[ "$(docker inspect --format '{{.State.Status}}' "$state" 2>/dev/null || true)" == running ]] && ((running_workers+=1))
   done
 
-  if ((infra_repaired || migrate_repaired)); then
-    if ((total_workers > 0)); then
-      ui_info 'worker: restart po naprawie zależności.'
-      docker_compose restart worker || true
-    fi
-    running_workers=0
-  fi
-
-  if ((running_workers != expected_workers || total_workers != expected_workers || infra_repaired || migrate_repaired)); then
-    ui_info "worker: przywracam skalę $expected_workers."
-    docker_compose up -d --no-deps --scale "worker=$expected_workers" worker || {
-      ui_fail 'Nie udało się przywrócić workerów.'
+  if ((network_repaired)); then
+    ui_info "worker: odtwarzam kontenery po naprawie sieci i przywracam skalę $expected_workers."
+    docker_compose up -d --no-deps --force-recreate --scale "worker=$expected_workers" worker || {
+      ui_fail 'Nie udało się odtworzyć workerów.'
       return 1
     }
+    running_workers=0
+  else
+    if ((total_workers > 0)); then
+      ui_info 'worker: restart kontrolny, aby odświeżyć połączenia Redis/PostgreSQL.'
+      docker_compose restart worker || true
+      running_workers=0
+    fi
+    if ((running_workers != expected_workers || total_workers != expected_workers || infra_repaired || migrate_repaired)); then
+      ui_info "worker: przywracam skalę $expected_workers."
+      docker_compose up -d --no-deps --scale "worker=$expected_workers" worker || {
+        ui_fail 'Nie udało się przywrócić workerów.'
+        return 1
+      }
+    fi
   fi
 
   for ((attempt=1; attempt<=30; attempt++)); do
@@ -1071,20 +1118,24 @@ docker_repair() {
   fi
   ui_ok "worker: $running_workers/$expected_workers kontenerów running."
 
-  if ((infra_repaired || migrate_repaired)) || ! docker_service_ready dispatcher 0; then
-    if docker_service_ready dispatcher 0; then
-      ui_info 'dispatcher: restart po naprawie zależności.'
-      docker_compose restart dispatcher || {
-        ui_fail 'Nie udało się zrestartować dispatchera.'
-        return 1
-      }
-    else
-      ui_info 'dispatcher: uruchamiam brakujący lub zatrzymany kontener.'
-      docker_compose up -d --no-deps dispatcher || {
-        ui_fail 'Nie udało się uruchomić dispatchera.'
-        return 1
-      }
-    fi
+  if ((network_repaired)); then
+    ui_info 'dispatcher: odtwarzam kontener po naprawie sieci.'
+    docker_compose up -d --no-deps --force-recreate dispatcher || {
+      ui_fail 'Nie udało się odtworzyć dispatchera.'
+      return 1
+    }
+  elif docker_service_ready dispatcher 0; then
+    ui_info 'dispatcher: restart kontrolny, aby odświeżyć połączenie z Redis.'
+    docker_compose restart dispatcher || {
+      ui_fail 'Nie udało się zrestartować dispatchera.'
+      return 1
+    }
+  else
+    ui_info 'dispatcher: uruchamiam brakujący lub zatrzymany kontener.'
+    docker_compose up -d --no-deps dispatcher || {
+      ui_fail 'Nie udało się uruchomić dispatchera.'
+      return 1
+    }
   fi
   if ! docker_wait_service_ready dispatcher 0 30; then
     ui_fail 'dispatcher nie osiągnął stanu running.'
