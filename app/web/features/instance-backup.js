@@ -411,7 +411,7 @@ async function instanceBackupView() {
     form.append('file', file, file.name);
     try {
       const response = await authenticatedFetch('/instance-backups/upload', { method: 'POST', body: form });
-      if (!response.ok) return responseError(response);
+      if (!response.ok) await responseError(response);
       const uploaded = await response.json();
       stateView.restoreArea.replaceChildren(planPanel(uploaded, data => startRestore(uploaded.backup.id, data)));
     } catch (error) {
