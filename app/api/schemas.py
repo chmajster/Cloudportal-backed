@@ -143,7 +143,7 @@ class LDAPSettingsInput(Input):
 class UserCreate(Input):
     username: Slug
     email: EmailStr
-    password: Password
+    password: Password | None = None
     first_name: Annotated[str, Field(max_length=100)] = ''
     last_name: Annotated[str, Field(max_length=100)] = ''
     is_service_account: bool = False
