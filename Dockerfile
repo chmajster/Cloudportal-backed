@@ -3,7 +3,7 @@ FROM python:3.12-slim-bookworm
 ARG BUILD_COMMIT=unknown
 ENV CP_BUILD_COMMIT=$BUILD_COMMIT
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl openssh-client sshpass \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl openssh-client sshpass postgresql-client \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --system --home-dir /var/lib/cloudportal-backed --shell /usr/sbin/nologin cloudportal
 COPY --from=terraform /bin/terraform /usr/local/bin/terraform
