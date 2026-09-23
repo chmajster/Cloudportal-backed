@@ -320,8 +320,15 @@ if ((check_platform)); then
   drain_script_input
   exit 0
 fi
-if ((status_mode == 0)); then
-  [[ $EUID -eq 0 ]] || { ui_fail 'Instalacja i deinstalacja wymagają roota. Uruchom przez sudo bash.'; exit 1; }
+if ((status_mode == 0 || (docker_mode == 1 && status_mode == 1 && docker_auto_repair == 1))); then
+  [[ $EUID -eq 0 ]] || {
+    if ((docker_mode == 1 && status_mode == 1)); then
+      ui_fail 'Auto-naprawa Docker wymaga roota. Uruchom przez sudo albo użyj --no-auto-repair.'
+    else
+      ui_fail 'Instalacja i deinstalacja wymagają roota. Uruchom przez sudo bash.'
+    fi
+    exit 1
+  }
 fi
 
 docker_root=/opt/cloudportal-backed-docker
@@ -1247,6 +1254,7 @@ EOF
 
 if ((docker_mode)); then
   if ((status_mode)); then
+    ((docker_auto_repair == 0)) || docker_acquire_install_lock
     if docker_status; then
       exit 0
     fi
