@@ -17,7 +17,6 @@
   function safeApi(path, fallback = [], options = {}) {
     return api(path, options).then(result => result.items || result).catch(() => fallback);
   }
-
   function dualListGroup(title, name, rows, selected, description = '') {
     const picked = new Set((selected || []).map(value => String(value)));
     const labelFor = row => {
@@ -1384,12 +1383,8 @@
       footerRoot = dom.modalActions;
       if (!dom.modal.open) dom.modal.showModal();
 
-      blueprintScope = parts.scope.create({
-        state, data, options, allowed, safeApi, discoverProvider, render,
-      });
-      try {
-        await blueprintScope.loadResources(true);
-      } catch (error) {
+      blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, discoverProvider, render });
+      try { await blueprintScope.loadResources(true); } catch (error) {
         state.providerId = '';
         state.errors = { project_id: error.message };
       }
