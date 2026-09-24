@@ -27,8 +27,12 @@ class FakeAwxClient(AwxClient):
         self.groups = []
         self.memberships = []
 
-    def ensure_inventory(self, *, inventory_id=None, name='CloudPortal'):
-        self.seen['inventory'] = {'inventory_id': inventory_id, 'name': name}
+    def ensure_inventory(self, *, inventory_id=None, name='CloudPortal', organization_id=None):
+        self.seen['inventory'] = {
+            'inventory_id': inventory_id,
+            'name': name,
+            'organization_id': organization_id,
+        }
         return {'id': inventory_id or 42, 'name': name}
 
     def ensure_host(self, *, inventory_id, hostname, ansible_host, variables):
@@ -58,6 +62,7 @@ def test_register_host_is_metadata_driven_and_groups_are_automatic():
         environment='Prod',
         apmid='LEO',
         inventory_name='CloudPortal',
+        organization_id=7,
     )
 
     assert result == {
@@ -66,6 +71,11 @@ def test_register_host_is_metadata_driven_and_groups_are_automatic():
         'host_id': 101,
         'host_name': 'srv001',
         'groups': ['env-prod', 'apmid-leo'],
+    }
+    assert client.seen['inventory'] == {
+        'inventory_id': None,
+        'name': 'CloudPortal',
+        'organization_id': 7,
     }
     assert client.seen['host']['variables'] == {
         'ansible_host': '10.20.30.40',
@@ -116,3 +126,67 @@ def test_remove_host_deletes_only_matching_host_without_creating_inventory():
         'inventory_id': 42,
     }
     assert client.deleted == ['hosts/101/']
+
+
+class FakeDiscoveryAwxClient(AwxClient):
+    def __init__(self):
+        self.endpoint = 'https://awx.example.com'
+        self.username = 'admin'
+
+    def api_base(self):
+        return self.endpoint + '/api/v2'
+
+    def current_user(self):
+        return {'id': 1, 'username': 'admin'}
+
+    def request(self, method, path, **kwargs):
+        assert method == 'GET'
+        assert path == 'ping/'
+
+        class Response:
+            @staticmethod
+            def json():
+                return {'version': '24.6.1'}
+
+        return Response()
+
+    def list_resource(self, resource, *, params=None):
+        return {
+            'organizations': [{'id': 7, 'name': 'Platform'}],
+            'projects': [{
+                'id': 21,
+                'name': 'Linux Automation',
+                'organization': 7,
+                'status': 'successful',
+                'scm_type': 'git',
+            }],
+            'inventories': [{'id': 12, 'name': 'Linux Servers', 'organization': 7}],
+            'job_templates': [{
+                'id': 33,
+                'name': 'Initial Linux',
+                'inventory': 12,
+                'project': 21,
+                'playbook': 'initial.yml',
+                'execution_environment': 4,
+            }],
+        }.get(resource, [])
+
+
+def test_discovery_exposes_awx_projects_and_job_template_relationships():
+    result = FakeDiscoveryAwxClient().discovery()
+
+    assert result['projects'] == [{
+        'id': 21,
+        'name': 'Linux Automation',
+        'organization': 7,
+        'status': 'successful',
+        'scm_type': 'git',
+    }]
+    assert result['job_templates'] == [{
+        'id': 33,
+        'name': 'Initial Linux',
+        'inventory': 12,
+        'project': 21,
+        'playbook': 'initial.yml',
+        'execution_environment': 4,
+    }]

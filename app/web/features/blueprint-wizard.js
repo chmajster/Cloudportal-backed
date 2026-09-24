@@ -10,6 +10,7 @@
     ['Sieć', 'Sieć'],
     ['Konfiguracja', 'Konfiguracja systemu'],
     ['Workflow', 'Workflow'],
+    ['AWX', 'AWX / Automation Controller'],
     ['Dostęp', 'Dostęp i bezpieczeństwo'],
     ['Podsumowanie', 'Podsumowanie'],
   ];
@@ -89,7 +90,7 @@
   }
 
   async function openBlueprintWizard(options = {}) {
-    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit) {
+    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit || !parts.awx) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
       return;
     }
@@ -355,7 +356,7 @@
             });
             state.awxEnabled = state.workflow.some(step => step.type === 'register_awx');
           }
-        } else if (state.step === 7) {
+        } else if (state.step === 8) {
           const ids = name => {
             const list = root.querySelector('[data-dual-list-name="' + CSS.escape(name) + '"]');
             if (list) return [...list.options].map(option => Number(option.value));
@@ -460,6 +461,8 @@
           });
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
+        } else if (index === 7) {
+          Object.assign(errors, parts.awx.validate(state));
         }
         state.errors = errors;
         return !Object.keys(errors).length;
@@ -1090,6 +1093,11 @@
         return content;
       }
 
+      function renderAwx() {
+        return node('div', { class: 'blueprint-wizard-step-stack' },
+          parts.awx.render({ state, data, rerender: render, capture: captureCurrentStep }));
+      }
+
       function renderAccess() {
         const content = node('div', { class: 'blueprint-wizard-step-stack' },
           node('div', { class: 'blueprint-wizard-info' },
@@ -1188,6 +1196,7 @@
           ['Konfiguracja', [
             ['Ansible', state.ansibleEnabled ? (ansibleRunNames.join(' → ') || '—') : 'Brak'],
           ]],
+          ['AWX', parts.awx.summaryRows(state, data)],
           ['Dostęp', [
             ['Role', roleNames.join(', ') || 'Bez ograniczenia'],
             ['Użytkownicy', userNames.join(', ') || 'Bez ograniczenia'],
@@ -1218,6 +1227,7 @@
           'Wybierz DHCP, IPAM lub statyczny adres IP.',
           'Opcjonalnie uruchom jeden lub wiele zatwierdzonych runbooków Ansible po utworzeniu VM.',
           'Sprawdź automatycznie zbudowaną sekwencję operacji lub włącz tryb zaawansowany.',
+          'Wybierz, czy Blueprint ma używać AWX. Możesz wskazać organizację, projekt, inventory i Job Template.',
           'Opcjonalnie ogranicz widoczność, uruchamianie i zarządzanie Blueprintem.',
           'Sprawdź całą konfigurację przed zapisaniem Blueprintu.',
         ];
@@ -1229,6 +1239,7 @@
           () => parts.network.renderNetworkStep({ state, data, rerender: render }),
           renderSystemConfiguration,
           renderWorkflow,
+          renderAwx,
           renderAccess,
           renderReview,
         ][state.step]();
@@ -1317,7 +1328,7 @@
         } catch (error) {
           state.submitting = false;
           state.errors = { submit: error.message };
-          state.step = 8;
+          state.step = STEPS.length - 1;
           render();
         }
       }

@@ -461,6 +461,8 @@ state.cloudInitEnabled = true;
 state.waitAgent = false;
 state.awxEnabled = true;
 state.awxCredentialId = '77';
+state.awxOrganizationId = '9';
+state.awxProjectId = '21';
 state.awxInventoryId = '12';
 state.awxInventoryName = 'Linux Servers';
 state.awxGroupByEnvironment = true;
@@ -485,6 +487,8 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
 
     assert result['deployment']['awx'] == {
         'credential_id': 77,
+        'organization_id': 9,
+        'project_id': 21,
         'inventory_id': 12,
         'inventory_name': 'Linux Servers',
         'group_by_environment': True,

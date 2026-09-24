@@ -117,7 +117,7 @@ def run_ui(expression):
     executable = shutil.which('node')
     if not executable:
         pytest.skip('node is required')
-    scripts = ['blueprint-wizard-core.js', 'blueprint-wizard-cloud-init.js']
+    scripts = ['blueprint-wizard-core.js', 'blueprint-wizard-cloud-init.js', 'blueprint-wizard-awx.js']
     setup = 'global.window = {}; global.registerExtension = () => {};\n'
     for name in scripts:
         path = ROOT / 'app/web/features' / name
@@ -159,6 +159,42 @@ console.log(JSON.stringify({steps:state.workflow, errors:parts.cloudInit.validat
     assert result['errors'] == {}
     assert result['steps'][-1]['depends_on'] == ['approve', 'cloud_init']
     assert validate_cloud_init_workflow(result['steps'])
+
+
+def test_ui_awx_toggle_enables_cloud_init_and_registers_after_ip():
+    result = run_ui('''
+const state = parts.core.stateDefaults(); state.providerType = 'proxmox'; state.advancedWorkflow = true;
+state.cloudInitEnabled = false;
+state.workflow = [{id:'apply', type:'terraform_apply', depends_on:[], conditions:{}, retry:0, timeout:3600, rollback:null}];
+parts.awx.toggleStep(state, true);
+console.log(JSON.stringify({enabled:state.awxEnabled, cloudInit:state.cloudInitEnabled, steps:state.workflow}));
+''')
+    assert result['enabled'] is True
+    assert result['cloudInit'] is True
+    assert [step['type'] for step in result['steps']] == [
+        'cloud_init', 'terraform_apply', 'wait_for_ip', 'register_awx',
+    ]
+    assert result['steps'][-1]['depends_on'] == [result['steps'][-2]['id']]
+
+
+def test_ui_awx_validates_organization_project_inventory_and_job_template_relationships():
+    result = run_ui('''
+const state = parts.core.stateDefaults(); state.providerType = 'proxmox'; state.cloudInitEnabled = true;
+state.awxEnabled = true; state.awxCredentialId = '77';
+state.awxOrganizationId = '9'; state.awxProjectId = '21'; state.awxInventoryId = '12'; state.awxJobTemplateId = '33';
+state.awxDiscovery = {
+  organizations:[{id:9,name:'Platform'}],
+  projects:[{id:21,name:'Linux',organization:9}],
+  inventories:[{id:12,name:'Linux Servers',organization:9}],
+  job_templates:[{id:33,name:'Initial Linux',project:21,inventory:12}]
+};
+const valid = parts.awx.validate(state);
+state.awxDiscovery.job_templates[0].project = 22;
+const mismatch = parts.awx.validate(state);
+console.log(JSON.stringify({valid,mismatch}));
+''')
+    assert result['valid'] == {}
+    assert 'awx_job_template_id' in result['mismatch']
 
 
 def test_ui_does_not_require_snippets_for_native_iso():

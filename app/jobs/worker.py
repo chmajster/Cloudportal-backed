@@ -731,12 +731,25 @@ def register_awx_host(context, runtime, workspace, *, timeout=600):
             apmid=facts.get('apmid'),
             inventory_id=config.get('inventory_id'),
             inventory_name=str(config.get('inventory_name') or 'CloudPortal'),
+            organization_id=config.get('organization_id'),
             group_by_environment=bool(config.get('group_by_environment', True)),
             group_by_apmid=bool(config.get('group_by_apmid', True)),
         )
         job_template_id = config.get('job_template_id')
+        project_id = config.get('project_id')
         launch = None
         if job_template_id:
+            if project_id:
+                job_template = client.request(
+                    'GET', f'job_templates/{int(job_template_id)}/'
+                ).json()
+                if (
+                    not isinstance(job_template, dict)
+                    or int(job_template.get('project') or 0) != int(project_id)
+                ):
+                    raise AwxError(
+                        'Selected AWX Job Template does not belong to the selected project'
+                    )
             launch = client.launch_job_template(
                 int(job_template_id),
                 hostname=context.deployment.name,
@@ -802,6 +815,7 @@ def cleanup_awx_after_destroy(context):
             hostname=context.deployment.name,
             inventory_id=config.get('inventory_id'),
             inventory_name=str(config.get('inventory_name') or 'CloudPortal'),
+            organization_id=config.get('organization_id'),
         )
     except AwxError:
         context.log(
