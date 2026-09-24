@@ -10,10 +10,10 @@ from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDep
 from app.credentials.outputs import CredentialOutput, SSHKeyBootstrapOutput
 from app.api.schemas import (CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
                              ProxmoxTokenBootstrapInput, SSHHostKeyInput, SSHKeyBootstrapInput)
-from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, template_definition,
-                         template_public, template_source_preview, playbook_source_preview, validate_template_variables)
+from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, snapshot_ansible_payload,
+                         template_definition, template_public, template_source_preview, playbook_source_preview,
+                         validate_template_variables)
 from app.catalog_control import catalog_item_public, require_catalog_item_enabled, set_catalog_item_enabled
-from app.ansible_custom.service import custom_playbook_snapshot
 from app.credentials.service import credential_in_use, credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
@@ -407,35 +407,10 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
     if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
         raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
-    job_payload = dict(payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}))
-    snapshots = dict(job_payload.get('_ansible_playbook_snapshots') or {})
-    configured_ansible = []
-    ansible_payload = job_payload.get('ansible')
-    if isinstance(ansible_payload, dict) and ansible_payload.get('playbook'):
-        configured_ansible.append(ansible_payload)
-    for ansible_run in (job_payload.get('ansible_runs') or []):
-        if isinstance(ansible_run, dict) and ansible_run.get('playbook'):
-            configured_ansible.append(ansible_run)
-
-    for ansible_run in configured_ansible:
-        playbook_id = str(ansible_run['playbook'])
-        require_catalog_item_enabled(db, 'playbooks', playbook_id)
-        existing_snapshot = snapshots.get(playbook_id)
-        if not (
-            isinstance(existing_snapshot, dict)
-            and existing_snapshot.get('custom') is True
-            and existing_snapshot.get('id') == playbook_id
-        ):
-            snapshot = custom_playbook_snapshot(playbook_definition(playbook_id, db=db))
-            if snapshot is not None:
-                snapshots[playbook_id] = snapshot
-
-    if snapshots:
-        job_payload['_ansible_playbook_snapshots'] = snapshots
-    if isinstance(ansible_payload, dict):
-        legacy_snapshot = snapshots.get(str(ansible_payload.get('playbook') or ''))
-        if legacy_snapshot is not None:
-            job_payload['_ansible_playbook_snapshot'] = legacy_snapshot
+    job_payload = snapshot_ansible_payload(
+        db,
+        payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}),
+    )
     if deployment:
         job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
