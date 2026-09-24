@@ -1058,6 +1058,40 @@
 }
 
 
+.job-log-page {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.job-log-page-meta {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.job-log-page-meta dt {
+  color: var(--muted);
+  font-size: .74rem;
+  font-weight: 700;
+}
+.job-log-page-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.job-log-page-actions {
+  min-height: 40px;
+  justify-content: flex-start;
+}
+.job-log-page .job-live-log {
+  min-height: min(58vh, 620px);
+  max-height: none;
+}
+
 .job-log-status {
   min-height: 32px;
   display: flex;
@@ -1125,4 +1159,10 @@
     width: 100%;
     margin-left: 0;
   }
+}
+
+@media (max-width: 640px) {
+  .job-log-page-meta { grid-template-columns: 1fr; }
+  .job-log-page-meta dt { margin-top: 4px; }
+  .job-log-page .job-live-log { min-height: 50vh; }
 }

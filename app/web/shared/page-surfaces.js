@@ -8,7 +8,10 @@
   let surfaceSequence = 0;
 
   function surfaceRoute(view, token) {
-    const base = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(view) : '/' + view;
+    const current = surfaceBaseView();
+    const base = typeof window.uiRoutePathForRequest === 'function'
+      ? window.uiRoutePathForRequest(current, view)
+      : (typeof window.uiRoutePath === 'function' ? window.uiRoutePath(view) : '/' + view);
     return '#' + base + '/page/' + token;
   }
 
