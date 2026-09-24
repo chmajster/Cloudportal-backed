@@ -79,6 +79,7 @@ def credential_in_use(db, id, *, pending_only=False):
         Deployment.credentials_id == id,
         Deployment.workflow['ansible']['credentials_id'].as_integer() == id,
         Deployment.workflow['blueprint']['guest_credential_id'].as_integer() == id,
+        Deployment.workflow['blueprint']['template_guest_credential_id'].as_integer() == id,
     ))
     if pending_only:
         deployments = deployments.where(Deployment.active_job_id.is_not(None))
@@ -90,6 +91,7 @@ def credential_in_use(db, id, *, pending_only=False):
         or_(
             Job.payload['ansible']['credentials_id'].as_integer() == id,
             Job.payload['blueprint']['guest_credential_id'].as_integer() == id,
+            Job.payload['blueprint']['template_guest_credential_id'].as_integer() == id,
         ),
     )
     if db.scalar(deployments.limit(1)) or db.scalar(active_job_credential.limit(1)):
@@ -99,6 +101,7 @@ def credential_in_use(db, id, *, pending_only=False):
 
     blueprint_ref = select(Blueprint.id).where(or_(
         Blueprint.deployment['guest_credential_id'].as_integer() == id,
+        Blueprint.deployment['template_guest_credential_id'].as_integer() == id,
         Blueprint.deployment['ansible']['credentials_id'].as_integer() == id,
     ))
     return bool(db.scalar(blueprint_ref.limit(1)))
