@@ -613,6 +613,28 @@ def test_ansible_failure_is_reported(client,headers,monkeypatch):
     assert client.get('/api/v1/jobs/'+response.json()['id'],headers=headers).json()['status']=='failed'
 
 
+def test_parallel_dispatch_capacity_uses_runtime_setting(client, headers):
+    from app.jobs.queue import parallel_dispatch_capacity
+
+    configured = client.put(
+        '/api/v1/settings/execution',
+        headers=headers,
+        json={'max_parallel_jobs': 3},
+    )
+    assert configured.status_code == 200, configured.text
+
+    created = deployment(client, headers)
+    with session() as db:
+        job = db.get(Job, created['job']['id'])
+        job.status = 'running'
+        db.commit()
+
+    with session() as db:
+        assert parallel_dispatch_capacity(db) == 2
+        assert parallel_dispatch_capacity(db, active_rq_jobs=1) == 1
+        assert parallel_dispatch_capacity(db, active_rq_jobs=2) == 0
+
+
 def test_dispatcher_and_rq_execute_durable_job(client,headers,monkeypatch,tmp_path):
     from app.jobs.queue import dispatch_once, queue
     from rq import SimpleWorker
