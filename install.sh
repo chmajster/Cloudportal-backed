@@ -88,8 +88,8 @@ installer_error() {
   ui_fail "Etap „$CURRENT_STAGE” przerwany (kod $rc, linia $line)."
   ui_info 'Sprawdź komunikat bezpośrednio powyżej.'
   if [[ ${docker_mode:-0} == 1 ]]; then
-    ui_info 'Docker: docker ps --filter label=com.docker.compose.project=cloudportal-backed'
-    ui_info 'Logi: uruchom install.sh --docker --status, a następnie docker compose logs.'
+    ui_info 'Docker: sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed'
+    ui_info 'Logi: uruchom sudo ./install.sh --docker --status, a następnie sudo docker compose logs.'
   else
     ui_info 'Usługi: systemctl status cloudportal-api cloudportal-dispatcher cloudportal-worker@1'
     ui_info 'Logi: journalctl -u cloudportal-api -u cloudportal-dispatcher -u cloudportal-worker@1 -n 100 --no-pager'
@@ -1491,7 +1491,7 @@ EOF
     exit 1
   }
   ui_info 'Tworzę lub weryfikuję master key bez generowania jednorazowych danych administratora i bez uruchamiania migracji.'
-  docker_compose_for "$release" "$candidate_env" run --rm --no-deps bootstrap python -m app.bootstrap --key-only
+  docker_compose_for "$release" "$candidate_env" run --rm --no-deps -T bootstrap python -m app.bootstrap --key-only
   ui_ok 'Master key jest gotowy; migracje wykona usługa migrate podczas startu kandydata.'
 
   if ((docker_tls_changed)); then
