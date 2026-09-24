@@ -31,7 +31,9 @@
   const TERRAFORM_STEP_TYPES = new Set(['terraform_plan', 'terraform_apply', 'terraform_destroy']);
 
   function defaultStepTimeout(type) {
-    return TERRAFORM_STEP_TYPES.has(type) ? 3600 : 600;
+    if (TERRAFORM_STEP_TYPES.has(type)) return 3600;
+    if (type === 'wait_for_ip') return 180;
+    return 600;
   }
 
   const deepClone = value => JSON.parse(JSON.stringify(value));
@@ -862,7 +864,9 @@
       const timeoutLabel = terraformStep ? 'Timeout Terraform / OpenTofu [s]' : 'Timeout kroku [s]';
       const timeoutHelp = terraformStep
         ? 'Maksymalny czas dla tego kroku Terraform/OpenTofu. Domyślnie 3600 s.'
-        : 'Maksymalny czas wykonania tego kroku workflow. Domyślnie 600 s.';
+        : step.type === 'wait_for_ip'
+          ? 'Adres IP jest sprawdzany co 10 s przez maksymalnie 180 s.'
+          : 'Maksymalny czas wykonania tego kroku workflow. Domyślnie 600 s.';
       const advanced = el('details', {
         class: 'advanced-options wide',
         open: state.advancedOpen ? '' : null,
