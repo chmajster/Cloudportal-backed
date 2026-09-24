@@ -238,6 +238,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('inventory.consoleVm', showVmConsole)" in script
     assert "const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm')" in script
     assert "runCommand('inventory.consoleVm', item)" in script
+    assert 'offerMissingVmCleanup' in script
+    assert "'/missing', { method: 'DELETE' }" in script
+    assert 'VM nie istnieje w Proxmox' in script
+    assert 'nie została znaleziona na platformie' in script
+    assert "item.lifecycle_status !== 'destroyed'" in script
     assert "Wdrożenia i operacje" in script
     assert 'Brak gotowych Blueprintów.' in script
     assert '.product-grid' in stylesheet
