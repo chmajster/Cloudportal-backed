@@ -886,7 +886,7 @@ async function blueprintForm(item = null) {
         node('summary', { text: 'Opcje zaawansowane' }),
         node('div', { class: 'form-grid advanced-options-body' },
           field('Liczba ponowień', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
-          field('Limit czasu (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
+          field('Limit czasu (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? (step.type === 'wait_for_ip' ? 180 : 600) }),
           field('Krok cofania — ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
           field('Warunki — JSON (opcjonalnie)', 'workflow_conditions', {
             tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? window.BlueprintFormUtils.jsonValue(step.conditions) : '',
@@ -1176,7 +1176,7 @@ async function blueprintForm(item = null) {
             type: row.querySelector('[name="workflow_type"]').value,
             depends_on: splitValues(row.querySelector('[name="workflow_depends"]').value),
             retry: Number(row.querySelector('[name="workflow_retry"]').value || 0),
-            timeout: Number(row.querySelector('[name="workflow_timeout"]').value || 600),
+            timeout: Number(row.querySelector('[name="workflow_timeout"]').value || (row.querySelector('[name="workflow_type"]').value === 'wait_for_ip' ? 180 : 600)),
             conditions: row.querySelector('[name="workflow_conditions"]').value.trim()
               ? window.BlueprintFormUtils.parseObject(row.querySelector('[name="workflow_conditions"]').value, 'Warunki kroku')
               : {},
