@@ -298,3 +298,37 @@ def test_active_quota_blocks_legacy_capacity_mutations(client, headers, monkeypa
     deleted = client.delete(base, headers=idem(headers))
     assert deleted.status_code == 409
     assert deleted.json()['detail']['code'] == 'QUOTA_GOVERNED_ACTION_REQUIRED'
+
+
+
+def test_guest_agent_ping_uses_http_success_not_data_payload(monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+    observed = []
+
+    def request(method, path, **kwargs):
+        observed.append((method, path, kwargs))
+        return type('Response', (), {'status_code': 200})()
+
+    monkeypatch.setattr(provider, '_request', request)
+
+    assert provider.guest_agent_ready('pve01', 114) is True
+    assert observed == [(
+        'GET',
+        '/nodes/pve01/qemu/114/agent/ping',
+        {'return_response': True, 'accepted_statuses': {500}},
+    )]
+
+
+def test_guest_agent_ping_treats_proxmox_500_as_not_ready(monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+    monkeypatch.setattr(
+        provider,
+        '_request',
+        lambda *_args, **_kwargs: type('Response', (), {'status_code': 500})(),
+    )
+
+    assert provider.guest_agent_ready('pve01', 114) is False
