@@ -122,12 +122,23 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     provider = find(db, Provider, data.deployment.provider_id)
     existing = db.get(Blueprint, blueprint_id) if blueprint_id is not None else None
     existing_template = existing.deployment.get('template') if existing else None
-    existing_playbook = (existing.deployment.get('ansible') or {}).get('playbook') if existing else None
+    existing_playbooks = set()
+    if existing:
+        legacy_ansible = existing.deployment.get('ansible') or {}
+        if legacy_ansible.get('playbook'):
+            existing_playbooks.add(legacy_ansible['playbook'])
+        existing_playbooks.update(
+            row.get('playbook')
+            for row in (existing.deployment.get('ansible_runs') or [])
+            if isinstance(row, dict) and row.get('playbook')
+        )
     if data.deployment.template != existing_template:
         require_catalog_item_enabled(db, 'templates', data.deployment.template)
     template_meta, _ = template_definition(data.deployment.template)
-    if data.deployment.ansible and data.deployment.ansible.playbook != existing_playbook:
-        require_catalog_item_enabled(db, 'playbooks', data.deployment.ansible.playbook)
+    requested_ansible = ([data.deployment.ansible] if data.deployment.ansible else []) + list(data.deployment.ansible_runs)
+    for ansible_run in requested_ansible:
+        if ansible_run.playbook not in existing_playbooks:
+            require_catalog_item_enabled(db, 'playbooks', ansible_run.playbook)
     if provider.type != template_meta['provider']:
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     if provider.credentials_id != data.deployment.credentials_id:
@@ -146,7 +157,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
             422,
             'Workflow steps supported only for Proxmox: ' + ', '.join(invalid_provider_steps),
         )
-    if data.deployment.ansible and provider.type != 'proxmox':
+    if requested_ansible and provider.type != 'proxmox':
         raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
     if data.deployment.hostname_scheme_id:
         scheme = find(db, HostnameScheme, data.deployment.hostname_scheme_id)
@@ -331,7 +342,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             'Missing Blueprint workflow permissions: ' + ', '.join(sorted(missing_workflow_permissions)),
         )
     def create():
-        rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id = compile_blueprint(
+        rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
         )
         blueprint_variables = rendered.pop('blueprint_variables')
@@ -340,22 +351,29 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         provider = find(db, Provider, parsed.provider_id)
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
-        credential_ids = {parsed.credentials_id} | ({parsed.ansible.credentials_id} if parsed.ansible else set())
+        primary_ansible = parsed.ansible or (ansible_runs[0] if ansible_runs else None)
+        credential_ids = {parsed.credentials_id}
+        if primary_ansible:
+            credential_ids.add(primary_ansible.credentials_id)
+        credential_ids.update(run.credentials_id for run in ansible_runs)
         if guest_credential_id:
             credential_ids.add(guest_credential_id)
         if template_guest_credential_id:
             credential_ids.add(template_guest_credential_id)
         for credential_id in sorted(credential_ids):
             locked_credential(db, credential_id)
-        if parsed.ansible:
+        configured_ansible = ansible_runs or ([parsed.ansible] if parsed.ansible else [])
+        if configured_ansible:
             if provider.type != 'proxmox':
                 raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
             if 'ansible.execute' not in request.state.permissions:
                 raise HTTPException(403, 'ansible.execute required by blueprint')
-            validate_ansible(db, parsed.ansible)
+            for ansible_run in configured_ansible:
+                validate_ansible(db, ansible_run)
         deployment = Deployment(name=parsed.name, provider_id=provider.id, provider=provider.type, template=parsed.template,
                                 credentials_id=parsed.credentials_id, variables=parsed.variables,
-                                workflow={'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
+                                workflow={'ansible': primary_ansible.model_dump() if primary_ansible else None,
+                                          'ansible_runs': [run.model_dump() for run in configured_ansible],
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
                                                         'variables': blueprint_variables, 'steps': row.workflow,
                                                         'guest_credential_id': guest_credential_id,
@@ -370,7 +388,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         db.flush()
         deployment.state_location = f'database://terraform-states/{deployment.id}'
         job = new_job(db, request, actor, 'terraform.apply', deployment,
-                      {'ansible': parsed.ansible.model_dump() if parsed.ansible else None,
+                      {'ansible': primary_ansible.model_dump() if primary_ansible else None,
+                       'ansible_runs': [run.model_dump() for run in configured_ansible],
                        'blueprint': deployment.workflow['blueprint']})
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id

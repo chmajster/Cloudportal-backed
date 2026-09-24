@@ -386,7 +386,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '/providers/' in script and '/templates' in script
     assert '.proxmox-template-card' in stylesheet
     assert 'data-workflow-row' in script
-    assert 'deployment_ansible_enabled' in script
+    assert "registerExtension('blueprint-ansible-runs'" in script
+    assert 'Dodaj runbook' in script
+    assert 'Runbook / Playbook' in script
+    assert 'ansible_runs' in script
+    assert 'Po wdrożeniu uruchom zatwierdzone runbooki Ansible' in script
     assert 'function permissionPicker(' in script
     assert 'function permissionSummary(' in script
     assert 'account-overview-grid' in script

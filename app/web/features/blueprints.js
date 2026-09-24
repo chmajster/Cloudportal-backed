@@ -974,80 +974,21 @@ async function blueprintForm(item = null) {
         deployment.credentials_id);
     };
 
-    const existingAnsible = deployment.ansible || null;
-    const ansibleToggle = checkboxField('Po wdrożeniu uruchom zatwierdzony playbook Ansible', 'deployment_ansible_enabled', Boolean(existingAnsible));
-    const ansibleFields = node('div', { class: 'form-grid wide ansible-fields' });
-    const ansibleSection = formSection(
-      'Konfiguracja systemu po wdrożeniu',
-      'Opcjonalny krok Ansible uruchamiany po utworzeniu VM i wykryciu jej adresu.',
-      ansibleToggle,
-      ansibleFields,
-    );
-
-    const renderBlueprintAnsible = () => {
-      const template = currentTemplate();
-      const supported = template.provider === 'proxmox';
-      ansibleSection.hidden = !supported;
-      if (!supported) {
-        ansibleFields.replaceChildren();
-        return;
-      }
-      const enabled = ansibleToggle.querySelector('input').checked;
-      if (!allowed('ansible.execute')) {
-        ansibleToggle.querySelector('input').disabled = true;
-        ansibleFields.replaceChildren(node('p', {
-          class: 'muted wide',
-          text: existingAnsible
-            ? 'Istniejąca konfiguracja Ansible zostanie zachowana. Brak uprawnienia ansible.execute do jej edycji.'
-            : 'Brak uprawnienia ansible.execute — konfiguracja Ansible jest niedostępna.',
-        }));
-        return;
-      }
-      ansibleToggle.querySelector('input').disabled = false;
-      if (!enabled) {
-        ansibleFields.replaceChildren(node('p', { class: 'muted wide', text: 'Ansible nie zostanie uruchomiony po wdrożeniu.' }));
-        return;
-      }
-      const choices = [...playbooks];
-      if (existingAnsible?.playbook && !choices.some(value => value.id === existingAnsible.playbook)) {
-        choices.unshift({
-          id: existingAnsible.playbook,
-          name: existingAnsible.playbook + ' (zapisany)',
-          version: '?',
-          transport: credentials.find(value => Number(value.id) === Number(existingAnsible.credentials_id))?.type || 'ssh',
-          variables: Object.keys(existingAnsible.variables || {}),
-        });
-      }
-      if (!choices.length) {
-        ansibleFields.replaceChildren(node('p', { class: 'form-error wide', text: 'Katalog nie zawiera dostępnych playbooków Ansible.' }));
-        return;
-      }
-      const playbookField = selectField('Playbook', 'deployment_ansible_playbook', choices.map(value => ({
-        value: value.id, label: `${value.name} · v${value.version}`,
-      })), existingAnsible?.playbook || choices[0].id, { required: true });
-      const systemCredentialField = selectField('Systemowe dane dostępowe', 'deployment_ansible_credentials_id', [], existingAnsible?.credentials_id || '', { required: true });
-      const variableFields = node('div', { class: 'form-grid wide' });
-      ansibleFields.replaceChildren(playbookField, systemCredentialField, variableFields);
-
-      const refreshPlaybook = () => {
-        const playbook = choices.find(value => value.id === playbookField.querySelector('select').value) || choices[0];
-        const matching = credentials.filter(value => value.type === playbook.transport).map(value => ({ id: value.id, label: value.name }));
-        refill(
-          systemCredentialField.querySelector('select'),
-          matching,
-          matching.length ? 'Wybierz systemowe dane dostępowe' : `Brak danych dostępowych typu ${playbook.transport}`,
-          existingAnsible?.credentials_id,
-        );
-        variableFields.replaceChildren();
-        (playbook.variables || []).forEach(name => variableFields.append(field(
-          FIELD_LABELS[name] || name.replaceAll('_', ' '),
-          `deployment_ansible_var_${name}`,
-          { value: existingAnsible?.variables?.[name] || '', help: 'Opcjonalna zmienna zatwierdzonego playbooka.' },
-        )));
-      };
-      playbookField.querySelector('select').addEventListener('change', refreshPlaybook);
-      refreshPlaybook();
-    };
+    const ansibleEditor = window.BlueprintAnsibleRuns.createEditor({
+      playbooks,
+      credentials,
+      initialRuns: window.BlueprintAnsibleRuns.initialRunsFromDeployment(deployment),
+      enabled: Boolean(
+        (deployment.ansible_runs || []).length
+        || deployment.ansible
+      ),
+      editable: allowed('ansible.execute'),
+      supported: currentTemplate()?.provider === 'proxmox',
+      prefix: 'deployment_ansible',
+      toggleLabel: 'Po wdrożeniu uruchom zatwierdzone runbooki Ansible',
+      description: 'Możesz dodać wiele runbooków. Są wykonywane kolejno po utworzeniu VM i wykryciu jej adresu.',
+    });
+    const ansibleSection = ansibleEditor.section;
 
     const refreshDeploymentTemplate = () => {
       saveDeploymentVariables();
@@ -1067,11 +1008,10 @@ async function blueprintForm(item = null) {
       deploymentVariablesReady = true;
       templateGuestCredentialControl.sync(template.id);
       guestCredentialControl.sync(template.id);
-      renderBlueprintAnsible();
+      ansibleEditor.setSupported(template.provider === 'proxmox');
     };
     templateField.querySelector('select').addEventListener('change', refreshDeploymentTemplate);
     providerField.querySelector('select').addEventListener('change', refreshCredentialChoices);
-    ansibleToggle.querySelector('input').addEventListener('change', renderBlueprintAnsible);
 
     const managerPermissions = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
     const dedicatedElsewhere = new Set(
@@ -1277,26 +1217,9 @@ async function blueprintForm(item = null) {
         if (hostnameSchemeId) deploymentPayload.hostname_scheme_id = hostnameSchemeId;
         if (form.elements.deployment_ipam_pool_id.value) deploymentPayload.ipam_pool_id = Number(form.elements.deployment_ipam_pool_id.value);
 
-        if (!allowed('ansible.execute') && existingAnsible) {
-          deploymentPayload.ansible = existingAnsible;
-        } else if (currentTemplate().provider === 'proxmox' && form.elements.deployment_ansible_enabled?.checked) {
-          const playbook = playbooks.find(value => value.id === form.elements.deployment_ansible_playbook?.value)
-            || (existingAnsible?.playbook === form.elements.deployment_ansible_playbook?.value
-              ? { id: existingAnsible.playbook, variables: Object.keys(existingAnsible.variables || {}) }
-              : null);
-          if (!playbook) throw new Error('Wybierz playbook Ansible dla Blueprintu.');
-          if (!form.elements.deployment_ansible_credentials_id?.value) throw new Error('Wybierz systemowe dane dostępowe dla Ansible.');
-          const variables = {};
-          (playbook.variables || []).forEach(name => {
-            const value = form.elements[`deployment_ansible_var_${name}`]?.value?.trim();
-            if (value) variables[name] = value;
-          });
-          deploymentPayload.ansible = {
-            playbook: playbook.id,
-            credentials_id: Number(form.elements.deployment_ansible_credentials_id.value),
-            variables,
-          };
-        }
+        const ansibleRuns = ansibleEditor.getRuns();
+        deploymentPayload.ansible_runs = ansibleRuns;
+        deploymentPayload.ansible = ansibleRuns[0] || null;
 
         const selectedIds = name => [...form.querySelectorAll(`[name="${name}"]:checked`)].map(input => Number(input.value));
         const payload = {

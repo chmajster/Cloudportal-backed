@@ -193,6 +193,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     guest_credential_id = deployment.pop('guest_credential_id', None)
     template_guest_credential_id = deployment.pop('template_guest_credential_id', None)
     guest_account_mode = deployment.pop('guest_account_mode', 'cloud_init_managed')
+    ansible_runs_raw = deployment.pop('ansible_runs', []) or []
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
@@ -324,6 +325,10 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     ).model_dump(mode='json')
     if rendered.get('ansible'):
         rendered['ansible'] = AnsibleInput.model_validate(rendered['ansible'])
+    ansible_runs = [
+        AnsibleInput.model_validate(item)
+        for item in render_template(ansible_runs_raw, variables)
+    ]
     rendered['blueprint_variables'] = variables
     return (
         rendered,
@@ -331,4 +336,5 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         ip_allocation,
         (guest_credential['id'] if guest_credential else None),
         (template_guest_credential['id'] if template_guest_credential else None),
+        ansible_runs,
     )

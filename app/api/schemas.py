@@ -677,7 +677,8 @@ class BlueprintDeployment(Input):
     template: Slug = 'proxmox-vm'
     variables: dict[str, Any]
     executor: Literal['terraform', 'opentofu'] = 'terraform'
-    ansible: dict[str, Any] | None = None
+    ansible: AnsibleInput | None = None
+    ansible_runs: Annotated[list[AnsibleInput], Field(max_length=20)] = Field(default_factory=list)
     hostname_scheme_id: int | None = Field(default=None, gt=0)
     ipam_pool_id: int | None = Field(default=None, gt=0)
     hostname_values: dict[Slug, Annotated[str, Field(min_length=1, max_length=253)]] = Field(default_factory=dict)

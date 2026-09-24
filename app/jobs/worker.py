@@ -53,6 +53,7 @@ class Context:
         self.rollback_destroyed = False
         self.quota_provider_submitted = False
         self.deployment = self.credential = self.ansible = self.ansible_credential = None
+        self.ansible_runs = []
 
     def check(self):
         if time.monotonic() - self.started > settings().execution_timeout:
@@ -181,6 +182,12 @@ def validate_authorization(db, job):
         ansible = (job.payload or {}).get('ansible') or {}
         if ansible and not reference_visible(db, 'credential', ansible.get('credentials_id'), scope):
             raise ExecutionFailed('Ansible credential access has been revoked')
+        for ansible_run in ((job.payload or {}).get('ansible_runs') or []):
+            if not isinstance(ansible_run, dict):
+                raise ExecutionFailed('Ansible runbook configuration is invalid')
+            credential_id = ansible_run.get('credentials_id')
+            if not credential_id or not reference_visible(db, 'credential', credential_id, scope):
+                raise ExecutionFailed('Ansible runbook credential access has been revoked')
         if job.operation in {'terraform.plan', 'terraform.apply'}:
             blueprint = (job.payload or {}).get('blueprint') or {}
             guest_credential_id = blueprint.get('guest_credential_id')
@@ -216,7 +223,7 @@ def validate_authorization(db, job):
         needed.add('deployments.destroy')
     if job.operation == 'terraform.import':
         needed.add('deployments.adopt')
-    if job.payload.get('ansible'):
+    if job.payload.get('ansible') or job.payload.get('ansible_runs'):
         needed.add('ansible.execute')
     if not needed <= permissions:
         raise ExecutionFailed('Job permissions have been revoked')
@@ -540,11 +547,58 @@ def persist_workflow_runtime(context, runtime):
             'provider_applied': bool(runtime.get('applied')),
             'inventory_synced': bool(runtime.get('inventory_synced')),
             'ansible_ran': bool(runtime.get('ansible_ran')),
+            'ansible_completed_runs': sorted(
+                int(value) for value in runtime.get('ansible_completed_runs', set())
+            ),
         })
         payload['_workflow_runtime'] = saved
         current.payload = payload
         db.commit()
         context.job.payload = dict(payload)
+
+
+def configured_ansible_runs(context):
+    if context.ansible_runs:
+        return list(context.ansible_runs)
+    if context.ansible is not None and context.ansible_credential is not None:
+        return [(context.ansible, context.ansible_credential)]
+    return []
+
+
+def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addresses=None):
+    runs = configured_ansible_runs(context)
+    if not runs:
+        raise ExecutionFailed(
+            'Workflow requests Ansible but deployment has no Ansible runbook configuration'
+        )
+    completed = runtime.setdefault('ansible_completed_runs', set())
+    addresses = list(addresses or [])
+    for index, (spec, credential) in enumerate(runs):
+        if index in completed:
+            context.log(
+                f'workflow.ansible.run.resumed: {index + 1}/{len(runs)}:{spec.playbook}'
+            )
+            continue
+        context.ansible = spec
+        context.ansible_credential = credential
+        context.stage(
+            f'workflow.ansible.run.start:{index + 1}/{len(runs)}:{spec.playbook}'
+        )
+        addresses = wait_for_ansible_transport(
+            context,
+            workspace,
+            timeout=timeout,
+            addresses=addresses,
+        )
+        context.ansible.inventory = Inventory(hosts=addresses)
+        AnsibleExecutor().execute('ansible.execute', context)
+        completed.add(index)
+        context.stage(
+            f'workflow.ansible.run.completed:{index + 1}/{len(runs)}:{spec.playbook}'
+        )
+        persist_workflow_runtime(context, runtime)
+    runtime['ansible_ran'] = len(completed) >= len(runs)
+    return addresses
 
 
 BLUEPRINT_DECLARATIVE_STEPS = {
@@ -1263,6 +1317,9 @@ def run_blueprint_workflow(context, executor):
             saved_runtime.get('ansible_ran')
             or explicit_ansible_completed
         ),
+        'ansible_completed_runs': {
+            int(value) for value in (saved_runtime.get('ansible_completed_runs') or [])
+        },
         'prepared': [],
         'step_states': {step_id: 'completed' for step_id in completed_steps},
         'plan_ready': saved_plan_ready,
@@ -1555,19 +1612,13 @@ def run_blueprint_workflow(context, executor):
                     address = wait_for_ssh(context, workspace_for(step_type), timeout)
                     runtime['addresses'] = [address]
                 elif step_type == 'run_ansible_playbook':
-                    if not context.ansible:
-                        raise ExecutionFailed(
-                            'Workflow requests Ansible but deployment has no Ansible configuration'
-                        )
-                    runtime['addresses'] = wait_for_ansible_transport(
+                    runtime['addresses'] = execute_configured_ansible(
                         context,
+                        runtime,
                         workspace_for(step_type),
                         timeout=timeout,
                         addresses=runtime['addresses'],
                     )
-                    context.ansible.inventory = Inventory(hosts=runtime['addresses'])
-                    AnsibleExecutor().execute('ansible.execute', context)
-                    runtime['ansible_ran'] = True
                 elif step_type == 'create_snapshot':
                     create_blueprint_snapshot(context, workspace_for(step_type), step)
                 elif step_type == 'release_ip':
@@ -1648,16 +1699,14 @@ def run_blueprint_workflow(context, executor):
     if runtime['applied'] and not runtime['inventory_synced']:
         register_managed_inventory(context, runtime['workspace'])
 
-    if context.ansible and not runtime['ansible_ran']:
+    if configured_ansible_runs(context) and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
-        runtime['addresses'] = wait_for_ansible_transport(
+        runtime['addresses'] = execute_configured_ansible(
             context,
+            runtime,
             workspace_for('ansible compatibility'),
             addresses=runtime['addresses'],
         )
-        context.ansible.inventory = Inventory(hosts=runtime['addresses'])
-        AnsibleExecutor().execute('ansible.execute', context)
-        runtime['ansible_ran'] = True
         persist_workflow_runtime(context, runtime)
 
     context.blueprint_workflow_completed = True
@@ -1702,9 +1751,15 @@ def _execute_unfenced(job_id):
                         raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
                     if has_released_allocations(db, context.deployment.id):
                         raise ExecutionFailed('Deployment allocations were released; execute the Blueprint again')
+            for raw_run in ((job.payload or {}).get('ansible_runs') or []):
+                spec = AnsibleInput.model_validate(raw_run)
+                run_credential = ensure_runtime_credential(db.get(Credential, spec.credentials_id))
+                context.ansible_runs.append((spec, run_credential))
             if job.payload.get('ansible'):
                 context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
+            elif context.ansible_runs:
+                context.ansible, context.ansible_credential = context.ansible_runs[0]
         if (
             settings().provider_offline_queue_enabled
             and job.operation in {'terraform.apply', 'terraform.destroy'}

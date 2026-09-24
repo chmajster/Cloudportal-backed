@@ -275,6 +275,81 @@ def test_blueprint_guest_ssh_credential_is_injected_into_cloud_init(client, head
     assert protected.status_code == 409
 
 
+def test_blueprint_persists_multiple_ansible_runbooks_in_order(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+
+    first_credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Runbook SSH 1',
+        'type': 'ssh',
+        'endpoint': 'ssh://vm.example.com:22',
+        'username': 'vmadmin',
+        'secrets': {'password': 'runbook-password-1'},
+    })
+    second_credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Runbook SSH 2',
+        'type': 'ssh',
+        'endpoint': 'ssh://vm.example.com:22',
+        'username': 'vmadmin',
+        'secrets': {'password': 'runbook-password-2'},
+    })
+    assert first_credential.status_code == second_credential.status_code == 201
+
+    runs = [
+        {
+            'playbook': 'bootstrap-linux',
+            'credentials_id': first_credential.json()['id'],
+            'variables': {'timezone': 'Europe/Warsaw'},
+        },
+        {
+            'playbook': 'linux-system-update',
+            'credentials_id': second_credential.json()['id'],
+            'variables': {},
+        },
+    ]
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'multi-runbook-blueprint',
+        'name': 'Multi runbook Blueprint',
+        'deployment': {
+            'name': 'multi-runbook-vm',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'multi-runbook-vm',
+            },
+            'ansible': runs[0],
+            'ansible_runs': runs,
+        },
+        'workflow': [
+            {'id': 'apply', 'type': 'terraform_apply'},
+            {'id': 'ansible', 'type': 'run_ansible_playbook', 'depends_on': ['apply']},
+        ],
+    })
+    assert created.status_code == 201, created.text
+    assert [row['playbook'] for row in created.json()['deployment']['ansible_runs']] == [
+        'bootstrap-linux',
+        'linux-system-update',
+    ]
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    assert [row['playbook'] for row in execution.json()['workflow']['ansible_runs']] == [
+        'bootstrap-linux',
+        'linux-system-update',
+    ]
+    assert execution.json()['workflow']['ansible']['playbook'] == 'bootstrap-linux'
+
+    protected = client.delete(
+        f"/api/v1/credentials/{second_credential.json()['id']}",
+        headers=headers,
+    )
+    assert protected.status_code == 409
+
+
 def test_blueprint_guest_credential_accepts_password_only_ssh_without_persisting_password(client, headers):
     from app.database import session
     from app.executors.terraform import guest_credential_runtime_variables
