@@ -1311,7 +1311,7 @@
             node('p', { class: 'muted', text: created.name + ' · v' + created.version }),
             node('div', { class: 'blueprint-wizard-inline-actions' },
               button('Zamknij', () => navigate('blueprints'), 'primary'),
-              allowed('blueprints.execute') ? button('Przejdź do Blueprintów', () => navigate('blueprints')) : null));
+              blueprintScope.allows('blueprints.execute') ? button('Przejdź do Blueprintów', () => navigate('blueprints')) : null));
           footerRoot.replaceChildren();
           state.submitting = false;
         } catch (error) {
