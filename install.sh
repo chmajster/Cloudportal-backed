@@ -2729,6 +2729,18 @@ server {
         proxy_read_timeout 5s;
         proxy_connect_timeout 2s;
     }
+    location ~ ^/api/v1/console-sessions/[A-Za-z0-9_-]+/websocket$ {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
     location / {
         proxy_pass http://127.0.0.1:8765;
         proxy_set_header Host \$host;
