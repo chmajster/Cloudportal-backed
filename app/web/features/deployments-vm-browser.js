@@ -162,7 +162,8 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
 
   if (provisioningFailed && deployment && !deployment.active_job_id
       && deployment.status !== 'reconciliation_required') {
-    if (allowed('jobs.execute') && allowed('terraform.execute') && allowed('blueprints.execute')) {
+    if (allowed('jobs.execute') && allowed('terraform.execute')
+        && allowed('deployments.create') && allowed('blueprints.execute')) {
       actions.push(button('Ponów', async () => {
         await api(`/jobs/${provisioningJob.id}/retry`, { method: 'POST', idempotent: true });
         toast('Provisioning został ponowiony.');
