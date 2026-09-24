@@ -140,7 +140,7 @@ def _execution_permissions(db, job, request):
     return user, permissions
 
 
-def _automation_spec(db, target, adapter, action, params):
+def _automation_spec(db, target, adapter, action, params, *, job_payload=None):
     addresses = adapter.guest_addresses(target)
     if not addresses:
         raise failure('VALIDATION_FAILED', message='Guest IP address is unavailable; QEMU Guest Agent or synchronized inventory is required', status_code=422)
@@ -170,11 +170,21 @@ def _automation_spec(db, target, adapter, action, params):
     else:
         raise failure('ACTION_NOT_SUPPORTED', message='No approved automation implementation exists for this action')
 
-    spec = AnsibleInput(
-        playbook=playbook,
-        credentials_id=credential.id,
-        inventory=Inventory(hosts=addresses),
-        variables=variables,
+    payload = job_payload or {}
+    snapshots = payload.get('_ansible_playbook_snapshots') or {}
+    snapshot = (
+        snapshots.get(playbook)
+        if isinstance(snapshots, dict)
+        else None
+    ) or payload.get('_ansible_playbook_snapshot')
+    spec = AnsibleInput.model_validate(
+        {
+            'playbook': playbook,
+            'credentials_id': credential.id,
+            'inventory': {'hosts': addresses},
+            'variables': variables,
+        },
+        context={'playbook_snapshot': snapshot},
     )
     return spec, credential
 
@@ -314,7 +324,14 @@ def _execute_unfenced(job_id):
 
         if action in {'run_ansible', 'install_package', 'remove_package', 'update_packages', 'patch_system', 'update_credentials'}:
             with session() as db:
-                spec, guest_credential = _automation_spec(db, target, adapter, action, params)
+                spec, guest_credential = _automation_spec(
+                    db,
+                    target,
+                    adapter,
+                    action,
+                    params,
+                    job_payload=context.job.payload,
+                )
             context.ansible = spec
             context.ansible_credential = guest_credential
             context.ansible_tags = list(params.get('tags') or [])
