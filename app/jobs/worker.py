@@ -1626,12 +1626,16 @@ def run_blueprint_workflow(context, executor):
         runtime['plan_sha256'] = None
         delete_plan(context.deployment.id)
         runtime['workspace'] = workspace
+        # TerraformExecutor persists state before returning. Checkpoint the provider
+        # mutation immediately, before guest bootstrap or any other post-apply work,
+        # so a worker crash cannot cause recovery to submit terraform apply again.
+        runtime['applied'] = True
+        persist_workflow_runtime(context, runtime)
         ensure_qemu_guest_bootstrap(
             context,
             workspace,
             timeout=min(settings().execution_timeout, 900),
         )
-        runtime['applied'] = True
         context.stage('inventory.synchronizing')
         inventory = register_managed_inventory(context, workspace)
         with session() as quota_db:
@@ -1908,7 +1912,13 @@ def run_blueprint_workflow(context, executor):
             apply_and_sync('workflow completion')
 
     if runtime['applied'] and not runtime['inventory_synced']:
-        register_managed_inventory(context, runtime['workspace'])
+        inventory = register_managed_inventory(context, runtime['workspace'])
+        runtime['inventory_synced'] = True
+        if inventory['vm_id'] is not None:
+            context.log(f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}")
+        else:
+            context.log(f"inventory.resource.registered: {inventory['external_id']}")
+        persist_workflow_runtime(context, runtime)
 
     if configured_ansible_runs(context) and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
@@ -2072,7 +2082,13 @@ def _execute_unfenced(job_id):
     with session() as db:
         current = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
         if current.cancel_requested and status == 'successful':
-            status, error = 'cancelled', 'Cancellation requested at completion; inspect deployment state'
+            # The mutation already completed successfully. A late cancellation must
+            # not rewrite provider truth as "cancelled" (especially after destroy),
+            # otherwise deployment/inventory/allocation state diverges from reality.
+            db.add(JobLog(
+                job_id=current.id,
+                message='job.cancel.too_late: operation already completed successfully',
+            ))
         if status == 'successful':
             commit_job_reservation(db, current)
         elif context.quota_provider_submitted:
