@@ -111,6 +111,106 @@ def test_schedule_materializes_durable_job_and_rechecks_user(client, headers, mo
         assert row.last_error == 'Schedule owner is disabled or locked'
 
 
+def test_scheduled_apply_snapshots_custom_ansible_playbook(client, headers):
+    created = deployment(client, headers)
+    custom = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json={
+        'id': 'scheduled-custom',
+        'name': 'Scheduled custom',
+        'category': 'Własne',
+        'transport': 'ssh',
+        'variables': {},
+        'wait_for_connection': False,
+        'validate_after': False,
+        'content': (
+            '- name: Scheduled v1\n'
+            '  hosts: all\n'
+            '  gather_facts: false\n'
+            '  tasks:\n'
+            '    - ansible.builtin.debug:\n'
+            '        msg: "scheduled-v1"\n'
+        ),
+    })
+    assert custom.status_code == 201, custom.text
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Scheduled guest SSH',
+        'type': 'ssh',
+        'endpoint': 'ssh://192.0.2.91:22',
+        'username': 'clouduser',
+        'secrets': {'password': 'scheduled-custom-password'},
+    })
+    assert guest.status_code == 201, guest.text
+
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        initial = db.get(Job, dep.active_job_id)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        run = {
+            'playbook': 'scheduled-custom',
+            'credentials_id': guest.json()['id'],
+            'inventory': None,
+            'variables': {},
+        }
+        dep.workflow = {'ansible': run, 'ansible_runs': [run]}
+        db.commit()
+
+    response = client.post('/api/v1/schedules', headers=headers, json={
+        'name': 'scheduled-custom-apply',
+        'deployment_id': created['id'],
+        'operation': 'terraform.apply',
+        'next_run_at': (now() + timedelta(hours=1)).isoformat() + 'Z',
+    })
+    assert response.status_code == 201, response.text
+    with session() as db:
+        schedule = db.get(ScheduledOperation, response.json()['id'])
+        schedule.next_run_at = now() - timedelta(seconds=1)
+        db.commit()
+
+    materialize_scheduled_jobs()
+
+    with session() as db:
+        job = db.query(Job).filter(
+            Job.source == 'Scheduler',
+            Job.deployment_id == created['id'],
+            Job.operation == 'terraform.apply',
+        ).one()
+        snapshot = job.payload['_ansible_playbook_snapshots']['scheduled-custom']
+        assert snapshot['version'] == 1
+        assert 'scheduled-v1' in snapshot['content']
+
+    updated = client.put('/api/v1/ansible/custom-playbooks/scheduled-custom', headers=headers, json={
+        'id': 'scheduled-custom',
+        'name': 'Scheduled custom',
+        'category': 'Własne',
+        'transport': 'ssh',
+        'variables': {},
+        'wait_for_connection': False,
+        'validate_after': False,
+        'content': (
+            '- name: Scheduled v2\n'
+            '  hosts: all\n'
+            '  gather_facts: false\n'
+            '  tasks:\n'
+            '    - ansible.builtin.debug:\n'
+            '        msg: "scheduled-v2"\n'
+        ),
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['version'] == 2
+
+    with session() as db:
+        job = db.query(Job).filter(
+            Job.source == 'Scheduler',
+            Job.deployment_id == created['id'],
+            Job.operation == 'terraform.apply',
+        ).one()
+        snapshot = job.payload['_ansible_playbook_snapshots']['scheduled-custom']
+        assert snapshot['version'] == 1
+        assert 'scheduled-v1' in snapshot['content']
+        assert 'scheduled-v2' not in snapshot['content']
+
+
 def test_signed_webhook_delivery_and_secret_redaction(client, headers, monkeypatch):
     monkeypatch.setattr(settings(), 'webhook_allowed_hosts', ['hooks.example.test'])
 
