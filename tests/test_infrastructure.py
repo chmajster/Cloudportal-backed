@@ -652,6 +652,68 @@ def test_parallel_dispatch_capacity_uses_runtime_setting(client, headers):
         assert parallel_dispatch_capacity(db, active_rq_jobs=2) == 0
 
 
+def test_force_dispatch_bypasses_runtime_parallel_limit(client, headers, monkeypatch):
+    from app.jobs.queue import parallel_dispatch_capacity
+    from app.jobs import force_dispatch as force_dispatch_module
+
+    configured = client.put(
+        '/api/v1/settings/execution',
+        headers=headers,
+        json={'max_parallel_jobs': 1},
+    )
+    assert configured.status_code == 200, configured.text
+
+    created = deployment(client, headers)
+    with session() as db:
+        queued = db.get(Job, created['job']['id'])
+        blocker = Job(
+            tenant_id=queued.tenant_id,
+            project_id=queued.project_id,
+            operation='terraform.plan',
+            status='running',
+            created_by=queued.created_by,
+            token_id=queued.token_id,
+            request_id=str(uuid.uuid4()),
+            ip='127.0.0.1',
+            source='API',
+        )
+        db.add(blocker)
+        db.commit()
+
+    with session() as db:
+        assert parallel_dispatch_capacity(db) == 0
+
+    enqueued = []
+
+    class ExistingRQJob:
+        def get_status(self, refresh=True):
+            return 'finished'
+
+        def delete(self):
+            return None
+
+    class FakeQueue:
+        def enqueue(self, *args, **kwargs):
+            enqueued.append((args, kwargs))
+
+    monkeypatch.setattr(force_dispatch_module.RQJob, 'fetch', lambda *args, **kwargs: ExistingRQJob())
+    monkeypatch.setattr(force_dispatch_module, 'queue', lambda: FakeQueue())
+
+    response = client.post(
+        f"/api/v1/jobs/{created['job']['id']}/force-dispatch",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert enqueued
+    assert enqueued[0][0] == ('app.jobs.worker.execute', created['job']['id'])
+    assert enqueued[0][1]['job_id'] == created['job']['id']
+
+    with session() as db:
+        queued = db.get(Job, created['job']['id'])
+        assert queued.status == 'queued'
+        assert queued.dispatched_at is not None
+
+
 def test_dispatcher_and_rq_execute_durable_job(client,headers,monkeypatch,tmp_path):
     from app.jobs.queue import dispatch_once, queue
     from rq import SimpleWorker
