@@ -103,30 +103,36 @@ def hash_password(password, salt):
     return hashed
 
 
-def render_seed(variables, *, instance_id, mac_address, password_hash=None):
-    username = str(variables.get('ssh_username') or 'clouduser')
-    if not USERNAME.fullmatch(username):
-        raise ExecutionFailed('Cloud-init requires a valid Linux username (1-32 lowercase characters)')
+def render_seed(variables, *, instance_id, mac_address, password_hash=None,
+                guest_account_mode='cloud_init_managed'):
+    if guest_account_mode not in {'cloud_init_managed', 'existing_template'}:
+        raise ExecutionFailed('Unsupported Cloud-init guest account mode')
     if not MAC.fullmatch(mac_address):
         raise ExecutionFailed('Cloud-init requires a valid primary NIC MAC address')
-    public_key = variables.get('ssh_public_key')
-    if public_key and ('\n' in public_key or not public_key.startswith(('ssh-ed25519 ', 'ssh-rsa ', 'ecdsa-sha2-'))):
-        raise ExecutionFailed('Cloud-init requires one SSH public key')
-    user = {'name': username, 'shell': '/bin/sh', 'lock_passwd': not bool(password_hash)}
-    if username != 'root':
-        user['sudo'] = 'ALL=(ALL) NOPASSWD:ALL'
-    if public_key:
-        user['ssh_authorized_keys'] = [public_key]
-    if password_hash:
-        user['hashed_passwd'] = password_hash
     config = {
         'hostname': variables['name'],
         'manage_etc_hosts': True,
-        'users': [user],
-        'ssh_pwauth': bool(password_hash),
-        'chpasswd': {'expire': False},
-        'disable_root': username != 'root',
     }
+    if guest_account_mode == 'cloud_init_managed':
+        username = str(variables.get('ssh_username') or 'clouduser')
+        if not USERNAME.fullmatch(username):
+            raise ExecutionFailed('Cloud-init requires a valid Linux username (1-32 lowercase characters)')
+        public_key = variables.get('ssh_public_key')
+        if public_key and ('\n' in public_key or not public_key.startswith(('ssh-ed25519 ', 'ssh-rsa ', 'ecdsa-sha2-'))):
+            raise ExecutionFailed('Cloud-init requires one SSH public key')
+        user = {'name': username, 'shell': '/bin/sh', 'lock_passwd': not bool(password_hash)}
+        if username != 'root':
+            user['sudo'] = 'ALL=(ALL) NOPASSWD:ALL'
+        if public_key:
+            user['ssh_authorized_keys'] = [public_key]
+        if password_hash:
+            user['hashed_passwd'] = password_hash
+        config.update({
+            'users': [user],
+            'ssh_pwauth': bool(password_hash),
+            'chpasswd': {'expire': False},
+            'disable_root': username != 'root',
+        })
     if variables.get('install_qemu_guest_agent'):
         config.update(package_update=True, packages=['qemu-guest-agent'], runcmd=[['sh', '-ec', AGENT_START]])
     nic = {'match': {'macaddress': mac_address.lower()}, 'dhcp4': not bool(variables.get('ipv4_address')), 'dhcp6': False}
@@ -292,8 +298,16 @@ def prepare_native_seed(context, workspace, guest_variables, guest_password):
             interface = manifest['binding']['interface']
             mac = manifest['binding']['mac']
         binding = {'node': variables['node'], 'storage': storage, 'interface': interface, 'mac': mac}
-    files = render_seed(variables, instance_id='cloudportal-' + generation,
-                        mac_address=binding['mac'], password_hash=hashed)
+    guest_account_mode = str(
+        blueprint_snapshot(context).get('guest_account_mode') or 'cloud_init_managed'
+    )
+    files = render_seed(
+        variables,
+        instance_id='cloudportal-' + generation,
+        mac_address=binding['mac'],
+        password_hash=hashed,
+        guest_account_mode=guest_account_mode,
+    )
     fingerprint = hashlib.sha256(json.dumps({'files': files, 'binding': binding}, sort_keys=True).encode()).hexdigest()
     if saved_apply or (vms and not recreate):
         if manifest.get('fingerprint') != fingerprint:
@@ -316,6 +330,8 @@ def prepare_native_seed(context, workspace, guest_variables, guest_password):
         _private_write(manifest_path, json.dumps(manifest, sort_keys=True))
     context.check()
     context.log('cloud-init.media.ready: NoCloud ISO; upload through Proxmox API; no host/guest SSH required')
+    if guest_account_mode == 'existing_template':
+        context.log('cloud-init.guest-account: preserve existing template account; use selected credential for later guest access')
     if variables.get('install_qemu_guest_agent'):
         context.log('cloud-init.qemu-agent: install, enable and start during first guest boot')
     return {
