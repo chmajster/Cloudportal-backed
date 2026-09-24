@@ -149,13 +149,15 @@ async function myResourcesView(repairInventory = true) {
 
   const deployments = deploymentResult.items || [];
   const deploymentById = new Map(deployments.map(item => [item.id, item]));
-  const vms = await window.MyResourcesVmBrowser.composeProvisioning({
+  const vms = (await window.MyResourcesVmBrowser.composeProvisioning({
     deployments,
     vms: vmResult.items || [],
     jobs: jobResult.items || [],
-  });
+  })).filter(item => item.lifecycle_status !== 'destroyed');
 
-  const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm');
+  const resources = (resourceResult.items || []).filter(
+    item => item.resource_type !== 'vm' && item.lifecycle_status !== 'destroyed'
+  );
   const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
   const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
   const userNames = new Map(users.map(user => [
