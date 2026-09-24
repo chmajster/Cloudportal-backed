@@ -4,6 +4,7 @@
 let jobLogPollNonce = 0;
 let myResourcesPollTimer = null;
 let jobsPollTimer = null;
+const { resourceSummaryCard, resourceEmptyState, resourceSection } = window.DeploymentsResourceUI;
 
 async function launchProductBlueprint(item) {
   if (!hasCommand('blueprints.execute')) {
@@ -112,39 +113,6 @@ function managedResourceCard(item, providerNames) {
       item.primary_ip ? node('span', { class: 'mono', text: item.primary_ip }) : null),
     node('div', { class: 'my-resource-card-actions' },
       button('Szczegóły', () => showObjectDetails(item.name || 'Zasób', details, 'Zasób zarządzany'))));
-}
-
-function resourceSummaryCard(iconName, label, count, subtitle, tone, sectionId) {
-  return node('button', {
-    class: 'my-resources-summary-card my-resources-summary-card-' + tone,
-    type: 'button',
-    onClick: () => document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-  },
-    node('span', { class: 'my-resources-summary-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
-    node('span', { class: 'my-resources-summary-copy' },
-      node('span', { class: 'my-resources-summary-label', text: label }),
-      node('strong', { text: String(count) }),
-      node('small', { text: subtitle })),
-    node('span', { class: 'my-resources-summary-chevron', 'aria-hidden': 'true' }, appIcon('chevron-right')));
-}
-
-function resourceEmptyState(iconName, title, description) {
-  return node('div', { class: 'my-resources-empty' },
-    node('span', { class: 'my-resources-empty-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
-    node('strong', { text: title }),
-    node('span', { class: 'muted', text: description }));
-}
-
-function resourceSection(id, iconName, title, description, count, content) {
-  return node('section', { class: 'panel my-resources-section', id },
-    node('div', { class: 'my-resources-section-head' },
-      node('div', { class: 'my-resources-section-title' },
-        node('span', { class: 'my-resources-section-icon', 'aria-hidden': 'true' }, appIcon(iconName)),
-        node('div', {},
-          node('h2', { text: title }),
-          node('p', { class: 'muted', text: description }))),
-      node('span', { class: 'my-resources-section-count', text: String(count) })),
-    content);
 }
 
 async function myResourcesView(repairInventory = true) {
