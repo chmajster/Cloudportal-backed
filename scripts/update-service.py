@@ -426,6 +426,22 @@ def extract_candidate_archive(archive_path: Path, destination: Path) -> None:
             os.chmod(target, 0o700 if member.mode & 0o111 else 0o600)
 
 
+def _normalize_candidate_build_context(source: Path) -> None:
+    """Make the extracted scratch tree readable by the non-root image user.
+
+    extract_candidate_archive() deliberately writes restrictive 0600/0700 modes.
+    Docker COPY preserves those modes and root ownership, so the candidate image
+    would otherwise contain Python/Alembic files unreadable by UID 10001.
+    """
+    os.chmod(source, 0o755)
+    for path in source.rglob("*"):
+        if path.is_dir():
+            os.chmod(path, 0o755)
+        elif path.is_file():
+            executable = bool(path.stat().st_mode & 0o111)
+            os.chmod(path, 0o755 if executable else 0o644)
+
+
 def _run_candidate_command(command: list[str], cwd: Path, label: str, timeout: int = 300) -> None:
     try:
         result = subprocess.run(
@@ -701,6 +717,7 @@ def _docker_validate_candidate_runtime(target_sha: str, backup_dir: Path, settin
 
         download_candidate_archive(target_sha, archive, settings)
         extract_candidate_archive(archive, source)
+        _normalize_candidate_build_context(source)
 
         password = os.urandom(24).hex()
         database_url = f"postgresql+psycopg://cloudportal:{password}@postgres/cloudportal"
