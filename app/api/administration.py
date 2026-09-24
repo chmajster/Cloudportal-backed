@@ -6,11 +6,12 @@ from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
                              IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput,
-                             VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput)
+                             VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput, JobExecutionSettingsOutput)
 from app.api.schemas import (AssignRoles, LDAPSettingsInput, RoleInput, TokenInput, UserCreate, UserUpdate,
-                             VMClassificationSettingsInput, BlueprintExecutionSettingsInput)
+                             VMClassificationSettingsInput, BlueprintExecutionSettingsInput, JobExecutionSettingsInput)
 from app.auth.routes import user_public
 from app.blueprint_settings import blueprint_execution_settings, save_blueprint_execution_settings
+from app.execution_settings import job_execution_settings, save_job_execution_settings
 from app.auth.ldap import ldap_settings, save_ldap_settings, test_ldap_connection
 from app.vm_classification import save_vm_classification_settings, vm_classification_settings
 from app.database import get_db
@@ -163,6 +164,19 @@ def update_blueprint_execution_settings(data: BlueprintExecutionSettingsInput, r
                                         actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
     result = save_blueprint_execution_settings(db, data)
     audit(db, request, 'settings.blueprints_updated', 'settings', 'blueprint_execution')
+    return result
+
+
+@router.get('/settings/execution', response_model=JobExecutionSettingsOutput)
+def get_job_execution_settings(actor=Depends(require('settings.read')), db=Depends(get_db, scope='function')):
+    return job_execution_settings(db)
+
+
+@router.put('/settings/execution', response_model=JobExecutionSettingsOutput)
+def update_job_execution_settings(data: JobExecutionSettingsInput, request: Request,
+                                  actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    result = save_job_execution_settings(db, data)
+    audit(db, request, 'settings.job_execution_updated', 'settings', 'job_execution')
     return result
 
 
