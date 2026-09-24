@@ -95,9 +95,8 @@
     }
 
     try {
-      const [tenants, projects, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
-        safeApi('/tenants?limit=200'),
-        safeApi('/projects?limit=200'),
+      const [creationScopes, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
+        safeApi('/blueprints/creation-scopes?limit=200'),
         safeApi('/project-context', { selected: null, version: 0 }),
         allowed('ansible.read') ? safeApi('/ansible/playbooks') : Promise.resolve([]),
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
@@ -110,7 +109,7 @@
       ]);
 
       const state = parts.core.stateDefaults();
-      const scopeData = parts.scope.prepare(tenants, projects, projectContext, state);
+      const scopeData = parts.scope.prepare(creationScopes, projectContext, state);
       const data = {
         tenants: scopeData.tenants,
         projects: scopeData.projects,
