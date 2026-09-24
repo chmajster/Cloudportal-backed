@@ -327,11 +327,7 @@
         } else if (state.step === 4) {
           parts.network.captureNetwork(root, state);
         } else if (state.step === 5) {
-          state.ansibleEnabled = root.querySelector('[name="ansible_enabled"]')?.checked ?? state.ansibleEnabled;
-          state.ansibleCredentialId = root.querySelector('[name="ansible_credentials_id"]')?.value || state.ansibleCredentialId;
-          root.querySelectorAll('[data-ansible-variable]').forEach(input => {
-            state.ansibleVariables[input.dataset.ansibleVariable] = input.value.trim();
-          });
+          state.ansibleEnabled = root.querySelector('[name="wizard_ansible_enabled"]')?.checked ?? state.ansibleEnabled;
         } else if (state.step === 6) {
           const cloudAccountMode = root.querySelector('[name="cloud_init_guest_account_mode"]');
           if (cloudAccountMode) state.guestAccountMode = cloudAccountMode.value;
@@ -446,13 +442,19 @@
         } else if (index === 4) {
           Object.assign(errors, parts.network.validateNetwork(state, data));
         } else if (index === 5 && state.ansibleEnabled) {
-          const playbook = data.playbooks.find(value => value.id === state.playbookId);
-          if (!playbook) errors.playbook = 'Wybierz playbook Ansible.';
-          if (!state.ansibleCredentialId) errors.ansible_credentials_id = 'Brak zgodnych credentials Ansible.';
-          for (const name of playbook?.required_variables || []) {
-            if (name === 'hostname' && playbook.id === 'bootstrap-linux' && state.hostnameEnabled) continue;
-            if (!state.ansibleVariables[name]) errors['ansible_' + name] = 'Uzupełnij wymaganą zmienną ' + name + '.';
-          }
+          const runs = state.ansibleRuns || [];
+          if (!runs.length) errors.ansible_runs = 'Dodaj co najmniej jeden runbook Ansible.';
+          runs.forEach((run, runIndex) => {
+            const playbook = data.playbooks.find(value => value.id === run.playbook);
+            if (!playbook) errors['ansible_playbook_' + runIndex] = 'Runbook #' + (runIndex + 1) + ': wybierz playbook.';
+            if (!run.credentials_id) errors['ansible_credentials_' + runIndex] = 'Runbook #' + (runIndex + 1) + ': wybierz credentials.';
+            for (const name of playbook?.required_variables || []) {
+              if (name === 'hostname' && state.hostnameEnabled) continue;
+              if (!run.variables?.[name]) {
+                errors['ansible_' + runIndex + '_' + name] = 'Runbook #' + (runIndex + 1) + ': uzupełnij zmienną ' + name + '.';
+              }
+            }
+          });
         } else if (index === 6) {
           Object.assign(errors, validateWorkflow());
         }
@@ -930,89 +932,35 @@
       }
 
       function renderSystemConfiguration() {
-        const off = node('button', {
-          type: 'button',
-          class: 'blueprint-wizard-select-card' + (!state.ansibleEnabled ? ' selected' : ''),
-        },
-          node('span', { class: 'blueprint-wizard-select-card-icon' }, appIcon('check')),
-          node('span', { class: 'blueprint-wizard-select-card-copy' },
-            node('strong', { text: 'Bez dodatkowej konfiguracji' }),
-            node('small', { text: 'Blueprint kończy się po utworzeniu i przygotowaniu VM.' })));
-        const on = node('button', {
-          type: 'button',
-          class: 'blueprint-wizard-select-card' + (state.ansibleEnabled ? ' selected' : ''),
-        },
-          node('span', { class: 'blueprint-wizard-select-card-icon' }, appIcon('workflow')),
-          node('span', { class: 'blueprint-wizard-select-card-copy' },
-            node('strong', { text: 'Uruchom Ansible po utworzeniu VM' }),
-            node('small', { text: 'Po QEMU Agent uruchomi zatwierdzony playbook.' })));
-        off.addEventListener('click', () => { state.ansibleEnabled = false; render(); });
-        on.addEventListener('click', () => { state.ansibleEnabled = true; render(); });
-
-        const content = node('div', { class: 'blueprint-wizard-step-stack' },
-          node('div', { class: 'blueprint-wizard-card-grid' }, off, on));
-        if (!state.ansibleEnabled) return content;
-
-        const playbookGrid = node('div', { class: 'blueprint-wizard-card-grid' });
-        data.playbooks.forEach(playbook => {
-          const active = playbook.id === state.playbookId;
-          const card = node('button', {
-            type: 'button',
-            class: 'blueprint-wizard-select-card' + (active ? ' selected' : ''),
+        const initialRuns = (state.ansibleRuns || []).length
+          ? state.ansibleRuns
+          : (state.playbookId ? [{
+              playbook: state.playbookId,
+              credentials_id: Number(state.ansibleCredentialId),
+              variables: { ...(state.ansibleVariables || {}) },
+            }] : []);
+        let editor = null;
+        editor = window.BlueprintAnsibleRuns.createEditor({
+          playbooks: data.playbooks,
+          credentials: data.credentials,
+          initialRuns,
+          enabled: state.ansibleEnabled,
+          editable: state.providerType === 'proxmox',
+          supported: state.providerType === 'proxmox',
+          prefix: 'wizard_ansible',
+          toggleLabel: 'Po wdrożeniu uruchom zatwierdzone runbooki Ansible',
+          description: 'Dodaj jeden lub wiele runbooków. Wykonają się kolejno po utworzeniu VM.',
+          autoVariables: state.hostnameEnabled ? { hostname: '{{ hostname }}' } : {},
+          onChange: runs => {
+            state.ansibleRuns = runs;
+            state.ansibleEnabled = editor?.isEnabled() ?? Boolean(runs.length);
+            const first = runs[0];
+            state.playbookId = first?.playbook || '';
+            state.ansibleCredentialId = first?.credentials_id ? String(first.credentials_id) : '';
+            state.ansibleVariables = { ...(first?.variables || {}) };
           },
-            node('span', { class: 'blueprint-wizard-select-card-icon' }, appIcon('file-text')),
-            node('span', { class: 'blueprint-wizard-select-card-copy' },
-              node('strong', { text: playbook.name }),
-              node('small', { text: (playbook.transport || 'ssh').toUpperCase() + ' · v' + playbook.version }),
-              playbook.description ? node('small', { text: playbook.description }) : null),
-            active ? node('span', { class: 'blueprint-wizard-card-check' }, appIcon('check')) : null);
-          card.addEventListener('click', () => {
-            state.playbookId = playbook.id;
-            const matching = data.credentials.filter(value => value.type === playbook.transport);
-            if (!matching.some(value => String(value.id) === String(state.ansibleCredentialId))) {
-              const templateAccount = matching.find(value =>
-                String(value.id) === String(state.templateGuestCredentialId));
-              state.ansibleCredentialId = String(templateAccount?.id || matching[0]?.id || '');
-            }
-            render();
-          });
-          playbookGrid.append(card);
         });
-        content.append(node('div', { class: 'blueprint-wizard-section-heading' },
-          node('strong', { text: 'Playbook' })), playbookGrid);
-
-        const playbook = data.playbooks.find(value => value.id === state.playbookId);
-        if (playbook) {
-          const matching = data.credentials.filter(value => value.type === playbook.transport);
-          const credentialField = selectField('Credentials ' + playbook.transport.toUpperCase(), 'ansible_credentials_id',
-            matching.map(value => ({ value: value.id, label: value.name + ' (#' + value.id + ')' })),
-            state.ansibleCredentialId, { required: true, placeholder: 'Brak zgodnych credentials' });
-          credentialField.querySelector('select').addEventListener('change', event => { state.ansibleCredentialId = event.currentTarget.value; });
-          content.append(credentialField);
-
-          const required = playbook.required_variables || [];
-          if (required.length) {
-            const variables = node('div', { class: 'form-grid blueprint-wizard-inline-panel' });
-            required.forEach(name => {
-              if (name === 'hostname' && playbook.id === 'bootstrap-linux' && state.hostnameEnabled) {
-                variables.append(node('div', { class: 'blueprint-wizard-info wide' },
-                  node('strong', { text: 'hostname' }),
-                  node('span', { text: 'Automatycznie: {{ hostname }}' })));
-                return;
-              }
-              const wrapper = field(name, 'ansible_' + name, {
-                value: state.ansibleVariables[name] || '', required: true,
-              });
-              const input = wrapper.querySelector('input,textarea');
-              input.dataset.ansibleVariable = name;
-              input.addEventListener('input', () => { state.ansibleVariables[name] = input.value.trim(); });
-              variables.append(wrapper);
-            });
-            content.append(node('div', { class: 'blueprint-wizard-section-heading' },
-              node('strong', { text: 'Wymagane zmienne playbooka' })), variables);
-          }
-        }
-        return content;
+        return node('div', { class: 'blueprint-wizard-step-stack' }, editor.section);
       }
 
       function currentAutoWorkflow() {
@@ -1173,7 +1121,9 @@
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         const scheme = data.schemes.find(value => String(value.id) === String(state.hostnameSchemeId));
         const pool = data.pools.find(value => String(value.id) === String(state.ipamPoolId));
-        const playbook = data.playbooks.find(value => value.id === state.playbookId);
+        const ansibleRunNames = (state.ansibleRuns || []).map(run =>
+          data.playbooks.find(value => value.id === run.playbook)?.name || run.playbook
+        );
         const steps = state.advancedWorkflow ? state.workflow : currentAutoWorkflow();
         const roleNames = state.allowedRoleIds.map(id => data.roles.find(value => Number(value.id) === Number(id))?.name).filter(Boolean);
         const userNames = state.allowedUserIds.map(id => data.users.find(value => Number(value.id) === Number(id))?.username).filter(Boolean);
@@ -1230,7 +1180,7 @@
             ['Pula / adres', state.ipMode === 'ipam' ? (pool?.name || '—') : state.ipMode === 'static' ? state.ipv4Address : 'DHCP'],
           ]],
           ['Konfiguracja', [
-            ['Ansible', state.ansibleEnabled ? (playbook?.name || '—') : 'Brak'],
+            ['Ansible', state.ansibleEnabled ? (ansibleRunNames.join(' → ') || '—') : 'Brak'],
           ]],
           ['Dostęp', [
             ['Role', roleNames.join(', ') || 'Bez ograniczenia'],
@@ -1260,7 +1210,7 @@
           'Ustaw wielkość VM. Presety aktualizują CPU, RAM i dysk jednym kliknięciem.',
           'Wybierz sposób automatycznego nadawania nazw hostów.',
           'Wybierz DHCP, IPAM lub statyczny adres IP.',
-          'Opcjonalnie uruchom zatwierdzony playbook Ansible po utworzeniu VM.',
+          'Opcjonalnie uruchom jeden lub wiele zatwierdzonych runbooków Ansible po utworzeniu VM.',
           'Sprawdź automatycznie zbudowaną sekwencję operacji lub włącz tryb zaawansowany.',
           'Opcjonalnie ogranicz widoczność, uruchamianie i zarządzanie Blueprintem.',
           'Sprawdź całą konfigurację przed zapisaniem Blueprintu.',
