@@ -1,6 +1,9 @@
 import os
 import shutil
+import uuid
 from datetime import timedelta
+
+from sqlalchemy import select
 
 from app.database import session
 from app.instance_backup.archive import build_archive
@@ -8,12 +11,14 @@ from app.instance_backup.models import InstanceBackup, utcnow
 from app.instance_backup.database import current_alembic_revision
 from app.instance_backup.paths import generated_dir
 from app.instance_backup.restore import (
+    _quarantine_restored_execution,
     _restore_workspaces,
     execute_restore,
     read_restore_status,
     write_restore_status,
 )
 from app.config import settings
+from app.models import Job, User
 
 
 def make_restore_source(tmp_path):
@@ -109,6 +114,38 @@ def test_failed_restore_uses_safety_backup_for_rollback(system, tmp_path, monkey
     assert status["status"] == "failed"
     assert status["rollback"] == "completed"
     assert len(calls) == 2
+    with session() as db:
+        rows = db.scalars(select(InstanceBackup)).all()
+        assert any(row.id == backup_id for row in rows)
+        assert any(row.origin == "safety" for row in rows)
+
+
+def test_restore_quarantines_nonterminal_jobs(system):
+    with session() as db:
+        admin = db.scalar(select(User).where(User.username == "admin"))
+        job = Job(
+            id=str(uuid.uuid4()),
+            operation="terraform.apply",
+            deployment_id=None,
+            payload={},
+            status="queued",
+            created_by=admin.id,
+            token_id=None,
+            request_id=str(uuid.uuid4()),
+            ip="",
+            source="API",
+        )
+        db.add(job)
+        db.commit()
+        job_id = job.id
+
+    result = _quarantine_restored_execution()
+    assert result["jobs"] == 1
+
+    with session() as db:
+        job = db.get(Job, job_id)
+        assert job.status == "failed"
+        assert "quarantined" in job.error.lower()
 
 
 def test_workspace_restore_replaces_target_tree(system, tmp_path):

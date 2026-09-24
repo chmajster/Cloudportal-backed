@@ -11,9 +11,10 @@ from alembic import command
 from alembic.config import Config
 from rq import Queue
 from rq.serializers import JSONSerializer
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 
 from app.config import settings
+from app.day2.models import Day2ActionRequest
 from app.database import engine, session
 from app.instance_backup.archive import extract_archive, sha256_file
 from app.instance_backup.crypto import (
@@ -31,7 +32,8 @@ from app.instance_backup.service import (
 )
 from app.instance_backup.validation import validate_restore_preflight
 from app.instance_operation import exclusive_instance_operation
-from app.models import Audit, Credential, Token, User
+from app.models import Audit, Credential, Deployment, Job, JobLog, ScheduledOperation, Token, User, now
+from app.quotas.service import mark_job_reservation_uncertain
 from app.security.core import decrypt_secret, encryption_key, redis_client
 
 
@@ -44,6 +46,7 @@ RESTORE_PROGRESS = {
     "workspace_restore": 60,
     "secret_restore": 68,
     "migrations": 80,
+    "quarantine": 84,
     "session_continuity": 86,
     "health": 95,
     "completed": 100,
@@ -60,6 +63,7 @@ RESTORE_LABELS = {
     "workspace_restore": "Przywracanie workspace Terraform",
     "secret_restore": "Przywracanie materiału kryptograficznego",
     "migrations": "Migracje bazy danych",
+    "quarantine": "Kwarantanna zadań po migracji",
     "session_continuity": "Przywracanie sesji administratora",
     "health": "Walidacja stanu aplikacji",
     "completed": "Migracja zakończona",
@@ -293,6 +297,90 @@ def _record_archive(path: Path, manifest: dict, *, origin: str, filename: str, c
         db.commit()
 
 
+def _snapshot_backup_catalog() -> list[dict]:
+    columns = [column.name for column in InstanceBackup.__table__.columns]
+    with session() as db:
+        rows = db.scalars(select(InstanceBackup).order_by(InstanceBackup.id)).all()
+        return [
+            {name: getattr(row, name) for name in columns}
+            for row in rows
+        ]
+
+
+def _restore_backup_catalog(records: list[dict]) -> None:
+    with session() as db:
+        db.execute(delete(InstanceBackup))
+        for values in records:
+            db.add(InstanceBackup(**dict(values)))
+        db.flush()
+        if records and engine().dialect.name == "postgresql":
+            db.execute(
+                text(
+                    "SELECT setval(pg_get_serial_sequence('instance_backups','id'), "
+                    ":max_id, true)"
+                ),
+                {"max_id": max(int(item["id"]) for item in records)},
+            )
+        db.commit()
+
+
+def _quarantine_restored_execution() -> dict[str, int]:
+    nonterminal = ("waiting_approval", "queued", "running", "cancelling")
+    message = (
+        "Restored nonterminal job quarantined. Reconcile provider state before retrying "
+        "or creating another mutating operation."
+    )
+    with session() as db:
+        jobs = db.scalars(
+            select(Job).where(Job.status.in_(nonterminal)).with_for_update()
+        ).all()
+        for job in jobs:
+            mark_job_reservation_uncertain(db, job)
+            job.status = "failed"
+            job.error = message
+            job.heartbeat_at = now()
+            db.add(JobLog(job_id=job.id, message="restore.quarantined: " + message))
+
+            if job.deployment_id:
+                deployment = db.get(Deployment, job.deployment_id)
+                if deployment is not None and deployment.active_job_id == job.id:
+                    deployment.active_job_id = None
+                    deployment.status = "reconciliation_required"
+
+            request = db.scalar(
+                select(Day2ActionRequest)
+                .where(Day2ActionRequest.job_id == job.id)
+                .with_for_update()
+            )
+            if request is not None:
+                request.status = "FAILED"
+                request.finished_at = now()
+                request.error_code = "RESTORE_RECONCILIATION_REQUIRED"
+                request.error_message = message
+                request.result = {
+                    **(request.result or {}),
+                    "reconciliation_required": True,
+                    "restore_quarantined": True,
+                }
+                if request.approval_state == "pending":
+                    request.approval_state = "cancelled"
+
+        schedules = db.scalars(
+            select(ScheduledOperation)
+            .where(ScheduledOperation.is_active.is_(True))
+            .with_for_update()
+        ).all()
+        for schedule in schedules:
+            schedule.is_active = False
+            schedule.last_error = (
+                "Disabled by instance restore; enable after source cutover "
+                "and provider-state reconciliation."
+            )
+
+        db.commit()
+        return {"jobs": len(jobs), "schedules": len(schedules)}
+
+
 def _audit_restore(action: str, restore_uuid: str, backup_uuid: str, *, user_id: int | None, result: str) -> None:
     try:
         with session() as db:
@@ -332,6 +420,7 @@ def _execute_restore_locked(
     restored_user_id = None
     backup_uuid = ""
     source_filename = ""
+    backup_catalog: list[dict] = []
     try:
         write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="preflight")
         with session() as db:
@@ -345,6 +434,8 @@ def _execute_restore_locked(
             actor_snapshot = _session_snapshot(actor_token_id)
             backup_uuid = str(source_manifest.get("backup_uuid") or row.backup_uuid)
             source_filename = row.filename
+
+        backup_catalog = _snapshot_backup_catalog()
 
         if safety_backup:
             write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="safety_backup")
@@ -374,6 +465,9 @@ def _execute_restore_locked(
 
         write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="migrations")
         _upgrade_database()
+
+        write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="quarantine")
+        quarantined = _quarantine_restored_execution()
 
         write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="session_continuity")
         session_restored, restored_user_id = _restore_session_snapshot(actor_snapshot)
@@ -406,7 +500,11 @@ def _execute_restore_locked(
             backup_id=backup_id,
             status="completed",
             stage="completed",
-            message="Restore, migracje i health validation zakończone poprawnie.",
+            message=(
+                "Restore, migracje i health validation zakończone poprawnie. "
+                f"Zadania w kwarantannie: {quarantined['jobs']}; "
+                f"wyłączone harmonogramy: {quarantined['schedules']}."
+            ),
             reauthentication_required=not session_restored,
         )
     except Exception as exc:
@@ -430,7 +528,16 @@ def _execute_restore_locked(
                 _restore_workspaces(rollback_extracted, "rollback-" + restore_uuid)
                 restore_previous_local_key(previous_key)
                 _upgrade_database()
+                _restore_backup_catalog(backup_catalog)
                 _health_validation()
+                if safety_manifest is not None:
+                    _record_archive(
+                        safety_path,
+                        safety_manifest,
+                        origin="safety",
+                        filename="cloudportal-safety-" + restore_uuid[:8] + ".cpb",
+                        created_by=None,
+                    )
                 rollback_state = "completed"
             except Exception:
                 rollback_state = "failed"
