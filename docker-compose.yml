@@ -12,9 +12,16 @@ x-backend: &backend
     CP_PUBLIC_HOST: ${CP_PUBLIC_HOST:-localhost}
     CP_HTTPS_PORT: ${CP_HTTPS_PORT:-8443}
     CP_INSTALL_MODE: docker
+    CP_UPDATER_URL: ${CP_UPDATER_URL:-http://host.docker.internal:8766}
+    CP_UPDATER_TOKEN_FILE: /run/cloudportal-updater/updater.token
+    CP_UPDATER_STATUS_TOKEN_FILE: /run/cloudportal-updater/updater-status.token
   volumes:
     - backend-config:/etc/cloudportal-backed
     - backend-data:/var/lib/cloudportal-backed
+    - ${CP_UPDATER_HOST_CONFIG_DIR:-/etc/cloudportal-backed-docker}/updater.token:/run/cloudportal-updater/updater.token:ro
+    - ${CP_UPDATER_HOST_CONFIG_DIR:-/etc/cloudportal-backed-docker}/updater-status.token:/run/cloudportal-updater/updater-status.token:ro
+  extra_hosts:
+    - 'host.docker.internal:host-gateway'
   security_opt:
     - no-new-privileges:true
   cap_drop: [ALL]
@@ -99,6 +106,8 @@ services:
       - ${CP_TLS_DIR:-./tls}:/etc/nginx/tls:ro
     depends_on:
       api: {condition: service_healthy}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     networks: [backend]
     security_opt: ['no-new-privileges:true']
 volumes:
