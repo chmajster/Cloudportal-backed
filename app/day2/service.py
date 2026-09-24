@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.access import ensure_inventory_resource_access, ensure_inventory_vm_access
-from app.catalog import playbook_definition
+from app.catalog import playbook_definition, snapshot_ansible_payload
+from app.catalog_control import require_catalog_item_enabled
 from app.day2.diff import configuration_diff, redact
 from app.day2.errors import Day2Failure, failure
 from app.day2.models import BulkDay2ActionRequest, Day2ActionRequest, Day2ResourceLock, Day2ResourceState
@@ -378,12 +379,19 @@ def _validate_action_specific(db, target, credential, adapter, action, params):
             raise failure('ACTION_NOT_SUPPORTED', message='VM does not expose a cloud-init drive', status_code=409)
     if action.id == 'run_ansible':
         try:
-            playbook_definition(params['playbook'])
+            require_catalog_item_enabled(db, 'playbooks', params['playbook'])
+            definition = playbook_definition(params['playbook'], db=db)
         except Exception:
-            raise failure('VALIDATION_FAILED', message='Only playbooks from the approved catalog can be executed', status_code=422) from None
+            raise failure('VALIDATION_FAILED', message='Only enabled playbooks from the approved catalog can be executed', status_code=422) from None
         guest = db.get(Credential, int(params['credential_id']))
         if guest is None or guest.type not in {'ssh', 'winrm'}:
             raise failure('VALIDATION_FAILED', message='RUN_ANSIBLE requires an SSH or WinRM credential', status_code=422)
+        if guest.type != definition['transport']:
+            raise failure(
+                'VALIDATION_FAILED',
+                message=f"Playbook requires {definition['transport']} credential",
+                status_code=422,
+            )
     if action.id in {'install_package', 'remove_package', 'update_packages', 'patch_system', 'update_credentials'}:
         guest = db.get(Credential, int(params['credential_id']))
         if guest is None or guest.type not in {'ssh', 'winrm'}:
@@ -563,11 +571,22 @@ def create_action(db, request, actor, target, credential, action_id, params, rea
     )
     db.add(row)
     db.flush()
+    job_payload = {'day2_action_request_id': row.id, 'resource_id': target.resource_id}
+    if action.id == 'run_ansible':
+        snapshot_payload = snapshot_ansible_payload(
+            db,
+            {'ansible': {'playbook': params['playbook']}},
+        )
+        if snapshot_payload.get('_ansible_playbook_snapshots'):
+            job_payload['_ansible_playbook_snapshots'] = snapshot_payload['_ansible_playbook_snapshots']
+        if snapshot_payload.get('_ansible_playbook_snapshot'):
+            job_payload['_ansible_playbook_snapshot'] = snapshot_payload['_ansible_playbook_snapshot']
+
     job = Job(
         id=str(uuid.uuid4()),
         deployment_id=None,
         operation='day2.' + action.id,
-        payload={'day2_action_request_id': row.id, 'resource_id': target.resource_id},
+        payload=job_payload,
         status='waiting_approval' if validation['approval_required'] else 'queued',
         created_by=actor.user_id,
         token_id=actor.id,
