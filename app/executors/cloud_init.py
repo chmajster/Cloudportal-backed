@@ -280,7 +280,14 @@ def prepare_native_seed(context, workspace, guest_variables, guest_password):
     salt = manifest.get('salt') or secrets.token_hex(8)
     variables = dict(deployment.variables or {})
     variables.update(guest_variables)
-    hashed = hash_password(guest_password, salt)
+    guest_account_mode = str(
+        blueprint_snapshot(context).get('guest_account_mode') or 'cloud_init_managed'
+    )
+    hashed = (
+        hash_password(guest_password, salt)
+        if guest_account_mode == 'cloud_init_managed'
+        else None
+    )
     if saved_apply:
         binding = manifest['binding']
     else:
@@ -298,9 +305,6 @@ def prepare_native_seed(context, workspace, guest_variables, guest_password):
             interface = manifest['binding']['interface']
             mac = manifest['binding']['mac']
         binding = {'node': variables['node'], 'storage': storage, 'interface': interface, 'mac': mac}
-    guest_account_mode = str(
-        blueprint_snapshot(context).get('guest_account_mode') or 'cloud_init_managed'
-    )
     files = render_seed(
         variables,
         instance_id='cloudportal-' + generation,
