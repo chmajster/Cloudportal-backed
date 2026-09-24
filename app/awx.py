@@ -333,6 +333,46 @@ class AwxClient:
             'groups': groups,
         }
 
+    def remove_host(
+        self,
+        *,
+        hostname: str,
+        inventory_id: int | None = None,
+        inventory_name: str = 'CloudPortal',
+    ) -> dict:
+        inventory = None
+        if inventory_id:
+            try:
+                candidate = self.request('GET', f'inventories/{int(inventory_id)}/').json()
+            except AwxError:
+                candidate = None
+            if isinstance(candidate, dict) and candidate.get('id'):
+                inventory = candidate
+        else:
+            matches = self.list_resource('inventories', params={'name': inventory_name})
+            if matches:
+                inventory = matches[0]
+
+        if not inventory:
+            return {'removed': False, 'reason': 'inventory_not_found'}
+
+        hosts = self.list_resource(
+            'hosts',
+            params={'inventory': int(inventory['id']), 'name': hostname},
+        )
+        removed = []
+        for host in hosts:
+            if str(host.get('name') or '') != hostname or not host.get('id'):
+                continue
+            host_id = int(host['id'])
+            self.request('DELETE', f'hosts/{host_id}/')
+            removed.append(host_id)
+        return {
+            'removed': bool(removed),
+            'host_ids': removed,
+            'inventory_id': int(inventory['id']),
+        }
+
     def launch_job_template(self, template_id: int, *, hostname: str, deployment_id: str) -> dict:
         data = self.request(
             'POST',
