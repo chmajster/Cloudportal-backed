@@ -495,7 +495,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Czekaj na QEMU Guest Agent po Terraform apply" in script
     assert "install_qemu_guest_agent" in script
     assert "cloud_init_snippet_storage" in script
-    assert "data.has('install_qemu_guest_agent') && !data.get('guest_credential_id')" in script
+    assert "Hasło SSH (opcjonalnie)" in script
+    assert "secrets: { password: directGuestPassword }" in script
+    assert "guestCredentialRequested" in script
+    assert "data.has('install_qemu_guest_agent') && !guestCredentialRequested" in script
+    assert "ssh_password: data.get('ssh_password')" not in script
     assert "state.installQemuGuestAgent && (state.guestCredentialId || !snippetAvailable || !sshReady)" in script
     assert "Wybrano Credential VM, więc workflow celowo pomija upload snippets i SSH do noda PVE." in script
     assert "snippetStorages" in script
