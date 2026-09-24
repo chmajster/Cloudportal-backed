@@ -29,6 +29,7 @@
           name: row.project_name || projectId,
           slug: row.project_slug || '',
           status: 'active',
+          permissions: Array.isArray(row.permissions) ? row.permissions : [],
         });
       }
     });
@@ -68,6 +69,11 @@
         || String(projectId || '—');
     }
 
+    function scopeAllows(permission) {
+      const project = data.projects.find(value => String(value.id) === String(state.projectId));
+      return Boolean(allowed(permission) || project?.permissions?.includes(permission));
+    }
+
     function refreshManagerRoles(resetSelection = false) {
       const dedicatedElsewhere = new Set(
         data.blueprints.flatMap(value => value.manager_role_ids || []).map(Number)
@@ -97,7 +103,7 @@
       state.selectedTemplateNode = '';
       state.selectedTemplateName = '';
       state.hostnameSchemeId = String(data.schemes[0]?.id || '');
-      state.hostnameEnabled = Boolean(allowed('hostnames.read') && data.schemes.length);
+      state.hostnameEnabled = Boolean(scopeAllows('hostnames.read') && data.schemes.length);
       state.ipamPoolId = data.pools.some(value => String(value.id) === String(state.ipamPoolId))
         ? state.ipamPoolId : '';
       state.guestCredentialId = data.credentials.some(value => String(value.id) === String(state.guestCredentialId))
@@ -130,13 +136,14 @@
 
     async function loadResources(resetManagerSelection = false) {
       const requestOptions = { headers: parts.core.scopeHeaders(state) };
-      const [providers, templates, schemes, pools, credentials, blueprints] = await Promise.all([
+      const [providers, templates, schemes, pools, credentials, blueprints, playbooks] = await Promise.all([
         safeApi('/providers?limit=200', [], requestOptions),
         safeApi('/templates', [], requestOptions),
-        allowed('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
-        allowed('ipam.read') ? safeApi('/ipam/pools?limit=200', [], requestOptions) : Promise.resolve([]),
+        scopeAllows('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
+        scopeAllows('ipam.read') ? safeApi('/ipam/pools?limit=200', [], requestOptions) : Promise.resolve([]),
         safeApi('/credentials?limit=200', [], requestOptions),
-        allowed('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
+        scopeAllows('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
+        scopeAllows('ansible.read') ? safeApi('/ansible/playbooks', [], requestOptions) : Promise.resolve([]),
       ]);
 
       data.providers = providers;
@@ -145,6 +152,7 @@
       data.pools = pools;
       data.credentials = credentials;
       data.blueprints = blueprints;
+      data.playbooks = playbooks.filter(value => value.enabled !== false);
       if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
       if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 
@@ -209,6 +217,7 @@
       renderFields,
       tenantLabel,
       projectLabel,
+      allows: scopeAllows,
     });
   }
 
