@@ -191,6 +191,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     fixed_apmid = deployment.pop('apmid', None)
     fixed_environment = deployment.pop('environment', None)
     guest_credential_id = deployment.pop('guest_credential_id', None)
+    template_guest_credential_id = deployment.pop('template_guest_credential_id', None)
     guest_account_mode = deployment.pop('guest_account_mode', 'cloud_init_managed')
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
@@ -198,18 +199,21 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
 
     deployment_variables = deployment.setdefault('variables', {})
     guest_credential = guest_credential_cloud_init(db, guest_credential_id)
-    if guest_account_mode == 'existing_template' and not guest_credential:
-        raise HTTPException(422, 'Existing template account mode requires a guest SSH credential')
-    if guest_credential:
-        # The username remains part of deployment runtime data so wait/SSH/day-2
-        # stages know which pre-existing account to use. In existing-template
-        # mode Cloud-init itself does not create or mutate this account.
+    template_guest_credential = guest_credential_cloud_init(db, template_guest_credential_id)
+    if guest_account_mode == 'existing_template':
+        existing_credential = template_guest_credential or guest_credential
+        if not existing_credential:
+            raise HTTPException(422, 'Existing template account mode requires a guest SSH credential')
+        # Preserve the account already present in the template. Its username is
+        # still recorded for later SSH/day-2 stages, but Cloud-init does not
+        # modify password, authorized_keys or sudo for this identity.
+        deployment_variables['ssh_username'] = existing_credential['username']
+    elif guest_credential:
         deployment_variables['ssh_username'] = guest_credential['username']
-        if guest_account_mode == 'cloud_init_managed':
-            if guest_credential['public_key']:
-                deployment_variables['ssh_public_key'] = guest_credential['public_key']
-            else:
-                deployment_variables['ssh_public_key'] = None
+        if guest_credential['public_key']:
+            deployment_variables['ssh_public_key'] = guest_credential['public_key']
+        else:
+            deployment_variables['ssh_public_key'] = None
 
     tags = [str(tag).strip().lower() for tag in (deployment_variables.get('tags') or []) if str(tag).strip()]
 
@@ -321,4 +325,10 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     if rendered.get('ansible'):
         rendered['ansible'] = AnsibleInput.model_validate(rendered['ansible'])
     rendered['blueprint_variables'] = variables
-    return rendered, reservation, ip_allocation, (guest_credential['id'] if guest_credential else None)
+    return (
+        rendered,
+        reservation,
+        ip_allocation,
+        (guest_credential['id'] if guest_credential else None),
+        (template_guest_credential['id'] if template_guest_credential else None),
+    )
