@@ -356,12 +356,17 @@ function showDeploymentDetails(item) {
         { label: 'Pole', value: row => FIELD_LABELS[row.key] || row.key.replaceAll('_', ' ') },
         { label: 'Wartość', value: row => displayValue(row.value) },
       ], variableRows) : node('p', { class: 'muted', text: 'Brak parametrów.' })));
-  if (workflow.ansible) {
+  const ansibleRuns = Array.isArray(workflow.ansible_runs) && workflow.ansible_runs.length
+    ? workflow.ansible_runs
+    : (workflow.ansible ? [workflow.ansible] : []);
+  if (ansibleRuns.length) {
     content.append(node('section', { class: 'detail-section' },
       node('h3', { text: 'Konfiguracja Ansible' }),
-      node('div', { class: 'checks' },
-        info('Playbook', workflow.ansible.playbook),
-        info('Dane dostępowe', `#${workflow.ansible.credentials_id}`))));
+      table([
+        { label: '#', value: (_row, index) => index + 1 },
+        { label: 'Runbook / Playbook', value: row => row.playbook },
+        { label: 'Dane dostępowe', value: row => `#${row.credentials_id}` },
+      ], ansibleRuns)));
   }
   dom.modal.classList.add('modal-wide');
   dom.modalTitle.textContent = item.name;
