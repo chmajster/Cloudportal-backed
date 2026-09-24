@@ -79,6 +79,7 @@
   const PATH_ROUTES = new Map(
     Object.entries(ROUTE_PATHS).map(([id, path]) => [path, id])
   );
+  const JOB_LOG_ROUTE = /^\/jobs\/([^/]+)$/;
 
   const NAVIGATION_POSITION = new Map(
     CLIENT_NAVIGATION_ROUTES.map((routeId, index) => [routeId, index])
@@ -97,6 +98,7 @@
 
   function resolveView(value) {
     const normalized = normalizeRouteValue(value);
+    if (JOB_LOG_ROUTE.test(normalized)) return 'job-log';
     if (PATH_ROUTES.has(normalized)) return PATH_ROUTES.get(normalized);
     if (ROUTE_PATHS[normalized]) return normalized;
     if (normalized.startsWith('/')) {
@@ -109,6 +111,16 @@
   function routePath(routeOrId) {
     const id = typeof routeOrId === 'string' ? routeOrId : routeOrId?.id;
     return ROUTE_PATHS[id] || ('/' + (id || 'products'));
+  }
+
+  function routePathForRequest(value, resolvedId) {
+    const normalized = normalizeRouteValue(value);
+    if (resolvedId === 'job-log') {
+      if (JOB_LOG_ROUTE.test(normalized)) return normalized;
+      const current = normalizeRouteValue(location.hash.slice(1));
+      if (JOB_LOG_ROUTE.test(current)) return current;
+    }
+    return routePath(resolvedId);
   }
 
   function navigationParent(route) {
@@ -147,6 +159,7 @@
   window.uiNavigationRank = navigationRank;
   window.uiNavigationOrder = navigationPosition;
   window.uiRoutePath = routePath;
+  window.uiRoutePathForRequest = routePathForRequest;
   window.uiResolveView = resolveView;
   window.uiPageEyebrow = pageEyebrow;
 })();
