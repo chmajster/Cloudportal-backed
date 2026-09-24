@@ -47,7 +47,7 @@ def test_console_session_is_ephemeral_proxied_and_rbac_protected(client, headers
 
     legacy_asset = client.get(body['rfb_module'])
     assert legacy_asset.status_code == 200, legacy_asset.text
-    assert legacy_asset.content == b'export default class RFB {}'
+    assert b'export default class RFB' in legacy_asset.content
     assert legacy_asset.headers['content-type'].startswith('text/javascript')
     assert legacy_asset.headers['X-Content-Type-Options'] == 'nosniff'
     assert legacy_asset.headers['Cache-Control'] == 'no-store'

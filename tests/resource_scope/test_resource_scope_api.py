@@ -215,8 +215,6 @@ def test_console_capability_rechecks_token_revocation(system, monkeypatch):
     client,headers,_=system
     c,provider=infrastructure(client,headers,'console')
     monkeypatch.setattr(ProxmoxProvider,'console_session',lambda *_:{'port':5900,'ticket':'ephemeral','password':'rfb'})
-    calls=[]
-    monkeypatch.setattr(ProxmoxProvider,'novnc_asset',lambda *_:calls.append(True) or (b'export default {}','text/javascript'))
     response=client.post(f"/api/v1/providers/{provider['id']}/vms/pve/111/console",headers=headers)
     assert response.status_code==200,response.text
     body=response.json()
@@ -226,7 +224,7 @@ def test_console_capability_rechecks_token_revocation(system, monkeypatch):
     with session() as db:
         token=db.scalar(select(Token).where(Token.kind=='api'));token.revoked_at=now();db.commit()
     response=client.get(legacy_asset)
-    assert response.status_code==401 and len(calls)==1,response.text
+    assert response.status_code==401,response.text
 
 
 def test_destroy_replay_and_project_deletion_guard(system):

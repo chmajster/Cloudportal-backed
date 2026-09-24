@@ -3,10 +3,11 @@ import json
 import re
 import secrets
 import ssl
+from pathlib import Path as FilePath
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, WebSocket
-from fastapi.responses import Response
+from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from websockets.asyncio.client import connect as websocket_connect
 from pydantic import Field, model_validator
@@ -30,6 +31,7 @@ NODE = Annotated[str, Path(pattern=r'^[A-Za-z0-9_.-]{1,63}\z')]
 SNAPSHOT = Annotated[str, Path(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\z')]
 CONSOLE_SESSION_TTL = 90
 CONSOLE_TOKEN = re.compile(r'^[A-Za-z0-9_-]{32,128}\Z')
+LOCAL_NOVNC_ROOT = (FilePath(__file__).resolve().parents[1] / 'web' / 'vendor' / 'novnc').resolve()
 NOVNC_CONTENT_TYPES = {
     'js': 'text/javascript; charset=utf-8',
     'css': 'text/css; charset=utf-8',
@@ -51,9 +53,19 @@ def console_key(session_id):
 
 
 
-def novnc_content_type(asset_path, upstream_content_type):
+def novnc_content_type(asset_path, upstream_content_type=None):
     extension = asset_path.rsplit('.', 1)[-1].lower() if '.' in asset_path else ''
     return NOVNC_CONTENT_TYPES.get(extension, upstream_content_type or 'application/octet-stream')
+
+
+def local_novnc_asset(asset_path):
+    if not asset_path or '\\' in asset_path or asset_path.startswith('/'):
+        raise HTTPException(404, 'noVNC asset not found')
+    candidate = (LOCAL_NOVNC_ROOT / asset_path).resolve()
+    if not candidate.is_relative_to(LOCAL_NOVNC_ROOT) or not candidate.is_file():
+        raise HTTPException(404, 'noVNC asset not found')
+    return candidate
+
 
 def load_console_session(session_id):
     if not CONSOLE_TOKEN.fullmatch(session_id):
@@ -460,14 +472,16 @@ def console_asset(session_id: str, asset_path: str):
     record = load_console_session(session_id)
     if record is None:
         raise HTTPException(410, 'Console session expired')
-    body, upstream_content_type = console_adapter(record).novnc_asset(asset_path)
-    return Response(
-        content=body,
+
+    # Keep the legacy session-scoped module URL working for tabs loaded before
+    # an upgrade, but serve the exact vendored client instead of PVE static files.
+    from app.resource_scope.console import console_access
+    console_access(record)
+    target = local_novnc_asset(asset_path)
+    return FileResponse(
+        target,
+        media_type=novnc_content_type(asset_path),
         headers={
-            # Browsers reject ES modules when Proxmox/pveproxy reports JavaScript
-            # as text/plain or application/octet-stream. The asset path has
-            # already passed strict validation, so its extension is authoritative.
-            'Content-Type': novnc_content_type(asset_path, upstream_content_type),
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
             'Referrer-Policy': 'no-referrer',
