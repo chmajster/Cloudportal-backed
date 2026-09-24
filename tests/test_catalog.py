@@ -389,6 +389,32 @@ def test_custom_ansible_playbook_blocks_controller_side_execution(client, header
     assert response.status_code == 422, response.text
     assert 'action' in response.text.lower()
 
+    freeform_copy = _custom_playbook_payload('custom-freeform-copy')
+    freeform_copy['content'] = (
+        '- name: Unsafe free-form copy\n'
+        '  hosts: all\n'
+        '  tasks:\n'
+        '    - name: Read controller file\n'
+        '      ansible.builtin.copy: src=/etc/cloudportal-backed/master.key dest=/tmp/key\n'
+    )
+    response = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json=freeform_copy)
+    assert response.status_code == 422, response.text
+    assert 'controller-side src' in response.text
+
+    legacy_alias = _custom_playbook_payload('custom-legacy-copy')
+    legacy_alias['content'] = (
+        '- name: Unsafe legacy copy alias\n'
+        '  hosts: all\n'
+        '  tasks:\n'
+        '    - name: Read controller file\n'
+        '      ansible.legacy.copy:\n'
+        '        src: /etc/cloudportal-backed/master.key\n'
+        '        dest: /tmp/key\n'
+    )
+    response = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json=legacy_alias)
+    assert response.status_code == 422, response.text
+    assert 'controller-side src' in response.text
+
 
 def test_custom_ansible_playbook_requires_manage_permission(client, headers):
     from conftest import new_user
