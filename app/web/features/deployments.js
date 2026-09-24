@@ -136,22 +136,81 @@ async function myResourcesView(repairInventory = true) {
   }
 
   const optionalItems = path => api(path).then(result => result.items || []).catch(() => []);
-  const [deploymentResult, vmResult, resourceResult, providerResult, users, projects, tenants] = await Promise.all([
+  const [deploymentResult, vmResult, resourceResult, providerResult, jobResult, users, projects, tenants] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/vms?limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
+    allowed('jobs.read') ? api('/jobs?limit=200') : Promise.resolve({ items: [] }),
     allowed('users.read') ? optionalItems('/users?limit=200') : Promise.resolve([]),
     optionalItems('/projects?limit=200'),
     optionalItems('/tenants?limit=200'),
   ]);
 
   const deployments = deploymentResult.items || [];
-  const vms = vmResult.items || [];
+  const rawVms = vmResult.items || [];
+  const jobs = jobResult.items || [];
+  const deploymentById = new Map(deployments.map(item => [item.id, item]));
+  const jobById = new Map(jobs.map(item => [item.id, item]));
+  const latestApplyJobByDeployment = new Map();
+  [...jobs]
+    .filter(item => item.deployment_id && item.operation === 'terraform.apply')
+    .sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0))
+    .forEach(item => {
+      if (!latestApplyJobByDeployment.has(item.deployment_id)) {
+        latestApplyJobByDeployment.set(item.deployment_id, item);
+      }
+    });
+
+  const provisioningJobForDeployment = deployment => {
+    if (!deployment) return null;
+    const active = deployment.active_job_id ? jobById.get(deployment.active_job_id) : null;
+    if (active?.operation === 'terraform.apply') return active;
+    return latestApplyJobByDeployment.get(deployment.id) || null;
+  };
+
+  function provisionalBlueprintVm(deployment) {
+    const variables = deployment.variables || {};
+    const vmId = variables.vm_id ?? variables.vmid ?? variables.target_vmid ?? variables.new_vmid ?? null;
+    return {
+      id: 'provisioning:' + deployment.id,
+      tenant_id: deployment.tenant_id,
+      project_id: deployment.project_id,
+      provider_id: deployment.provider_id,
+      deployment_id: deployment.id,
+      node: variables.node || variables.target_node || '',
+      vm_id: vmId,
+      name: deployment.name,
+      management_mode: 'terraform',
+      lifecycle_status: 'provisioning',
+      created_by: deployment.created_by,
+      created_at: deployment.created_at,
+      updated_at: deployment.updated_at,
+      destroyed_at: null,
+      provisioning_placeholder: true,
+      provisioning_job: provisioningJobForDeployment(deployment),
+    };
+  }
+
+  const managedDeploymentIds = new Set(rawVms.filter(item => item.deployment_id).map(item => item.deployment_id));
+  const vms = rawVms.map(item => {
+    const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
+    const provisioningJob = provisioningJobForDeployment(deployment);
+    return provisioningJob && provisioningJob.status !== 'successful'
+      ? { ...item, provisioning_job: provisioningJob }
+      : item;
+  });
+  deployments
+    .filter(item => item.provider === 'proxmox'
+      && Boolean(item.workflow?.blueprint)
+      && item.status !== 'destroyed'
+      && !managedDeploymentIds.has(item.id))
+    .forEach(item => vms.push(provisionalBlueprintVm(item)));
+  vms.sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0));
+
   const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm');
   const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
   const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
-  const deploymentById = new Map(deployments.map(item => [item.id, item]));
   const userNames = new Map(users.map(user => [
     String(user.id),
     [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || user.username || ('#' + user.id),
@@ -192,7 +251,7 @@ async function myResourcesView(repairInventory = true) {
       ], deployments, item => {
         const actions = [];
         const vm = vmByDeployment.get(item.id);
-        if (vm && allowed('vms.read') && hasCommand('inventory.openVm')) {
+        if (vm && !vm.provisioning_placeholder && allowed('vms.read') && hasCommand('inventory.openVm')) {
           actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', vm, 'overview', 'my-resources'), 'primary'));
         }
         actions.push(...deploymentActions(item, 'my-resources'));
