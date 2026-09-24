@@ -62,9 +62,11 @@
   function workflow(options = {}) {
     const steps = [];
     let previous = [];
-    const add = (id, type) => {
-      const timeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
-      steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout, rollback: null });
+    const add = (id, type, overrides = {}) => {
+      const defaultTimeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
+      const timeout = overrides.timeout ?? defaultTimeout;
+      const retry = overrides.retry ?? 0;
+      steps.push({ id, type, depends_on: [...previous], conditions: {}, retry, timeout, rollback: null });
       previous = [id];
     };
     if (options.cloudInit) add('cloud_init', 'cloud_init');
@@ -73,7 +75,7 @@
     if (options.waitAgent || options.ansible || options.guestAccess || options.awx) add('guest_ip', 'wait_for_ip');
     if (options.guestAccess) add('guest_ssh', 'wait_for_ssh');
     if (options.ansible) add('ansible', 'run_ansible_playbook');
-    if (options.awx) add('awx', 'register_awx');
+    if (options.awx) add('awx', 'register_awx', { retry: Number(options.awxRetry ?? 3), timeout: Number(options.awxTimeout ?? 300) });
     return steps;
   }
 
@@ -208,6 +210,8 @@
       awxGroupByApmid: true,
       awxJobTemplateId: '',
       awxRemoveOnDestroy: true,
+      awxRetry: 3,
+      awxTimeout: 300,
       awxDiscovery: null,
       awxDiscoveryError: '',
       cloudInitEnabled: true,
@@ -381,6 +385,8 @@
       ),
       ansible: state.ansibleEnabled,
       awx: state.providerType === 'proxmox' && state.awxEnabled,
+      awxRetry: state.awxRetry,
+      awxTimeout: state.awxTimeout,
     });
     const selectedWorkflow = state.advancedWorkflow && state.workflow.length ? state.workflow : autoWorkflow;
     return {
