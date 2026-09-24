@@ -468,8 +468,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'Usuń wszystkie'" in script
     assert "'Podsumowanie', 'Podsumowanie'" in script
     assert "Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji." in script
-    assert "selectField('Tenant', 'tenant_id'" in script
+    assert "selectField('Organizacja', 'tenant_id'" in script
     assert "selectField('Projekt', 'project_id'" in script
+    assert "/blueprints/creation-scopes?limit=200" in script
+    assert "RBAC pozwala Ci tworzyć Blueprinty" in script
     assert "'X-Tenant-ID': String(state.tenantId)" in script
     assert "'X-Project-ID': String(state.projectId)" in script
     assert "!state.selectEnvironmentOnExecute" in script
