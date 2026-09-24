@@ -148,81 +148,12 @@ async function myResourcesView(repairInventory = true) {
   ]);
 
   const deployments = deploymentResult.items || [];
-  const rawVms = vmResult.items || [];
-  const jobs = jobResult.items || [];
   const deploymentById = new Map(deployments.map(item => [item.id, item]));
-  const jobById = new Map(jobs.map(item => [item.id, item]));
-
-  if (allowed('jobs.read')) {
-    const missingActiveJobIds = [...new Set(
-      deployments
-        .map(item => item.active_job_id)
-        .filter(id => id && !jobById.has(id))
-    )];
-    const activeJobs = await Promise.all(
-      missingActiveJobIds.map(id => api('/jobs/' + encodeURIComponent(id)).catch(() => null))
-    );
-    activeJobs.filter(Boolean).forEach(job => {
-      jobs.push(job);
-      jobById.set(job.id, job);
-    });
-  }
-
-  const latestApplyJobByDeployment = new Map();
-  [...jobs]
-    .filter(item => item.deployment_id && item.operation === 'terraform.apply')
-    .sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0))
-    .forEach(item => {
-      if (!latestApplyJobByDeployment.has(item.deployment_id)) {
-        latestApplyJobByDeployment.set(item.deployment_id, item);
-      }
-    });
-
-  const provisioningJobForDeployment = deployment => {
-    if (!deployment) return null;
-    const active = deployment.active_job_id ? jobById.get(deployment.active_job_id) : null;
-    if (active?.operation === 'terraform.apply') return active;
-    return latestApplyJobByDeployment.get(deployment.id) || null;
-  };
-
-  function provisionalBlueprintVm(deployment) {
-    const variables = deployment.variables || {};
-    const vmId = variables.vm_id ?? variables.vmid ?? variables.target_vmid ?? variables.new_vmid ?? null;
-    return {
-      id: 'provisioning:' + deployment.id,
-      tenant_id: deployment.tenant_id,
-      project_id: deployment.project_id,
-      provider_id: deployment.provider_id,
-      deployment_id: deployment.id,
-      node: variables.node || variables.target_node || '',
-      vm_id: vmId,
-      name: deployment.name,
-      management_mode: 'terraform',
-      lifecycle_status: 'provisioning',
-      created_by: deployment.created_by,
-      created_at: deployment.created_at,
-      updated_at: deployment.updated_at,
-      destroyed_at: null,
-      provisioning_placeholder: true,
-      provisioning_job: provisioningJobForDeployment(deployment),
-    };
-  }
-
-  const managedDeploymentIds = new Set(rawVms.filter(item => item.deployment_id).map(item => item.deployment_id));
-  const vms = rawVms.map(item => {
-    const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
-    const provisioningJob = provisioningJobForDeployment(deployment);
-    return provisioningJob && provisioningJob.status !== 'successful'
-      ? { ...item, provisioning_job: provisioningJob }
-      : item;
+  const vms = await window.MyResourcesVmBrowser.composeProvisioning({
+    deployments,
+    vms: vmResult.items || [],
+    jobs: jobResult.items || [],
   });
-  deployments
-    .filter(item => item.provider === 'proxmox'
-      && Boolean(item.workflow?.blueprint)
-      && item.status !== 'destroyed'
-      && !managedDeploymentIds.has(item.id))
-    .forEach(item => vms.push(provisionalBlueprintVm(item)));
-  vms.sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0));
 
   const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm');
   const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
