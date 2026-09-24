@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import ThreadingMixIn, UnixStreamServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -35,8 +36,9 @@ REPOSITORY = os.environ.get("CP_UPDATER_REPOSITORY", "chmajster/Cloudportal-back
 INSTALL_MODE = os.environ.get("CP_UPDATER_INSTALL_MODE", "systemd").strip().lower()
 BIND_HOST = os.environ.get(
     "CP_UPDATER_BIND",
-    "0.0.0.0" if INSTALL_MODE == "docker" else "127.0.0.1",
+    "127.0.0.1",
 ).strip() or "127.0.0.1"
+SOCKET_PATH = os.environ.get("CP_UPDATER_SOCKET", "").strip()
 
 CONTROL_TOKEN = CONFIG_DIR / "updater.token"
 STATUS_TOKEN = CONFIG_DIR / "updater-status.token"
@@ -60,6 +62,10 @@ CI_POLL_SECONDS = 15
 
 lock = threading.RLock()
 update_thread: threading.Thread | None = None
+
+
+class ThreadingUnixHTTPServer(ThreadingMixIn, UnixStreamServer):
+    daemon_threads = True
 
 
 def utcnow() -> str:
@@ -1547,8 +1553,21 @@ def main() -> None:
                 finished_at=utcnow(),
             )
     threading.Thread(target=scheduler, daemon=True, name="cloudportal-update-scheduler").start()
-    server = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
-    server.serve_forever()
+    if SOCKET_PATH:
+        socket_path = Path(SOCKET_PATH)
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(socket_path.parent, 0o755)
+        socket_path.unlink(missing_ok=True)
+        server = ThreadingUnixHTTPServer(str(socket_path), Handler)
+        os.chmod(socket_path, 0o666)
+        try:
+            server.serve_forever()
+        finally:
+            server.server_close()
+            socket_path.unlink(missing_ok=True)
+    else:
+        server = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
+        server.serve_forever()
 
 
 if __name__ == "__main__":
