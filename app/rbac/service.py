@@ -11,7 +11,7 @@ PERMISSIONS = {
         'users': 'read create update delete', 'roles': 'read create update delete assign',
         'credentials': 'read create update delete test', 'providers': 'read create update delete',
         'deployments': 'read read_all create destroy adopt', 'jobs': 'read read_all execute cancel',
-        'terraform': 'read execute', 'ansible': 'read execute', 'audit': 'read',
+        'terraform': 'read execute', 'ansible': 'read execute manage', 'audit': 'read',
         'blueprints': 'read create update delete execute approve',
         'hostnames': 'read create update delete reserve release',
         'vms': 'read read_all manage_all power update delete clone migrate template console',
