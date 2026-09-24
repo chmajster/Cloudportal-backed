@@ -326,6 +326,7 @@ class BlueprintCreationScopeOutput(Output):
     project_id: str
     project_name: str
     project_slug: str
+    permissions: list[str]
 
 
 class BlueprintOutput(Output):
