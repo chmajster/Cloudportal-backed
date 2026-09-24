@@ -47,6 +47,9 @@ function inventoryVmActions(item) {
     && allowed('jobs.execute')
     && allowed('terraform.execute');
   if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
+  if (item.live === null && item.lifecycle_status !== 'destroyed') {
+    actions.push(button('Usuń brakującą', () => offerMissingVmCleanup(item, 'inventory'), 'danger'));
+  }
   if (allowed('inventory.update')) actions.push(button('Odśwież stan', async () => {
     await api(`/inventory/vms/${item.id}/reconcile`, { method: 'POST' });
     toast('Stan zasobu odświeżony.');
@@ -146,15 +149,20 @@ async function offerMissingVmCleanup(item, returnView = 'inventory') {
     return true;
   }
 
-  confirmAction(
-    'VM nie istnieje w Proxmox',
-    label + ' (' + location + ') nie została znaleziona na platformie. Usunąć nieaktualny wpis VM z aktywnych zasobów Cloudportal? Dane historyczne i audyt pozostaną zachowane.',
-    async () => {
+  openModal({
+    title: 'VM nie istnieje w Proxmox',
+    eyebrow: location,
+    danger: true,
+    submitLabel: 'Usuń nieaktualny wpis',
+    body: node('div', { class: 'stack' },
+      node('p', { text: label + ' nie została znaleziona na platformie Proxmox.' }),
+      node('p', { class: 'muted', text: 'Usunięcie dotyczy aktywnego wpisu w Cloudportal. Historia, audyt i informacje o wdrożeniu pozostaną zachowane.' })),
+    onSubmit: async () => {
       await api('/inventory/vms/' + encodeURIComponent(item.id) + '/missing', { method: 'DELETE' });
       toast('Usunięto nieaktualną VM z aktywnych zasobów Cloudportal.');
       await navigate(returnView);
     },
-  );
+  });
   return true;
 }
 
@@ -524,6 +532,7 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
         else result = await vmAuditContent(item);
         tabContent.replaceChildren(result);
       } catch (error) {
+        if (await offerMissingVmCleanup(item, returnView)) return;
         tabContent.replaceChildren(node('div', { class: 'panel' }, node('p', { class: 'form-error', text: error.message })));
       }
     };
