@@ -7,7 +7,7 @@ from rq import Queue, Worker
 from rq.job import Job as RQJob
 from rq.exceptions import NoSuchJobError
 from rq.serializers import JSONSerializer
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from app.config import settings
 from app.database import session
 from app.events.service import dispatch_event_broker_once
@@ -47,6 +47,18 @@ def provider_retry_ready(job):
 
 
 CANCELLATION_GRACE_SECONDS = 60
+DISPATCH_CAPACITY_LOCK_KEY = 4850454325908757588
+
+
+def acquire_dispatch_capacity_lock(db):
+    # Serialize the capacity calculation + RQ enqueue batch across dispatcher
+    # processes. The PostgreSQL transaction-scoped advisory lock is released
+    # automatically by the commit at the end of this dispatch cycle.
+    if db.get_bind().dialect.name == 'postgresql':
+        db.execute(
+            text('SELECT pg_advisory_xact_lock(:lock_key)'),
+            {'lock_key': DISPATCH_CAPACITY_LOCK_KEY},
+        )
 
 
 def parallel_dispatch_capacity(db, active_rq_jobs=0):
@@ -280,6 +292,7 @@ def _dispatch_once_unfenced():
     materialize_scheduled_jobs()
     q = queue()
     with session() as db:
+        acquire_dispatch_capacity_lock(db)
         expire_waiting_approvals(db)
         jobs = db.scalars(
             select(Job)
