@@ -1335,8 +1335,8 @@ async function executeBlueprint(item) {
           idempotent: true,
           body: payload,
         });
-        toast(`Utworzono „${result.name}”. Konfiguracja została zapisana w lokalnej bazie i dodana do kolejki. Jeśli Proxmox jest offline, VM utworzy się automatycznie po odzyskaniu połączenia.`);
-        navigate('jobs');
+        toast(`Utworzono „${result.name}”. VM jest już widoczna w „Moje zasoby”. Status i etap provisioningu będą aktualizowane automatycznie; jeśli Proxmox jest offline, zadanie wznowi się po odzyskaniu połączenia.`);
+        navigate('my-resources');
       },
     });
   } catch (error) {
