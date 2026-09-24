@@ -1172,6 +1172,7 @@ async function blueprintForm(item = null) {
           credentialField,
           selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
           deploymentHostnameSchemeField,
+          templateGuestCredentialField,
           guestCredentialField,
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
