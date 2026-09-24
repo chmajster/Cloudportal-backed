@@ -522,7 +522,17 @@ class ProxmoxProvider(InfrastructureProvider):
         except (KeyError, ValueError, TypeError):
             return {'ok': False, 'retryable': False, 'reason': 'invalid_response'}
 
-    def _request(self, method, path, *, data=None, json_data=None):
+    def _request(
+        self,
+        method,
+        path,
+        *,
+        data=None,
+        json_data=None,
+        return_response=False,
+        accepted_statuses=None,
+    ):
+        accepted_statuses = set(accepted_statuses or ())
         try:
             with httpx.Client(
                 verify=self.verify_ssl,
@@ -552,9 +562,19 @@ class ProxmoxProvider(InfrastructureProvider):
                     data=data,
                     json=json_data,
                 )
-                response.raise_for_status()
+                if response.status_code not in accepted_statuses:
+                    response.raise_for_status()
+                if return_response:
+                    return response
                 body = response.json()
                 return body.get('data')
+        except httpx.HTTPStatusError as error:
+            operation = (
+                'Sprawdzenie QEMU Guest Agent'
+                if '/agent/ping' in path
+                else f'Operacja API Proxmox {method} {path}'
+            )
+            raise _proxmox_http_exception(error, operation) from None
         except httpx.HTTPError as error:
             if _certificate_verification_failed(error):
                 raise HTTPException(
@@ -564,7 +584,8 @@ class ProxmoxProvider(InfrastructureProvider):
                 ) from None
             raise HTTPException(
                 502,
-                'Połączenie lub uwierzytelnienie Proxmox nie powiodło się. Sprawdź endpoint, protokół, dane dostępowe i uprawnienia.',
+                f'Operacja API Proxmox {method} {path}: nie można połączyć się z API. '
+                'Sprawdź endpoint, protokół, routing i firewall.',
             ) from None
         except (KeyError, ValueError):
             raise HTTPException(
@@ -614,10 +635,21 @@ class ProxmoxProvider(InfrastructureProvider):
         raise HTTPException(422, 'Unknown resource')
 
     def guest_agent_ready(self, node, vm_id):
-        data = self._get(
-            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/ping'
+        path = f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/ping'
+        response = self._request(
+            'GET',
+            path,
+            return_response=True,
+            # Proxmox uses HTTP 500 while the QEMU Guest Agent channel exists
+            # but is not ready yet. This is a readiness state, not an API
+            # authentication/transport failure.
+            accepted_statuses={500},
         )
-        return data is not None
+        if response.status_code == 500:
+            return False
+        # The ping endpoint may return {"data": null} on success. HTTP 2xx is
+        # therefore the readiness signal; checking the data payload is wrong.
+        return 200 <= response.status_code < 300
 
     def guest_exec(self, node, vm_id, command, timeout=120):
         argv = [str(value) for value in command if str(value)]
