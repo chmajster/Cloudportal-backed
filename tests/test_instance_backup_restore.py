@@ -63,7 +63,11 @@ def test_restore_status_file_is_private(system):
 def test_restore_endpoint_requires_typed_confirmation(system, tmp_path, monkeypatch):
     client, headers, _ = system
     backup_id, _, _ = make_restore_source(tmp_path)
-    monkeypatch.setattr("app.instance_backup.api.enqueue_restore", lambda *args: None)
+    queued = {}
+    monkeypatch.setattr(
+        "app.instance_backup.api.enqueue_restore",
+        lambda *args: queued.setdefault("args", args),
+    )
     rejected = client.post(
         f"/api/v1/instance-backups/{backup_id}/restore", headers=headers,
         json={"confirmation": "YES", "safety_backup": True},
@@ -75,6 +79,8 @@ def test_restore_endpoint_requires_typed_confirmation(system, tmp_path, monkeypa
     )
     assert accepted.status_code == 202, accepted.text
     assert accepted.json()["safety_backup"] is True
+    assert len(queued["args"]) == 4
+    assert queued["args"][3] is not None
 
 
 def test_failed_restore_uses_safety_backup_for_rollback(system, tmp_path, monkeypatch):

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from python_multipart.multipart import MultipartParser, parse_options_header
 from sqlalchemy import select
+from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.database import get_db
@@ -239,8 +240,8 @@ async def upload_backup(
     destination = uploaded_path(upload_uuid)
     try:
         client_filename, size = await _stream_multipart_upload(request, destination)
-        manifest = validate_uploaded_backup(destination)
-        digest = sha256_file(destination)
+        manifest = await run_in_threadpool(validate_uploaded_backup, destination)
+        digest = await run_in_threadpool(sha256_file, destination)
         row = register_uploaded_backup(
             path=destination,
             original_filename=sanitize_filename(client_filename),
@@ -264,7 +265,7 @@ async def upload_backup(
     audit(db, request, "instance_backup.uploaded", "instance_backups", row.id)
     db.commit()
     try:
-        plan = restore_plan(row)
+        plan = await run_in_threadpool(restore_plan, row)
         preflight = {"ok": True, "error": None}
     except Exception as exc:
         plan = migration_plan(manifest)
@@ -347,7 +348,7 @@ def start_restore(
     audit(db, request, "instance_restore.started", "instance_backups", backup_id)
     db.commit()
     try:
-        enqueue_restore(backup_id, restore_uuid, data.safety_backup)
+        enqueue_restore(backup_id, restore_uuid, data.safety_backup, actor.id)
     except Exception:
         write_restore_status(
             restore_uuid,

@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import session
 from app.events.service import dispatch_event_broker_once
 from app.inventory_sync import repair_inventory_from_states
+from app.instance_operation import normal_instance_operation
 from app.jobs.approval import approval_policy_for_job
 from app.jobs.recovery import queue_automatic_resume, record_persisted_state_recovery
 from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
@@ -256,7 +257,7 @@ def reconcile_stale_jobs(db):
     return len(rows)
 
 
-def dispatch_once():
+def _dispatch_once_unfenced():
     materialize_scheduled_jobs()
     q = queue()
     with session() as db:
@@ -292,6 +293,11 @@ def dispatch_once():
     from app.instance_backup.service import cleanup_expired_backups
     cleanup_expired_backups()
     redis_client().set('cp:dispatcher:heartbeat', 'alive', ex=30)
+
+
+def dispatch_once():
+    with normal_instance_operation():
+        return _dispatch_once_unfenced()
 
 
 def dispatch_forever():

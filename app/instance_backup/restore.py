@@ -30,6 +30,7 @@ from app.instance_backup.service import (
     verify_record,
 )
 from app.instance_backup.validation import validate_restore_preflight
+from app.instance_operation import exclusive_instance_operation
 from app.models import Audit, Credential, Token, User
 from app.security.core import decrypt_secret, encryption_key, redis_client
 
@@ -313,7 +314,12 @@ def _audit_restore(action: str, restore_uuid: str, backup_uuid: str, *, user_id:
         pass
 
 
-def execute_restore(backup_id: int, restore_uuid: str, safety_backup: bool = True) -> None:
+def _execute_restore_locked(
+    backup_id: int,
+    restore_uuid: str,
+    safety_backup: bool = True,
+    actor_token_id: int | None = None,
+) -> None:
     source_path: Path | None = None
     source_manifest: dict | None = None
     safety_path: Path | None = None
@@ -336,7 +342,7 @@ def execute_restore(backup_id: int, restore_uuid: str, safety_backup: bool = Tru
             source_path = verified["path"]
             source_manifest = validate_restore_preflight(source_path)
             validate_secret_compatibility(source_manifest)
-            actor_snapshot = _session_snapshot(row.token_id)
+            actor_snapshot = _session_snapshot(actor_token_id)
             backup_uuid = str(source_manifest.get("backup_uuid") or row.backup_uuid)
             source_filename = row.filename
 
@@ -344,7 +350,11 @@ def execute_restore(backup_id: int, restore_uuid: str, safety_backup: bool = Tru
             write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="safety_backup")
             safety_uuid = str(uuid.uuid4())
             safety_path = generated_dir() / f"{safety_uuid}.cpb"
-            safety_manifest, _, _ = create_snapshot_archive(safety_path, safety_uuid)
+            safety_manifest, _, _ = create_snapshot_archive(
+                safety_path,
+                safety_uuid,
+                quiesce=False,
+            )
 
         write_restore_status(restore_uuid, backup_id=backup_id, status="running", stage="extract")
         extracted = staging_dir() / f"restore-{restore_uuid}"
@@ -447,13 +457,34 @@ def execute_restore(backup_id: int, restore_uuid: str, safety_backup: bool = Tru
             shutil.rmtree(rollback_extracted, ignore_errors=True)
 
 
-def enqueue_restore(backup_id: int, restore_uuid: str, safety_backup: bool) -> None:
+def execute_restore(
+    backup_id: int,
+    restore_uuid: str,
+    safety_backup: bool = True,
+    actor_token_id: int | None = None,
+) -> None:
+    with exclusive_instance_operation():
+        _execute_restore_locked(
+            backup_id,
+            restore_uuid,
+            safety_backup,
+            actor_token_id,
+        )
+
+
+def enqueue_restore(
+    backup_id: int,
+    restore_uuid: str,
+    safety_backup: bool,
+    actor_token_id: int | None = None,
+) -> None:
     queue = Queue("cloudportal", connection=redis_client(), serializer=JSONSerializer)
     queue.enqueue(
         "app.instance_backup.restore.execute_restore",
         backup_id,
         restore_uuid,
         safety_backup,
+        actor_token_id,
         job_id=f"instance-restore:{restore_uuid}",
         job_timeout=max(settings().execution_timeout, 7200),
         result_ttl=86400,

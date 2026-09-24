@@ -5,6 +5,7 @@ import os
 import shutil
 import socket
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from app.instance_backup.crypto import collect_secret_material, secret_descripto
 from app.instance_backup.database import current_alembic_revision, database_counts, dump_database
 from app.instance_backup.models import InstanceBackup, utcnow
 from app.instance_backup.paths import generated_dir, root_dir, staging_dir, uploaded_dir
+from app.instance_operation import exclusive_instance_operation
 from app.security.core import redis_client
 from app.version import build_commit, build_version
 
@@ -193,6 +195,7 @@ def create_snapshot_archive(
     backup_uuid: str,
     *,
     stage_callback=None,
+    quiesce: bool = True,
 ) -> tuple[dict, int, str]:
     work = staging_dir() / backup_uuid
     if work.exists():
@@ -200,33 +203,35 @@ def create_snapshot_archive(
     work.mkdir(mode=0o700)
     os.chmod(work, 0o700)
     try:
-        if stage_callback:
-            stage_callback("preparing")
-        meta = current_instance_metadata()
+        operation_fence = exclusive_instance_operation() if quiesce else nullcontext()
+        with operation_fence:
+            if stage_callback:
+                stage_callback("preparing")
+            meta = current_instance_metadata()
 
-        if stage_callback:
-            stage_callback("database_dump")
-        dump_database(work / "database.dump")
+            if stage_callback:
+                stage_callback("database_dump")
+            dump_database(work / "database.dump")
 
-        if stage_callback:
-            stage_callback("configuration")
-        _write_json(work / "configuration" / "runtime.json", _runtime_snapshot(meta))
-        workspace_members = collect_workspace_material(work)
+            if stage_callback:
+                stage_callback("configuration")
+            _write_json(work / "configuration" / "runtime.json", _runtime_snapshot(meta))
+            workspace_members = collect_workspace_material(work)
 
-        if stage_callback:
-            stage_callback("secret_material")
-        secret_members = collect_secret_material(work)
+            if stage_callback:
+                stage_callback("secret_material")
+            secret_members = collect_secret_material(work)
 
-        if stage_callback:
-            stage_callback("manifest")
-        manifest = _manifest(backup_uuid, meta)
-        manifest["workspace_files"] = len(workspace_members)
-        members = [
-            "database.dump",
-            "configuration/runtime.json",
-            *workspace_members,
-            *secret_members,
-        ]
+            if stage_callback:
+                stage_callback("manifest")
+            manifest = _manifest(backup_uuid, meta)
+            manifest["workspace_files"] = len(workspace_members)
+            members = [
+                "database.dump",
+                "configuration/runtime.json",
+                *workspace_members,
+                *secret_members,
+            ]
 
         size, archive_sha = build_archive(
             work,

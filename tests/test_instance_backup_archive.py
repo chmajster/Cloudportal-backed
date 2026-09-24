@@ -89,3 +89,29 @@ def test_archive_rejects_checksum_mismatch(tmp_path, system):
             archive.addfile(entry, io.BytesIO(data))
     with pytest.raises(ValueError, match="Checksum mismatch"):
         inspect_archive(path)
+
+def test_archive_removes_partial_file_when_build_fails(tmp_path, system, monkeypatch):
+    staging = tmp_path / "failed-build"
+    staging.mkdir()
+    (staging / "database.dump").write_bytes(b"dump")
+    (staging / "configuration").mkdir()
+    (staging / "configuration" / "runtime.json").write_text("{}")
+    (staging / "secrets").mkdir()
+    (staging / "secrets" / "master.key").write_bytes(base64.b64encode(b"k" * 32) + b"\n")
+    destination = tmp_path / "failed.cpb"
+
+    def fail_open(*args, **kwargs):
+        raise OSError("simulated archive failure")
+
+    monkeypatch.setattr("app.instance_backup.archive.tarfile.open", fail_open)
+    with pytest.raises(OSError, match="simulated archive failure"):
+        build_archive(
+            staging,
+            destination,
+            manifest(),
+            ["database.dump", "configuration/runtime.json", "secrets/master.key"],
+        )
+
+    assert not destination.exists()
+    assert not destination.with_name(destination.name + ".partial").exists()
+

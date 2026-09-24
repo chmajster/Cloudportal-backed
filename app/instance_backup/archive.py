@@ -65,24 +65,28 @@ def build_archive(
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = destination.with_name(destination.name + ".partial")
     temporary.unlink(missing_ok=True)
-    with temporary.open("xb") as raw:
-        os.chmod(temporary, 0o600)
-        with tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
-            for name in archive_names:
-                source = staging / name
-                info = tarfile.TarInfo(name=name)
-                info.size = source.stat().st_size
-                info.mode = 0o600
-                info.uid = 0
-                info.gid = 0
-                info.uname = ""
-                info.gname = ""
-                info.mtime = 0
-                with source.open("rb") as stream:
-                    archive.addfile(info, stream)
-        raw.flush()
-        os.fsync(raw.fileno())
-    os.replace(temporary, destination)
+    try:
+        with temporary.open("xb") as raw:
+            os.chmod(temporary, 0o600)
+            with tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
+                for name in archive_names:
+                    source = staging / name
+                    info = tarfile.TarInfo(name=name)
+                    info.size = source.stat().st_size
+                    info.mode = 0o600
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = ""
+                    info.gname = ""
+                    info.mtime = 0
+                    with source.open("rb") as stream:
+                        archive.addfile(info, stream)
+            raw.flush()
+            os.fsync(raw.fileno())
+        os.replace(temporary, destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
     chmod_file(destination)
     return destination.stat().st_size, sha256_file(destination)
 
