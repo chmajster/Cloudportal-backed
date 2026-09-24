@@ -22,6 +22,7 @@ class FakeContext:
         self.credential = object()
         self.ansible = None
         self.ansible_credential = None
+        self.ansible_runs = []
         self.step_deadline = None
         self.rollback_destroyed = False
         self.logs = []
@@ -162,6 +163,89 @@ def test_blueprint_resume_uses_completed_apply_checkpoint(monkeypatch, tmp_path)
     assert observed == [restored]
     assert any('provider apply checkpoint already completed' in value for value in context.logs)
     assert context.blueprint_workflow_completed is True
+
+
+def test_blueprint_runs_multiple_ansible_runbooks_in_order(monkeypatch):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'ansible', 'type': 'run_ansible_playbook', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.ansible_runs = [
+        (SimpleNamespace(playbook='bootstrap-linux', inventory=None), SimpleNamespace(id=11)),
+        (SimpleNamespace(playbook='linux-system-update', inventory=None), SimpleNamespace(id=12)),
+    ]
+    executor = FakeExecutor()
+    calls = []
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda _context, _workspace: {'external_id': '120', 'vm_id': 120, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker,
+        'wait_for_ansible_transport',
+        lambda _context, _workspace, **_kwargs: ['192.0.2.120'],
+    )
+    monkeypatch.setattr(
+        worker.AnsibleExecutor,
+        'execute',
+        lambda _executor, operation, active: calls.append(
+            (operation, active.ansible.playbook, active.ansible_credential.id)
+        ),
+    )
+
+    worker.run_blueprint_workflow(context, executor)
+
+    assert calls == [
+        ('ansible.execute', 'bootstrap-linux', 11),
+        ('ansible.execute', 'linux-system-update', 12),
+    ]
+    assert any('workflow.ansible.run.start:1/2:bootstrap-linux' in value for value in context.stages)
+    assert any('workflow.ansible.run.completed:2/2:linux-system-update' in value for value in context.stages)
+
+
+def test_blueprint_multi_runbook_resume_skips_completed_run(monkeypatch):
+    context = FakeContext([])
+    context.ansible_runs = [
+        (SimpleNamespace(playbook='bootstrap-linux', inventory=None), SimpleNamespace(id=21)),
+        (SimpleNamespace(playbook='linux-system-update', inventory=None), SimpleNamespace(id=22)),
+    ]
+    runtime = {
+        'step_states': {},
+        'plan_ready': False,
+        'plan_sha256': None,
+        'applied': True,
+        'inventory_synced': True,
+        'ansible_ran': False,
+        'ansible_completed_runs': {0},
+    }
+    calls = []
+
+    monkeypatch.setattr(
+        worker,
+        'wait_for_ansible_transport',
+        lambda _context, _workspace, **_kwargs: ['192.0.2.121'],
+    )
+    monkeypatch.setattr(
+        worker.AnsibleExecutor,
+        'execute',
+        lambda _executor, operation, active: calls.append(
+            (operation, active.ansible.playbook, active.ansible_credential.id)
+        ),
+    )
+    monkeypatch.setattr(worker, 'persist_workflow_runtime', lambda *_args: None)
+
+    addresses = worker.execute_configured_ansible(
+        context, runtime, '/tmp/workspace', addresses=['192.0.2.121']
+    )
+
+    assert addresses == ['192.0.2.121']
+    assert calls == [('ansible.execute', 'linux-system-update', 22)]
+    assert runtime['ansible_completed_runs'] == {0, 1}
+    assert runtime['ansible_ran'] is True
+    assert any('workflow.ansible.run.resumed: 1/2:bootstrap-linux' in value for value in context.logs)
 
 
 def test_blueprint_resume_does_not_repeat_completed_ansible(monkeypatch, tmp_path):
