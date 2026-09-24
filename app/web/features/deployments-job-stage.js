@@ -17,6 +17,7 @@ function workflowStepLabel(type) {
     wait_for_ip: 'Oczekiwanie na adres IP',
     wait_for_ssh: 'Oczekiwanie na SSH',
     run_ansible_playbook: 'Uruchamianie Ansible',
+    register_awx: 'Rejestracja hosta w AWX',
     create_snapshot: 'Tworzenie snapshotu',
     health_check: 'Kontrola stanu',
     release_ip: 'Zwalnianie adresu IP',
