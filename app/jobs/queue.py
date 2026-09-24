@@ -49,6 +49,16 @@ def provider_retry_ready(job):
 CANCELLATION_GRACE_SECONDS = 60
 
 
+def parallel_dispatch_capacity(db, active_rq_jobs=0):
+    parallel_limit = job_execution_settings(db)['max_parallel_jobs']
+    running_jobs = db.scalar(
+        select(func.count()).select_from(Job).where(
+            Job.status.in_(['running', 'cancelling'])
+        )
+    ) or 0
+    return max(0, parallel_limit - int(running_jobs) - int(active_rq_jobs))
+
+
 def reconcile_cancelled_jobs(db):
     threshold = now() - timedelta(seconds=CANCELLATION_GRACE_SECONDS)
     rows = db.scalars(
@@ -295,13 +305,7 @@ def _dispatch_once_unfenced():
             except NoSuchJobError:
                 job.dispatched_at = None
 
-        parallel_limit = job_execution_settings(db)['max_parallel_jobs']
-        running_jobs = db.scalar(
-            select(func.count()).select_from(Job).where(
-                Job.status.in_(['running', 'cancelling'])
-            )
-        ) or 0
-        available_slots = max(0, parallel_limit - running_jobs - len(active_rq_jobs))
+        available_slots = parallel_dispatch_capacity(db, len(active_rq_jobs))
 
         for job in jobs:
             if available_slots <= 0:
