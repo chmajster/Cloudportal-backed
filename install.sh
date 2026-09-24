@@ -282,6 +282,7 @@ mode_count=$((status_mode + uninstall_mode + check_platform + recovery_mode))
 ((purge_data == 0 || uninstall_mode == 1)) || { ui_fail '--purge-data wymaga --uninstall.'; exit 2; }
 ((assume_yes == 0 || uninstall_mode == 1)) || { ui_fail '--yes/-y ma zastosowanie tylko z --uninstall.'; exit 2; }
 ((gui == 0 || uninstall_mode == 0)) || { ui_fail '--gui/-gui nie może być użyte razem z --uninstall.'; exit 2; }
+((gui == 0 || recovery_mode == 0)) || { ui_fail '--gui/-gui nie jest obsługiwane w trybie recovery.'; exit 2; }
 ((gui == 0 || docker_mode == 0)) || { ui_fail '--gui/-gui nie jest obsługiwane w trybie --docker.'; exit 2; }
 ((docker_auto_repair_explicit == 0 || (docker_mode == 1 && status_mode == 1))) || { ui_fail '--no-auto-repair wymaga --docker --status.'; exit 2; }
 if ((recovery_mode == 0)); then
@@ -360,7 +361,7 @@ if ((status_mode == 0 || (docker_mode == 1 && status_mode == 1 && docker_auto_re
     if ((docker_mode == 1 && status_mode == 1)); then
       ui_fail 'Auto-naprawa Docker wymaga roota. Uruchom przez sudo albo użyj --no-auto-repair.'
     else
-      ui_fail 'Instalacja i deinstalacja wymagają roota. Uruchom przez sudo bash.'
+      ui_fail 'Instalacja, deinstalacja i recovery wymagają roota. Uruchom przez sudo bash.'
     fi
     exit 1
   }
