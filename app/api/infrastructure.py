@@ -22,6 +22,7 @@ from app.database import get_db
 from app.deployments.recreate import recreate_job_payload
 from app.jobs.approval import gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
+from app.jobs.force_dispatch import ForceDispatchConflict, ForceDispatchUnavailable, force_dispatch_job
 from app.quotas.service import prepare_job_reservation, release_job_reservation
 from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
@@ -700,6 +701,22 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
         create,
         required=True,
     )
+
+
+@router.post('/jobs/{id}/force-dispatch', response_model=JobOutput)
+def force_dispatch(id: str, request: Request, actor=Depends(require('jobs.force')),
+                   db=Depends(get_db, scope='function')):
+    job = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    try:
+        force_dispatch_job(db, job)
+    except ForceDispatchConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ForceDispatchUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
+    audit(db, request, 'job.force_dispatch', 'jobs', job.id)
+    return job_public(job)
 
 
 @router.get('/jobs/{id}/logs', response_model=JobLogsOutput)
