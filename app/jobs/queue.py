@@ -47,6 +47,7 @@ def provider_retry_ready(job):
 
 
 CANCELLATION_GRACE_SECONDS = 60
+STALE_JOB_HEARTBEAT_SECONDS = 180
 DISPATCH_CAPACITY_LOCK_KEY = 4850454325908757588
 
 
@@ -257,7 +258,10 @@ def reconcile_stale_jobs(db):
     rows = db.scalars(select(Job).where(
         Job.status == 'running',
         Job.cancel_requested.is_(False),
-        Job.heartbeat_at < now() - timedelta(seconds=settings().execution_timeout + 180),
+        # Heartbeats are refreshed by Context.check() during Terraform/Ansible
+        # subprocesses and workflow polling. Do not reserve a concurrency slot for
+        # an entire execution timeout after a worker has disappeared.
+        Job.heartbeat_at < now() - timedelta(seconds=STALE_JOB_HEARTBEAT_SECONDS),
     ).with_for_update(skip_locked=True)).all()
     for job in rows:
         mark_job_reservation_uncertain(db, job)
