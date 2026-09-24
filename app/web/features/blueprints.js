@@ -74,57 +74,6 @@ async function blueprintsView() {
       return result;
     }));
 }
-function jsonValue(value) { return JSON.stringify(value, null, 2); }
-function parseObject(value, label) {
-  try { const parsed = JSON.parse(value); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(); return parsed; }
-  catch { throw new Error(`${label} musi zawierać poprawny obiekt JSON.`); }
-}
-function parseArray(value, label) {
-  try { const parsed = JSON.parse(value); if (!Array.isArray(parsed)) throw new Error(); return parsed; }
-  catch { throw new Error(`${label} musi zawierać poprawną tablicę JSON.`); }
-}
-function hostnamePatternTokens(pattern) {
-  const automatic = new Set(['number', 'random', 'year']);
-  return [...new Set(Array.from(String(pattern || '').matchAll(/{([a-z]+)}/g), match => match[1]))]
-    .filter(token => !automatic.has(token));
-}
-function normalizeHostnamePattern(pattern, padding = 3) {
-  const raw = String(pattern || '').trim();
-  const runs = [...raw.matchAll(/X{1,9}/g)];
-  if (!raw.includes('{number}') && !raw.includes('{random}') && runs.length === 1) {
-    return {
-      pattern: raw.replace(runs[0][0], '{number}'),
-      padding: runs[0][0].length,
-    };
-  }
-  return { pattern: raw, padding: Number(padding || 3) };
-}
-function blueprintTags(value) {
-  return [...new Set(String(value || '').split(/[,\n]+/).map(item => item.trim().toLowerCase()).filter(Boolean))];
-}
-function setSelectChoices(select, choices, selected = '', placeholder = '') {
-  select.replaceChildren();
-  if (placeholder) select.append(node('option', { value: '', text: placeholder }));
-  choices.forEach(choice => select.append(node('option', {
-    value: choice.value,
-    text: choice.label,
-    selected: String(choice.value) === String(selected),
-  })));
-}
-function blueprintWorkflow(options) {
-  const steps = [];
-  let previous = [];
-  const add = (id, type) => {
-    const timeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
-    steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout, rollback: null });
-    previous = [id];
-  };
-  add('apply', 'terraform_apply');
-  if (options.waitAgent) add('agent', 'wait_for_agent');
-  if (options.waitAgent || options.ansible) add('guest_ip', 'wait_for_ip');
-  if (options.ansible) add('ansible', 'run_ansible_playbook');
-  return steps;
-}
 async function proxmoxBlueprintForm(item = null, options = {}) {
   if ((item?.workflow || []).some(step => step.type === 'cloud_init')) return blueprintForm(item);
   try {
@@ -356,17 +305,17 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         hydratedHostnameSchemeId = scheme.id;
       }
       const pattern = custom
-        ? normalizeHostnamePattern(
+        ? window.BlueprintFormUtils.normalizeHostnamePattern(
             newScheme.querySelector('[name="hostname_pattern"]').value,
             newScheme.querySelector('[name="hostname_padding"]').value
           ).pattern
-        : normalizeHostnamePattern(
+        : window.BlueprintFormUtils.normalizeHostnamePattern(
             existingSchemeEditor.querySelector('[name="existing_hostname_pattern"]')?.value || scheme?.pattern || '',
             existingSchemeEditor.querySelector('[name="existing_hostname_padding"]')?.value || scheme?.padding || 3
           ).pattern;
       const defaults = deployment.hostname_values || {};
       hostnameDefaults.replaceChildren();
-      const tokens = hostnamePatternTokens(pattern);
+      const tokens = window.BlueprintFormUtils.hostnamePatternTokens(pattern);
       if (!tokens.length) {
         hostnameDefaults.append(node('div', { class: 'field-help wide', text: 'Pattern używa wyłącznie automatycznych tokenów {number}/{random}/{year}.' }));
       } else {
@@ -394,12 +343,12 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         site: 'dc1',
       }[token] || token);
       const previewHostname = (rawPattern, rawPadding, nextNumber = 1) => {
-        const normalized = normalizeHostnamePattern(rawPattern, rawPadding);
+        const normalized = window.BlueprintFormUtils.normalizeHostnamePattern(rawPattern, rawPadding);
         let preview = String(normalized.pattern || '')
           .replaceAll('{year}', String(new Date().getFullYear()))
           .replaceAll('{random}', 'a1b2')
           .replaceAll('{number}', String(nextNumber).padStart(Number(normalized.padding || 3), '0'));
-        hostnamePatternTokens(normalized.pattern).forEach(token => {
+        window.BlueprintFormUtils.hostnamePatternTokens(normalized.pattern).forEach(token => {
           preview = preview.replaceAll('{' + token + '}', sampleValue(token));
         });
         return preview.toLowerCase();
@@ -435,7 +384,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       if (playbook) {
         const allowedType = playbook.transport;
         const matching = credentials.filter(value => value.type === allowedType);
-        setSelectChoices(
+        window.BlueprintFormUtils.setSelectChoices(
           ansibleCredentialSelect,
           matching.map(value => ({ value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')' })),
           deployment.ansible?.credentials_id || '',
@@ -448,11 +397,11 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const options = {
         hostname: Boolean(schemeSelect.value),
         ipam: ipModeSelect.value === 'ipam',
-        tags: window.BlueprintProvisioningGuards.workflowNeedsTags(blueprintTags(fields.querySelector('[name="tags"]')?.value), deployment),
+        tags: window.BlueprintProvisioningGuards.workflowNeedsTags(window.BlueprintFormUtils.blueprintTags(fields.querySelector('[name="tags"]')?.value), deployment),
         waitAgent: Boolean(fields.querySelector('[name="wait_agent"]')?.checked),
         ansible: Boolean(playbookSelect.value),
       };
-      const steps = blueprintWorkflow(options);
+      const steps = window.BlueprintFormUtils.blueprintWorkflow(options);
       workflowPreview.replaceChildren(...steps.flatMap((step, index) => {
         const card = node('div', { class: 'workflow-preview-card' },
           node('span', { class: 'workflow-dag-index', text: String(index + 1) }),
@@ -478,14 +427,14 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const snippetState = window.BlueprintProvisioningGuards.selectSnippetStorage(availableStorages, cloudInitSnippetStorage);
       cloudInitSnippetStorage = snippetState.storage;
       window.BlueprintProvisioningGuards.syncQemuGuestAgentInstallControl(fields.querySelector('[name="install_qemu_guest_agent"]'), snippetState.snippets, qemuReadiness);
-      setSelectChoices(
+      window.BlueprintFormUtils.setSelectChoices(
         storageSelect,
         storages.map(value => ({ value: value.storage, label: value.storage + (value.type ? ' [' + value.type + ']' : '') })),
         variables.storage || storageSelect.value,
         'Wybierz storage'
       );
       const networks = networkResult.items.filter(value => value.iface);
-      setSelectChoices(
+      window.BlueprintFormUtils.setSelectChoices(
         networkSelect,
         networks.map(value => ({ value: value.iface, label: value.iface + (value.type ? ' [' + value.type + ']' : '') })),
         variables.network || networkSelect.value || 'vmbr0',
@@ -499,7 +448,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         api('/providers/' + providerId + '/templates'),
       ]);
       templateRows = templateResult.items;
-      setSelectChoices(
+      window.BlueprintFormUtils.setSelectChoices(
         nodeSelect,
         nodeResult.items.map(value => ({ value: value.node, label: value.node })),
         variables.node || nodeSelect.value,
@@ -508,7 +457,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       const currentImage = variables.template_id
         ? String(variables.template_node || '') + '|' + String(variables.template_id)
         : '';
-      setSelectChoices(
+      window.BlueprintFormUtils.setSelectChoices(
         imageSelect,
         templateRows.map(value => ({
           value: String(value.node || '') + '|' + String(value.vmid),
@@ -551,7 +500,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         let schemeId = data.get('hostname_scheme_id');
         let selectedPattern = '';
         if (schemeId === '__new__') {
-          const normalized = normalizeHostnamePattern(
+          const normalized = window.BlueprintFormUtils.normalizeHostnamePattern(
             data.get('hostname_pattern'),
             data.get('hostname_padding')
           );
@@ -570,7 +519,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         } else {
           const selectedScheme = schemes.find(value => String(value.id) === String(schemeId));
           if (!selectedScheme) throw new Error('Wybrany schemat hostname nie istnieje.');
-          const normalized = normalizeHostnamePattern(
+          const normalized = window.BlueprintFormUtils.normalizeHostnamePattern(
             data.get('existing_hostname_pattern') || selectedScheme.pattern,
             data.get('existing_hostname_padding') || selectedScheme.padding
           );
@@ -595,7 +544,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           }
         }
         const hostnameValues = {};
-        hostnamePatternTokens(selectedPattern).forEach(token => {
+        window.BlueprintFormUtils.hostnamePatternTokens(selectedPattern).forEach(token => {
           const value = form.elements['hostname_token_' + token]?.value.trim();
           if (value) hostnameValues[token] = value;
         });
@@ -603,7 +552,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         const templateNode = image[0];
         const templateId = Number(image[1]);
         if (!templateId) throw new Error('Wybierz obraz/template Proxmox.');
-        const tags = blueprintTags(data.get('tags'));
+        const tags = window.BlueprintFormUtils.blueprintTags(data.get('tags'));
         const directGuestPassword = String(data.get('ssh_password') || '');
         const selectedGuestCredentialId = data.get('guest_credential_id')
           ? Number(data.get('guest_credential_id'))
@@ -654,7 +603,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             ansible.variables.hostname = '{{ hostname }}';
           }
         }
-        const workflow = blueprintWorkflow({
+        const workflow = window.BlueprintFormUtils.blueprintWorkflow({
           hostname: Boolean(schemeId),
           ipam: mode === 'ipam',
           tags: window.BlueprintProvisioningGuards.workflowNeedsTags(tags, deployment),
@@ -925,7 +874,7 @@ async function blueprintForm(item = null) {
           field('Limit czasu (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
           field('Krok cofania — ID (opcjonalnie)', 'workflow_rollback', { value: step.rollback || '' }),
           field('Warunki — JSON (opcjonalnie)', 'workflow_conditions', {
-            tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? jsonValue(step.conditions) : '',
+            tag: 'textarea', wide: true, value: Object.keys(step.conditions || {}).length ? window.BlueprintFormUtils.jsonValue(step.conditions) : '',
             help: 'Zaawansowane warunki wykonania kroku.',
           })));
       const row = node('div', { class: 'editor-card workflow-editor-card', 'data-workflow-row': String(workflowCounter) });
@@ -1266,7 +1215,7 @@ async function blueprintForm(item = null) {
             retry: Number(row.querySelector('[name="workflow_retry"]').value || 0),
             timeout: Number(row.querySelector('[name="workflow_timeout"]').value || 600),
             conditions: row.querySelector('[name="workflow_conditions"]').value.trim()
-              ? parseObject(row.querySelector('[name="workflow_conditions"]').value, 'Warunki kroku')
+              ? window.BlueprintFormUtils.parseObject(row.querySelector('[name="workflow_conditions"]').value, 'Warunki kroku')
               : {},
           };
           const rollback = row.querySelector('[name="workflow_rollback"]').value.trim();
