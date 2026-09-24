@@ -164,6 +164,11 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         pool = find(db, IPPool, data.deployment.ipam_pool_id)
         if not pool.is_active:
             raise HTTPException(422, 'Blueprint IPAM pool must be active')
+    if data.deployment.guest_account_mode == 'existing_template':
+        if not data.deployment.guest_credential_id:
+            raise HTTPException(422, 'Existing template account mode requires a guest SSH credential')
+        if 'cloud_init' not in workflow_types:
+            raise HTTPException(422, 'Existing template account mode requires an explicit cloud_init workflow step')
     if data.deployment.guest_credential_id:
         if data.deployment.template != 'proxmox-vm':
             raise HTTPException(422, 'Guest credential injection is currently supported only for proxmox-vm')
