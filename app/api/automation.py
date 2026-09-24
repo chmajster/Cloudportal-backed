@@ -17,7 +17,7 @@ from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
-from app.projects.authorization import visible_projects
+from app.projects.authorization import effective_permissions as project_effective_permissions, visible_projects
 from app.projects.models import Project
 from app.security.core import audit, authenticate
 from app.tenancy.authorization import Principal, identity as scoped_identity
@@ -281,6 +281,7 @@ def blueprint_creation_scopes(limit: Limit = 200, offset: Offset = 0,
         'project_id': project.id,
         'project_name': project.name,
         'project_slug': project.slug,
+        'permissions': sorted(project_effective_permissions(db, identity, project)[0]),
     } for project, tenant in rows]}
 
 
