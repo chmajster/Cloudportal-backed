@@ -33,7 +33,9 @@
   function validate(state) {
     const errors = {};
     if (!enabled(state)) return errors;
-    if (state.guestAccountMode === 'existing_template' && !state.guestCredentialId) {
+    if (state.guestAccountMode === 'existing_template'
+        && !state.guestCredentialId
+        && !state.templateGuestCredentialId) {
       errors.guest_credential_id = 'Wybierz dane dostępowe SSH dla konta istniejącego w template.';
     }
     if (!state.advancedWorkflow) return errors;
@@ -57,11 +59,18 @@
 
   function preview(state, credentials) {
     const credential = credentials.find(row => String(row.id) === String(state.guestCredentialId));
-    const username = credential?.username || state.sshUsername || 'clouduser';
+    const templateCredential = credentials.find(row =>
+      String(row.id) === String(state.templateGuestCredentialId));
+    const username = (state.guestAccountMode === 'existing_template' ? templateCredential?.username : null)
+      || credential?.username || state.sshUsername || 'clouduser';
     const existingAccount = state.guestAccountMode === 'existing_template';
     const text = [
       '#cloud-config',
       '# Podgląd bez sekretów. Pełną konfigurację przygotuje worker.',
+      ...(templateCredential && !existingAccount ? [
+        '# Istniejące konto z template do późniejszego dostępu SSH: ' + templateCredential.username,
+        '# Cloud-init nie modyfikuje tego konta, chyba że wybrano je także jako konto zarządzane.',
+      ] : []),
       ...(existingAccount ? [
         '# Konto ' + JSON.stringify(username) + ' już istnieje w template.',
         '# Cloud-init nie utworzy użytkownika, nie zmieni jego hasła, kluczy SSH ani sudo.',
@@ -122,19 +131,28 @@
       rerender();
     });
     const choices = window.BlueprintProvisioningGuards.guestCredentialChoices(data.credentials || []);
+    const templateCredential = (data.credentials || []).find(row =>
+      String(row.id) === String(state.templateGuestCredentialId));
+    if (templateCredential) {
+      panel.append(node('div', { class: 'blueprint-wizard-info' },
+        node('strong', { text: 'Konto istniejące w template: ' + (templateCredential.username || templateCredential.name) }),
+        node('span', { text: 'Ten Credential może być używany przez uwierzytelnione kroki SSH i dalszą automatyzację. Cloud-init zachowa to konto, dopóki nie wybierzesz go jawnie jako konta zarządzanego.' })));
+    }
     const credential = selectField(
       state.guestAccountMode === 'existing_template'
         ? 'Dane dostępowe do istniejącego konta'
         : 'Użytkownik, hasło lub klucz z Dostępów',
       'cloud_init_guest_credential_id',
       state.guestAccountMode === 'existing_template'
-        ? [{ value: '', label: 'Wybierz konto istniejące w template' }, ...choices]
+        ? [{ value: '', label: state.templateGuestCredentialId
+            ? 'Użyj Credentiala istniejącego konta wybranego wcześniej'
+            : 'Wybierz konto istniejące w template' }, ...choices]
         : [{ value: '', label: 'Użytkownik i klucz publiczny z parametrów VM' }, ...choices],
       state.guestCredentialId,
       {
         wide: true,
         help: state.guestAccountMode === 'existing_template'
-          ? 'Username credentiala musi odpowiadać kontu już obecnemu w template. Cloud-init go nie modyfikuje; credential zostaje przypisany do wykonania kolejnych etapów.'
+          ? 'Username credentiala musi odpowiadać kontu już obecnemu w template. Możesz użyć Credentiala wybranego wcześniej jako istniejące konto lokalne albo wskazać go tutaj. Cloud-init go nie modyfikuje.'
           : 'Zapisujemy wyłącznie ID dostępu. Hasło ani klucz prywatny nie są pobierane do przeglądarki.',
       },
     );
