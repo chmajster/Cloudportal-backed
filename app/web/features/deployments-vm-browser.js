@@ -156,6 +156,7 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
   }
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
+  const createdAt = deployment?.created_at || item.created_at || '';
   const canRecreate = item.management_mode === 'terraform'
     && item.deployment_id
     && deployment?.status !== 'reconciliation_required'
@@ -187,6 +188,12 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       metadata.environment ? node('span', { text: 'ENV: ' + metadata.environment.toUpperCase() }) : null,
       metadata.owner && metadata.owner !== '—' ? node('span', { text: 'Właściciel: ' + metadata.owner }) : null,
       metadata.project && metadata.project !== '—' ? node('span', { text: 'Projekt: ' + metadata.project }) : null),
+    node('div', { class: 'my-resource-card-created' },
+      node('span', { class: 'my-resource-card-created-label', text: 'Data utworzenia' }),
+      node('span', {
+        class: 'my-resource-card-created-value',
+        text: createdAt ? formatDate(createdAt) : '—',
+      })),
     actions.length
       ? node('div', { class: 'my-resource-card-actions' }, ...actions)
       : node('small', { class: 'muted', text: 'Brak uprawnień do sterowania tą VM.' }));
@@ -346,13 +353,21 @@ function createVmBrowser({
       meta,
       () => vmBulkControls?.sync(),
     )));
+    const listHeader = myResourcesVmUi.view === 'list'
+      ? node('div', { class: 'my-resources-vm-list-header', 'aria-hidden': 'true' },
+        node('span', { text: 'Maszyna' }),
+        node('span', { text: 'Informacje' }),
+        node('span', { text: 'Data utworzenia' }),
+        node('span', { class: 'my-resources-vm-list-header-actions', text: 'Akcje' }))
+      : null;
     vmBulkControls = window.vmBulkActions?.toolbar(
       filtered.map(entry => entry.item),
       grid,
       () => typeof onRefresh === 'function' ? onRefresh() : undefined
     ) || null;
-    if (vmBulkControls) results.replaceChildren(vmBulkControls.element, grid);
-    else results.replaceChildren(grid);
+    const renderedContent = listHeader ? [listHeader, grid] : [grid];
+    if (vmBulkControls) results.replaceChildren(vmBulkControls.element, ...renderedContent);
+    else results.replaceChildren(...renderedContent);
   }
 
   search.addEventListener('input', () => {
