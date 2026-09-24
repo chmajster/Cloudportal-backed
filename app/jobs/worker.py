@@ -11,6 +11,9 @@ import ipaddress
 
 WAIT_FOR_IP_MAX_SECONDS = 180
 WAIT_FOR_IP_POLL_SECONDS = 10
+WAIT_FOR_AGENT_PROVIDER_RETRIES = 3
+WAIT_FOR_AGENT_PROVIDER_RETRY_SECONDS = 10
+WAIT_FOR_AGENT_POLL_SECONDS = 2
 
 import paramiko
 from datetime import timedelta
@@ -383,14 +386,39 @@ def wait_for_agent(context, workspace, timeout=600):
     context.stage('workflow.wait_for_agent')
     deadline = time.monotonic() + timeout
     last_error = None
+    provider_retries = 0
     while time.monotonic() < deadline:
         context.check()
         try:
             if provider.guest_agent_ready(node, vm_id):
                 return True
+            # A successful API request means Proxmox is reachable. Retry limits below
+            # apply only to consecutive provider/API failures, not to a guest agent
+            # which is still starting inside the VM.
+            provider_retries = 0
         except Exception as error:
-            last_error = _log_wait_error(context, 'workflow.wait_for_agent', error, last_error)
-        time.sleep(2)
+            last_error = _safe_wait_error(error)
+            if provider_retries >= WAIT_FOR_AGENT_PROVIDER_RETRIES:
+                raise ExecutionFailed(
+                    'QEMU Guest Agent check failed after '
+                    f'{WAIT_FOR_AGENT_PROVIDER_RETRIES} retries; '
+                    f'last provider error: {last_error}'
+                ) from None
+            provider_retries += 1
+            remaining = max(0.0, deadline - time.monotonic())
+            delay = min(WAIT_FOR_AGENT_PROVIDER_RETRY_SECONDS, remaining)
+            context.log(
+                'workflow.wait_for_agent.retry: '
+                f'attempt={provider_retries}/{WAIT_FOR_AGENT_PROVIDER_RETRIES} '
+                f'delay={int(delay)}s error={last_error}'
+            )
+            if delay:
+                time.sleep(delay)
+            continue
+
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining:
+            time.sleep(min(WAIT_FOR_AGENT_POLL_SECONDS, remaining))
     suffix = f'; last provider error: {last_error}' if last_error else ''
     raise ExecutionFailed('Timed out waiting for QEMU Guest Agent' + suffix)
 
