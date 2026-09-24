@@ -182,6 +182,51 @@ def test_dispatcher_terminal_outcome_updates_action(resource):
         assert db.get(Day2ResourceLock, resource[2]) is None
 
 
+def test_day2_rejects_disabled_custom_ansible_playbook(resource):
+    client, headers, _vm, _fake = resource
+    playbook = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json={
+        'id': 'day2-custom-disabled',
+        'name': 'Day2 custom disabled',
+        'category': 'Własne',
+        'transport': 'ssh',
+        'variables': {},
+        'wait_for_connection': False,
+        'validate_after': False,
+        'content': (
+            '- name: Day2 custom\n'
+            '  hosts: all\n'
+            '  gather_facts: false\n'
+            '  tasks:\n'
+            '    - ansible.builtin.debug:\n'
+            '        msg: "ok"\n'
+        ),
+    })
+    assert playbook.status_code == 201, playbook.text
+    disabled = client.put(
+        '/api/v1/ansible/custom-playbooks/day2-custom-disabled/enabled',
+        headers=headers,
+        json={'enabled': False},
+    )
+    assert disabled.status_code == 200, disabled.text
+
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Day2 guest SSH',
+        'type': 'ssh',
+        'endpoint': 'ssh://192.0.2.90:22',
+        'username': 'clouduser',
+        'secrets': {'password': 'day2-custom-password'},
+    })
+    assert guest.status_code == 201, guest.text
+
+    response = submit(
+        resource,
+        action='run_ansible',
+        params={'playbook': 'day2-custom-disabled', 'credential_id': guest.json()['id']},
+    )
+    assert response.status_code == 422, response.text
+    assert 'enabled playbooks' in response.text
+
+
 def test_foreign_resource_and_schema_rejected(resource):
     client, admin, vm, _ = resource
     _, h = new_user(client, admin, 'day2-foreign', ['day2.view', 'day2.power'])
