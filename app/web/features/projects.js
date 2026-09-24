@@ -192,8 +192,10 @@
       if (current !== generation || state.view !== 'projects') return;
       for (const role of page.items) if (!rendered.has(role.id)) {
         const existingFallback = roles.querySelector('[data-role-id="' + role.id + '"]');
+        const checked = existingFallback?.querySelector('input[type="checkbox"]')?.checked
+          ?? selected.has(role.id);
         if (existingFallback) existingFallback.remove();
-        const option = scopedRoleOption(role, selected.has(role.id));
+        const option = scopedRoleOption(role, checked);
         option.dataset.roleId = String(role.id);
         roles.append(option);
         rendered.add(role.id);
