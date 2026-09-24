@@ -227,6 +227,7 @@ function emptyVmState(title, description) {
 
 function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSelectionChange = null, onRefresh = null) {
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
+  const createdAt = deployment?.created_at || item.created_at || '';
   const provisioningJob = item.provisioning_job || null;
   const provisioningVisible = Boolean(
     item.provisioning_placeholder
@@ -319,6 +320,12 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       metadata.environment ? node('span', { text: 'ENV: ' + metadata.environment.toUpperCase() }) : null,
       metadata.owner && metadata.owner !== '—' ? node('span', { text: 'Właściciel: ' + metadata.owner }) : null,
       metadata.project && metadata.project !== '—' ? node('span', { text: 'Projekt: ' + metadata.project }) : null),
+    node('div', { class: 'my-resource-card-created' },
+      node('span', { class: 'my-resource-card-created-label', text: 'Data utworzenia' }),
+      node('span', {
+        class: 'my-resource-card-created-value',
+        text: createdAt ? formatDate(createdAt) : '—',
+      })),
     provisioningVisible ? node('div', { class: 'my-resource-provisioning-state' },
       node('div', { class: 'my-resource-provisioning-head' },
         node('strong', { text: 'Komentarz: Provisioning' }),
@@ -496,14 +503,22 @@ function createVmBrowser({
       () => vmBulkControls?.sync(),
       onRefresh,
     )));
+    const listHeader = myResourcesVmUi.view === 'list'
+      ? node('div', { class: 'my-resources-vm-list-header', 'aria-hidden': 'true' },
+        node('span', { text: 'Maszyna' }),
+        node('span', { text: 'Informacje' }),
+        node('span', { text: 'Data utworzenia' }),
+        node('span', { class: 'my-resources-vm-list-header-actions', text: 'Akcje' }))
+      : null;
     const bulkItems = filtered.map(entry => entry.item).filter(item => !item.provisioning_placeholder);
     vmBulkControls = bulkItems.length ? (window.vmBulkActions?.toolbar(
       bulkItems,
       grid,
       () => typeof onRefresh === 'function' ? onRefresh() : undefined
     ) || null) : null;
-    if (vmBulkControls) results.replaceChildren(vmBulkControls.element, grid);
-    else results.replaceChildren(grid);
+    const renderedContent = listHeader ? [listHeader, grid] : [grid];
+    if (vmBulkControls) results.replaceChildren(vmBulkControls.element, ...renderedContent);
+    else results.replaceChildren(...renderedContent);
   }
 
   search.addEventListener('input', () => {
