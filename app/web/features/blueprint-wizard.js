@@ -344,12 +344,13 @@
               if (rawConditions) {
                 try { conditions = JSON.parse(rawConditions); } catch { conditions = { __invalid: rawConditions }; }
               }
+              const type = row.querySelector('[name="workflow_type"]').value;
               return {
                 id: row.querySelector('[name="workflow_id"]').value.trim(),
-                type: row.querySelector('[name="workflow_type"]').value,
+                type,
                 depends_on: row.querySelector('[name="workflow_depends"]').value.split(',').map(value => value.trim()).filter(Boolean),
                 retry: Number(row.querySelector('[name="workflow_retry"]').value || 0),
-                timeout: Number(row.querySelector('[name="workflow_timeout"]').value || 600),
+                timeout: Number(row.querySelector('[name="workflow_timeout"]').value || (type === 'wait_for_ip' ? 180 : 600)),
                 rollback: row.querySelector('[name="workflow_rollback"]').value.trim() || null,
                 conditions,
               };
@@ -1016,7 +1017,7 @@
               step.type, { required: true }),
             field('Zależy od (ID, po przecinku)', 'workflow_depends', { value: (step.depends_on || []).join(', ') }),
             field('Retry', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
-            field('Timeout (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? 600 }),
+            field('Timeout (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? (step.type === 'wait_for_ip' ? 180 : 600) }),
             field('Rollback (ID kroku)', 'workflow_rollback', { value: step.rollback || '' }),
             field('Conditions (JSON)', 'workflow_conditions', {
               tag: 'textarea', wide: true, value: JSON.stringify(step.conditions || {}, null, 2),
