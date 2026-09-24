@@ -76,3 +76,43 @@ def test_register_host_is_metadata_driven_and_groups_are_automatic():
     }
     assert client.groups == [(42, 'env-prod'), (42, 'apmid-leo')]
     assert client.memberships == [(201, 101), (202, 101)]
+
+
+
+class FakeRemovalAwxClient(AwxClient):
+    def __init__(self):
+        self.deleted = []
+
+    def list_resource(self, resource, *, params=None):
+        if resource == 'inventories':
+            return [{'id': 42, 'name': 'CloudPortal'}]
+        if resource == 'hosts':
+            return [
+                {'id': 101, 'name': 'srv001'},
+                {'id': 102, 'name': 'another-host'},
+            ]
+        return []
+
+    def request(self, method, path, **kwargs):
+        assert method == 'DELETE'
+        self.deleted.append(path)
+
+        class Response:
+            @staticmethod
+            def json():
+                return {}
+
+        return Response()
+
+
+def test_remove_host_deletes_only_matching_host_without_creating_inventory():
+    client = FakeRemovalAwxClient()
+
+    result = client.remove_host(hostname='srv001', inventory_name='CloudPortal')
+
+    assert result == {
+        'removed': True,
+        'host_ids': [101],
+        'inventory_id': 42,
+    }
+    assert client.deleted == ['hosts/101/']
