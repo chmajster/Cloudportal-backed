@@ -44,6 +44,10 @@ class BlueprintExecutionSettingsOutput(Output):
     approval_timeout_hours: int
 
 
+class JobExecutionSettingsOutput(Output):
+    max_parallel_jobs: int
+
+
 class LDAPSettingsOutput(Output):
     enabled: bool
     url: str
