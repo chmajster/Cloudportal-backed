@@ -1160,12 +1160,26 @@ async function jobsView() {
 
 async function runStandaloneAnsible(initialPlaybookId = null) {
   try {
-    const [playbookResult, credentialResult] = await Promise.all([
+    const canSelectManagedVms = allowed('inventory.read');
+    const [playbookResult, credentialResult, vmResult, resourceResult] = await Promise.all([
       api('/ansible/playbooks'),
       api('/credentials?limit=200'),
+      canSelectManagedVms ? api('/inventory/vms?lifecycle_status=active&limit=200') : Promise.resolve({ items: [] }),
+      canSelectManagedVms ? api('/inventory/resources?lifecycle_status=active&limit=200') : Promise.resolve({ items: [] }),
     ]);
     const playbooks = playbookResult.items.filter(item => item.enabled !== false);
     const credentials = credentialResult.items;
+    const vmResourcesByDeployment = new Map(
+      (resourceResult.items || [])
+        .filter(item => item.resource_type === 'vm' && item.deployment_id)
+        .map(item => [item.deployment_id, item])
+    );
+    const managedVmTargets = (vmResult.items || [])
+      .map(vm => ({
+        ...vm,
+        target_address: vm.deployment_id ? (vmResourcesByDeployment.get(vm.deployment_id)?.primary_ip || '') : '',
+      }))
+      .sort((a, b) => String(a.name || a.vm_id).localeCompare(String(b.name || b.vm_id), 'pl'));
     if (!playbooks.length) throw new Error('Katalog nie zawiera aktywnych playbooków Ansible.');
 
     const categories = [...new Set(playbooks.map(playbook => playbook.category || 'Inne'))].sort((a, b) => a.localeCompare(b));
@@ -1178,20 +1192,73 @@ async function runStandaloneAnsible(initialPlaybookId = null) {
     const playbookSelect = playbookField.querySelector('select');
     const playbookPreview = createAnsiblePlaybookPreview(playbookSelect);
     const credentialField = selectField('Dane dostępowe hosta', 'credentials_id', [], '', { required: true });
+    const hostsField = field('Adresy IP hostów', 'hosts', {
+      tag: 'textarea',
+      required: true,
+      wide: true,
+      placeholder: '10.0.0.10\n10.0.0.11',
+      help: 'Wybierz VM powyżej albo wpisz adres IPv4/IPv6 ręcznie. Jeden adres w wierszu lub adresy oddzielone przecinkami.',
+    });
+    const hostsInput = hostsField.querySelector('textarea');
+    let selectedVmAddresses = new Set();
+
+    const vmTargetSelect = node('select', {
+      name: 'managed_vm_targets',
+      multiple: true,
+      size: Math.min(7, Math.max(3, managedVmTargets.length || 3)),
+      disabled: !managedVmTargets.length,
+    });
+    if (!managedVmTargets.length) {
+      vmTargetSelect.append(node('option', {
+        value: '',
+        text: canSelectManagedVms ? 'Brak aktywnych VM w Twoim zakresie dostępu' : 'Brak uprawnienia inventory.read',
+        disabled: true,
+      }));
+    } else {
+      managedVmTargets.forEach(vm => {
+        const address = vm.target_address;
+        vmTargetSelect.append(node('option', {
+          value: vm.id,
+          text: [
+            vm.name || ('VM ' + vm.vm_id),
+            address || 'brak znanego IP',
+            (vm.node || '—') + ' / VMID ' + vm.vm_id,
+          ].join(' · '),
+          disabled: !address,
+          'data-address': address || null,
+        }));
+      });
+    }
+
+    const vmTargetField = node('label', { class: 'wide' },
+      formFieldLabel('VM z Moich zasobów', false),
+      vmTargetSelect,
+      node('span', {
+        class: 'field-help',
+        text: canSelectManagedVms
+          ? 'Możesz zaznaczyć wiele VM. Lista respektuje Twój zakres RBAC. VM bez znanego adresu IP są wyszarzone.'
+          : 'Wybór VM wymaga uprawnienia inventory.read. Adres IP nadal możesz podać ręcznie.',
+      }));
+
+    vmTargetSelect.addEventListener('change', () => {
+      const manualHosts = splitValues(hostsInput.value).filter(address => !selectedVmAddresses.has(address));
+      selectedVmAddresses = new Set(
+        Array.from(vmTargetSelect.selectedOptions)
+          .map(option => option.dataset.address)
+          .filter(Boolean)
+      );
+      hostsInput.value = [...new Set([...selectedVmAddresses, ...manualHosts])].join('\n');
+    });
+
     const variables = node('div', { class: 'form-grid wide' });
     const fields = node('div', { class: 'form-grid' },
       formSection('Playbook', 'Wybierz zatwierdzoną operację, którą backend uruchomi na zdalnej VM.',
         node('div', { class: 'form-grid' }, categoryField, playbookField, playbookInfo, playbookPreview.actions, playbookPreview.panel)),
-      formSection('Cel', 'Podaj adresy IP hostów, na których ma zostać uruchomiony zatwierdzony playbook.',
+      formSection('Cel', 'Wybierz dostępne VM lub podaj adresy IP hostów, na których ma zostać uruchomiony zatwierdzony playbook.',
         node('div', { class: 'form-grid' },
           credentialField,
-          field('Adresy IP hostów', 'hosts', {
-            tag: 'textarea',
-            required: true,
-            wide: true,
-            placeholder: '10.0.0.10\n10.0.0.11',
-            help: 'Jeden adres IPv4/IPv6 w wierszu lub adresy oddzielone przecinkami.',
-          }))),
+          vmTargetField,
+          hostsField)),
       formSection('Zmienne playbooka', 'Puste pola opcjonalne nie są wysyłane.', variables));
 
     const categorySelect = categoryField.querySelector('select');
