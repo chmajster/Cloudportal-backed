@@ -1138,7 +1138,7 @@
           ['Blueprint', [
             ['Nazwa', state.name],
             ['Slug', state.slug],
-            ['Tenant', blueprintScope.tenantLabel(state.tenantId)],
+            ['Organizacja', blueprintScope.tenantLabel(state.tenantId)],
             ['Projekt', blueprintScope.projectLabel(state.projectId)],
             ['Opis', state.description || '—'],
           ]],
@@ -1211,7 +1211,7 @@
 
       function renderStepBody() {
         const descriptions = [
-          'Nadaj Blueprintowi czytelną nazwę i opis. Szczegóły techniczne są ukryte.',
+          'Wybierz organizację i projekt, a następnie nadaj Blueprintowi nazwę i opis. Lista zakresów wynika z RBAC.',
           'Wybierz provider, node i bazowy obraz VM. Credentials są pobierane z providera.',
           'Ustaw wielkość VM. Presety aktualizują CPU, RAM i dysk jednym kliknięciem.',
           'Wybierz sposób automatycznego nadawania nazw hostów.',
