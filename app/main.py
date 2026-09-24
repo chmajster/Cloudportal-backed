@@ -82,7 +82,9 @@ async def boundary(request: Request, call_next):
                     body.append(chunk)
                 else:
                     request._body = b''.join(body)
-                    if request.url.path not in {'/api/v1/health', '/docs', '/openapi.json'}:
+                    # Rate-limit API traffic only. Static UI assets must not consume
+                    # the API quota because a single page load may request many files.
+                    if request.url.path.startswith('/api/') and request.url.path != '/api/v1/health':
                         from fastapi import HTTPException
                         try:
                             await run_in_threadpool(throttle, 'api:' + (request.client.host if request.client else ''), settings().request_limit, 60)
