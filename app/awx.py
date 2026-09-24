@@ -125,11 +125,23 @@ class AwxClient:
         query = {'page_size': 200}
         if params:
             query.update(params)
-        payload = self.request('GET', resource.rstrip('/') + '/', params=query).json()
-        if isinstance(payload, dict):
-            rows = payload.get('results') or []
-            return [row for row in rows if isinstance(row, dict)]
-        return []
+        rows = []
+        page = 1
+        while page <= 100:
+            page_query = dict(query)
+            page_query['page'] = page
+            payload = self.request(
+                'GET',
+                resource.rstrip('/') + '/',
+                params=page_query,
+            ).json()
+            if not isinstance(payload, dict):
+                break
+            rows.extend(row for row in (payload.get('results') or []) if isinstance(row, dict))
+            if not payload.get('next'):
+                break
+            page += 1
+        return rows
 
     def current_user(self) -> dict:
         payload = self.request('GET', 'me/').json()
@@ -251,7 +263,6 @@ class AwxClient:
         if existing:
             return existing[0]
 
-        inventories = self.list_resource('inventories')
         target_organization_id = selected_organization_id or self._organization_for_inventory()
         try:
             data = self.request('POST', 'inventories/', json={
@@ -262,14 +273,12 @@ class AwxClient:
             if isinstance(data, dict) and data.get('id'):
                 return data
         except AwxError:
-            fallback = inventories
-            if selected_organization_id:
-                fallback = [
-                    row for row in inventories
-                    if int(row.get('organization') or 0) == selected_organization_id
-                ]
-            if len(fallback) == 1:
-                return fallback[0]
+            # Never silently redirect onboarding into an unrelated inventory just
+            # because it is currently the only visible one.
+            retry = {'name': name, 'organization': target_organization_id}
+            matches = self.list_resource('inventories', params=retry)
+            if matches:
+                return matches[0]
             raise
         raise AwxError('AWX inventory creation did not return an inventory')
 
