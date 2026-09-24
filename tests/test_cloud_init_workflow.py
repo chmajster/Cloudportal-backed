@@ -174,6 +174,7 @@ console.log(JSON.stringify({enabled:state.awxEnabled, cloudInit:state.cloudInitE
     assert [step['type'] for step in result['steps']] == [
         'cloud_init', 'terraform_apply', 'wait_for_ip', 'register_awx',
     ]
+    assert result['steps'][-2]['timeout'] == 180
     assert result['steps'][-1]['depends_on'] == [result['steps'][-2]['id']]
 
 
