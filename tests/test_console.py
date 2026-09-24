@@ -32,7 +32,9 @@ def test_console_session_is_ephemeral_proxied_and_rbac_protected(client, headers
     assert response.status_code == 200, response.text
     body = response.json()
     assert body['mode'] == 'novnc'
-    assert body['rfb_module'] == '/ui/vendor/novnc/core/rfb.js'
+    assert body['rfb_module'].startswith('/api/v1/console-sessions/')
+    assert body['rfb_module'].endswith('/novnc/core/rfb.js')
+    assert body['local_rfb_module'] == '/ui/vendor/novnc/core/rfb.js'
     assert body['ws_path'].startswith('/api/v1/console-sessions/')
     assert body['ws_path'].endswith('/websocket')
     assert body['password'] == 'ephemeral-rfb-password'
@@ -43,12 +45,17 @@ def test_console_session_is_ephemeral_proxied_and_rbac_protected(client, headers
     assert response.headers['Cache-Control'] == 'no-store'
     assert credential['secret'] == '********'
 
-    asset = client.get(body['rfb_module'])
-    assert asset.status_code == 200, asset.text
-    assert b'export default class RFB' in asset.content
-    assert asset.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
-    assert asset.headers['X-Content-Type-Options'] == 'nosniff'
-    assert asset.headers['Cache-Control'] == 'no-store'
+    legacy_asset = client.get(body['rfb_module'])
+    assert legacy_asset.status_code == 200, legacy_asset.text
+    assert legacy_asset.content == b'export default class RFB {}'
+    assert legacy_asset.headers['content-type'].startswith('text/javascript')
+    assert legacy_asset.headers['X-Content-Type-Options'] == 'nosniff'
+    assert legacy_asset.headers['Cache-Control'] == 'no-store'
+
+    local_asset = client.get(body['local_rfb_module'])
+    assert local_asset.status_code == 200, local_asset.text
+    assert b'export default class RFB' in local_asset.content
+    assert local_asset.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
 
     _, reader = new_user(client, headers, username='console-reader', permissions=['vms.read'])
     denied = client.post(base, headers=reader)

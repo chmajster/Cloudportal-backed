@@ -83,7 +83,8 @@ if any(int(vm.get('vmid', -1)) == args.restore_vmid for vm in vms):
 console = request('POST', f'providers/{args.provider_id}/vms/{args.node}/{args.vmid}/console')
 if (
     console.get('mode') != 'novnc'
-    or console.get('rfb_module') != '/ui/vendor/novnc/core/rfb.js'
+    or not str(console.get('rfb_module', '')).startswith('/api/v1/console-sessions/')
+    or console.get('local_rfb_module') != '/ui/vendor/novnc/core/rfb.js'
     or not str(console.get('ws_path', '')).startswith('/api/v1/console-sessions/')
     or not console.get('password')
 ):
@@ -91,7 +92,7 @@ if (
 if 'pve' in str(console.get('rfb_module', '')).lower() or console.get('ticket') or console.get('port'):
     raise RuntimeError('Console response exposed upstream Proxmox connection details')
 
-asset = client.get(args.url.rstrip('/') + console['rfb_module'])
+asset = client.get(args.url.rstrip('/') + console['local_rfb_module'])
 if not asset.is_success or b'RFB' not in asset.content:
     raise RuntimeError('Cloudportal local noVNC module was not served')
 
