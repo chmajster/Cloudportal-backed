@@ -4,7 +4,7 @@ from rq.job import Job as RQJob
 from rq.serializers import JSONSerializer
 
 from app.config import settings
-from app.jobs.queue import acquire_dispatch_capacity_lock, queue
+from app.jobs.queue import queue
 from app.models import JobLog, now
 from app.security.core import redis_client
 
@@ -29,9 +29,10 @@ def force_dispatch_job(db, job):
     if (job.payload or {}).get('_provider_wait'):
         raise ForceDispatchConflict('Job is waiting for provider retry and cannot bypass provider backoff')
 
-    # Serialize with the normal dispatcher so both paths cannot enqueue the same
-    # job at the same time. This lock does not apply the configured capacity.
-    acquire_dispatch_capacity_lock(db)
+    # The API route holds a row lock on this Job. The normal dispatcher uses
+    # SELECT ... FOR UPDATE SKIP LOCKED, so it skips a force-dispatched row
+    # until this transaction commits. If the dispatcher won the row lock first,
+    # the RQ lookup below detects the already-dispatched job.
 
     try:
         existing = RQJob.fetch(job.id, connection=redis_client(), serializer=JSONSerializer)
