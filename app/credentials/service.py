@@ -73,6 +73,20 @@ def save_secret(db, c, value):
     c.secret_updated_at = now()
 
 
+def _ansible_runs_reference(payload, credential_id):
+    if not isinstance(payload, dict):
+        return False
+    for run in payload.get('ansible_runs') or []:
+        if not isinstance(run, dict):
+            continue
+        try:
+            if int(run.get('credentials_id') or 0) == int(credential_id):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def credential_in_use(db, id, *, pending_only=False):
     """Return whether a credential is protected by an active or durable reference."""
     deployments = select(Deployment.id).where(or_(
@@ -96,6 +110,21 @@ def credential_in_use(db, id, *, pending_only=False):
     )
     if db.scalar(deployments.limit(1)) or db.scalar(active_job_credential.limit(1)):
         return True
+
+    deployment_runs = select(Deployment.workflow)
+    if pending_only:
+        deployment_runs = deployment_runs.where(Deployment.active_job_id.is_not(None))
+    else:
+        deployment_runs = deployment_runs.where(Deployment.status != 'destroyed')
+    if any(_ansible_runs_reference(payload, id) for payload in db.scalars(deployment_runs)):
+        return True
+
+    active_jobs = select(Job.payload).where(
+        Job.status.in_(['waiting_approval', 'queued', 'running', 'cancelling'])
+    )
+    if any(_ansible_runs_reference(payload, id) for payload in db.scalars(active_jobs)):
+        return True
+
     if pending_only:
         return False
 
@@ -104,4 +133,9 @@ def credential_in_use(db, id, *, pending_only=False):
         Blueprint.deployment['template_guest_credential_id'].as_integer() == id,
         Blueprint.deployment['ansible']['credentials_id'].as_integer() == id,
     ))
-    return bool(db.scalar(blueprint_ref.limit(1)))
+    if db.scalar(blueprint_ref.limit(1)):
+        return True
+    return any(
+        _ansible_runs_reference(payload, id)
+        for payload in db.scalars(select(Blueprint.deployment))
+    )
