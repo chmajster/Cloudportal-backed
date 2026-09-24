@@ -147,8 +147,8 @@ async function myResourcesView(repairInventory = true) {
   ]);
 
   const deployments = deploymentResult.items || [];
-  const vms = vmResult.items || [];
-  const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm');
+  const vms = (vmResult.items || []).filter(item => item.lifecycle_status !== 'destroyed');
+  const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm' && item.lifecycle_status !== 'destroyed');
   const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
   const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
   const deploymentById = new Map(deployments.map(item => [item.id, item]));

@@ -14,7 +14,7 @@ from app.catalog import template_import_target, template_public, validate_templa
 from app.catalog_control import require_catalog_item_enabled
 from app.database import get_db
 from app.inventory_sync import repair_inventory_from_states
-from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider
+from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider, now
 from app.providers.registry import provider_for
 from app.security.core import audit
 from app.resource_scope.http import require
@@ -386,6 +386,74 @@ def reconcile_vm(
         )
     audit(db, request, 'inventory.vm_reconciled', 'managed_vms', row.id)
     return public(row)
+
+
+@router.delete('/vms/{id}/missing')
+def remove_confirmed_missing_vm(
+    id: str,
+    request: Request,
+    actor=Depends(require('inventory.delete')),
+    db=Depends(get_db, scope='function'),
+):
+    """Remove a stale VM from active inventory only after provider-side absence is confirmed."""
+    row = db.scalar(select(ManagedVM).where(ManagedVM.id == id).with_for_update())
+    ensure_inventory_vm_access(db, request, actor, row)
+
+    provider, adapter = provider_adapter(db, row.provider_id)
+    if provider.type != 'proxmox':
+        raise HTTPException(422, 'Missing-VM cleanup is currently supported only for Proxmox')
+
+    try:
+        discover_vm(adapter, row.vm_id)
+    except HTTPException as error:
+        if error.status_code != 404:
+            raise
+    else:
+        raise HTTPException(
+            409,
+            'VM still exists on Proxmox. Refresh inventory instead of removing it.',
+        )
+
+    if row.deployment_id:
+        deployment = db.scalar(select(Deployment).where(
+            Deployment.id == row.deployment_id
+        ).with_for_update())
+        if deployment is not None and deployment.active_job_id:
+            raise HTTPException(
+                409,
+                'Cannot remove a missing VM while its deployment has an active job',
+            )
+
+    when = now()
+    row.lifecycle_status = 'destroyed'
+    row.destroyed_at = when
+
+    if row.deployment_id:
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == row.deployment_id
+        ).with_for_update())
+        if resource is not None:
+            resource.lifecycle_status = 'destroyed'
+            resource.destroyed_at = when
+
+        if deployment is not None and deployment.status != 'destroyed':
+            deployment.status = 'reconciliation_required'
+
+        reconcile_terraform_presence(
+            db,
+            Scope(row.tenant_id, row.project_id),
+            row.deployment_id,
+            present=False,
+        )
+
+    audit(db, request, 'inventory.vm_missing_removed', 'managed_vms', row.id)
+    return {
+        'deleted': True,
+        'provider_absent': True,
+        'id': row.id,
+        'vm_id': row.vm_id,
+        'deployment_id': row.deployment_id,
+    }
 
 
 @router.delete('/vms/{id}')
