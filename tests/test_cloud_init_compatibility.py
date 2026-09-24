@@ -69,6 +69,54 @@ def test_quick_editor_delegates_cloud_init_without_rebuilding_its_dag():
     assert result['legacy'] == 'legacy quick editor'
 
 
+
+def test_quick_editor_keeps_awx_cloud_init_workflow_in_quick_editor():
+    source = (ROOT / 'app/web/features/blueprints.js').read_text()
+    opening = 'async function proxmoxBlueprintForm(item = null, options = {}) {'
+    guard = source.split(opening, 1)[1].split('\n  try {', 1)[0]
+    item = {
+        'workflow': [
+            {'id': 'cloud_init', 'type': 'cloud_init', 'depends_on': []},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud_init']},
+            {'id': 'guest_ip', 'type': 'wait_for_ip', 'depends_on': ['apply']},
+            {'id': 'awx', 'type': 'register_awx', 'depends_on': ['guest_ip']},
+        ],
+        'deployment': {'awx': {'credential_id': 77}},
+    }
+    script = 'const blueprintForm = async item => ({editor:"classic", item});\n'
+    script += opening + guard + '\nthrow new Error("quick editor");}\n'
+    script += '(async () => {\n'
+    script += 'const result = await proxmoxBlueprintForm(' + json.dumps(item) + ').catch(error => error.message);\n'
+    script += 'console.log(JSON.stringify(result));\n})();'
+    result = node_json(script)
+    assert result == 'quick editor'
+
+
+def test_quick_workflow_builds_required_cloud_init_before_awx():
+    helper = ROOT / 'app/web/features/blueprint-form-utils.js'
+    script = 'global.window = {}; global.registerExtension = (_name, initialize) => initialize();\n'
+    script += 'eval(require("fs").readFileSync(' + json.dumps(str(helper)) + ', "utf8"));\n'
+    script += '''
+const steps = window.BlueprintFormUtils.blueprintWorkflow({
+  cloudInit: true,
+  waitAgent: false,
+  ansible: false,
+  guestAccess: false,
+  awx: true,
+  awxRetry: 4,
+  awxTimeout: 420,
+});
+console.log(JSON.stringify(steps));
+'''
+    result = node_json(script)
+    assert [step['type'] for step in result] == [
+        'cloud_init', 'terraform_apply', 'wait_for_ip', 'register_awx',
+    ]
+    assert result[-1]['retry'] == 4
+    assert result[-1]['timeout'] == 420
+    assert validate_cloud_init_workflow(result)
+
+
 def test_classic_cloud_init_action_is_available_only_for_proxmox():
     source = (ROOT / 'app/web/features/blueprints.js').read_text()
     assert "['cloud_init', 'Cloud-init: pierwszy start systemu']" in source
