@@ -9,6 +9,9 @@ import socket
 import time
 import ipaddress
 
+WAIT_FOR_IP_MAX_SECONDS = 180
+WAIT_FOR_IP_POLL_SECONDS = 10
+
 import paramiko
 from datetime import timedelta
 from types import SimpleNamespace
@@ -414,10 +417,11 @@ def configured_deployment_ip(context):
         return None
 
 
-def wait_for_ip(context, workspace, timeout=600):
+def wait_for_ip(context, workspace, timeout=WAIT_FOR_IP_MAX_SECONDS):
+    effective_timeout = min(max(float(timeout), 1.0), WAIT_FOR_IP_MAX_SECONDS)
     configured = configured_deployment_ip(context)
     if configured:
-        wait_for_vm(context, workspace, timeout=timeout)
+        wait_for_vm(context, workspace, timeout=effective_timeout)
         context.stage('workflow.wait_for_ip')
         context.log(f'workflow.wait_for_ip.configured: {configured}')
         update_inventory_primary_ip(context, configured)
@@ -425,23 +429,35 @@ def wait_for_ip(context, workspace, timeout=600):
 
     node, vm_id, provider = _workflow_vm_identity(context, workspace)
     context.stage('workflow.wait_for_ip')
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + effective_timeout
+    max_attempts = max(1, int((effective_timeout + WAIT_FOR_IP_POLL_SECONDS - 1) // WAIT_FOR_IP_POLL_SECONDS))
+    context.log(
+        'workflow.wait_for_ip.polling: '
+        f'interval={WAIT_FOR_IP_POLL_SECONDS}s timeout={int(effective_timeout)}s attempts={max_attempts}'
+    )
     last_error = None
+    attempt = 0
     while time.monotonic() < deadline:
         context.check()
+        attempt += 1
+        context.log(f'workflow.wait_for_ip.poll: attempt={attempt}/{max_attempts}')
         try:
             addresses = provider.guest_addresses(node, vm_id)
             ipv4 = [address for address in addresses if ':' not in address]
             selected = (ipv4 or addresses)[:1]
             if selected:
+                context.log(f'workflow.wait_for_ip.discovered: {selected[0]} attempt={attempt}')
                 update_inventory_primary_ip(context, selected[0])
                 return selected
         except Exception as error:
             last_error = _log_wait_error(context, 'workflow.wait_for_ip', error, last_error)
-        time.sleep(2)
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining:
+            time.sleep(min(WAIT_FOR_IP_POLL_SECONDS, remaining))
     suffix = f'; last provider error: {last_error}' if last_error else ''
     raise ExecutionFailed(
-        'Timed out waiting for VM IP address. DHCP discovery requires a working QEMU Guest Agent'
+        f'Timed out after {int(effective_timeout)}s waiting for VM IP address. '
+        'DHCP discovery requires a working QEMU Guest Agent'
         + suffix
     )
 
