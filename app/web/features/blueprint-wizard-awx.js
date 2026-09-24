@@ -37,7 +37,7 @@
         depends_on: apply ? [apply.id] : [],
         conditions: {},
         retry: 0,
-        timeout: 600,
+        timeout: 180,
         rollback: null,
       };
       state.workflow.push(ipStep);
