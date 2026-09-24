@@ -204,6 +204,8 @@
       ansibleVariables: {},
       awxEnabled: false,
       awxCredentialId: '',
+      awxOrganizationId: '',
+      awxProjectId: '',
       awxInventoryId: '',
       awxInventoryName: 'CloudPortal',
       awxGroupByEnvironment: true,
@@ -342,6 +344,8 @@
     if (state.awxEnabled && state.awxCredentialId) {
       deployment.awx = {
         credential_id: Number(state.awxCredentialId),
+        organization_id: state.awxOrganizationId ? Number(state.awxOrganizationId) : null,
+        project_id: state.awxProjectId ? Number(state.awxProjectId) : null,
         inventory_id: state.awxInventoryId ? Number(state.awxInventoryId) : null,
         inventory_name: String(state.awxInventoryName || 'CloudPortal').trim() || 'CloudPortal',
         group_by_environment: Boolean(state.awxGroupByEnvironment),
