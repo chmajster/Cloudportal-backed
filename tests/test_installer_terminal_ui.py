@@ -185,16 +185,17 @@ def test_api_healthcheck_is_quiet_during_expected_startup_and_dumps_diagnostics_
     assert "journalctl --no-pager -u cloudportal-api.service -n 80" in INSTALLER
 
 
-def test_docker_compose_wires_updater_tokens_and_host_gateway():
+def test_docker_compose_wires_updater_tokens_and_unix_socket():
     compose = (ROOT / 'docker-compose.yml').read_text(encoding='utf-8')
     nginx = (ROOT / 'scripts' / 'nginx-container.conf').read_text(encoding='utf-8')
-    assert 'CP_UPDATER_URL: ${CP_UPDATER_URL:-http://host.docker.internal:8766}' in compose
-    assert 'CP_UPDATER_TOKEN_FILE: /run/cloudportal-updater/updater.token' in compose
-    assert 'CP_UPDATER_STATUS_TOKEN_FILE: /run/cloudportal-updater/updater-status.token' in compose
+    assert 'CP_UPDATER_UNIX_SOCKET: /run/cloudportal-updater/updater.sock' in compose
+    assert 'CP_UPDATER_TOKEN_FILE: /run/cloudportal-updater-secrets/updater.token' in compose
+    assert 'CP_UPDATER_STATUS_TOKEN_FILE: /run/cloudportal-updater-secrets/updater-status.token' in compose
     assert 'CP_UPDATER_HOST_CONFIG_DIR' in compose
-    assert compose.count('host.docker.internal:host-gateway') >= 2
+    assert 'CP_UPDATER_RUNTIME_DIR' in compose
+    assert 'host.docker.internal' not in compose
     assert 'location = /update-status' in nginx
-    assert 'proxy_pass http://host.docker.internal:8766/status$is_args$args;' in nginx
+    assert 'proxy_pass http://unix:/run/cloudportal-updater/updater.sock:/status$is_args$args;' in nginx
 
 
 def test_docker_status_and_repair_include_updater_channel():
