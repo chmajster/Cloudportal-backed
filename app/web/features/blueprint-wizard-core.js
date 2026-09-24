@@ -207,6 +207,7 @@
       awxGroupByEnvironment: true,
       awxGroupByApmid: true,
       awxJobTemplateId: '',
+      awxRemoveOnDestroy: true,
       awxDiscovery: null,
       awxDiscoveryError: '',
       cloudInitEnabled: true,
@@ -342,6 +343,7 @@
         group_by_environment: Boolean(state.awxGroupByEnvironment),
         group_by_apmid: Boolean(state.awxGroupByApmid),
         job_template_id: state.awxJobTemplateId ? Number(state.awxJobTemplateId) : null,
+        remove_on_destroy: Boolean(state.awxRemoveOnDestroy),
       };
     }
 
