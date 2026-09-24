@@ -2,16 +2,17 @@ import secrets
 from datetime import timedelta, timezone
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
                              IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput,
-                             VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput, JobExecutionSettingsOutput)
+                             VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput)
 from app.api.schemas import (AssignRoles, LDAPSettingsInput, RoleInput, TokenInput, UserCreate, UserUpdate,
-                             VMClassificationSettingsInput, BlueprintExecutionSettingsInput, JobExecutionSettingsInput)
+                             VMClassificationSettingsInput, BlueprintExecutionSettingsInput)
 from app.auth.routes import user_public
 from app.blueprint_settings import blueprint_execution_settings, save_blueprint_execution_settings
-from app.execution_settings import job_execution_settings, save_job_execution_settings
+from app.jobs.settings import job_execution_settings, save_job_execution_settings
 from app.auth.ldap import ldap_settings, save_ldap_settings, test_ldap_connection
 from app.vm_classification import save_vm_classification_settings, vm_classification_settings
 from app.database import get_db
@@ -20,6 +21,18 @@ from app.rbac.service import ALL_PERMISSIONS, ensure_admin_remains, governance_l
 from app.security.core import audit, digest, effective_permissions, issue_token, password_hasher, require, revoke_user
 
 router = APIRouter(tags=['administration'])
+
+
+class JobExecutionSettingsInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    max_parallel_jobs: int = Field(ge=1, le=64)
+
+
+class JobExecutionSettingsOutput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    max_parallel_jobs: int
+
+
 def role_public(role):
     return {'id': role.id, 'name': role.name, 'permissions': sorted(p.name for p in role.permissions)}
 
