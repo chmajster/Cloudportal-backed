@@ -49,6 +49,8 @@ Tryby:
   --gui, -gui                 Interaktywny interfejs dialog.
   --non-interactive           Tryb bez pytań; przy --uninstall wymaga także --yes.
   --docker                    Zainstaluj/obsłuż Cloudportal jako stack Docker Compose zamiast usług systemd.
+  --recovery-admin            Recovery lokalnego administratora; alias: --recovery-password.
+  --recovery-password         Utwórz lub odzyskaj lokalne konto Administrator bez reinstalacji.
 
 Konfiguracja:
   --host HOST                 Host/DNS backendu.
@@ -60,6 +62,10 @@ Konfiguracja:
   --ref REF                   Branch/tag/commit GitHub, domyślnie main.
   --cert-file FILE            Własny certyfikat TLS.
   --cert-key FILE             Klucz do własnego certyfikatu TLS.
+  --recovery-username USER    Login konta recovery; domyślnie recovery-admin.
+  --recovery-email EMAIL      E-mail nowego konta; dla istniejącego opcjonalny.
+  --recovery-project REF      Projekt docelowy: ID lub slug; domyślnie projekt Default.
+  --recovery-password-file F  Plik 0600 z hasłem recovery; wymagany w trybie nieinteraktywnym.
 
 GitHub:
   --github-token-file FILE    Plik 0600 z tokenem Contents: read.
@@ -77,6 +83,8 @@ Przykłady:
   sudo ./install.sh --docker --non-interactive --port 8443
   sudo ./install.sh --docker --status
   sudo ./install.sh --status
+  sudo ./install.sh --recovery-admin
+  sudo ./install.sh --docker --recovery-admin
   sudo ./install.sh --uninstall
   sudo ./install.sh --uninstall --purge-data
   sudo ./install.sh --non-interactive --uninstall --yes
@@ -117,6 +125,12 @@ takeover_running_install=1
 purge_data=0
 status_mode=0
 uninstall_mode=0
+recovery_mode=0
+recovery_username=''
+recovery_email=''
+recovery_project=''
+recovery_password_file=''
+recovery_password=''
 assume_yes=0
 docker_mode=0
 docker_auto_repair=1
@@ -132,11 +146,12 @@ install_progress() {
 }
 while (($#)); do
   case "$1" in
-    --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days)
+    --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days|--recovery-username|--recovery-email|--recovery-project|--recovery-password-file)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing value for $1" >&2; exit 2; }
       case "$1" in
         --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2;; --ref) ref=$2;;
         --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2;;
+        --recovery-username) recovery_username=$2;; --recovery-email) recovery_email=$2;; --recovery-project) recovery_project=$2;; --recovery-password-file) recovery_password_file=$2;;
       esac
       shift 2;;
     --enable-backups) backup_schedule=true; shift;;
@@ -144,6 +159,7 @@ while (($#)); do
     --gui|-gui) gui=1; shift;;
     --non-interactive) non_interactive=1; shift;;
     --docker) docker_mode=1; shift;;
+    --recovery-admin|--recovery-password) recovery_mode=1; shift;;
     --check-platform) check_platform=1; shift;;
     --takeover) takeover_running_install=1; shift;;
     --no-takeover) takeover_running_install=0; shift;;
@@ -177,12 +193,14 @@ interactive_action_menu() {
   [6] Odinstaluj całkowicie — usuń bazę i dane
   [7] Odinstaluj Docker — zachowaj wolumeny i konfigurację
   [8] Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację
+  [9] Recovery password / konto Administrator — systemd
+  [10] Recovery password / konto Administrator — Docker
   [0] Wyjście
 EOF
 
   local choice=''
   while :; do
-    printf 'Wybierz operację [0-8]: ' >&3
+    printf 'Wybierz operację [0-10]: ' >&3
     if ! IFS= read -r choice <&3; then
       exec 3>&-
       ui_fail 'Nie udało się odczytać wyboru z terminala.'
@@ -234,13 +252,24 @@ EOF
         exec 3>&-
         return 0
         ;;
+      9)
+        recovery_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      10)
+        docker_mode=1
+        recovery_mode=1
+        exec 3>&-
+        return 0
+        ;;
       0)
         exec 3>&-
         ui_info 'Nie wykonano żadnych zmian.'
         exit 0
         ;;
       *)
-        ui_warn 'Nieprawidłowy wybór. Wpisz cyfrę od 0 do 8.'
+        ui_warn 'Nieprawidłowy wybór. Wpisz cyfrę od 0 do 10.'
         ;;
     esac
   done
@@ -248,13 +277,19 @@ EOF
 
 interactive_action_menu
 
-mode_count=$((status_mode + uninstall_mode + check_platform))
-((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall albo --check-platform.'; exit 2; }
+mode_count=$((status_mode + uninstall_mode + check_platform + recovery_mode))
+((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall, --check-platform albo --recovery-admin.'; exit 2; }
 ((purge_data == 0 || uninstall_mode == 1)) || { ui_fail '--purge-data wymaga --uninstall.'; exit 2; }
 ((assume_yes == 0 || uninstall_mode == 1)) || { ui_fail '--yes/-y ma zastosowanie tylko z --uninstall.'; exit 2; }
 ((gui == 0 || uninstall_mode == 0)) || { ui_fail '--gui/-gui nie może być użyte razem z --uninstall.'; exit 2; }
 ((gui == 0 || docker_mode == 0)) || { ui_fail '--gui/-gui nie jest obsługiwane w trybie --docker.'; exit 2; }
 ((docker_auto_repair_explicit == 0 || (docker_mode == 1 && status_mode == 1))) || { ui_fail '--no-auto-repair wymaga --docker --status.'; exit 2; }
+if ((recovery_mode == 0)); then
+  [[ -z "$recovery_username" && -z "$recovery_email" && -z "$recovery_project" && -z "$recovery_password_file" ]] || {
+    ui_fail 'Opcje --recovery-* wymagają --recovery-admin albo --recovery-password.'
+    exit 2
+  }
+fi
 
 drain_script_input() {
   [[ -t 0 ]] || cat >/dev/null || true
@@ -287,7 +322,7 @@ case "$ID:$VERSION_ID" in
     key_value_command=valkey-server
     ;;
   *)
-    if ((uninstall_mode || status_mode || docker_mode)); then
+    if ((uninstall_mode || status_mode || docker_mode || recovery_mode)); then
       os_family=unknown
       python_command=python3
       key_value_package=unknown
@@ -304,7 +339,7 @@ case "$(uname -m)" in
   x86_64) arch=amd64;;
   aarch64|arm64) arch=arm64;;
   *)
-    if ((uninstall_mode || status_mode)); then
+    if ((uninstall_mode || status_mode || recovery_mode)); then
       arch=$(uname -m)
       ui_warn "Architektura $arch nie jest wspierana do instalacji; tryb status/deinstalacji będzie kontynuowany."
     else
@@ -330,6 +365,82 @@ if ((status_mode == 0 || (docker_mode == 1 && status_mode == 1 && docker_auto_re
     exit 1
   }
 fi
+
+recovery_prepare_inputs() {
+  CURRENT_STAGE='dane recovery administratora'
+
+  if [[ -z "$recovery_username" ]]; then
+    if ((non_interactive)); then
+      recovery_username='recovery-admin'
+    else
+      [[ -r /dev/tty && -w /dev/tty ]] || { ui_fail 'Recovery bez --recovery-password-file wymaga interaktywnego terminala.'; return 2; }
+      printf 'Login konta recovery [recovery-admin]: ' >/dev/tty
+      IFS= read -r recovery_username </dev/tty || true
+      recovery_username=${recovery_username:-recovery-admin}
+    fi
+  fi
+  recovery_username=${recovery_username,,}
+  [[ "$recovery_username" =~ ^[a-z0-9][a-z0-9_.-]{0,62}$ ]] || {
+    ui_fail 'Login recovery musi mieć 1-63 znaki: litery/cyfry oraz . _ -.'
+    return 2
+  }
+
+  if [[ -z "$recovery_email" && $non_interactive -eq 0 ]]; then
+    printf 'E-mail konta (Enter = zachowaj istniejący / dla nowego użyj login@localhost.example): ' >/dev/tty
+    IFS= read -r recovery_email </dev/tty || true
+  fi
+  recovery_email=${recovery_email,,}
+  if [[ -n "$recovery_email" ]]; then
+    [[ ${#recovery_email} -le 254 && "$recovery_email" == *@* && "$recovery_email" != *[[:space:]]* ]] || {
+      ui_fail 'Nieprawidłowy e-mail recovery.'
+      return 2
+    }
+  fi
+
+  if [[ -z "$recovery_project" && $non_interactive -eq 0 ]]; then
+    printf 'Projekt docelowy — ID lub slug [default]: ' >/dev/tty
+    IFS= read -r recovery_project </dev/tty || true
+  fi
+  [[ ${#recovery_project} -le 100 ]] || { ui_fail 'Identyfikator projektu recovery jest za długi.'; return 2; }
+
+  if [[ -n "$recovery_password_file" ]]; then
+    [[ -f "$recovery_password_file" && ! -L "$recovery_password_file" && -r "$recovery_password_file" ]] || {
+      ui_fail 'Plik --recovery-password-file musi być zwykłym, czytelnym plikiem.'
+      return 2
+    }
+    [[ "$(stat -c %a "$recovery_password_file" 2>/dev/null || true)" == 600 ]] || {
+      ui_fail 'Plik --recovery-password-file musi mieć tryb 0600.'
+      return 2
+    }
+    recovery_password=$(head -n 1 "$recovery_password_file")
+  else
+    ((non_interactive == 0)) || {
+      ui_fail 'Tryb --non-interactive recovery wymaga --recovery-password-file FILE.'
+      return 2
+    }
+    [[ -r /dev/tty && -w /dev/tty ]] || { ui_fail 'Recovery hasła wymaga /dev/tty albo --recovery-password-file.'; return 2; }
+    local confirmation=''
+    printf 'Nowe hasło administratora: ' >/dev/tty
+    IFS= read -r -s recovery_password </dev/tty || true
+    printf '\nPowtórz hasło: ' >/dev/tty
+    IFS= read -r -s confirmation </dev/tty || true
+    printf '\n' >/dev/tty
+    if [[ "$recovery_password" != "$confirmation" ]]; then
+      unset confirmation recovery_password
+      recovery_password=''
+      ui_fail 'Podane hasła nie są identyczne.'
+      return 2
+    fi
+    unset confirmation
+  fi
+
+  if ((${#recovery_password} < 12 || ${#recovery_password} > 256)); then
+    unset recovery_password
+    recovery_password=''
+    ui_fail 'Hasło recovery musi mieć od 12 do 256 znaków.'
+    return 2
+  fi
+}
 
 docker_root=/opt/cloudportal-backed-docker
 docker_config=/etc/cloudportal-backed-docker
@@ -1322,6 +1433,59 @@ docker_prepare_github_curl() {
   fi
 }
 
+
+docker_recovery_admin() {
+  CURRENT_STAGE='recovery administratora Docker'
+  ui_header 'Cloudportal-backed — recovery administratora Docker'
+
+  docker_compose_detect || { ui_fail 'Docker Compose nie jest dostępny.'; return 1; }
+  docker info >/dev/null 2>&1 || { ui_fail 'Docker Engine nie odpowiada. Uruchom recovery przez sudo na hoście z działającym Dockerem.'; return 1; }
+
+  local release
+  release=$(docker_current_release)
+  [[ -n "$release" && -d "$release" && -f "$release/docker-compose.yml" ]] || {
+    ui_fail "Brak aktywnego release Docker w $docker_root/current."
+    return 1
+  }
+  [[ -r "$docker_env" ]] || { ui_fail "Brak konfiguracji Docker: $docker_env"; return 1; }
+
+  ui_info 'Uruchamiam PostgreSQL wymagany do recovery.'
+  docker_compose_for "$release" "$docker_env" up -d postgres
+  local ready=0
+  for ((attempt=1; attempt<=30; attempt++)); do
+    if docker_compose_for "$release" "$docker_env" exec -T postgres pg_isready -U cloudportal -d cloudportal >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  ((ready == 1)) || {
+    ui_fail 'PostgreSQL nie osiągnął stanu ready.'
+    docker_compose_for "$release" "$docker_env" logs --tail=80 postgres || true
+    return 1
+  }
+
+  recovery_prepare_inputs
+
+  local args=(python -m app.recovery --username "$recovery_username" --password-stdin)
+  [[ -z "$recovery_email" ]] || args+=(--email "$recovery_email")
+  [[ -z "$recovery_project" ]] || args+=(--project "$recovery_project")
+
+  ui_info 'Tworzę lub odzyskuję lokalne konto Administrator i przypisuję je do projektu.'
+  if ! printf '%s\n' "$recovery_password" | docker_compose_for "$release" "$docker_env" run --rm --no-deps -T bootstrap "${args[@]}"; then
+    unset recovery_password
+    recovery_password=''
+    ui_fail 'Recovery administratora nie powiodło się.'
+    return 1
+  fi
+  unset recovery_password
+  recovery_password=''
+
+  ui_ok "Recovery zakończone. Konto: $recovery_username"
+  ui_info "Projekt: ${recovery_project:-default}"
+  ui_info 'Wszystkie wcześniejsze tokeny tego konta zostały unieważnione.'
+}
+
 docker_install() {
   ui_header 'Cloudportal-backed — instalacja Docker'
   local stages=6 release_sha effective_tarball_url candidate_sha release docker_tls_stage
@@ -1548,7 +1712,7 @@ EOF
   ui_ok 'Kandydat został aktywowany jako bieżący release Docker.'
 
   ui_info 'Finalizuję bootstrap administratora dopiero po udanym healthchecku. Jednorazowy token, jeżeli powstanie, zostanie wyświetlony poniżej.'
-  docker_compose_for "$release" "$docker_env" run --rm --no-deps bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
+  docker_compose_for "$release" "$docker_env" run --rm --no-deps -T bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
   ui_ok 'Bootstrap administratora zakończony po walidacji działającego stacka.'
 
   ui_header 'Podsumowanie'
@@ -1565,6 +1729,11 @@ EOF
 }
 
 if ((docker_mode)); then
+  if ((recovery_mode)); then
+    docker_acquire_install_lock
+    docker_recovery_admin
+    exit 0
+  fi
   if ((status_mode)); then
     ((docker_auto_repair == 0)) || docker_acquire_install_lock
     if docker_status; then
@@ -2132,6 +2301,49 @@ uninstall_cloudportal() {
     ui_info 'Dane Cloudportal: zachowane.'
   fi
 }
+
+
+native_recovery_admin() {
+  CURRENT_STAGE='recovery administratora'
+  ui_header 'Cloudportal-backed — recovery administratora'
+
+  local release
+  release=$(readlink -f "$app_root/current" 2>/dev/null || true)
+  [[ -n "$release" && -d "$release" && -x "$release/.venv/bin/python" ]] || {
+    ui_fail "Brak aktywnego runtime w $app_root/current."
+    return 1
+  }
+  [[ -r "$config/backend.env" ]] || { ui_fail "Brak konfiguracji: $config/backend.env"; return 1; }
+  id cloudportal >/dev/null 2>&1 || { ui_fail 'Brak użytkownika systemowego cloudportal.'; return 1; }
+
+  recovery_prepare_inputs
+
+  local args=(-m app.recovery --username "$recovery_username" --password-stdin)
+  [[ -z "$recovery_email" ]] || args+=(--email "$recovery_email")
+  [[ -z "$recovery_project" ]] || args+=(--project "$recovery_project")
+
+  local loader='import os,sys; from pathlib import Path; [os.environ.__setitem__(*line.split("=",1)) for line in Path(sys.argv[1]).read_text().splitlines() if line and not line.startswith("#")]; os.chdir(sys.argv[2]); os.execv(sys.argv[3], sys.argv[3:])'
+  ui_info 'Tworzę lub odzyskuję lokalne konto Administrator i przypisuję je do projektu.'
+  if ! printf '%s\n' "$recovery_password" | runuser -u cloudportal -- "$release/.venv/bin/python" -c "$loader"       "$config/backend.env" "$release" "$release/.venv/bin/python" "${args[@]}"; then
+    unset recovery_password
+    recovery_password=''
+    ui_fail 'Recovery administratora nie powiodło się.'
+    return 1
+  fi
+  unset recovery_password
+  recovery_password=''
+
+  ui_ok "Recovery zakończone. Konto: $recovery_username"
+  ui_info "Projekt: ${recovery_project:-default}"
+  ui_info 'Wszystkie wcześniejsze tokeny tego konta zostały unieważnione.'
+}
+
+if ((recovery_mode)); then
+  acquire_install_lock
+  native_recovery_admin
+  drain_script_input
+  exit 0
+fi
 
 if ((status_mode)); then
   show_status
