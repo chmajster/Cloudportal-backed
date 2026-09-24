@@ -83,7 +83,7 @@ if any(int(vm.get('vmid', -1)) == args.restore_vmid for vm in vms):
 console = request('POST', f'providers/{args.provider_id}/vms/{args.node}/{args.vmid}/console')
 if (
     console.get('mode') != 'novnc'
-    or not str(console.get('rfb_module', '')).startswith('/api/v1/console-sessions/')
+    or console.get('rfb_module') != '/ui/vendor/novnc/core/rfb.js'
     or not str(console.get('ws_path', '')).startswith('/api/v1/console-sessions/')
     or not console.get('password')
 ):
@@ -93,7 +93,7 @@ if 'pve' in str(console.get('rfb_module', '')).lower() or console.get('ticket') 
 
 asset = client.get(args.url.rstrip('/') + console['rfb_module'])
 if not asset.is_success or b'RFB' not in asset.content:
-    raise RuntimeError('Backend noVNC asset proxy did not return the RFB module')
+    raise RuntimeError('Cloudportal local noVNC module was not served')
 
 backend = urlsplit(args.url)
 tls = ssl.create_default_context(cafile=args.ca_file) if args.ca_file else ssl.create_default_context()
@@ -110,7 +110,7 @@ with websocket_connect(
         greeting = greeting.encode()
     if not greeting.startswith(b'RFB '):
         raise RuntimeError('Backend console WebSocket did not relay an RFB protocol greeting')
-print('Backend-only noVNC asset and WebSocket proxy accepted an RFB session.')
+print('Cloudportal-local noVNC client and backend WebSocket proxy accepted an RFB session.')
 
 before = {
     row['volid']

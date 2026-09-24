@@ -219,11 +219,13 @@ def test_console_capability_rechecks_token_revocation(system, monkeypatch):
     monkeypatch.setattr(ProxmoxProvider,'novnc_asset',lambda *_:calls.append(True) or (b'export default {}','text/javascript'))
     response=client.post(f"/api/v1/providers/{provider['id']}/vms/pve/111/console",headers=headers)
     assert response.status_code==200,response.text
-    asset=response.json()['rfb_module']
-    assert client.get(asset).status_code==200
+    body=response.json()
+    assert client.get(body['rfb_module']).status_code==200
+    legacy_asset=body['ws_path'].removesuffix('/websocket')+'/novnc/core/rfb.js'
+    assert client.get(legacy_asset).status_code==200
     with session() as db:
         token=db.scalar(select(Token).where(Token.kind=='api'));token.revoked_at=now();db.commit()
-    response=client.get(asset)
+    response=client.get(legacy_asset)
     assert response.status_code==401 and len(calls)==1,response.text
 
 

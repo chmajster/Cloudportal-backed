@@ -444,7 +444,9 @@ def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
     audit(db, request, 'vm.console_session_issued', 'vms', f'{provider_id}:{node}:{vmid}')
     return {
         'mode': 'novnc',
-        'rfb_module': f'/api/v1/console-sessions/{session_id}/novnc/core/rfb.js',
+        # RFB client code is vendored with Cloudportal. Only the VNC transport
+        # is session-bound and proxied from Proxmox.
+        'rfb_module': '/ui/vendor/novnc/core/rfb.js',
         'ws_path': f'/api/v1/console-sessions/{session_id}/websocket',
         'password': result['password'],
         'expires_in': CONSOLE_SESSION_TTL,
