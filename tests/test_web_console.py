@@ -408,6 +408,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerExtension('blueprint-wizard-ui'" in script
     assert "registerExtension('blueprint-wizard'" in script
     assert "registerExtension('blueprint-vra-designer'" in script
+    assert "const TERRAFORM_STEP_TYPES = new Set(['terraform_plan', 'terraform_apply', 'terraform_destroy'])" in script
+    assert "function defaultStepTimeout(type)" in script
+    assert "'Timeout Terraform / OpenTofu [s]'" in script
+    assert "el('summary', { text: 'Opcje zaawansowane' })" in script
+    assert "iconButton('Domyślny timeout'" in script
     assert "body: JSON.stringify(state.blueprint)" not in script
     assert "body: state.blueprint" in script
     assert "path.addEventListener('click', event => event.stopPropagation())" in script
