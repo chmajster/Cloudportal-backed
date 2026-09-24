@@ -277,6 +277,43 @@ def list_playbooks(db=None):
     return builtin_items + [_playbook_public_item(item) for item in custom_items]
 
 
+def snapshot_ansible_payload(db, payload, *, require_enabled=True):
+    """Return a job payload with immutable snapshots for every custom playbook reference."""
+    result = dict(payload or {})
+    snapshots = dict(result.get('_ansible_playbook_snapshots') or {})
+    configured = []
+    single = result.get('ansible')
+    if isinstance(single, dict) and single.get('playbook'):
+        configured.append(single)
+    for run in (result.get('ansible_runs') or []):
+        if isinstance(run, dict) and run.get('playbook'):
+            configured.append(run)
+
+    for run in configured:
+        playbook_id = str(run['playbook'])
+        if require_enabled:
+            from app.catalog_control import require_catalog_item_enabled
+            require_catalog_item_enabled(db, 'playbooks', playbook_id)
+        existing = snapshots.get(playbook_id)
+        if (
+            isinstance(existing, dict)
+            and existing.get('custom') is True
+            and existing.get('id') == playbook_id
+        ):
+            continue
+        snapshot = custom_playbook_snapshot(playbook_definition(playbook_id, db=db))
+        if snapshot is not None:
+            snapshots[playbook_id] = snapshot
+
+    if snapshots:
+        result['_ansible_playbook_snapshots'] = snapshots
+    if isinstance(single, dict):
+        legacy = snapshots.get(str(single.get('playbook') or ''))
+        if legacy is not None:
+            result['_ansible_playbook_snapshot'] = legacy
+    return result
+
+
 def validate_playbook_variables_definition(item, variables):
     definitions = item.get('variables', {})
     unknown = set(variables) - set(definitions)
