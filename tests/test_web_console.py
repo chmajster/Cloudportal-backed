@@ -360,6 +360,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "name: 'port'" not in script
     assert 'template-variable-grid' in script
     assert "registerCommand('ansible.run'" in script
+    assert "api('/inventory/vms?lifecycle_status=active&limit=200')" in script
+    assert "api('/inventory/resources?lifecycle_status=active&limit=200')" in script
+    assert "name: 'managed_vm_targets'" in script
+    assert 'VM z Moich zasobów' in script
+    assert 'Lista respektuje Twój zakres RBAC' in script
+    assert "option.dataset.address" in script
     assert "'/catalog/' + kind + '/'" in script
     assert "item.enabled === false ? 'Włącz' : 'Wyłącz'" in script
     assert "item.enabled !== false" in script
