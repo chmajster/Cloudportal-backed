@@ -22,6 +22,7 @@ from app.day2.service import (
     validate_action,
 )
 from app.executors.ansible import AnsibleExecutor
+from app.instance_operation import normal_instance_operation
 from app.executors.base import Cancelled, ExecutionFailed
 from app.models import Audit, Credential, Deployment, Job, JobLog, ManagedVM, Token, User, now
 from app.operations.service import queue_job_webhooks, queue_webhook_event
@@ -246,7 +247,7 @@ def _fail_before_execution(job_id, code, message):
         db.commit()
 
 
-def execute(job_id):
+def _execute_unfenced(job_id):
     task = None
     target = None
     adapter = None
@@ -422,3 +423,8 @@ def execute(job_id):
         _emit(db, event, request, {'error_code': error_code, 'warnings': warnings})
         queue_job_webhooks(db, job)
         db.commit()
+
+def execute(job_id):
+    with normal_instance_operation():
+        return _execute_unfenced(job_id)
+

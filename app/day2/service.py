@@ -263,6 +263,10 @@ def _provider_supports(adapter, action_id, target):
 
 
 def _availability_reason(db, target, action, adapter, permissions, config, state, power_state=None):
+    if target.deployment_id:
+        deployment = db.get(Deployment, target.deployment_id)
+        if deployment is not None and deployment.status == 'reconciliation_required':
+            return 'Deployment requires a successful Terraform reconciliation plan before Day-2 mutations'
     if not config['enable_day2_actions']:
         return 'Day-2 Actions are disabled globally'
     if action.permission not in permissions:

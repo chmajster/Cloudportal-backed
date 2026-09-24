@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
 from app.config import settings
 from app.database import session
+from app.instance_operation import normal_instance_operation
 from app.executors.ansible import AnsibleExecutor
 from app.executors.base import Cancelled, ExecutionFailed
 from app.executors.terraform import (OpenTofuExecutor, TerraformExecutor, cleanup_qemu_bootstrap,
@@ -1592,7 +1593,7 @@ def run_blueprint_workflow(context, executor):
     context.stage('workflow.completed')
     return runtime['workspace']
 
-def execute(job_id):
+def _execute_unfenced(job_id):
     os.umask(0o077)
     with session() as db:
         # Atomic claim prevents duplicate dispatch or RQ retry from executing twice.
@@ -1727,7 +1728,18 @@ def execute(job_id):
             if owns_deployment:
                 deployment.active_job_id = None
                 if current.operation == 'terraform.plan':
-                    deployment.status = current.payload.get('previous_status', deployment.status or 'failed')
+                    previous_status = (current.payload or {}).get(
+                        'previous_status',
+                        deployment.status or 'failed',
+                    )
+                    if previous_status == 'reconciliation_required' and status == 'successful':
+                        deployment.status = 'successful'
+                        db.add(JobLog(
+                            job_id=current.id,
+                            message='restore.reconciliation.completed: successful terraform.plan',
+                        ))
+                    else:
+                        deployment.status = previous_status
                 elif context.rollback_destroyed:
                     deployment.status = 'destroyed'
                 else:
@@ -1808,3 +1820,8 @@ def execute(job_id):
                      source=job.source,
                      resource='jobs', resource_id=job.id, result=status, request_id=job.request_id))
         db.commit()
+
+def execute(job_id):
+    with normal_instance_operation():
+        return _execute_unfenced(job_id)
+

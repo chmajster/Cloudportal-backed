@@ -6,6 +6,7 @@ from app.tenancy import models as tenancy_models
 from app.projects import models as project_models
 from app.resource_scope import models as resource_scope_models
 from app.quotas import models as quota_models
+from app.instance_backup import models as instance_backup_models  # noqa: F401
 
 
 def run():

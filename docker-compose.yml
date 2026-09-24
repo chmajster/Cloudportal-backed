@@ -9,6 +9,9 @@ x-backend: &backend
     CP_MASTER_KEY_FILE: /etc/cloudportal-backed/master.key
     CP_DATA_DIR: /var/lib/cloudportal-backed
     CP_WORKER_COUNT: ${CP_WORKER_COUNT:-1}
+    CP_PUBLIC_HOST: ${CP_PUBLIC_HOST:-localhost}
+    CP_HTTPS_PORT: ${CP_HTTPS_PORT:-8443}
+    CP_INSTALL_MODE: docker
   volumes:
     - backend-config:/etc/cloudportal-backed
     - backend-data:/var/lib/cloudportal-backed

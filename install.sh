@@ -2378,6 +2378,11 @@ CP_DATA_DIR=$data
 CP_WORKER_COUNT=$workers
 CP_BACKUP_SCHEDULE_ENABLED=$backup_schedule
 CP_BACKUP_RETENTION_DAYS=$backup_retention_days
+CP_INSTALL_MODE=systemd
+CP_PUBLIC_HOST=$backend_host
+CP_HTTPS_PORT=$backend_port
+CP_INSTANCE_BACKUP_DOWNLOAD_RETENTION_HOURS=24
+CP_INSTANCE_BACKUP_MAX_UPLOAD_BYTES=10737418240
 EOF
   cat > "$config/redis.conf" <<EOF
 bind 127.0.0.1
@@ -2404,6 +2409,17 @@ if grep -q '^CP_BACKUP_RETENTION_DAYS=' "$config/backend.env"; then
 else
   printf 'CP_BACKUP_RETENTION_DAYS=%s\n' "$backup_retention_days" >> "$config/backend.env"
 fi
+for runtime_pair in "CP_INSTALL_MODE=systemd" "CP_PUBLIC_HOST=$backend_host" "CP_HTTPS_PORT=$backend_port"; do
+  runtime_key=${runtime_pair%%=*}
+  runtime_value=${runtime_pair#*=}
+  if grep -q "^$runtime_key=" "$config/backend.env"; then
+    sed -i "s|^$runtime_key=.*|$runtime_key=$runtime_value|" "$config/backend.env"
+  else
+    printf '%s=%s\n' "$runtime_key" "$runtime_value" >> "$config/backend.env"
+  fi
+done
+grep -q '^CP_INSTANCE_BACKUP_DOWNLOAD_RETENTION_HOURS=' "$config/backend.env" || printf 'CP_INSTANCE_BACKUP_DOWNLOAD_RETENTION_HOURS=24\n' >> "$config/backend.env"
+grep -q '^CP_INSTANCE_BACKUP_MAX_UPLOAD_BYTES=' "$config/backend.env" || printf 'CP_INSTANCE_BACKUP_MAX_UPLOAD_BYTES=10737418240\n' >> "$config/backend.env"
 install_progress 42 updater 'Konfigurowanie niezależnego serwisu aktualizacji.'
 for token_file in "$config/updater.token" "$config/updater-status.token"; do
   if [[ ! -s "$token_file" ]]; then
@@ -2536,9 +2552,10 @@ run_backend "$release/.venv/bin/python" -m app.bootstrap --key-only
 run_backend "$release/.venv/bin/alembic" upgrade head
 install_progress 62 systemd 'Przygotowywanie jednostek systemd aplikacji.'
 for service in api worker@ dispatcher; do
+  write_paths="$data"
   case "$service" in
     api) command="$release/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --proxy-headers --forwarded-allow-ips 127.0.0.1";;
-    worker@) command="$release/.venv/bin/python -m app.jobs.queue";;
+    worker@) command="$release/.venv/bin/python -m app.jobs.queue"; write_paths="$data $config";;
     dispatcher) command="$release/.venv/bin/python -m app.jobs.queue --dispatcher";;
   esac
   cat > "/etc/systemd/system/cloudportal-$service.service" <<EOF
@@ -2567,7 +2584,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 CapabilityBoundingSet=
-ReadWritePaths=$data
+ReadWritePaths=$write_paths
 UMask=0077
 [Install]
 WantedBy=multi-user.target

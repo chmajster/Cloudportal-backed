@@ -77,6 +77,47 @@ def test_idempotency_and_concurrent_apply(client,headers):
         assert len(db.scalars(select(Deployment)).all())==1
         assert len(db.scalars(select(Job)).all())==1
 
+def test_reconciliation_required_blocks_mutations_until_successful_plan(client, headers):
+    created = deployment(client, headers)
+    with session() as db:
+        original = db.get(Job, created['job']['id'])
+        dep = db.get(Deployment, created['id'])
+        original.status = 'failed'
+        dep.active_job_id = None
+        dep.status = 'reconciliation_required'
+        db.commit()
+
+    blocked = client.post(
+        '/api/v1/jobs',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json={'operation': 'terraform.apply', 'deployment_id': created['id']},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert 'reconciliation' in blocked.text.lower()
+
+    planned = client.post(
+        '/api/v1/jobs',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json={'operation': 'terraform.plan', 'deployment_id': created['id']},
+    )
+    assert planned.status_code == 202, planned.text
+    with session() as db:
+        plan_job = db.get(Job, planned.json()['id'])
+        dep = db.get(Deployment, created['id'])
+        assert plan_job.payload['previous_status'] == 'reconciliation_required'
+        plan_job.status = 'successful'
+        db.commit()
+
+    with session() as db:
+        reconcile_deployment_job_statuses(db)
+        db.commit()
+
+    with session() as db:
+        dep = db.get(Deployment, created['id'])
+        assert dep.status == 'successful'
+        assert dep.active_job_id is None
+
+
 def test_recreate_deployment_queues_idempotent_replace_apply(client, headers):
     created = deployment(client, headers)
     cancelled = client.post('/api/v1/jobs/' + created['job']['id'] + '/cancel', headers=headers)

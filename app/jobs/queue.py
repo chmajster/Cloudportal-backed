@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import session
 from app.events.service import dispatch_event_broker_once
 from app.inventory_sync import repair_inventory_from_states
+from app.instance_operation import normal_instance_operation
 from app.jobs.approval import approval_policy_for_job
 from app.jobs.recovery import queue_automatic_resume, record_persisted_state_recovery
 from app.models import Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedResource, ManagedVM, now
@@ -138,7 +139,15 @@ def reconcile_deployment_job_statuses(db):
 
         deployment.active_job_id = None
         if job.operation == 'terraform.plan':
-            deployment.status = (job.payload or {}).get('previous_status', deployment.status or 'failed')
+            previous_status = (job.payload or {}).get(
+                'previous_status',
+                deployment.status or 'failed',
+            )
+            deployment.status = (
+                'successful'
+                if previous_status == 'reconciliation_required' and job.status == 'successful'
+                else previous_status
+            )
         elif job.status != 'successful':
             deployment.status = job.status
         elif job.operation == 'terraform.destroy':
@@ -256,7 +265,7 @@ def reconcile_stale_jobs(db):
     return len(rows)
 
 
-def dispatch_once():
+def _dispatch_once_unfenced():
     materialize_scheduled_jobs()
     q = queue()
     with session() as db:
@@ -289,7 +298,14 @@ def dispatch_once():
     dispatch_event_broker_once()
     deliver_webhooks_once()
     cleanup_retention_once()
+    from app.instance_backup.service import cleanup_expired_backups
+    cleanup_expired_backups()
     redis_client().set('cp:dispatcher:heartbeat', 'alive', ex=30)
+
+
+def dispatch_once():
+    with normal_instance_operation():
+        return _dispatch_once_unfenced()
 
 
 def dispatch_forever():

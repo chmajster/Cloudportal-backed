@@ -383,6 +383,11 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
     if deployment and deployment.workflow.get('ansible') and operation == 'terraform.apply' and 'ansible.execute' not in request.state.permissions:
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
+    if deployment and deployment.status == 'reconciliation_required' and operation != 'terraform.plan':
+        raise HTTPException(
+            409,
+            'Deployment requires Terraform reconciliation; run terraform.plan successfully before mutating it',
+        )
     if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
         raise HTTPException(409, 'Deployment is busy or destroyed')
     if deployment and operation == 'terraform.apply' and has_released_allocations(db, deployment.id):

@@ -731,6 +731,23 @@ async function apmidView() {
 }
 
 
+function instanceBackupTool() {
+  return node('article', { class: 'panel tool-card' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('file-text')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Ciągłość działania' }),
+        node('h2', { text: 'Backup i migracja' }),
+        node('p', { class: 'muted', text: 'Utwórz pełny backup Cloudportal-backed lub przenieś instancję na inny serwer.' })),
+      badge('WEB UI', 'ok')),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot' }),
+        'Eksport i restore .cpb'),
+      button('Otwórz', () => navigate('instance-backup'), 'primary')));
+}
+
+
 async function toolsView() {
   const cards = [];
 
@@ -774,6 +791,7 @@ async function toolsView() {
   }
 
   if (allowed('ansible.read')) cards.push(ansibleHostEntryTool());
+  if (allowed('instance_backups.read')) cards.push(instanceBackupTool());
 
   if (allowed('updates.read')) {
     try {

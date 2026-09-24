@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     event_consumer_lag_warning: int = Field(default=10000, ge=1, le=1000000000)
     retention_idempotency_days: int = Field(default=7, ge=1, le=3650)
     retention_released_allocations_days: int = Field(default=90, ge=1, le=3650)
+    instance_backup_download_retention_hours: int = Field(default=24, ge=1, le=720)
+    instance_backup_max_upload_bytes: int = Field(default=10 * 1024 ** 3, ge=1024 ** 2, le=100 * 1024 ** 3)
 
 
 @lru_cache
