@@ -4,4 +4,13 @@
 .tenancy-overview dd { margin: 0; overflow-wrap: anywhere; }
 .tenancy-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; }
 .tenancy-role-options { display: grid; gap: .65rem; margin: .75rem 0; }
+.tenancy-role-option {
+  display: grid;
+  gap: .35rem;
+  padding: .7rem .8rem;
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+  background: var(--surface);
+}
+.tenancy-role-option .field-help { padding-left: 26px; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .tenancy-overview { grid-template-columns: 1fr; } }

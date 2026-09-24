@@ -95,6 +95,34 @@ def test_existing_api_filters_sql_counts_direct_ids_logs_and_replay(system):
         json={'operation': 'terraform.destroy', 'deployment_id': second['id']}).status_code == 404
 
 
+def test_blueprint_creation_scopes_are_rbac_filtered_and_admin_sees_all(system):
+    client, headers, _ = system
+    alpha = project(client, headers, 'bp-scope-alpha')
+    beta = project(client, headers, 'bp-scope-beta')
+
+    admin = client.get('/api/v1/blueprints/creation-scopes?limit=200', headers=headers)
+    assert admin.status_code == 200, admin.text
+    admin_ids = {row['project_id'] for row in admin.json()['items']}
+    assert {alpha['id'], beta['id']} <= admin_ids
+
+    user, user_headers = member(client, headers, alpha, username='bp-scope-user')
+    delegated = client.get('/api/v1/blueprints/creation-scopes?limit=200', headers=user_headers)
+    assert delegated.status_code == 200, delegated.text
+    assert [row['project_id'] for row in delegated.json()['items']] == [alpha['id']]
+    row = delegated.json()['items'][0]
+    assert row['tenant_id'] == alpha['tenant_id']
+    assert row['tenant_name'] and row['project_name']
+    assert 'blueprints.create' in row['permissions']
+    assert 'blueprints.read' in row['permissions']
+
+    with session() as db:
+        db.get(ProjectMembership, (alpha['id'], user['id'])).status = 'disabled'
+        db.commit()
+    revoked = client.get('/api/v1/blueprints/creation-scopes?limit=200', headers=user_headers)
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()['items'] == []
+
+
 def test_scoped_grants_are_not_global_and_assignments_are_explicit(system):
     client, headers, _ = system
     p, q = project(client, headers, 'grants'), project(client, headers, 'other')

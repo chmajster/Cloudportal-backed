@@ -319,6 +319,16 @@ class GeneratedHostnameOutput(Output):
     reservation: HostnameReservationOutput | None
 
 
+class BlueprintCreationScopeOutput(Output):
+    tenant_id: str
+    tenant_name: str
+    tenant_slug: str
+    project_id: str
+    project_name: str
+    project_slug: str
+    permissions: list[str]
+
+
 class BlueprintOutput(Output):
     id: int
     slug: str

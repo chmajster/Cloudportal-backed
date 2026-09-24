@@ -95,9 +95,8 @@
     }
 
     try {
-      const [tenants, projects, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
-        safeApi('/tenants?limit=200'),
-        safeApi('/projects?limit=200'),
+      const [creationScopes, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
+        safeApi('/blueprints/creation-scopes?limit=200'),
         safeApi('/project-context', { selected: null, version: 0 }),
         allowed('ansible.read') ? safeApi('/ansible/playbooks') : Promise.resolve([]),
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
@@ -110,7 +109,7 @@
       ]);
 
       const state = parts.core.stateDefaults();
-      const scopeData = parts.scope.prepare(tenants, projects, projectContext, state);
+      const scopeData = parts.scope.prepare(creationScopes, projectContext, state);
       const data = {
         tenants: scopeData.tenants,
         projects: scopeData.projects,
@@ -1139,7 +1138,7 @@
           ['Blueprint', [
             ['Nazwa', state.name],
             ['Slug', state.slug],
-            ['Tenant', blueprintScope.tenantLabel(state.tenantId)],
+            ['Organizacja', blueprintScope.tenantLabel(state.tenantId)],
             ['Projekt', blueprintScope.projectLabel(state.projectId)],
             ['Opis', state.description || '—'],
           ]],
@@ -1212,7 +1211,7 @@
 
       function renderStepBody() {
         const descriptions = [
-          'Nadaj Blueprintowi czytelną nazwę i opis. Szczegóły techniczne są ukryte.',
+          'Wybierz organizację i projekt, a następnie nadaj Blueprintowi nazwę i opis. Lista zakresów wynika z RBAC.',
           'Wybierz provider, node i bazowy obraz VM. Credentials są pobierane z providera.',
           'Ustaw wielkość VM. Presety aktualizują CPU, RAM i dysk jednym kliknięciem.',
           'Wybierz sposób automatycznego nadawania nazw hostów.',
@@ -1312,7 +1311,7 @@
             node('p', { class: 'muted', text: created.name + ' · v' + created.version }),
             node('div', { class: 'blueprint-wizard-inline-actions' },
               button('Zamknij', () => navigate('blueprints'), 'primary'),
-              allowed('blueprints.execute') ? button('Przejdź do Blueprintów', () => navigate('blueprints')) : null));
+              blueprintScope.allows('blueprints.execute') ? button('Przejdź do Blueprintów', () => navigate('blueprints')) : null));
           footerRoot.replaceChildren();
           state.submitting = false;
         } catch (error) {

@@ -12,6 +12,15 @@
     return button(label, () => Promise.resolve().then(operation).catch(error => toast(error.message, 'error')), kind, disabled);
   }
 
+  function scopedRoleOption(role, checked) {
+    const permissions = (role.permissions || []).slice().sort();
+    return node('div', { class: 'tenancy-role-option' },
+      checkboxField(`${role.name} (#${role.id})`, 'role_' + role.id, checked),
+      node('div', { class: 'field-help', text: permissions.length
+        ? 'Uprawnienia: ' + permissions.join(', ')
+        : 'Brak delegowalnych uprawnień w tym zakresie.' }));
+  }
+
   function pageControls(page, reload) {
     return node('div', { class: 'tenancy-pagination' },
       action('← Poprzednia', () => reload(Math.max(0, page.offset - page.limit)), 'ghost', page.offset === 0),
@@ -170,8 +179,10 @@
     // Existing assignments may reference a role that is no longer delegable.
     // Still render a removable checkbox; never trap a member in such a role.
     (member?.role_ids || []).forEach(roleId => {
-      choices.append(checkboxField(`Obecna rola #${roleId}`, 'role_' + roleId, true));
-      renderedRoles.add(roleId);
+      const fallback = node('div', { class: 'tenancy-role-option', 'data-role-id': String(roleId) },
+        checkboxField(`Obecna rola #${roleId}`, 'role_' + roleId, true),
+        node('div', { class: 'field-help', text: 'Rola przypisana wcześniej; jej aktualne uprawnienia zostaną zweryfikowane przez backend.' }));
+      choices.append(fallback);
     });
     let more;
     async function loadRoles() {
@@ -179,7 +190,13 @@
       if (current !== generation || state.view !== 'tenants') return;
       page.items.forEach(role => {
         if (renderedRoles.has(role.id)) return;
-        choices.append(checkboxField(`${role.name} (${role.id})`, 'role_' + role.id, selected.has(String(role.id))));
+        const existingFallback = choices.querySelector('[data-role-id="' + role.id + '"]');
+        const checked = existingFallback?.querySelector('input[type="checkbox"]')?.checked
+          ?? selected.has(String(role.id));
+        if (existingFallback) existingFallback.remove();
+        const option = scopedRoleOption(role, checked);
+        option.dataset.roleId = String(role.id);
+        choices.append(option);
         renderedRoles.add(role.id);
       });
       offset += page.items.length;
@@ -188,10 +205,24 @@
     more = action('Pokaż kolejne role', loadRoles);
     picker.append(more);
     if (assigner) await loadRoles();
+    let userField = null;
+    if (!member) {
+      const users = await api('/users?limit=200');
+      if (current !== generation || state.view !== 'tenants') return;
+      const candidates = (users.items || []).filter(user => user.is_active !== false && user.is_locked !== true);
+      userField = selectField('Użytkownik', 'user_id',
+        candidates.map(user => ({
+          value: String(user.id),
+          label: user.username + (user.email ? ' — ' + user.email : '') + ' (#' + user.id + ')',
+        })),
+        '', { required: true, placeholder: 'Wybierz użytkownika' });
+      userField.append(node('span', { class: 'field-help',
+        text: 'Po dodaniu użytkownika wybierz role RBAC. Backend nie pozwoli nadać uprawnień szerszych niż Twoje w tej organizacji.' }));
+    }
     if (current !== generation || state.view !== 'tenants') return;
     const body = node('div', { class: 'stack' },
-      member ? node('p', { text: `${member.username} / ID ${member.user_id}` }) : field('ID użytkownika', 'user_id', {
-        type: 'number', min: 1, required: true, help: 'ID aktywnego konta udostępniony przez administratora platformy.' }),
+      member ? node('p', { text: `${member.username} / ID ${member.user_id}` }) : userField,
+      node('p', { class: 'muted', text: 'Uprawnienia są nadawane przez role RBAC w tej organizacji; nie zmieniają globalnych uprawnień konta.' }),
       assigner ? picker : node('p', { text: 'Nie masz uprawnienia do nadawania ról. Członkostwo zostanie utworzone bez roli.' }),
       member ? node('p', { class: 'muted', text: 'Zapis zastępuje zestaw ról. Zaznacz role, które mają pozostać; lista ma paginację.' }) : null);
     openModal({ title: member ? 'Role członka' : 'Dodaj członka', body, onSubmit: async data => {

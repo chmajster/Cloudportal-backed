@@ -4,4 +4,13 @@
 .projects-json { overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; }
 .projects-notice { padding: .8rem 1rem; border: 1px solid var(--border); border-radius: .5rem; }
 .projects-roles { display: grid; gap: .5rem; }
+.projects-role-option {
+  display: grid;
+  gap: .35rem;
+  padding: .7rem .8rem;
+  border: 1px solid var(--line);
+  border-radius: .55rem;
+  background: var(--surface);
+}
+.projects-role-option .field-help { padding-left: 26px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .projects-overview { grid-template-columns: 1fr; } }

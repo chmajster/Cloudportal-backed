@@ -9,6 +9,15 @@
   function action(label, operation, kind = 'ghost', disabled = false) {
     return button(label, () => Promise.resolve().then(operation).catch(error => toast(error.message, 'error')), kind, disabled);
   }
+  function scopedRoleOption(role, checked) {
+    const permissions = (role.permissions || []).slice().sort();
+    return node('div', { class: 'projects-role-option' },
+      checkboxField(`${role.name} (#${role.id})`, 'role_' + role.id, checked),
+      node('div', { class: 'field-help', text: permissions.length
+        ? 'Uprawnienia: ' + permissions.join(', ')
+        : 'Brak delegowalnych uprawnień w tym projekcie.' }));
+  }
+
   function controls(page, reload) {
     return node('div', { class: 'projects-pagination' },
       action('Poprzednia', () => reload(Math.max(0, page.offset - page.limit)), 'ghost', page.offset === 0),
@@ -170,7 +179,11 @@
     const current = ++generation;
     const roles = node('div', { class: 'projects-roles' });
     const selected = new Set(member?.role_ids || []), rendered = new Set();
-    for (const roleId of selected) { roles.append(checkboxField(`Obecna rola #${roleId}`, 'role_' + roleId, true)); rendered.add(roleId); }
+    for (const roleId of selected) {
+      roles.append(node('div', { class: 'projects-role-option', 'data-role-id': String(roleId) },
+        checkboxField(`Obecna rola #${roleId}`, 'role_' + roleId, true),
+        node('div', { class: 'field-help', text: 'Rola przypisana wcześniej; backend ponownie sprawdzi jej bieżący zakres.' })));
+    }
     const userField = selectField('Członek tenanta', 'user_id', [], '');
     const select = userField.querySelector('select'); select.required = true;
     let roleOffset = 0, userOffset = 0, moreRoles, moreUsers;
@@ -178,7 +191,14 @@
       const page = await api(`/projects/${id}/assignable-roles?limit=${pageSize}&offset=${roleOffset}`);
       if (current !== generation || state.view !== 'projects') return;
       for (const role of page.items) if (!rendered.has(role.id)) {
-        roles.append(checkboxField(`${role.name} (#${role.id})`, 'role_' + role.id, selected.has(role.id))); rendered.add(role.id);
+        const existingFallback = roles.querySelector('[data-role-id="' + role.id + '"]');
+        const checked = existingFallback?.querySelector('input[type="checkbox"]')?.checked
+          ?? selected.has(role.id);
+        if (existingFallback) existingFallback.remove();
+        const option = scopedRoleOption(role, checked);
+        option.dataset.roleId = String(role.id);
+        roles.append(option);
+        rendered.add(role.id);
       }
       roleOffset += page.items.length; moreRoles.disabled = roleOffset >= page.total;
     }
@@ -193,6 +213,7 @@
     if (current !== generation || state.view !== 'projects') return;
     openModal({ title: member ? 'Role członka projektu' : 'Dodaj członka projektu', body: node('div', { class: 'stack' },
       member ? node('p', { text: member.username }) : userField, member ? null : moreUsers,
+      node('p', { class: 'muted', text: 'Uprawnienia są nadawane przez role RBAC tylko w tym projekcie. Role projektowe nie rozszerzają uprawnień globalnych.' }),
       assigner ? roles : node('p', { text: 'Członkostwo bez roli — brak uprawnienia do przypisywania ról.' }), assigner ? moreRoles : null),
       onSubmit: async data => {
         const roleIds = new Set(member?.role_ids || []);
