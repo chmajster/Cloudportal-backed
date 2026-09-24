@@ -490,6 +490,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'group_by_environment': True,
         'group_by_apmid': True,
         'job_template_id': 33,
+        'remove_on_destroy': True,
     }
     assert [step['type'] for step in result['workflow']] == [
         'cloud_init',
@@ -498,3 +499,5 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'register_awx',
     ]
     assert result['workflow'][-1]['depends_on'] == ['guest_ip']
+    assert result['workflow'][-1]['retry'] == 3
+    assert result['workflow'][-1]['timeout'] == 300
