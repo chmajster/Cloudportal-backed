@@ -123,11 +123,12 @@ async function testLdap() {
 }
 
 async function settingsView() {
-  const [config, health, updateSettings, blueprintSettings] = await Promise.all([
+  const [config, health, updateSettings, blueprintSettings, executionSettings] = await Promise.all([
     api('/settings/ldap'),
     api('/health', { auth: false, allow: [503] }),
     allowed('updates.read') ? api('/updates/settings').catch(() => null) : Promise.resolve(null),
     api('/settings/blueprints'),
+    api('/settings/execution'),
   ]);
 
   const user = state.identity?.user || {};
@@ -136,6 +137,9 @@ async function settingsView() {
   const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
   const checks = health?.checks || {};
   const workers = checks.workers || {};
+  const parallelLimit = Number(executionSettings.max_parallel_jobs || 1);
+  const onlineWorkers = Number(workers.online || 0);
+  const effectiveParallelism = onlineWorkers > 0 ? Math.min(parallelLimit, onlineWorkers) : 0;
 
   const appearance = settingsCard(
     'sun',
@@ -181,9 +185,40 @@ async function settingsView() {
       node('div', { class: 'settings-value' }, node('span', { text: 'Redis' }), settingsHealth(checks.redis)),
       node('div', { class: 'settings-value' }, node('span', { text: 'Dispatcher' }), settingsHealth(checks.dispatcher)),
       settingsValue('Workery online', workers.online !== undefined ? String(workers.online) : '—'),
-      settingsValue('Workery oczekiwane', workers.expected !== undefined ? String(workers.expected) : '—')),
+      settingsValue('Workery oczekiwane', workers.expected !== undefined ? String(workers.expected) : '—'),
+      settingsValue('Limit równoległych zadań', String(parallelLimit)),
+      settingsValue('Efektywnie teraz', workers.online !== undefined ? String(effectiveParallelism) : '—')),
     node('div', { class: 'settings-card-actions' },
-      button('Odśwież stan', () => settingsView()))
+      button('Odśwież stan', () => settingsView()),
+      allowed('settings.update') ? button('Zmień równoległość', () => {
+        const body = node('div', { class: 'form-grid' },
+          field('Maksymalna liczba równoległych zadań', 'max_parallel_jobs', {
+            type: 'number',
+            min: 1,
+            max: 64,
+            required: true,
+            value: parallelLimit,
+            help: 'Zakres 1–64. Dispatcher nie przekaże nowych zadań ponad ten limit. Rzeczywista równoległość nie przekroczy liczby workerów online.',
+          }),
+          node('p', {
+            class: 'muted wide',
+            text: 'Zmiana działa bez restartu. Zadania już uruchomione lub przekazane do workerów nie są przerywane; nowy limit obowiązuje kolejne uruchomienia.',
+          }));
+        openModal({
+          title: 'Równoległość wykonywania zadań',
+          eyebrow: 'System · kolejka wykonawcza',
+          body,
+          submitLabel: 'Zapisz limit',
+          onSubmit: async data => {
+            await api('/settings/execution', {
+              method: 'PUT',
+              body: { max_parallel_jobs: Number(data.get('max_parallel_jobs')) },
+            });
+            toast('Limit równoległych zadań został zapisany.');
+            navigate('settings');
+          },
+        });
+      }, 'primary') : null)
   );
 
   const updates = settingsCard(
