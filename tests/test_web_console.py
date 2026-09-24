@@ -118,7 +118,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
 
     novnc_license = client.get('/ui/vendor/novnc/LICENSE.txt')
     assert novnc_license.status_code == 200
-    assert 'Mozilla Public License' in novnc_license.text
+    assert 'MPL 2.0' in novnc_license.text
 
     theme_script = client.get('/ui/theme-init.js')
     assert theme_script.status_code == 200
