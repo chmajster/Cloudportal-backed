@@ -738,7 +738,31 @@ def blueprint_runtime_facts(context):
     }
 
 
-def register_awx_host(context, runtime, workspace, *, timeout=600):
+def wait_for_awx_job(context, client, job_id, timeout):
+    deadline = time.monotonic() + max(1, float(timeout))
+    last_status = 'unknown'
+    while time.monotonic() < deadline:
+        context.check()
+        try:
+            payload = client.request('GET', f'jobs/{int(job_id)}/').json()
+        except AwxError as exc:
+            raise ExecutionFailed('AWX job status check failed: ' + str(exc)[:350]) from None
+        last_status = str((payload or {}).get('status') or 'unknown').lower()
+        if last_status == 'successful':
+            return payload
+        if last_status in {'failed', 'error', 'canceled', 'cancelled'}:
+            raise ExecutionFailed(
+                f'AWX Job Template execution finished with status {last_status}'
+            )
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining:
+            time.sleep(min(2.0, remaining))
+    raise ExecutionFailed(
+        f'Timed out waiting for AWX Job Template completion (last status: {last_status})'
+    )
+
+
+def register_awx_host(context, runtime, workspace, *, timeout=600, step_id='register_awx'):
     blueprint = (context.job.payload or {}).get('blueprint') or {}
     config = blueprint.get('awx') or {}
     if not config:
@@ -805,10 +829,32 @@ def register_awx_host(context, runtime, workspace, *, timeout=600):
                     raise AwxError(
                         'Selected AWX Job Template does not belong to the selected project'
                     )
-            launch = client.launch_job_template(
-                int(job_template_id),
-                hostname=context.deployment.name,
-                deployment_id=context.deployment.id,
+            launch_key = str(step_id)
+            launches = runtime.setdefault('awx_launches', {})
+            existing_job_id = launches.get(launch_key)
+            if existing_job_id:
+                launch = {'job': int(existing_job_id), 'resumed': True}
+                context.log(
+                    f'workflow.awx.job.resumed: template={int(job_template_id)} job={int(existing_job_id)}'
+                )
+            else:
+                launch = client.launch_job_template(
+                    int(job_template_id),
+                    hostname=context.deployment.name,
+                    deployment_id=context.deployment.id,
+                )
+                launched_job_id = launch.get('job') or launch.get('id')
+                if not launched_job_id:
+                    raise AwxError('AWX launch did not return a job id')
+                launches[launch_key] = int(launched_job_id)
+                # Persist immediately: after AWX accepts a launch, recovery must
+                # poll that job rather than silently launching a duplicate.
+                persist_workflow_runtime(context, runtime)
+            wait_for_awx_job(
+                context,
+                client,
+                int(launch.get('job') or launch.get('id')),
+                timeout,
             )
     except AwxError as exc:
         raise ExecutionFailed('AWX onboarding failed: ' + str(exc)[:350]) from None
@@ -1853,6 +1899,7 @@ def run_blueprint_workflow(context, executor):
                         runtime,
                         workspace_for(step_type),
                         timeout=timeout,
+                        step_id=step_id,
                     )
                 elif step_type == 'create_snapshot':
                     create_blueprint_snapshot(context, workspace_for(step_type), step)
