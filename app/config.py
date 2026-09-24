@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     refresh_seconds: int = 28800
     login_attempts: int = 5
     lockout_seconds: int = 900
-    request_limit: int = 300
+    request_limit: int = Field(default=1200, ge=60, le=100000)
     worker_count: int = Field(default=1, ge=1, le=64)
     execution_timeout: int = 3600
     worker_auto_resume_enabled: bool = True
