@@ -603,6 +603,8 @@ def persist_workflow_runtime(context, runtime):
             'ansible_completed_runs': sorted(
                 int(value) for value in runtime.get('ansible_completed_runs', set())
             ),
+            'ansible_inflight_run': runtime.get('ansible_inflight_run'),
+            'awx_launches': dict(runtime.get('awx_launches') or {}),
         })
         payload['_workflow_runtime'] = saved
         current.payload = payload
@@ -626,6 +628,12 @@ def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addr
         )
     completed = runtime.setdefault('ansible_completed_runs', set())
     addresses = list(addresses or [])
+    inflight = runtime.get('ansible_inflight_run')
+    if inflight is not None and int(inflight) not in completed:
+        raise ExecutionFailed(
+            'Automatic resume refused to repeat an Ansible run with an ambiguous result; '
+            'inspect the host and retry the deployment explicitly'
+        )
     for index, (spec, credential) in enumerate(runs):
         if index in completed:
             context.log(
@@ -644,8 +652,11 @@ def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addr
             addresses=addresses,
         )
         context.ansible.inventory = Inventory(hosts=addresses)
+        runtime['ansible_inflight_run'] = index
+        persist_workflow_runtime(context, runtime)
         AnsibleExecutor().execute('ansible.execute', context)
         completed.add(index)
+        runtime['ansible_inflight_run'] = None
         context.stage(
             f'workflow.ansible.run.completed:{index + 1}/{len(runs)}:{spec.playbook}'
         )
@@ -1471,6 +1482,13 @@ def create_blueprint_snapshot(context, workspace, step):
         raise ExecutionFailed('Proxmox node missing from deployment variables')
     snapname = ('bp-' + context.job.id[:8] + '-' + str(step.get('id') or 'snapshot'))[:40]
     provider = provider_for(context.credential)
+    try:
+        existing = provider.snapshots(node, vm_id) or []
+    except Exception:
+        existing = []
+    if any(str(item.get('name') or item.get('snapname') or '') == snapname for item in existing):
+        context.log(f'workflow.snapshot.reused: {snapname}')
+        return
     upid = provider.create_snapshot(
         node,
         vm_id,
@@ -1524,6 +1542,8 @@ def run_blueprint_workflow(context, executor):
         'ansible_completed_runs': {
             int(value) for value in (saved_runtime.get('ansible_completed_runs') or [])
         },
+        'ansible_inflight_run': saved_runtime.get('ansible_inflight_run'),
+        'awx_launches': dict(saved_runtime.get('awx_launches') or {}),
         'prepared': [],
         'step_states': {step_id: 'completed' for step_id in completed_steps},
         'plan_ready': saved_plan_ready,
