@@ -230,15 +230,11 @@ async function myResourcesView(repairInventory = true) {
     requestAnimationFrame(() => window.scrollTo({ top: preservedScrollY, behavior: 'auto' }));
   }
 
-  const provisioningActive = deployments.some(item =>
-    item.active_job_id || ['waiting_approval', 'queued', 'running', 'cancelling', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
-  if (provisioningActive) {
-    myResourcesPollTimer = window.setTimeout(() => {
-      if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
-        myResourcesView(false).catch(error => toast(error.message, 'error'));
-      }
-    }, 2000);
-  }
+  myResourcesPollTimer = window.DeploymentProvisioningPoll.schedule(deployments, () => {
+    if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
+      myResourcesView(false).catch(error => toast(error.message, 'error'));
+    }
+  });
 }
 
 function deploymentActions(item, returnTo = 'my-resources') {
