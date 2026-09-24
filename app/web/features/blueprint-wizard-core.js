@@ -174,6 +174,7 @@
       sshUsername: 'clouduser',
       sshPublicKey: '',
       guestCredentialId: '',
+      guestAccountMode: 'cloud_init_managed',
       genericVariables: {},
       hostnameEnabled: true,
       hostnameSchemeId: '',
@@ -308,6 +309,9 @@
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
     if (state.guestCredentialId) deployment.guest_credential_id = Number(state.guestCredentialId);
+    deployment.guest_account_mode = state.guestAccountMode === 'existing_template'
+      ? 'existing_template'
+      : 'cloud_init_managed';
     if (!state.selectApmidOnExecute && state.apmid) deployment.apmid = String(state.apmid).trim().toUpperCase();
     if (!state.selectEnvironmentOnExecute && state.environment) deployment.environment = String(state.environment).trim().toLowerCase();
     deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute);

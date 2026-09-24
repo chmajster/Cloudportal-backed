@@ -682,6 +682,7 @@ class BlueprintDeployment(Input):
     ipam_pool_id: int | None = Field(default=None, gt=0)
     hostname_values: dict[Slug, Annotated[str, Field(min_length=1, max_length=253)]] = Field(default_factory=dict)
     guest_credential_id: int | None = Field(default=None, gt=0)
+    guest_account_mode: Literal['cloud_init_managed', 'existing_template'] = 'cloud_init_managed'
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
     environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
     select_apmid_on_execute: bool = False

@@ -114,6 +114,44 @@ def test_blueprint_approval_permission_is_enforced(client, headers):
     assert current.json()['status'] == 'queued'
 
 
+def test_existing_template_account_requires_credential_and_cloud_init(client, headers):
+    credential, provider = infrastructure(client, headers)
+    payload = blueprint_payload(credential, provider)
+    payload['slug'] = 'existing-template-account'
+    payload['name'] = 'Existing template account'
+    payload['deployment']['guest_account_mode'] = 'existing_template'
+    payload['workflow'] = [
+        {'id': 'cloud_init', 'type': 'cloud_init'},
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud_init']},
+    ]
+
+    missing = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert missing.status_code == 422, missing.text
+    assert 'requires a guest SSH credential' in missing.text
+
+    guest = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Template local account',
+        'type': 'ssh',
+        'endpoint': '',
+        'username': 'templateadmin',
+        'secrets': {'password': 'template-password'},
+    })
+    assert guest.status_code == 201, guest.text
+    payload['deployment']['guest_credential_id'] = guest.json()['id']
+
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+    assert created.json()['deployment']['guest_account_mode'] == 'existing_template'
+    assert created.json()['deployment']['guest_credential_id'] == guest.json()['id']
+
+    without_cloud = dict(payload)
+    without_cloud['slug'] = 'existing-template-without-cloud-init'
+    without_cloud['workflow'] = [{'id': 'apply', 'type': 'terraform_apply'}]
+    rejected = client.post('/api/v1/blueprints', headers=headers, json=without_cloud)
+    assert rejected.status_code == 422, rejected.text
+    assert 'requires an explicit cloud_init workflow step' in rejected.text
+
+
 def test_waiting_approval_guest_credential_cannot_be_rotated(client, headers):
     setting = client.put(
         '/api/v1/settings/blueprints',

@@ -105,6 +105,31 @@ def test_render_dhcp_target_user_and_agent(tmp_path):
     assert 'cpbootstrap' not in json.dumps(files)
 
 
+def test_existing_template_account_is_preserved_by_cloud_init(tmp_path):
+    variables = context(tmp_path).deployment.variables | {
+        'ssh_username': 'predefined',
+        'ssh_public_key': 'ssh-ed25519 SHOULD-NOT-BE-INJECTED test',
+        'install_qemu_guest_agent': True,
+    }
+    files = seed.render_seed(
+        variables,
+        instance_id='existing-account',
+        mac_address='02:00:11:22:33:44',
+        password_hash='$6$SHOULD-NOT-BE-USED',
+        guest_account_mode='existing_template',
+    )
+    user_data = yaml.safe_load(files['user-data'])
+    assert 'users' not in user_data
+    assert 'chpasswd' not in user_data
+    assert 'ssh_pwauth' not in user_data
+    assert 'disable_root' not in user_data
+    assert 'predefined' not in files['user-data']
+    assert 'SHOULD-NOT-BE-INJECTED' not in files['user-data']
+    assert 'SHOULD-NOT-BE-USED' not in files['user-data']
+    assert user_data['packages'] == ['qemu-guest-agent']
+    assert user_data['hostname'] == 'vm01'
+
+
 def test_static_ip_and_dns_are_in_seed(tmp_path):
     variables = context(tmp_path).deployment.variables | {
         'ipv4_address': '192.0.2.10/24', 'ipv4_gateway': '192.0.2.1',
@@ -307,7 +332,15 @@ const data = {providers: [{id: 1, type: 'proxmox', credentials_id: 1}], template
 const payload = parts.core.buildPayload(state, data);
 assert.equal(payload.workflow[0].type, 'cloud_init');
 assert.equal(payload.deployment.guest_credential_id, 7);
+assert.equal(payload.deployment.guest_account_mode, 'cloud_init_managed');
 assert.equal(payload.deployment.variables.cloud_init_snippet_storage, null);
+state.guestAccountMode = 'existing_template';
+const existingPayload = parts.core.buildPayload(state, data);
+assert.equal(existingPayload.deployment.guest_account_mode, 'existing_template');
+assert.equal(Object.keys(parts.cloudInit.validate(state)).length, 0);
+state.guestCredentialId = '';
+assert(parts.cloudInit.validate(state).guest_credential_id);
+state.guestCredentialId = '7';
 state.advancedWorkflow = true; state.workflow = [{id:'plan',type:'terraform_plan',depends_on:[]},{id:'apply',type:'terraform_apply',depends_on:['plan']}];
 parts.cloudInit.toggleStep(state, true);
 assert.equal(state.workflow[0].type, 'cloud_init');
@@ -320,6 +353,8 @@ parts.cloudInit.toggleStep(state, false);
 assert(!state.workflow.some(step => step.type === 'cloud_init'));
 const preview = parts.cloudInit.preview(state, [{id:7,username:'operator',password:'DO-NOT-LEAK',private_key:'PRIVATE-DO-NOT-LEAK'}]);
 assert(preview.includes('operator')); assert(preview.includes('qemu-guest-agent'));
+assert(preview.includes('Cloud-init nie utworzy użytkownika'));
+assert(!preview.includes('users:'));
 assert(!preview.includes('DO-NOT-LEAK'));
 state.providerType = 'aws'; assert.equal(parts.cloudInit.enabled(state), false);
 '''

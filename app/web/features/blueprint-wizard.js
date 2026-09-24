@@ -329,6 +329,8 @@
             state.ansibleVariables[input.dataset.ansibleVariable] = input.value.trim();
           });
         } else if (state.step === 6) {
+          const cloudAccountMode = root.querySelector('[name="cloud_init_guest_account_mode"]');
+          if (cloudAccountMode) state.guestAccountMode = cloudAccountMode.value;
           const cloudCredential = root.querySelector('[name="cloud_init_guest_credential_id"]');
           if (cloudCredential) state.guestCredentialId = cloudCredential.value;
           state.installQemuGuestAgent = root.querySelector('[name="install_qemu_guest_agent"]')?.checked ?? state.installQemuGuestAgent;
