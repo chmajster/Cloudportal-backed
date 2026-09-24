@@ -421,7 +421,7 @@ def wait_for_ip(context, workspace, timeout=WAIT_FOR_IP_MAX_SECONDS):
     effective_timeout = min(max(float(timeout), 1.0), WAIT_FOR_IP_MAX_SECONDS)
     configured = configured_deployment_ip(context)
     if configured:
-        wait_for_vm(context, workspace, timeout=effective_timeout)
+        wait_for_vm(context, workspace, timeout=timeout)
         context.stage('workflow.wait_for_ip')
         context.log(f'workflow.wait_for_ip.configured: {configured}')
         update_inventory_primary_ip(context, configured)
