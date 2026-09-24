@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -33,10 +34,17 @@ def workspace_lock(workspace):
 
 
 @contextmanager
-def terraform_plugin_cache_lock(cache_dir):
+def terraform_plugin_cache_lock(cache_dir, context=None):
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (cache_dir / '.init.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if context is not None:
+                    context.check()
+                time.sleep(0.5)
         try:
             yield
         finally:
@@ -416,7 +424,7 @@ class TerraformExecutor(Executor):
                     if (workspace / '.terraform.lock.hcl').exists():
                         init_command.append('-lockfile=readonly')
                     context.stage('terraform.init')
-                    with terraform_plugin_cache_lock(plugin_cache):
+                    with terraform_plugin_cache_lock(plugin_cache, context):
                         if terraform_init_ready(workspace, init_fingerprint, self.binary):
                             context.log('terraform.init.cached: inicjalizacja została wykonana przez inny worker')
                         else:
