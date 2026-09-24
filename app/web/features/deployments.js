@@ -152,6 +152,22 @@ async function myResourcesView(repairInventory = true) {
   const jobs = jobResult.items || [];
   const deploymentById = new Map(deployments.map(item => [item.id, item]));
   const jobById = new Map(jobs.map(item => [item.id, item]));
+
+  if (allowed('jobs.read')) {
+    const missingActiveJobIds = [...new Set(
+      deployments
+        .map(item => item.active_job_id)
+        .filter(id => id && !jobById.has(id))
+    )];
+    const activeJobs = await Promise.all(
+      missingActiveJobIds.map(id => api('/jobs/' + encodeURIComponent(id)).catch(() => null))
+    );
+    activeJobs.filter(Boolean).forEach(job => {
+      jobs.push(job);
+      jobById.set(job.id, job);
+    });
+  }
+
   const latestApplyJobByDeployment = new Map();
   [...jobs]
     .filter(item => item.deployment_id && item.operation === 'terraform.apply')
