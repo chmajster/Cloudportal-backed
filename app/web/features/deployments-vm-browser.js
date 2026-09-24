@@ -46,6 +46,87 @@ function saveMyResourcesVmUi() {
   }
 }
 
+async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] }) {
+  const rawVms = [...vms];
+  const allJobs = [...jobs];
+  const deploymentById = new Map(deployments.map(item => [item.id, item]));
+  const jobById = new Map(allJobs.map(item => [item.id, item]));
+
+  if (allowed('jobs.read')) {
+    const missingActiveJobIds = [...new Set(
+      deployments
+        .map(item => item.active_job_id)
+        .filter(id => id && !jobById.has(id))
+    )];
+    const activeJobs = await Promise.all(
+      missingActiveJobIds.map(id => api('/jobs/' + encodeURIComponent(id)).catch(() => null))
+    );
+    activeJobs.filter(Boolean).forEach(job => {
+      allJobs.push(job);
+      jobById.set(job.id, job);
+    });
+  }
+
+  const latestApplyJobByDeployment = new Map();
+  allJobs
+    .filter(item => item.deployment_id && item.operation === 'terraform.apply')
+    .sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0))
+    .forEach(item => {
+      if (!latestApplyJobByDeployment.has(item.deployment_id)) {
+        latestApplyJobByDeployment.set(item.deployment_id, item);
+      }
+    });
+
+  const provisioningJobForDeployment = deployment => {
+    if (!deployment) return null;
+    const active = deployment.active_job_id ? jobById.get(deployment.active_job_id) : null;
+    if (active?.operation === 'terraform.apply') return active;
+    return latestApplyJobByDeployment.get(deployment.id) || null;
+  };
+
+  function provisionalBlueprintVm(deployment) {
+    const variables = deployment.variables || {};
+    const vmId = variables.vm_id ?? variables.vmid ?? variables.target_vmid ?? variables.new_vmid ?? null;
+    return {
+      id: 'provisioning:' + deployment.id,
+      tenant_id: deployment.tenant_id,
+      project_id: deployment.project_id,
+      provider_id: deployment.provider_id,
+      deployment_id: deployment.id,
+      node: variables.node || variables.target_node || '',
+      vm_id: vmId,
+      name: deployment.name,
+      management_mode: 'terraform',
+      lifecycle_status: 'provisioning',
+      created_by: deployment.created_by,
+      created_at: deployment.created_at,
+      updated_at: deployment.updated_at,
+      destroyed_at: null,
+      provisioning_placeholder: true,
+      provisioning_job: provisioningJobForDeployment(deployment),
+    };
+  }
+
+  const managedDeploymentIds = new Set(rawVms.filter(item => item.deployment_id).map(item => item.deployment_id));
+  const result = rawVms.map(item => {
+    const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
+    const provisioningJob = provisioningJobForDeployment(deployment);
+    return provisioningJob && provisioningJob.status !== 'successful'
+      ? { ...item, provisioning_job: provisioningJob }
+      : item;
+  });
+
+  deployments
+    .filter(item => item.provider === 'proxmox'
+      && Boolean(item.workflow?.blueprint)
+      && item.status !== 'destroyed'
+      && !managedDeploymentIds.has(item.id))
+    .forEach(item => result.push(provisionalBlueprintVm(item)));
+
+  result.sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0));
+  return result;
+}
+
 function vmTagValues(deployment) {
   const raw = deployment?.variables?.tags || [];
   const tags = (Array.isArray(raw) ? raw : String(raw).split(/[;,\s]+/))
@@ -86,7 +167,7 @@ function vmMetadata(item, deployment, providerNames, userNames, projectNames, te
     project: projectNames.get(projectId) || (projectId ? short(projectId, 12) : '—'),
     tenantId,
     tenant: tenantNames.get(tenantId) || (tenantId ? short(tenantId, 12) : '—'),
-    status: String(item.live?.status || item.lifecycle_status || 'unknown').toLowerCase(),
+    status: String(item.provisioning_job?.status || item.live?.status || item.lifecycle_status || 'unknown').toLowerCase(),
     providerId: String(item.provider_id || ''),
     provider: providerNames.get(Number(item.provider_id)) || ('Platforma #' + item.provider_id),
     node: String(item.node || ''),
@@ -132,6 +213,7 @@ function vmMatchesFilters(entry) {
     item.name, item.vm_id, item.node, item.deployment_id,
     meta.apmid, meta.environment, meta.owner, meta.project, meta.tenant,
     meta.provider, meta.status, item.management_mode,
+    item.provisioning_job?.current_stage, item.provisioning_job?.error,
   ].map(value => String(value || '').toLocaleLowerCase('pl')).join(' ');
   return haystack.includes(query);
 }
@@ -143,21 +225,56 @@ function emptyVmState(title, description) {
     node('span', { class: 'muted', text: description }));
 }
 
-function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSelectionChange = null) {
+function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSelectionChange = null, onRefresh = null) {
+  const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
+  const createdAt = deployment?.created_at || item.created_at || '';
+  const provisioningJob = item.provisioning_job || null;
+  const provisioningVisible = Boolean(
+    item.provisioning_placeholder
+    || (provisioningJob && provisioningJob.status !== 'successful')
+  );
+  const provisioningFailed = Boolean(
+    provisioningJob && ['failed', 'cancelled'].includes(provisioningJob.status)
+  );
   const liveStatus = item.live?.status || item.lifecycle_status || 'unknown';
-  const active = item.lifecycle_status === 'active';
+  const active = item.lifecycle_status === 'active' && !item.provisioning_placeholder;
   const canOpen = allowed('vms.read') && active && hasCommand('inventory.openVm');
   const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm');
   const actions = [];
+
+  if (provisioningFailed && deployment && !deployment.active_job_id
+      && deployment.status !== 'reconciliation_required') {
+    if (allowed('jobs.execute') && allowed('terraform.execute')
+        && allowed('deployments.create') && allowed('blueprints.execute')) {
+      actions.push(button('Ponów', async () => {
+        await api(`/jobs/${provisioningJob.id}/retry`, { method: 'POST', idempotent: true });
+        toast('Provisioning został ponowiony.');
+        if (typeof onRefresh === 'function') await onRefresh();
+        else navigate('my-resources');
+      }, 'primary'));
+    }
+    if (allowed('deployments.destroy') && allowed('jobs.execute') && allowed('terraform.execute')) {
+      actions.push(button('Usuń', () => confirmAction(
+        'Usuń nieudany provisioning',
+        'Terraform usunie zasoby utworzone przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.',
+        async () => {
+          await api(`/deployments/${deployment.id}/destroy`, { method: 'POST', body: {}, idempotent: true });
+          toast('Utworzono zadanie usuwania nieudanego provisioningu.');
+          if (typeof onRefresh === 'function') await onRefresh();
+          else navigate('my-resources');
+        },
+      ), 'danger'));
+    }
+  }
+
   if (canOpen) {
     actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', item, 'overview', 'my-resources'), 'primary'));
   }
   if (canConsole) {
     actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
   }
-  const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
-  const createdAt = deployment?.created_at || item.created_at || '';
-  const canRecreate = item.management_mode === 'terraform'
+  const canRecreate = !provisioningVisible
+    && item.management_mode === 'terraform'
     && item.deployment_id
     && deployment?.status !== 'reconciliation_required'
     && hasCommand('inventory.recreateVm')
@@ -172,15 +289,30 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     actions.push(button('Wdrożenie', () => runCommand('deployments.open', deployment), 'ghost'));
   }
 
+  const stage = provisioningVisible
+    ? (provisioningJob && window.JobStageUI
+        ? window.JobStageUI.cell(provisioningJob)
+        : node('span', { text: statusLabel(provisioningJob?.status || deployment?.status || 'queued') }))
+    : null;
+  const statusText = provisioningVisible
+    ? (provisioningFailed ? 'Provisioning: błąd' : 'Provisioning')
+    : statusLabel(liveStatus);
+  const statusKindValue = provisioningVisible
+    ? (provisioningFailed ? 'danger' : 'warning')
+    : statusKind(liveStatus);
+  const vmIdLabel = item.vm_id === null || item.vm_id === undefined || item.vm_id === ''
+    ? 'oczekuje'
+    : item.vm_id;
+
   const card = node('article', {
     class: 'my-resource-card my-resource-vm-card',
   },
     node('div', { class: 'my-resource-card-head' },
       node('span', { class: 'my-resource-card-icon', 'aria-hidden': 'true' }, appIcon('server')),
       node('div', { class: 'my-resource-card-title' },
-        node('strong', { text: item.name || ('VM ' + item.vm_id) }),
-        node('small', { class: 'mono muted', text: (item.node || '—') + ' / VMID ' + item.vm_id })),
-      badge(statusLabel(liveStatus), statusKind(liveStatus))),
+        node('strong', { text: item.name || ('VM ' + vmIdLabel) }),
+        node('small', { class: 'mono muted', text: (item.node || '—') + ' / VMID ' + vmIdLabel })),
+      badge(statusText, statusKindValue)),
     node('div', { class: 'my-resource-card-meta' },
       node('span', { text: metadata.provider || providerNames.get(Number(item.provider_id)) || ('Platforma #' + item.provider_id) }),
       node('span', { text: statusLabel(item.management_mode) }),
@@ -194,11 +326,28 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
         class: 'my-resource-card-created-value',
         text: createdAt ? formatDate(createdAt) : '—',
       })),
+    provisioningVisible ? node('div', { class: 'my-resource-provisioning-state' },
+      node('div', { class: 'my-resource-provisioning-head' },
+        node('strong', { text: 'Komentarz: Provisioning' }),
+        badge(statusLabel(provisioningJob?.status || deployment?.status || 'queued'),
+          provisioningFailed ? 'danger' : 'warning')),
+      node('div', { class: 'my-resource-provisioning-stage' },
+        node('span', { class: 'muted', text: 'Etap' }),
+        stage),
+      provisioningJob?.error
+        ? node('div', { class: 'form-error my-resource-provisioning-error', text: provisioningJob.error })
+        : null,
+      deployment?.status === 'reconciliation_required'
+        ? node('small', { class: 'muted', text: 'Wymagana rekonsyliacja Terraform przed ponowieniem lub usunięciem.' })
+        : null)
+      : null,
     actions.length
       ? node('div', { class: 'my-resource-card-actions' }, ...actions)
-      : node('small', { class: 'muted', text: 'Brak uprawnień do sterowania tą VM.' }));
+      : node('small', { class: 'muted', text: provisioningVisible ? 'Provisioning trwa.' : 'Brak uprawnień do sterowania tą VM.' }));
 
-  window.vmBulkActions?.decorateCard(card, item, onSelectionChange);
+  if (!item.provisioning_placeholder) {
+    window.vmBulkActions?.decorateCard(card, item, onSelectionChange);
+  }
   return card;
 }
 
@@ -352,6 +501,7 @@ function createVmBrowser({
       deploymentById,
       meta,
       () => vmBulkControls?.sync(),
+      onRefresh,
     )));
     const listHeader = myResourcesVmUi.view === 'list'
       ? node('div', { class: 'my-resources-vm-list-header', 'aria-hidden': 'true' },
@@ -360,11 +510,12 @@ function createVmBrowser({
         node('span', { text: 'Data utworzenia' }),
         node('span', { class: 'my-resources-vm-list-header-actions', text: 'Akcje' }))
       : null;
-    vmBulkControls = window.vmBulkActions?.toolbar(
-      filtered.map(entry => entry.item),
+    const bulkItems = filtered.map(entry => entry.item).filter(item => !item.provisioning_placeholder);
+    vmBulkControls = bulkItems.length ? (window.vmBulkActions?.toolbar(
+      bulkItems,
       grid,
       () => typeof onRefresh === 'function' ? onRefresh() : undefined
-    ) || null;
+    ) || null) : null;
     const renderedContent = listHeader ? [listHeader, grid] : [grid];
     if (vmBulkControls) results.replaceChildren(vmBulkControls.element, ...renderedContent);
     else results.replaceChildren(...renderedContent);
@@ -383,6 +534,7 @@ function createVmBrowser({
 
 registerExtension('deployments-vm-browser', () => {
   window.MyResourcesVmBrowser = Object.freeze({
+    composeProvisioning: composeProvisioningVms,
     create: createVmBrowser,
   });
 });

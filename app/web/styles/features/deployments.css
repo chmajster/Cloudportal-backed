@@ -964,6 +964,35 @@
   gap: 8px;
 }
 
+.my-resource-provisioning-state {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: .72rem;
+}
+
+.my-resource-provisioning-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.my-resource-provisioning-stage {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.my-resource-provisioning-error {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .my-resource-card-actions .button.primary {
   flex: 1 1 140px;
 }

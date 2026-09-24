@@ -136,22 +136,30 @@ async function myResourcesView(repairInventory = true) {
   }
 
   const optionalItems = path => api(path).then(result => result.items || []).catch(() => []);
-  const [deploymentResult, vmResult, resourceResult, providerResult, users, projects, tenants] = await Promise.all([
+  const [deploymentResult, vmResult, resourceResult, providerResult, jobResult, users, projects, tenants] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/vms?limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
+    allowed('jobs.read') ? api('/jobs?limit=200') : Promise.resolve({ items: [] }),
     allowed('users.read') ? optionalItems('/users?limit=200') : Promise.resolve([]),
     optionalItems('/projects?limit=200'),
     optionalItems('/tenants?limit=200'),
   ]);
 
   const deployments = deploymentResult.items || [];
-  const vms = (vmResult.items || []).filter(item => item.lifecycle_status !== 'destroyed');
-  const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm' && item.lifecycle_status !== 'destroyed');
+  const deploymentById = new Map(deployments.map(item => [item.id, item]));
+  const vms = (await window.MyResourcesVmBrowser.composeProvisioning({
+    deployments,
+    vms: vmResult.items || [],
+    jobs: jobResult.items || [],
+  })).filter(item => item.lifecycle_status !== 'destroyed');
+
+  const resources = (resourceResult.items || []).filter(
+    item => item.resource_type !== 'vm' && item.lifecycle_status !== 'destroyed'
+  );
   const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
   const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
-  const deploymentById = new Map(deployments.map(item => [item.id, item]));
   const userNames = new Map(users.map(user => [
     String(user.id),
     [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || user.username || ('#' + user.id),
@@ -192,7 +200,7 @@ async function myResourcesView(repairInventory = true) {
       ], deployments, item => {
         const actions = [];
         const vm = vmByDeployment.get(item.id);
-        if (vm && allowed('vms.read') && hasCommand('inventory.openVm')) {
+        if (vm && !vm.provisioning_placeholder && allowed('vms.read') && hasCommand('inventory.openVm')) {
           actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', vm, 'overview', 'my-resources'), 'primary'));
         }
         actions.push(...deploymentActions(item, 'my-resources'));
