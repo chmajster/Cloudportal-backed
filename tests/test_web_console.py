@@ -215,6 +215,20 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Wymuś stop" in script
     assert "window.vmBulkActions?.toolbar" in script
     assert "window.vmBulkActions?.decorateCard" in script
+    assert "const MY_RESOURCES_VM_UI_KEY = 'cloudportal.my-resources.vms.ui.v1'" in script
+    assert "function vmMetadata(" in script
+    assert "function vmMatchesFilters(" in script
+    assert "function createVmBrowser(" in script
+    assert "Szukaj VM, VMID, node, APMID" in script
+    assert "button('Filtry'" in script
+    assert "button('Kafelki'" in script
+    assert "button('Lista'" in script
+    assert "selectFilter('APMID'" in script
+    assert "selectFilter('Środowisko'" in script
+    assert "selectFilter('Właściciel'" in script
+    assert "selectFilter('Projekt'" in script
+    assert "selectFilter('Tenant'" in script
+    assert "checkboxField('Tylko moje VM'" in script
     assert "button('Anuluj'" in script
     assert "button('Anuluj zadanie'" in script
     assert "Anulowanie rozpoczęte." in script
@@ -238,6 +252,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.my-resources-section-icon' in stylesheet
     assert '.my-resources-empty-icon' in stylesheet
     assert '.my-resource-grid' in stylesheet
+    assert '.my-resources-vm-controls' in stylesheet
+    assert '.my-resources-filter-panel' in stylesheet
+    assert '.my-resource-grid-list' in stylesheet
+    assert '.my-resources-vm-view-toggle' in stylesheet
     assert '.my-resources-bulk-bar' in stylesheet
     assert '.my-resources-bulk-actions' in stylesheet
     assert '.my-resource-card.selected' in stylesheet
