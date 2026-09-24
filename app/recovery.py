@@ -4,10 +4,10 @@ import re
 import sys
 import uuid
 
-from sqlalchemy import delete, or_, select, text, update
+from sqlalchemy import delete, select, text, update
 
 from app.database import session
-from app.models import Audit, PasswordReset, Role, User, now
+from app.models import Audit, PasswordReset, Role, Setting, User, now
 from app.projects.models import Project, ProjectMembership, ProjectRoleAssignment, ProjectRoleGrant
 from app.projects.permissions import DEFAULT_PROJECT_ID
 from app.rbac.service import seed
@@ -119,6 +119,8 @@ def recover_admin(db, username, password, email=None, project_reference=None):
 
     if db.bind.dialect.name == 'postgresql':
         db.execute(text('SELECT pg_advisory_xact_lock(613040621)'))
+    if db.get(Setting, 'bootstrapped') is None:
+        raise RuntimeError('Administrator recovery requires an existing bootstrapped installation')
 
     seed(db)
     tenant, project = _project(db, project_reference)
@@ -127,14 +129,15 @@ def recover_admin(db, username, password, email=None, project_reference=None):
     project_admin = _role(db, 'Project Administrator')
 
     user = db.scalar(select(User).where(User.username == username).with_for_update())
-    email_owner = db.scalar(select(User).where(User.email == email).with_for_update()) if email else None
+    effective_email = email or (user.email if user is not None else f'{username}@localhost.example')
+    email_owner = db.scalar(select(User).where(User.email == effective_email).with_for_update())
     if email_owner is not None and (user is None or email_owner.id != user.id):
         raise RuntimeError('Recovery email is already used by another account')
     created = user is None
     if user is None:
         user = User(
             username=username,
-            email=email or f'{username}@localhost.example',
+            email=effective_email,
             password_hash=password_hasher.hash(password),
             auth_source='local',
             is_active=True,
