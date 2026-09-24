@@ -16,7 +16,9 @@ function credentialSecretField(spec, enabled) {
 
 function renderCredentialSecretFields(container, config, authMode, enabled) {
   const mode = config.authModes[authMode] || config.authModes[config.defaultAuth];
-  container.replaceChildren(...mode.fields.map(spec => credentialSecretField(spec, enabled)));
+  const fields = mode.fields.map(spec => credentialSecretField(spec, enabled));
+  if (fields.length === 1) fields[0].classList.add('wide');
+  container.replaceChildren(...fields);
 }
 
 function splitProxmoxEndpoint(value) {
@@ -377,6 +379,7 @@ function sshBootstrapHostKeyPanel() {
 
 function renderCredentialDynamic(container, type, item) {
   const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
+  container.dataset.credentialType = type;
   const sameType = Boolean(item && item.type === type);
   const mustReplace = Boolean(item && !sameType);
   const identity = node('div', { class: 'form-grid credential-identity' });
