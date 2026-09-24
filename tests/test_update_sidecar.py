@@ -424,6 +424,28 @@ def test_runtime_preflight_url_helpers_support_installer_local_services(tmp_path
     assert updater._scratch_redis_url('redis://:secret@127.0.0.1:6389/15').endswith('/14')
 
 
+def test_candidate_build_context_modes_are_readable_by_non_root_image_user(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    source = tmp_path / 'candidate'
+    nested = source / 'app'
+    nested.mkdir(parents=True)
+    regular = nested / 'module.py'
+    executable = source / 'install.sh'
+    regular.write_text('VALUE = 1\n')
+    executable.write_text('#!/bin/sh\n')
+    source.chmod(0o700)
+    nested.chmod(0o700)
+    regular.chmod(0o600)
+    executable.chmod(0o700)
+
+    updater._normalize_candidate_build_context(source)
+
+    assert source.stat().st_mode & 0o777 == 0o755
+    assert nested.stat().st_mode & 0o777 == 0o755
+    assert regular.stat().st_mode & 0o777 == 0o644
+    assert executable.stat().st_mode & 0o777 == 0o755
+
+
 def test_docker_runtime_preflight_runs_isolated_validation(tmp_path, monkeypatch):
     updater = load_update_service_module(tmp_path, monkeypatch)
     backup = tmp_path / 'backup'
