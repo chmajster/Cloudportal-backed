@@ -721,6 +721,7 @@ class AwxOnboardingInput(Input):
     group_by_environment: bool = True
     group_by_apmid: bool = True
     job_template_id: int | None = Field(default=None, gt=0)
+    remove_on_destroy: bool = True
 
 
 class BlueprintDeployment(Input):
