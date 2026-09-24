@@ -181,6 +181,8 @@ console.log(JSON.stringify({
         'wait_for_ip',
     ]
     assert result['workflow'][1]['depends_on'] == ['apply']
+    assert result['workflow'][2]['type'] == 'wait_for_ip'
+    assert result['workflow'][2]['timeout'] == 180
 
 
 def test_wizard_drops_hostname_defaults_not_used_by_selected_pattern():
@@ -502,6 +504,8 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'wait_for_ip',
         'register_awx',
     ]
+    assert result['workflow'][-2]['type'] == 'wait_for_ip'
+    assert result['workflow'][-2]['timeout'] == 180
     assert result['workflow'][-1]['depends_on'] == ['guest_ip']
     assert result['workflow'][-1]['retry'] == 3
     assert result['workflow'][-1]['timeout'] == 300
