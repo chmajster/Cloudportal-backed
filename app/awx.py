@@ -147,6 +147,7 @@ class AwxClient:
         inventories = self.list_resource('inventories')
         job_templates = self.list_resource('job_templates')
         organizations = self.list_resource('organizations')
+        projects = self.list_resource('projects')
         version = ''
         if isinstance(ping, dict):
             version = str(
@@ -168,12 +169,29 @@ class AwxClient:
                 for row in inventories if row.get('id') and row.get('name')
             ],
             'job_templates': [
-                {'id': row.get('id'), 'name': row.get('name'), 'inventory': row.get('inventory')}
+                {
+                    'id': row.get('id'),
+                    'name': row.get('name'),
+                    'inventory': row.get('inventory'),
+                    'project': row.get('project'),
+                    'playbook': row.get('playbook'),
+                    'execution_environment': row.get('execution_environment'),
+                }
                 for row in job_templates if row.get('id') and row.get('name')
             ],
             'organizations': [
                 {'id': row.get('id'), 'name': row.get('name')}
                 for row in organizations if row.get('id') and row.get('name')
+            ],
+            'projects': [
+                {
+                    'id': row.get('id'),
+                    'name': row.get('name'),
+                    'organization': row.get('organization'),
+                    'status': row.get('status'),
+                    'scm_type': row.get('scm_type'),
+                }
+                for row in projects if row.get('id') and row.get('name')
             ],
         }
 
@@ -210,24 +228,36 @@ class AwxClient:
         )[0]
         return int(selected['id'])
 
-    def ensure_inventory(self, *, inventory_id: int | None = None, name: str = 'CloudPortal') -> dict:
+    def ensure_inventory(
+        self,
+        *,
+        inventory_id: int | None = None,
+        name: str = 'CloudPortal',
+        organization_id: int | None = None,
+    ) -> dict:
+        selected_organization_id = int(organization_id) if organization_id else None
         if inventory_id:
             data = self.request('GET', f'inventories/{int(inventory_id)}/').json()
             if not isinstance(data, dict) or not data.get('id'):
                 raise AwxError('Selected AWX inventory is unavailable')
+            if selected_organization_id and int(data.get('organization') or 0) != selected_organization_id:
+                raise AwxError('Selected AWX inventory does not belong to the selected organization')
             return data
 
-        existing = self.list_resource('inventories', params={'name': name})
+        lookup = {'name': name}
+        if selected_organization_id:
+            lookup['organization'] = selected_organization_id
+        existing = self.list_resource('inventories', params=lookup)
         if existing:
             return existing[0]
 
         inventories = self.list_resource('inventories')
-        organization_id = self._organization_for_inventory()
+        target_organization_id = selected_organization_id or self._organization_for_inventory()
         try:
             data = self.request('POST', 'inventories/', json={
                 'name': name,
                 'description': 'Managed automatically by CloudPortal',
-                'organization': organization_id,
+                'organization': target_organization_id,
             }).json()
             if isinstance(data, dict) and data.get('id'):
                 return data
@@ -297,10 +327,15 @@ class AwxClient:
         apmid: str | None = None,
         inventory_id: int | None = None,
         inventory_name: str = 'CloudPortal',
+        organization_id: int | None = None,
         group_by_environment: bool = True,
         group_by_apmid: bool = True,
     ) -> dict:
-        inventory = self.ensure_inventory(inventory_id=inventory_id, name=inventory_name)
+        inventory = self.ensure_inventory(
+            inventory_id=inventory_id,
+            name=inventory_name,
+            organization_id=organization_id,
+        )
         variables = {
             'ansible_host': ansible_host,
             'cloudportal_managed': True,
@@ -339,6 +374,7 @@ class AwxClient:
         hostname: str,
         inventory_id: int | None = None,
         inventory_name: str = 'CloudPortal',
+        organization_id: int | None = None,
     ) -> dict:
         inventory = None
         if inventory_id:
@@ -349,7 +385,10 @@ class AwxClient:
             if isinstance(candidate, dict) and candidate.get('id'):
                 inventory = candidate
         else:
-            matches = self.list_resource('inventories', params={'name': inventory_name})
+            lookup = {'name': inventory_name}
+            if organization_id:
+                lookup['organization'] = int(organization_id)
+            matches = self.list_resource('inventories', params=lookup)
             if matches:
                 inventory = matches[0]
 
