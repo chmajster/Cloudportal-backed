@@ -223,6 +223,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Filtry'" in script
     assert "button('Kafelki'" in script
     assert "button('Lista'" in script
+    assert "deployment?.created_at || item.created_at" in script
+    assert "class: 'my-resource-card-created'" in script
+    assert "text: 'Data utworzenia'" in script
+    assert "my-resources-vm-list-header" in script
     assert "selectFilter('APMID'" in script
     assert "selectFilter('Środowisko'" in script
     assert "selectFilter('Właściciel'" in script
