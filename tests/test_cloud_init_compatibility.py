@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.automation.cloud_init import blueprint_snapshot, node_ssh_environment
+from app.automation.cloud_init import blueprint_snapshot, node_ssh_environment, validate_cloud_init_workflow
 
 
 ROOT = Path(__file__).resolve().parents[1]
