@@ -56,6 +56,7 @@ state.ansibleEnabled = true;
 state.playbookId = 'bootstrap-linux';
 state.ansibleCredentialId = '17';
 state.guestCredentialId = '18';
+state.templateGuestCredentialId = '19';
 state.cloudInitSnippetStorage = 'local';
 state.waitAgent = true;
 
@@ -86,6 +87,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['hostname_values'] == {}
     assert deployment['ipam_pool_id'] == 13
     assert deployment['guest_credential_id'] == 18
+    assert deployment['template_guest_credential_id'] == 19
     assert deployment['variables']['install_qemu_guest_agent'] is True
     assert deployment['variables']['cloud_init_snippet_storage'] is None
     assert 'environment' not in deployment
@@ -105,6 +107,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'terraform_apply',
         'wait_for_agent',
         'wait_for_ip',
+        'wait_for_ssh',
         'run_ansible_playbook',
     ]
 

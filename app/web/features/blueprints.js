@@ -201,10 +201,14 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         value: value.id, label: value.name + ' [' + value.type + '] (#' + value.id + ')',
       })), deployment.ansible?.credentials_id || '', { placeholder: 'Wybierz dane dostępowe' });
     const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(credentials);
-    const guestCredentialField = selectField('Credential ustawiany na VM', 'guest_credential_id',
-      [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...guestCredentialChoices],
+    const templateGuestCredentialField = selectField('Istniejące konto lokalne w template', 'template_guest_credential_id',
+      [{ value: '', label: 'Nie używaj predefiniowanego konta z template' }, ...guestCredentialChoices],
+      deployment.template_guest_credential_id || '', { wide: true,
+        help: 'Credential SSH opisuje konto, które już istnieje w bazowej VM/template. Cloudportal go nie tworzy ani nie nadpisuje; konto może być używane przez późniejsze kroki SSH i automatyzację.' });
+    const guestCredentialField = selectField('Konto zarządzane przez Cloud-init', 'guest_credential_id',
+      [{ value: '', label: 'Nie zmieniaj konta przez Cloud-init' }, ...guestCredentialChoices],
       deployment.guest_credential_id || '', { wide: true,
-        help: 'Cloud-init ustawi użytkownika oraz dostęp z credentiala: hasło, publiczny klucz SSH albo oba. Klucz prywatny pozostaje zaszyfrowany w Cloudportal i nie jest kopiowany do VM.' });
+        help: 'Cloud-init utworzy albo zaktualizuje użytkownika z Credentiala. Aby zaktualizować istniejące konto z template, wybierz ten sam Credential w obu polach.' });
     const guestPasswordField = field('Hasło SSH (opcjonalnie)', 'ssh_password', {
       type: 'password',
       value: '',
@@ -247,6 +251,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       schemeField, newScheme, existingSchemeEditor, hostnameDefaults,
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '4. Cloud-init' }), node('span', { text: 'Konfiguracja sieci, DNS i konta trafia do template Proxmox.' })),
       ipMode, ipamField, staticIp, staticGateway,
+      templateGuestCredentialField,
       guestCredentialField,
       field('Użytkownik SSH', 'ssh_username', { value: variables.ssh_username || 'clouduser', required: true }),
       guestPasswordField,
@@ -557,6 +562,9 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         const selectedGuestCredentialId = data.get('guest_credential_id')
           ? Number(data.get('guest_credential_id'))
           : null;
+        const selectedTemplateGuestCredentialId = data.get('template_guest_credential_id')
+          ? Number(data.get('template_guest_credential_id'))
+          : null;
         if (directGuestPassword && !allowed('credentials.create')) {
           throw new Error('Brak uprawnienia credentials.create do bezpiecznego zapisania hasła SSH.');
         }
@@ -608,6 +616,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ipam: mode === 'ipam',
           tags: window.BlueprintProvisioningGuards.workflowNeedsTags(tags, deployment),
           waitAgent: data.has('wait_agent'),
+          guestAccess: Boolean(selectedTemplateGuestCredentialId),
           ansible: Boolean(ansible),
         });
         const managerRoleIds = [...form.querySelectorAll('[name="manager_role_ids"]:checked')].map(input => Number(input.value));
@@ -641,6 +650,8 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
             guest_credential_id: selectedGuestCredentialId,
+            template_guest_credential_id: selectedTemplateGuestCredentialId,
+            guest_account_mode: deployment.guest_account_mode || 'cloud_init_managed',
             apmid: deployment.apmid || null,
             environment: deployment.environment || null,
             select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
@@ -928,7 +939,13 @@ async function blueprintForm(item = null) {
     let deploymentVariablesReady = false;
 
     const currentTemplate = () => templates.find(template => template.id === templateField.querySelector('select').value) || templates[0];
-    const guestCredentialControl = window.BlueprintProvisioningGuards.guestCredentialField(credentials, deployment.guest_credential_id, currentTemplate()?.id);
+    const templateGuestCredentialControl = window.BlueprintProvisioningGuards.templateGuestCredentialField(
+      credentials, deployment.template_guest_credential_id, currentTemplate()?.id
+    );
+    const templateGuestCredentialField = templateGuestCredentialControl.field;
+    const guestCredentialControl = window.BlueprintProvisioningGuards.guestCredentialField(
+      credentials, deployment.guest_credential_id, currentTemplate()?.id
+    );
     const guestCredentialField = guestCredentialControl.field;
     const refill = (select, values, placeholder, selectedValue) => {
       select.replaceChildren(node('option', { value: '', text: placeholder }));
@@ -1048,6 +1065,7 @@ async function blueprintForm(item = null) {
         templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
       });
       deploymentVariablesReady = true;
+      templateGuestCredentialControl.sync(template.id);
       guestCredentialControl.sync(template.id);
       renderBlueprintAnsible();
     };
@@ -1154,6 +1172,7 @@ async function blueprintForm(item = null) {
           credentialField,
           selectField('Silnik IaC', 'deployment_executor', [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }], deployment.executor || 'terraform'),
           deploymentHostnameSchemeField,
+          templateGuestCredentialField,
           guestCredentialField,
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
@@ -1245,6 +1264,9 @@ async function blueprintForm(item = null) {
           ),
           guest_credential_id: form.elements.deployment_guest_credential_id?.value
             ? Number(form.elements.deployment_guest_credential_id.value) : null,
+          template_guest_credential_id: form.elements.deployment_template_guest_credential_id?.value
+            ? Number(form.elements.deployment_template_guest_credential_id.value) : null,
+          guest_account_mode: deployment.guest_account_mode || 'cloud_init_managed',
           apmid: deployment.apmid || null,
           environment: deployment.environment || null,
           select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),

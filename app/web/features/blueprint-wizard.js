@@ -247,6 +247,7 @@
           ssh_username: 'sshUsername',
           ssh_public_key: 'sshPublicKey',
           guest_credential_id: 'guestCredentialId',
+          template_guest_credential_id: 'templateGuestCredentialId',
           hostname_enabled: 'hostnameEnabled',
           manual_vm_name: 'manualVmName',
           ipv4_address: 'ipv4Address',
@@ -310,7 +311,10 @@
             state.tags = root.querySelector('[name="tags"]')?.value.trim() || '';
             state.sshUsername = root.querySelector('[name="ssh_username"]')?.value.trim() || 'clouduser';
             state.sshPublicKey = root.querySelector('[name="ssh_public_key"]')?.value.trim() || '';
-            state.guestCredentialId = root.querySelector('[name="guest_credential_id"]')?.value || state.guestCredentialId;
+            const guestCredential = root.querySelector('[name="guest_credential_id"]');
+            if (guestCredential) state.guestCredentialId = guestCredential.value;
+            const templateGuestCredential = root.querySelector('[name="template_guest_credential_id"]');
+            if (templateGuestCredential) state.templateGuestCredentialId = templateGuestCredential.value;
           } else {
             root.querySelectorAll('[data-generic-variable]').forEach(input => {
               const template = data.templates.find(value => value.id === state.terraformTemplateId);
@@ -743,19 +747,38 @@
         const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(
           data.credentials || []
         );
+        const templateGuestCredentialField = selectField(
+          'Istniejące konto lokalne w template',
+          'template_guest_credential_id',
+          [
+            { value: '', label: 'Nie używaj predefiniowanego konta z template' },
+            ...guestCredentialChoices,
+          ],
+          state.templateGuestCredentialId,
+          {
+            wide: true,
+            help: guestCredentialChoices.length
+              ? 'Wybierz Credential SSH opisujący konto, które już istnieje w bazowej VM/template. Cloudportal nie tworzy ani nie nadpisuje tego konta. Credential będzie używany do uwierzytelnionych kroków SSH po uruchomieniu VM i może zostać ponownie wykorzystany przez dalszą automatyzację.'
+              : 'Brak dostępnych Credentiali SSH dla istniejącego konta w template.',
+          }
+        );
+        templateGuestCredentialField.querySelector('select').addEventListener('change', event => {
+          state.templateGuestCredentialId = event.currentTarget.value;
+        });
+
         const guestCredentialField = selectField(
-          'Credential ustawiany na VM',
+          'Konto zarządzane przez Cloud-init',
           'guest_credential_id',
           [
-            { value: '', label: 'Nie ustawiaj credentiala przez cloud-init' },
+            { value: '', label: 'Nie zmieniaj konta przez Cloud-init' },
             ...guestCredentialChoices,
           ],
           state.guestCredentialId,
           {
             wide: true,
             help: guestCredentialChoices.length
-              ? 'Cloud-init ustawi użytkownika z wybranego credentiala. Credential może używać hasła, klucza SSH albo obu. Klucz prywatny nigdy nie jest kopiowany do VM; przy logowaniu kluczem dodawany jest wyłącznie odpowiadający mu klucz publiczny.'
-              : 'Brak credentiali SSH z hasłem lub kluczem prywatnym dostępnych do ustawienia konta w VM.',
+              ? 'Cloud-init utworzy albo zaktualizuje użytkownika z wybranego Credentiala. Aby użyć istniejącego konta z template i jednocześnie zaktualizować je przez Cloud-init, wybierz ten sam Credential w obu polach.'
+              : 'Brak credentiali SSH z hasłem lub kluczem prywatnym dostępnych dla Cloud-init.',
           }
         );
         guestCredentialField.querySelector('select').addEventListener('change', event => {
@@ -886,6 +909,7 @@
             presetButton('large', 'Duża', 4, 8192, 80),
             presetButton('custom', 'Własna', state.cpu, state.memory, state.disk)),
           fields,
+          templateGuestCredentialField,
           guestCredentialField,
           runtimeClassification,
           qemuAgentInfo,
@@ -946,7 +970,9 @@
             state.playbookId = playbook.id;
             const matching = data.credentials.filter(value => value.type === playbook.transport);
             if (!matching.some(value => String(value.id) === String(state.ansibleCredentialId))) {
-              state.ansibleCredentialId = String(matching[0]?.id || '');
+              const templateAccount = matching.find(value =>
+                String(value.id) === String(state.templateGuestCredentialId));
+              state.ansibleCredentialId = String(templateAccount?.id || matching[0]?.id || '');
             }
             render();
           });
@@ -1002,6 +1028,7 @@
           ),
           cloudInit: state.providerType === 'proxmox' && state.cloudInitEnabled !== false,
           waitAgent: state.providerType === 'proxmox' && state.waitAgent,
+          guestAccess: state.providerType === 'proxmox' && Boolean(state.templateGuestCredentialId),
           ansible: state.ansibleEnabled,
         });
       }
@@ -1179,7 +1206,10 @@
             ['APMID', state.selectApmidOnExecute ? 'Wybierany podczas tworzenia VM' : (state.apmid || '—')],
             ['APMID przy tworzeniu VM', state.selectApmidOnExecute ? 'Wybierany przez użytkownika' : 'Stały z Blueprintu'],
             ['Cloud-init', parts.cloudInit.enabled(state) ? 'NoCloud ISO przez API; konfiguracja przy pierwszym starcie' : 'Starszy tryb'],
-            ['Credential VM', state.guestCredentialId
+            ['Konto istniejące w template', state.templateGuestCredentialId
+              ? (data.credentials.find(value => String(value.id) === String(state.templateGuestCredentialId))?.name || ('#' + state.templateGuestCredentialId))
+              : 'Brak'],
+            ['Konto zarządzane przez Cloud-init', state.guestCredentialId
               ? (data.credentials.find(value => String(value.id) === String(state.guestCredentialId))?.name || ('#' + state.guestCredentialId))
               : 'Brak'],
             ['QEMU Guest Agent', state.installQemuGuestAgent ? (state.waitAgent ? 'Instalacja przez cloud-init + oczekiwanie' : 'Instalacja przez cloud-init, bez oczekiwania') : (state.waitAgent ? 'Bez instalacji, oczekiwanie na agenta z template' : 'Wyłączony')],

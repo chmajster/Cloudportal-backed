@@ -70,7 +70,8 @@
     if (options.cloudInit) add('cloud_init', 'cloud_init');
     add('apply', 'terraform_apply');
     if (options.waitAgent) add('agent', 'wait_for_agent');
-    if (options.waitAgent || options.ansible) add('guest_ip', 'wait_for_ip');
+    if (options.waitAgent || options.ansible || options.guestAccess) add('guest_ip', 'wait_for_ip');
+    if (options.guestAccess) add('guest_ssh', 'wait_for_ssh');
     if (options.ansible) add('ansible', 'run_ansible_playbook');
     return steps;
   }
@@ -174,6 +175,7 @@
       sshUsername: 'clouduser',
       sshPublicKey: '',
       guestCredentialId: '',
+      templateGuestCredentialId: '',
       guestAccountMode: 'cloud_init_managed',
       genericVariables: {},
       hostnameEnabled: true,
@@ -309,6 +311,9 @@
     if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
     if (state.guestCredentialId) deployment.guest_credential_id = Number(state.guestCredentialId);
+    if (state.templateGuestCredentialId) {
+      deployment.template_guest_credential_id = Number(state.templateGuestCredentialId);
+    }
     deployment.guest_account_mode = state.guestAccountMode === 'existing_template'
       ? 'existing_template'
       : 'cloud_init_managed';
@@ -344,6 +349,10 @@
         || (!state.selectApmidOnExecute && !state.selectEnvironmentOnExecute && state.apmid && state.environment)),
       cloudInit: state.providerType === 'proxmox' && state.cloudInitEnabled !== false,
       waitAgent: state.providerType === 'proxmox' && state.waitAgent,
+      guestAccess: state.providerType === 'proxmox' && Boolean(
+        state.templateGuestCredentialId
+        || (state.guestAccountMode === 'existing_template' && state.guestCredentialId)
+      ),
       ansible: state.ansibleEnabled,
     });
     const selectedWorkflow = state.advancedWorkflow && state.workflow.length ? state.workflow : autoWorkflow;

@@ -80,6 +80,9 @@
         ? state.ipamPoolId : '';
       state.guestCredentialId = data.credentials.some(value => String(value.id) === String(state.guestCredentialId))
         ? state.guestCredentialId : '';
+      state.templateGuestCredentialId = data.credentials.some(value =>
+        String(value.id) === String(state.templateGuestCredentialId))
+        ? state.templateGuestCredentialId : '';
       state.ansibleCredentialId = data.credentials.some(value => String(value.id) === String(state.ansibleCredentialId))
         ? state.ansibleCredentialId : '';
 

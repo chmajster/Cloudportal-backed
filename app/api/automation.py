@@ -165,7 +165,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         if not pool.is_active:
             raise HTTPException(422, 'Blueprint IPAM pool must be active')
     if data.deployment.guest_account_mode == 'existing_template':
-        if not data.deployment.guest_credential_id:
+        if not (data.deployment.template_guest_credential_id or data.deployment.guest_credential_id):
             raise HTTPException(422, 'Existing template account mode requires a guest SSH credential')
         if 'cloud_init' not in workflow_types:
             raise HTTPException(422, 'Existing template account mode requires an explicit cloud_init workflow step')
@@ -173,6 +173,10 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         if data.deployment.template != 'proxmox-vm':
             raise HTTPException(422, 'Guest credential injection is currently supported only for proxmox-vm')
         guest_credential_cloud_init(db, data.deployment.guest_credential_id)
+    if data.deployment.template_guest_credential_id:
+        if data.deployment.template != 'proxmox-vm':
+            raise HTTPException(422, 'Template guest credential is currently supported only for proxmox-vm')
+        guest_credential_cloud_init(db, data.deployment.template_guest_credential_id)
     for role_id in set(data.allowed_role_ids):
         find(db, Role, role_id)
     manager_roles = []
@@ -327,7 +331,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             'Missing Blueprint workflow permissions: ' + ', '.join(sorted(missing_workflow_permissions)),
         )
     def create():
-        rendered, reservation, ip_allocation, guest_credential_id = compile_blueprint(
+        rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
         )
         blueprint_variables = rendered.pop('blueprint_variables')
@@ -339,6 +343,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         credential_ids = {parsed.credentials_id} | ({parsed.ansible.credentials_id} if parsed.ansible else set())
         if guest_credential_id:
             credential_ids.add(guest_credential_id)
+        if template_guest_credential_id:
+            credential_ids.add(template_guest_credential_id)
         for credential_id in sorted(credential_ids):
             locked_credential(db, credential_id)
         if parsed.ansible:
@@ -353,6 +359,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
                                                         'variables': blueprint_variables, 'steps': row.workflow,
                                                         'guest_credential_id': guest_credential_id,
+                                                        'template_guest_credential_id': template_guest_credential_id,
                                                         'guest_account_mode': (row.deployment or {}).get('guest_account_mode', 'cloud_init_managed'),
                                                         'requires_approval': row.requires_approval,
                                                         'auto_approve_for_executors': row.auto_approve_for_executors,

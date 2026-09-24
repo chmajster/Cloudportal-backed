@@ -188,6 +188,15 @@ def validate_authorization(db, job):
                 guest_credential_id = (((target.workflow or {}).get('blueprint') or {}).get('guest_credential_id'))
             if guest_credential_id and not reference_visible(db, 'credential', guest_credential_id, scope):
                 raise ExecutionFailed('Guest VM credential access has been revoked')
+            template_guest_credential_id = blueprint.get('template_guest_credential_id')
+            if not template_guest_credential_id and target is not None:
+                template_guest_credential_id = (((target.workflow or {}).get('blueprint') or {}).get(
+                    'template_guest_credential_id'
+                ))
+            if template_guest_credential_id and not reference_visible(
+                db, 'credential', template_guest_credential_id, scope
+            ):
+                raise ExecutionFailed('Template VM credential access has been revoked')
     except HTTPException:
         raise ExecutionFailed('Job project authorization has been revoked') from None
     needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
@@ -637,18 +646,40 @@ def blueprint_conditions_match(step, context):
 
 def wait_for_ssh(context, workspace, timeout):
     addresses = wait_for_ip(context, workspace, timeout=timeout)
+    access = _guest_access_credential(context)
+    private_key = _guest_private_key(access['private_key']) if access else None
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
         context.check()
         for address in addresses:
+            client = None
             try:
-                with socket.create_connection((address, 22), timeout=2):
-                    return address
-            except OSError as exc:
+                if access is None:
+                    with socket.create_connection((address, 22), timeout=2):
+                        return address
+                client = _guest_ssh_connect(
+                    address,
+                    access['username'],
+                    private_key=private_key,
+                    password=access['password'],
+                )
+                _guest_ssh_run(client, 'true', timeout=min(30, timeout))
+                context.log(
+                    'workflow.wait_for_ssh.authenticated: username=' + access['username']
+                )
+                return address
+            except (OSError, paramiko.SSHException, ExecutionFailed) as exc:
                 last_error = exc
+            finally:
+                if client is not None:
+                    client.close()
         time.sleep(2)
-    raise ExecutionFailed('Timed out waiting for SSH' + (f': {last_error}' if last_error else ''))
+    label = 'authenticated SSH' if access else 'SSH'
+    raise ExecutionFailed(
+        f'Timed out waiting for {label}'
+        + (f': {last_error}' if last_error else '')
+    )
 
 
 def wait_for_tcp_addresses(context, addresses, port, timeout, label):
@@ -720,9 +751,44 @@ def _guest_ssh_run(client, command, *, stdin_text=None, timeout=300):
     return stdout.read().decode('utf-8', errors='replace')
 
 
-def _guest_target_credential(context):
+def _blueprint_guest_credential_id(context, field):
     blueprint = (context.job.payload or {}).get('blueprint') or {}
-    credential_id = blueprint.get('guest_credential_id')
+    credential_id = blueprint.get(field)
+    if not credential_id:
+        credential_id = (((context.deployment.workflow or {}).get('blueprint') or {}).get(field))
+    return credential_id
+
+
+def _guest_access_credential(context):
+    credential_id = (
+        _blueprint_guest_credential_id(context, 'template_guest_credential_id')
+        or _blueprint_guest_credential_id(context, 'guest_credential_id')
+    )
+    if not credential_id:
+        return None
+    with session() as db:
+        credential = db.get(Credential, int(credential_id))
+        if credential is None:
+            raise ExecutionFailed('Guest access credential disappeared before workflow execution')
+        if credential.type != 'ssh':
+            raise ExecutionFailed('Guest access requires an SSH credential')
+        if credential.expires_at is not None and credential.expires_at <= now():
+            raise ExecutionFailed('Guest access credential expired before workflow execution')
+        if not credential.username:
+            raise ExecutionFailed('Guest access credential must define a username')
+        secret = decrypt_secret(credential)
+    if not secret.get('private_key') and not secret.get('password'):
+        raise ExecutionFailed('Guest access credential has no password or private key')
+    return {
+        'credential_id': credential.id,
+        'username': str(credential.username).strip(),
+        'private_key': secret.get('private_key'),
+        'password': secret.get('password'),
+    }
+
+
+def _guest_target_credential(context):
+    credential_id = _blueprint_guest_credential_id(context, 'guest_credential_id')
     variables = context.deployment.variables or {}
     if not credential_id:
         return {
