@@ -27,6 +27,11 @@
   const TYPE_META = new Map(STEP_CATALOG.flatMap(group => group.items.map(item => [item[0], {
     group: group.group, label: item[1], description: item[2],
   }])));
+  const TERRAFORM_STEP_TYPES = new Set(['terraform_plan', 'terraform_apply', 'terraform_destroy']);
+
+  function defaultStepTimeout(type) {
+    return TERRAFORM_STEP_TYPES.has(type) ? 3600 : 600;
+  }
 
   const deepClone = value => JSON.parse(JSON.stringify(value));
   const qs = (root, selector) => root.querySelector(selector);
@@ -175,13 +180,15 @@
   }
 
   function normalizeStep(step) {
+    const type = String(step.type || 'condition');
+    const parsedTimeout = Number(step.timeout ?? defaultStepTimeout(type));
     return {
       id: String(step.id || 'step').slice(0, 63),
-      type: String(step.type || 'condition'),
+      type,
       depends_on: Array.isArray(step.depends_on) ? [...new Set(step.depends_on.map(String))] : [],
       conditions: step.conditions && typeof step.conditions === 'object' && !Array.isArray(step.conditions) ? deepClone(step.conditions) : {},
       retry: Math.max(0, Math.min(10, Number(step.retry || 0))),
-      timeout: Math.max(1, Math.min(86400, Number(step.timeout || 600))),
+      timeout: Math.max(1, Math.min(86400, Number.isFinite(parsedTimeout) ? parsedTimeout : defaultStepTimeout(type))),
       rollback: step.rollback ? String(step.rollback) : null,
     };
   }
@@ -313,6 +320,7 @@
       selectedId: null,
       connectFrom: null,
       inspectorTab: 'step',
+      advancedOpen: false,
       zoom: 1,
       grid: true,
       dirty: false,
@@ -382,7 +390,7 @@
       let index = 2;
       while (existing.has(id)) id = base + '_' + index++;
       const previous = state.selectedId && existing.has(state.selectedId) ? [state.selectedId] : [];
-      const timeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
+      const timeout = defaultStepTimeout(type);
       return {
         step: { id, type, depends_on: previous, conditions: {}, retry: 0, timeout, rollback: null },
         position: { x, y },
@@ -838,19 +846,47 @@
       body.append(textField('ID kroku', step.id, value => renameStep(step, value)));
       const typeChoices = STEP_TYPES.map(type => ({ value: type, label: TYPE_META.get(type)?.label || type }));
       if (!STEP_TYPES.includes(step.type)) typeChoices.unshift({ value: step.type, label: 'Legacy / YAML: ' + step.type });
-      body.append(selectField('Typ', step.type, typeChoices, value => mutate(() => { step.type = value; })));
+      body.append(selectField('Typ', step.type, typeChoices, value => mutate(() => {
+        const previousType = step.type;
+        const previousDefaultTimeout = defaultStepTimeout(previousType);
+        step.type = value;
+        if (Number(step.timeout) === previousDefaultTimeout) step.timeout = defaultStepTimeout(value);
+      })));
       body.append(textField('Zależy od', (step.depends_on || []).join(', '), value => mutate(() => {
         step.depends_on = [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))];
       }), { help: 'ID kroków oddzielone przecinkami.' }));
-      body.append(textField('Retry', step.retry, value => mutate(() => { step.retry = Number(value || 0); }), { type: 'number', min: 0, max: 10 }));
-      body.append(textField('Timeout [s]', step.timeout, value => mutate(() => { step.timeout = Number(value || 600); }), { type: 'number', min: 1, max: 86400 }));
-      body.append(textField('Rollback step', step.rollback || '', value => mutate(() => { step.rollback = value.trim() || null; }), { placeholder: 'ID kroku' }));
-      body.append(textField('Conditions (JSON)', JSON.stringify(step.conditions || {}, null, 2), value => {
-        try {
-          const parsed = parseJson(value, 'Conditions', {});
-          mutate(() => { step.conditions = parsed; });
-        } catch (error) { toast(error.message, 'error'); }
-      }, { multiline: true, wide: true, help: 'Warunki runtime przekazywane bez zmian do workflow engine.' }));
+
+      const timeoutDefault = defaultStepTimeout(step.type);
+      const terraformStep = TERRAFORM_STEP_TYPES.has(step.type);
+      const timeoutLabel = terraformStep ? 'Timeout Terraform / OpenTofu [s]' : 'Timeout kroku [s]';
+      const timeoutHelp = terraformStep
+        ? 'Maksymalny czas dla tego kroku Terraform/OpenTofu. Domyślnie 3600 s.'
+        : 'Maksymalny czas wykonania tego kroku workflow. Domyślnie 600 s.';
+      const advanced = el('details', {
+        class: 'advanced-options wide',
+        open: state.advancedOpen ? '' : null,
+      },
+        el('summary', { text: 'Opcje zaawansowane' }),
+        el('div', { class: 'advanced-options-body' },
+          textField('Retry', step.retry, value => mutate(() => { step.retry = Number(value || 0); }), { type: 'number', min: 0, max: 10 }),
+          textField(timeoutLabel, step.timeout, value => mutate(() => {
+            const parsed = Number(value);
+            step.timeout = Number.isFinite(parsed) ? Math.max(1, Math.min(86400, parsed)) : timeoutDefault;
+          }), { type: 'number', min: 1, max: 86400, help: timeoutHelp }),
+          el('div', { class: 'vra-inspector-actions' },
+            iconButton('Domyślny timeout', 'Przywróć domyślny timeout dla tego typu kroku', () => mutate(() => {
+              step.timeout = defaultStepTimeout(step.type);
+            }))),
+          textField('Rollback step', step.rollback || '', value => mutate(() => { step.rollback = value.trim() || null; }), { placeholder: 'ID kroku' }),
+          textField('Conditions (JSON)', JSON.stringify(step.conditions || {}, null, 2), value => {
+            try {
+              const parsed = parseJson(value, 'Conditions', {});
+              mutate(() => { step.conditions = parsed; });
+            } catch (error) { toast(error.message, 'error'); }
+          }, { multiline: true, wide: true, help: 'Warunki runtime przekazywane bez zmian do workflow engine.' })
+        ));
+      advanced.addEventListener('toggle', () => { state.advancedOpen = advanced.open; });
+      body.append(advanced);
       body.append(el('div', { class: 'vra-inspector-actions' },
         iconButton(state.connectFrom === step.id ? 'Anuluj łączenie' : 'Połącz z…', 'Dodaj zależność przez canvas', () => {
           state.connectFrom = state.connectFrom === step.id ? null : step.id;
