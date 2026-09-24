@@ -39,6 +39,8 @@ def deployment_public(d):
 
 def job_public(j):
     result = public(j, JOB_FIELDS)
+    stage = (j.payload or {}).get('_current_stage')
+    result['current_stage'] = str(stage)[:255] if stage else None
     wait = (j.payload or {}).get('_provider_wait') or {}
     result['provider_waiting'] = bool(wait)
     result['provider_retry_attempts'] = int(wait.get('attempts') or 0)
@@ -557,6 +559,7 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
     payload = dict(original.payload or {})
     payload.pop('_approval', None)
     payload.pop('_workflow_runtime', None)
+    payload.pop('_current_stage', None)
     payload.pop('_provider_wait', None)
     payload.pop('_quota_checked', None)
     payload.pop('_quota_reservation_id', None)

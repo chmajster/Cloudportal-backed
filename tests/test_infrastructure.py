@@ -229,14 +229,24 @@ def test_dispatcher_reconciles_deployment_status_from_job(client, headers, monke
 
 def test_terraform_failure_and_retry(client,headers,monkeypatch):
     d=deployment(client,headers)
-    def fail(*args):raise ExecutionFailed('terraform exited with code 1')
+    def fail(operation, context):
+        context.stage('terraform.plan')
+        raise ExecutionFailed('terraform exited with code 1')
     monkeypatch.setattr(TerraformExecutor,'execute',fail)
     execute(d['job']['id'])
     result=client.get('/api/v1/jobs/'+d['job']['id'],headers=headers).json()
     assert result['status']=='failed' and 'code 1' in result['error']
+    assert result['current_stage']=='terraform.plan'
     assert client.get('/api/v1/deployments/'+d['id'],headers=headers).json()['active_job_id'] is None
     logs=client.get('/api/v1/jobs/'+d['job']['id']+'/logs',headers=headers).json()
     assert logs['items'] and logs['request_id']==result['request_id']
+
+    retried=client.post(
+        '/api/v1/jobs/'+d['job']['id']+'/retry',
+        headers={**headers,'Idempotency-Key':str(uuid.uuid4())},
+    )
+    assert retried.status_code==202,retried.text
+    assert retried.json()['current_stage'] is None
 
 
 def test_cancel_before_execution(client,headers,monkeypatch):

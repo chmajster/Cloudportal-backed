@@ -139,6 +139,7 @@ class JobOutput(Output):
     error: str | None
     retry_of: str | None
     attempt: int
+    current_stage: str | None = None
     provider_waiting: bool = False
     provider_retry_attempts: int = 0
     provider_next_retry_at: datetime | None = None
