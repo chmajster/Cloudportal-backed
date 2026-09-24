@@ -782,6 +782,20 @@ class BlueprintInput(Input):
                 raise ValueError(
                     f'Workflow step "{step.id}" depends on missing step(s): {", ".join(missing)}'
                 )
+        condition_keys = {'provider', 'executor', 'has_ansible', 'hostname', 'environment', 'apmid'}
+        for step in self.workflow:
+            allowed = set(condition_keys)
+            if step.type == 'delay':
+                allowed.add('seconds')
+            if step.type == 'notification':
+                allowed.add('message')
+            unknown_conditions = sorted(set(step.conditions) - allowed)
+            if unknown_conditions:
+                raise ValueError(
+                    f'Workflow step "{step.id}" uses unsupported condition key(s): '
+                    + ', '.join(unknown_conditions)
+                )
+
         graph = {step.id: step.depends_on for step in self.workflow}
         visiting, visited = set(), set()
         def visit(node):
