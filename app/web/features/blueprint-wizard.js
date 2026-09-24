@@ -983,6 +983,8 @@
           guestAccess: state.providerType === 'proxmox' && Boolean(state.templateGuestCredentialId),
           ansible: state.ansibleEnabled,
           awx: state.providerType === 'proxmox' && state.awxEnabled,
+          awxRetry: state.awxRetry,
+          awxTimeout: state.awxTimeout,
         });
       }
 
