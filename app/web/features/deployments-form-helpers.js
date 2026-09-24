@@ -1,5 +1,6 @@
 'use strict';
 
+(() => {
 function deploymentVariableWrapper(container, name) {
   return container.querySelector('[data-template-variable="' + name + '"]');
 }
@@ -31,3 +32,11 @@ function deploymentReplaceVariableWithSelect(container, template, name, label, c
   current.replaceWith(replacement);
   return replacement.querySelector('select');
 }
+
+registerExtension('deployments-form-helpers', () => {
+  window.deploymentVariableWrapper = deploymentVariableWrapper;
+  window.deploymentVariableRequired = deploymentVariableRequired;
+  window.deploymentSetSelectChoices = deploymentSetSelectChoices;
+  window.deploymentReplaceVariableWithSelect = deploymentReplaceVariableWithSelect;
+});
+})();
