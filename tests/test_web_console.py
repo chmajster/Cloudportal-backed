@@ -235,6 +235,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "checkboxField('Tylko moje VM'" in script
     assert "button('Anuluj'" in script
     assert "button('Anuluj zadanie'" in script
+    assert "button('Wymuś start'" in script
+    assert "allowed('jobs.force')" in script
+    assert "/force-dispatch" in script
     assert "Anulowanie rozpoczęte." in script
     assert "item.status === 'cancelling'" in script
     assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
