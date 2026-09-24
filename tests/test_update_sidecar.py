@@ -424,6 +424,45 @@ def test_runtime_preflight_url_helpers_support_installer_local_services(tmp_path
     assert updater._scratch_redis_url('redis://:secret@127.0.0.1:6389/15').endswith('/14')
 
 
+def test_docker_runtime_preflight_runs_isolated_validation(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    backup = tmp_path / 'backup'
+    backup.mkdir()
+    (backup / 'database.dump').write_bytes(b'dump')
+    calls = []
+
+    monkeypatch.setattr(updater, 'INSTALL_MODE', 'docker')
+    monkeypatch.setattr(
+        updater,
+        '_docker_validate_candidate_runtime',
+        lambda sha, backup_dir, settings: calls.append((sha, backup_dir, settings['runtime_preflight'])),
+    )
+
+    updater.validate_candidate_runtime('d' * 40, backup, updater.default_settings())
+
+    assert calls == [('d' * 40, backup, True)]
+
+
+def test_docker_runtime_preflight_can_be_explicitly_disabled(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    backup = tmp_path / 'backup'
+    backup.mkdir()
+    called = []
+
+    monkeypatch.setattr(updater, 'INSTALL_MODE', 'docker')
+    monkeypatch.setattr(
+        updater,
+        '_docker_validate_candidate_runtime',
+        lambda *args: called.append(args),
+    )
+    settings = updater.default_settings()
+    settings['runtime_preflight'] = False
+
+    updater.validate_candidate_runtime('e' * 40, backup, settings)
+
+    assert called == []
+
+
 def test_runtime_preflight_rejects_external_database_without_mutating_it(tmp_path, monkeypatch):
     updater = load_update_service_module(tmp_path, monkeypatch)
     try:
