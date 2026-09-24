@@ -262,8 +262,14 @@ class AwxClient:
             if isinstance(data, dict) and data.get('id'):
                 return data
         except AwxError:
-            if len(inventories) == 1:
-                return inventories[0]
+            fallback = inventories
+            if selected_organization_id:
+                fallback = [
+                    row for row in inventories
+                    if int(row.get('organization') or 0) == selected_organization_id
+                ]
+            if len(fallback) == 1:
+                return fallback[0]
             raise
         raise AwxError('AWX inventory creation did not return an inventory')
 
@@ -383,6 +389,8 @@ class AwxClient:
             except AwxError:
                 candidate = None
             if isinstance(candidate, dict) and candidate.get('id'):
+                if organization_id and int(candidate.get('organization') or 0) != int(organization_id):
+                    candidate = None
                 inventory = candidate
         else:
             lookup = {'name': inventory_name}
