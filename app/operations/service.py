@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import delete, exists, func, select
 
 from app.config import settings
+from app.catalog import snapshot_ansible_payload
 from app.database import session
 from app.jobs.approval import gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations
@@ -41,7 +42,7 @@ def required_operation_permissions(operation, deployment=None):
     permissions = {'jobs.execute', 'terraform.execute'}
     if operation == 'terraform.apply':
         permissions.add('deployments.create')
-        if deployment and (deployment.workflow or {}).get('ansible'):
+        if deployment and ((deployment.workflow or {}).get('ansible') or (deployment.workflow or {}).get('ansible_runs')):
             permissions.add('ansible.execute')
         blueprint = (deployment.workflow or {}).get('blueprint', {}) if deployment else {}
         if blueprint:
@@ -149,11 +150,19 @@ def materialize_scheduled_jobs():
                 schedule.last_error = 'Schedule owner no longer has required execution permissions'
                 continue
 
+            payload = dict(deployment.workflow if schedule.operation == 'terraform.apply' else {})
+            try:
+                payload = snapshot_ansible_payload(db, payload)
+            except HTTPException as error:
+                schedule.is_active = False
+                schedule.last_error = ('Scheduled Ansible playbook is unavailable: ' + str(error.detail))[:500]
+                continue
+
             job = Job(
                 id=str(uuid.uuid4()),
                 operation=schedule.operation,
                 deployment_id=deployment.id,
-                payload=dict(deployment.workflow if schedule.operation == 'terraform.apply' else {}),
+                payload=payload,
                 created_by=schedule.created_by,
                 token_id=None,
                 request_id=str(uuid.uuid4()),
