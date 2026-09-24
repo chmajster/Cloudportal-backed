@@ -194,6 +194,7 @@
       dnsServers: '',
       dnsDomain: '',
       ansibleEnabled: false,
+      ansibleRuns: [],
       playbookId: '',
       ansibleCredentialId: '',
       ansibleVariables: {},
@@ -322,21 +323,22 @@
     deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute);
     deployment.select_environment_on_execute = Boolean(state.selectEnvironmentOnExecute);
 
-    if (state.ansibleEnabled && state.playbookId) {
-      const selectedPlaybook = data.playbooks.find(value => value.id === state.playbookId);
-      const ansibleVariables = {};
-      for (const name of selectedPlaybook?.required_variables || []) {
-        if (name === 'hostname' && selectedPlaybook.id === 'bootstrap-linux' && state.hostnameEnabled) {
-          ansibleVariables.hostname = '{{ hostname }}';
-        } else if (state.ansibleVariables[name]) {
-          ansibleVariables[name] = state.ansibleVariables[name];
-        }
+    if (state.ansibleEnabled) {
+      const runs = (state.ansibleRuns || []).length
+        ? state.ansibleRuns
+        : (state.playbookId ? [{
+            playbook: state.playbookId,
+            credentials_id: Number(state.ansibleCredentialId),
+            variables: { ...(state.ansibleVariables || {}) },
+          }] : []);
+      if (runs.length) {
+        deployment.ansible_runs = runs.map(run => ({
+          playbook: run.playbook,
+          credentials_id: Number(run.credentials_id),
+          variables: { ...(run.variables || {}) },
+        }));
+        deployment.ansible = { ...deployment.ansible_runs[0], variables: { ...deployment.ansible_runs[0].variables } };
       }
-      deployment.ansible = {
-        playbook: state.playbookId,
-        credentials_id: Number(state.ansibleCredentialId),
-        variables: ansibleVariables,
-      };
     }
     return deployment;
   }
