@@ -1007,6 +1007,7 @@ async function createDeployment() {
 }
 
 async function jobsView() {
+  jobLogPollNonce += 1;
   if (jobsPollTimer) {
     clearTimeout(jobsPollTimer);
     jobsPollTimer = null;
@@ -1028,7 +1029,7 @@ async function jobsView() {
       { label: 'Źródło', value: item => item.source }, { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 14) },
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
-      const actions = [button('Logi', () => showJobLogs(item))];
+      const actions = [button('Logi', () => navigate('/jobs/' + encodeURIComponent(item.id)))];
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(item.status) && !item.cancel_requested) {
         actions.push(button('Anuluj', () => confirmAction(
           'Anuluj zadanie',
@@ -1275,20 +1276,52 @@ async function runStandaloneAnsible(initialPlaybookId = null) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
-async function showJobLogs(job) {
+function jobLogIdFromRoute() {
+  const route = String(location.hash.slice(1) || '').split('/page/')[0].replace(/\/+$/, '');
+  const match = route.match(/^\/?jobs\/([^/]+)$/);
+  if (!match) throw new Error('Brak ID zadania w adresie URL.');
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    throw new Error('ID zadania w adresie URL jest nieprawidłowe.');
+  }
+}
+
+async function jobLogView() {
+  if (jobsPollTimer) {
+    clearTimeout(jobsPollTimer);
+    jobsPollTimer = null;
+  }
+
+  const jobId = jobLogIdFromRoute();
   const nonce = ++jobLogPollNonce;
   const statusHost = node('div', { class: 'job-log-status' });
-  const logOutput = node('div', { class: 'log-output mono job-live-log', text: 'Oczekiwanie na logi…' });
+  const metaHost = node('dl', { class: 'job-log-page-meta' });
   const inventoryState = node('div', { class: 'job-log-inventory-state muted' });
+  const actionHost = node('div', { class: 'action-group job-log-page-actions' });
+  const logOutput = node('div', { class: 'log-output mono job-live-log', text: 'Oczekiwanie na logi…' });
 
-  dom.modalTitle.textContent = `Logi ${short(job.id, 18)}`;
-  dom.modalEyebrow.textContent = operationLabel(job.operation);
-  dom.modalBody.replaceChildren(statusHost, inventoryState, logOutput);
-  dom.modalActions.replaceChildren(button('Zamknij', () => {
-    jobLogPollNonce += 1;
-    closeModal();
-  }));
-  dom.modal.showModal();
+  const copyLink = button('Kopiuj link', async () => {
+    try {
+      await copyText(location.href);
+      toast('Skopiowano bezpośredni link do logów.');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }, 'ghost');
+
+  dom.content.replaceChildren(
+    heading('Logi zadania ' + short(jobId, 18), [
+      button('← Zadania', () => navigate('jobs'), 'ghost'),
+      copyLink,
+    ]),
+    node('section', { class: 'panel job-log-page' },
+      metaHost,
+      statusHost,
+      inventoryState,
+      actionHost,
+      logOutput)
+  );
 
   let firstRender = true;
 
@@ -1306,34 +1339,41 @@ async function showJobLogs(job) {
   const terminal = value => ['successful', 'failed', 'cancelled'].includes(value);
 
   const poll = async () => {
-    if (nonce !== jobLogPollNonce || !(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open) || !logOutput.isConnected) return;
+    if (nonce !== jobLogPollNonce || state.view !== 'job-log' || !logOutput.isConnected) return;
     try {
       const [current, logs] = await Promise.all([
-        api(`/jobs/${job.id}`),
-        api(`/jobs/${job.id}/logs?limit=200`),
+        api('/jobs/' + encodeURIComponent(jobId)),
+        api('/jobs/' + encodeURIComponent(jobId) + '/logs?limit=200'),
       ]);
+
+      metaHost.replaceChildren(
+        node('dt', { text: 'Operacja' }), node('dd', { text: operationLabel(current.operation) }),
+        node('dt', { text: 'ID zadania' }), node('dd', { class: 'mono', text: current.id }),
+        node('dt', { text: 'Wdrożenie' }), node('dd', { class: 'mono', text: current.deployment_id || '—' }),
+        node('dt', { text: 'Źródło' }), node('dd', { text: current.source || '—' }),
+        node('dt', { text: 'Utworzono' }), node('dd', { text: formatDate(current.created_at) })
+      );
 
       statusHost.replaceChildren(
         node('div', { class: 'action-group' },
           badge(statusLabel(current.status), statusKind(current.status)),
           current.provider_waiting ? badge('Oczekuje na Proxmox', 'warning') : null,
-          node('span', { class: 'muted', text: current.error || (terminal(current.status) ? 'Zadanie zakończone.' : 'Log jest odświeżany automatycznie.') }))
+          node('span', {
+            class: 'muted',
+            text: current.error || (terminal(current.status) ? 'Zadanie zakończone.' : 'Log jest odświeżany automatycznie.'),
+          }))
       );
       renderLogs(logs.items || []);
 
-      const actions = [button('Zamknij', () => {
-        jobLogPollNonce += 1;
-        closeModal();
-      })];
+      const actions = [];
 
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(current.status) && !current.cancel_requested) {
-        actions.unshift(button('Anuluj zadanie', () => confirmAction(
+        actions.push(button('Anuluj zadanie', () => confirmAction(
           'Anuluj zadanie',
           'Trwający Terraform/Ansible zostanie przerwany. Stan zasobu zostanie zachowany do weryfikacji.',
           async () => {
             const result = await api('/jobs/' + current.id + '/cancel', { method: 'POST' });
             toast(result.status === 'cancelled' ? 'Zadanie anulowane.' : 'Anulowanie rozpoczęte.');
-            window.setTimeout(poll, 100);
             return false;
           },
         ), 'danger'));
@@ -1351,7 +1391,6 @@ async function showJobLogs(job) {
           if (allowed('vms.read') && hasCommand('inventory.openVm')) {
             actions.unshift(button('Otwórz VM', async () => {
               jobLogPollNonce += 1;
-              closeModal();
               await runCommand('inventory.openVm', managedVm, 'overview', 'my-resources');
             }, 'primary'));
           }
@@ -1361,10 +1400,10 @@ async function showJobLogs(job) {
         }
         actions.unshift(button('Moje zasoby', () => {
           jobLogPollNonce += 1;
-          closeModal();
           navigate('my-resources');
         }, managedVm ? 'ghost' : 'primary'));
       } else {
+        inventoryState.className = 'job-log-inventory-state muted';
         inventoryState.textContent = current.operation === 'terraform.apply' && !terminal(current.status)
           ? (current.status === 'cancelling' || current.cancel_requested
             ? 'Anulowanie w toku. Backend kończy proces Terraform/Ansible i porządkuje status wdrożenia.'
@@ -1372,16 +1411,16 @@ async function showJobLogs(job) {
           : '';
       }
 
-      dom.modalActions.replaceChildren(...actions);
+      actionHost.replaceChildren(...actions);
 
       if (!terminal(current.status)) {
         window.setTimeout(poll, 1500);
-      } else if (state.view === 'my-resources') {
-        myResourcesView().catch(() => {});
       }
     } catch (error) {
       statusHost.replaceChildren(node('p', { class: 'form-error', text: error.message }));
-      if (nonce === jobLogPollNonce && dom.modal.open) window.setTimeout(poll, 3000);
+      if (nonce === jobLogPollNonce && state.view === 'job-log' && logOutput.isConnected) {
+        window.setTimeout(poll, 3000);
+      }
     }
   };
 
@@ -1394,4 +1433,12 @@ registerCommand('ansible.run', runStandaloneAnsible);
 registerView({ id: 'deployments', label: 'Produkty', iconName: 'box', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: null, order: 111 }, myResourcesView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
+registerView({
+  id: 'job-log',
+  label: 'Logi zadania',
+  permission: 'jobs.read',
+  order: 121,
+  navigation: false,
+  navigationParent: 'jobs',
+}, jobLogView);
 })();
