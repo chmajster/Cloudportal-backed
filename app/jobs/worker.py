@@ -80,6 +80,12 @@ class Context:
         self.check()
         self.log(action)
         with session() as db:
+            current = db.get(Job, self.job.id)
+            if current is not None:
+                payload = dict(current.payload or {})
+                payload['_current_stage'] = action
+                current.payload = payload
+                self.job.payload = dict(payload)
             db.add(Audit(user_id=self.job.created_by, token_id=self.job.token_id, ip=self.job.ip,
                          source=self.job.source,
                          action=action, resource='jobs', resource_id=self.job.id, request_id=self.job.request_id))
