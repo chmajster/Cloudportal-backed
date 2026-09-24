@@ -320,6 +320,7 @@
       selectedId: null,
       connectFrom: null,
       inspectorTab: 'step',
+      advancedOpen: false,
       zoom: 1,
       grid: true,
       dirty: false,
@@ -861,7 +862,10 @@
       const timeoutHelp = terraformStep
         ? 'Maksymalny czas dla tego kroku Terraform/OpenTofu. Domyślnie 3600 s.'
         : 'Maksymalny czas wykonania tego kroku workflow. Domyślnie 600 s.';
-      const advanced = el('details', { class: 'advanced-options wide' },
+      const advanced = el('details', {
+        class: 'advanced-options wide',
+        open: state.advancedOpen ? '' : null,
+      },
         el('summary', { text: 'Opcje zaawansowane' }),
         el('div', { class: 'advanced-options-body' },
           textField('Retry', step.retry, value => mutate(() => { step.retry = Number(value || 0); }), { type: 'number', min: 0, max: 10 }),
@@ -881,6 +885,7 @@
             } catch (error) { toast(error.message, 'error'); }
           }, { multiline: true, wide: true, help: 'Warunki runtime przekazywane bez zmian do workflow engine.' })
         ));
+      advanced.addEventListener('toggle', () => { state.advancedOpen = advanced.open; });
       body.append(advanced);
       body.append(el('div', { class: 'vra-inspector-actions' },
         iconButton(state.connectFrom === step.id ? 'Anuluj łączenie' : 'Połącz z…', 'Dodaj zależność przez canvas', () => {
