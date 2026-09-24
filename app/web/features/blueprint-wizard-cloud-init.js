@@ -105,8 +105,8 @@
       type: 'register_awx',
       depends_on: [ipStep.id],
       conditions: {},
-      retry: 1,
-      timeout: 600,
+      retry: Number(state.awxRetry ?? 3),
+      timeout: Number(state.awxTimeout ?? 300),
       rollback: null,
     });
   }
@@ -194,6 +194,21 @@
       state.awxJobTemplateId = event.currentTarget.value;
     });
 
+    const retry = field('Liczba ponowień AWX', 'awx_retry', {
+      type: 'number', min: 0, max: 10, value: state.awxRetry ?? 3,
+      help: 'Dotyczy automatycznego kroku register_awx.',
+    });
+    retry.querySelector('input').addEventListener('input', event => {
+      state.awxRetry = Number(event.currentTarget.value || 0);
+    });
+    const timeout = field('Timeout AWX (s)', 'awx_timeout', {
+      type: 'number', min: 10, max: 3600, value: state.awxTimeout ?? 300,
+      help: 'Maksymalny czas pojedynczej próby onboardingu.',
+    });
+    timeout.querySelector('input').addEventListener('input', event => {
+      state.awxTimeout = Number(event.currentTarget.value || 300);
+    });
+
     const removeOnDestroy = checkboxField(
       'Usuń host z AWX po usunięciu VM',
       'awx_remove_on_destroy',
@@ -221,6 +236,8 @@
       groupEnv,
       groupApmid,
       jobTemplate,
+      retry,
+      timeout,
       removeOnDestroy,
       node('p', { class: 'muted', text: 'Po uzyskaniu adresu IP CloudPortal utworzy lub zaktualizuje host w AWX. Operacja jest idempotentna — ponowienie workflow aktualizuje ten sam host zamiast tworzyć duplikat. Usuwanie hosta z AWX po terraform destroy jest best-effort i nie blokuje usunięcia VM, gdy AWX jest chwilowo niedostępny.' })
     );
