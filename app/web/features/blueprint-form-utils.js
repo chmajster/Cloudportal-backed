@@ -61,7 +61,7 @@ function blueprintWorkflow(options) {
   const steps = [];
   let previous = [];
   const add = (id, type) => {
-    const timeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
+    const timeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : type === 'wait_for_ip' ? 180 : 600;
     steps.push({ id, type, depends_on: [...previous], conditions: {}, retry: 0, timeout, rollback: null });
     previous = [id];
   };
