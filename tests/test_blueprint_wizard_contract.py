@@ -99,6 +99,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['ansible']['playbook'] == 'bootstrap-linux'
     assert deployment['ansible']['credentials_id'] == 17
     assert deployment['ansible']['variables']['hostname'] == '{{ hostname }}'
+    assert deployment['ansible_runs'] == [deployment['ansible']]
     assert deployment['variables']['tags'] == ['linux', 'production']
 
     workflow_types = [step['type'] for step in result['workflow']]
@@ -108,6 +109,60 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'wait_for_agent',
         'wait_for_ip',
         'wait_for_ssh',
+        'run_ansible_playbook',
+    ]
+
+
+def test_wizard_payload_preserves_multiple_ansible_runbooks_in_order():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'Multi Ansible';
+state.slug = 'multi-ansible';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = false;
+state.manualVmName = 'multi-ansible';
+state.ansibleEnabled = true;
+state.ansibleRuns = [
+  { playbook: 'bootstrap-linux', credentials_id: 17, variables: { timezone: 'Europe/Warsaw' } },
+  { playbook: 'linux-system-update', credentials_id: 18, variables: {} },
+];
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [
+    { id: 'bootstrap-linux', transport: 'ssh', required_variables: [] },
+    { id: 'linux-system-update', transport: 'ssh', required_variables: [] },
+  ],
+  schemes: [],
+};
+
+console.log(JSON.stringify(core.buildPayload(state, data)));
+""")
+
+    runs = result['deployment']['ansible_runs']
+    assert [run['playbook'] for run in runs] == [
+        'bootstrap-linux',
+        'linux-system-update',
+    ]
+    assert [run['credentials_id'] for run in runs] == [17, 18]
+    assert result['deployment']['ansible'] == runs[0]
+    assert [step['type'] for step in result['workflow']] == [
+        'cloud_init',
+        'terraform_apply',
+        'wait_for_agent',
+        'wait_for_ip',
         'run_ansible_playbook',
     ]
 
