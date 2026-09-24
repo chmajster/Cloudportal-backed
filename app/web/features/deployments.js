@@ -971,6 +971,17 @@ async function jobsView() {
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
       const actions = [button('Logi', () => navigate('/jobs/' + encodeURIComponent(item.id)))];
+      if (allowed('jobs.force') && item.status === 'queued' && !item.cancel_requested && !item.provider_waiting) {
+        actions.push(button('Wymuś start', () => confirmAction(
+          'Wymuś uruchomienie zadania',
+          'Zadanie zostanie przekazane do kolejki wykonawczej z pominięciem limitu maksymalnej liczby równoległych zadań. Pozostałe zabezpieczenia oraz dostępność workerów nadal obowiązują.',
+          async () => {
+            await api(`/jobs/${item.id}/force-dispatch`, { method: 'POST' });
+            toast('Zadanie przekazano do wykonania z pominięciem limitu równoległości.');
+            navigate('jobs');
+          },
+        ), 'primary'));
+      }
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(item.status) && !item.cancel_requested) {
         actions.push(button('Anuluj', () => confirmAction(
           'Anuluj zadanie',
@@ -1307,6 +1318,18 @@ async function jobLogView() {
       renderLogs(logs.items || []);
 
       const actions = [];
+
+      if (allowed('jobs.force') && current.status === 'queued' && !current.cancel_requested && !current.provider_waiting) {
+        actions.push(button('Wymuś start', () => confirmAction(
+          'Wymuś uruchomienie zadania',
+          'Zadanie zostanie przekazane do kolejki wykonawczej z pominięciem limitu maksymalnej liczby równoległych zadań. Pozostałe zabezpieczenia oraz dostępność workerów nadal obowiązują.',
+          async () => {
+            await api('/jobs/' + current.id + '/force-dispatch', { method: 'POST' });
+            toast('Zadanie przekazano do wykonania z pominięciem limitu równoległości.');
+            return false;
+          },
+        ), 'primary'));
+      }
 
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(current.status) && !current.cancel_requested) {
         actions.push(button('Anuluj zadanie', () => confirmAction(

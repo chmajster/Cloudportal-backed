@@ -236,6 +236,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Filtry'" in script
     assert "button('Kafelki'" in script
     assert "button('Lista'" in script
+    assert "deployment?.created_at || item.created_at" in script
+    assert "class: 'my-resource-card-created'" in script
+    assert "text: 'Data utworzenia'" in script
+    assert "my-resources-vm-list-header" in script
     assert "selectFilter('APMID'" in script
     assert "selectFilter('Środowisko'" in script
     assert "selectFilter('Właściciel'" in script
@@ -244,6 +248,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "checkboxField('Tylko moje VM'" in script
     assert "button('Anuluj'" in script
     assert "button('Anuluj zadanie'" in script
+    assert "button('Wymuś start'" in script
+    assert "allowed('jobs.force')" in script
+    assert "/force-dispatch" in script
     assert "Anulowanie rozpoczęte." in script
     assert "item.status === 'cancelling'" in script
     assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
@@ -251,6 +258,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('inventory.consoleVm', showVmConsole)" in script
     assert "const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm')" in script
     assert "runCommand('inventory.consoleVm', item)" in script
+    assert 'offerMissingVmCleanup' in script
+    assert "'/missing', { method: 'DELETE' }" in script
+    assert 'VM nie istnieje w Proxmox' in script
+    assert 'nie została znaleziona na platformie' in script
+    assert "item.lifecycle_status !== 'destroyed'" in script
     assert "Wdrożenia i operacje" in script
     assert 'Brak gotowych Blueprintów.' in script
     assert '.product-grid' in stylesheet
@@ -365,6 +377,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'suspend', 'Wstrzymaj'" in script
     assert "'resume', 'Wznów'" in script
     assert "'reset', 'Twardy reset'" in script
+    assert "'awx_credential_id'" in script
+    assert "'awx_organization_id'" in script
+    assert "'awx_project_id'" in script
+    assert "'awx_inventory_id'" in script
+    assert "'awx_job_template_id'" in script
     assert "button('Power ON'" in script
     assert "button('Power OFF'" in script
     assert "button('CTRL+ALT+DEL'" in script

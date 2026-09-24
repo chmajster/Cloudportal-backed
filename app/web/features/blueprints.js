@@ -41,6 +41,7 @@ function canManageBlueprintByRole(item) {
   const owned = new Set((state.identity?.roles || []).map(role => Number(role.id)));
   return [...required].some(id => owned.has(id));
 }
+
 async function blueprintsView() {
   const [blueprintResult, roleResult] = await Promise.all([
     api('/blueprints?limit=200'),
@@ -75,7 +76,10 @@ async function blueprintsView() {
     }));
 }
 async function proxmoxBlueprintForm(item = null, options = {}) {
-  if ((item?.workflow || []).some(step => step.type === 'cloud_init')) return blueprintForm(item);
+  const currentWorkflow = item?.workflow || [];
+  const hasCloudInitStep = currentWorkflow.some(step => step.type === 'cloud_init');
+  const hasAwxStep = currentWorkflow.some(step => step.type === 'register_awx');
+  if (hasCloudInitStep && !hasAwxStep) return blueprintForm(item);
   try {
     const [providerResult, schemeResult, poolResult, playbookResult, credentialResult, roleResult, blueprintResult, vmClassification] = await Promise.all([
       api('/providers?limit=200'),
@@ -113,6 +117,12 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
     });
     const deployment = item?.deployment || {};
     const variables = deployment.variables || {};
+    const awxEditor = await window.BlueprintAwxEditor.create(
+      deployment,
+      credentials,
+      item?.workflow || [],
+      () => updateWorkflowPreview()
+    );
     const templateWizard = options.mode === 'template';
     const currentProvider = providers.find(value => value.id === deployment.provider_id) || providers[0];
     const providerField = selectField(
@@ -267,6 +277,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       checkboxField('Instaluj QEMU Guest Agent automatycznie', 'install_qemu_guest_agent', variables.install_qemu_guest_agent ?? true),
       checkboxField('Czekaj na QEMU Guest Agent po Terraform apply', 'wait_agent', item ? (item.workflow || []).some(step => step.type === 'wait_for_agent') : true),
       playbookField, ansibleCredentialField,
+      awxEditor.section,
       node('div', { class: 'workflow-box wide' }, node('strong', { text: 'Podgląd workflow' }), workflowPreview),
       node('div', { class: 'designer-heading wide' }, node('strong', { text: '6. Dostęp, role i recovery' })),
       multiCheckboxField('Role zarządzające szablonem', 'manager_role_ids', roleChoices, item?.manager_role_ids || [], {
@@ -405,6 +416,10 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         tags: window.BlueprintProvisioningGuards.workflowNeedsTags(window.BlueprintFormUtils.blueprintTags(fields.querySelector('[name="tags"]')?.value), deployment),
         waitAgent: Boolean(fields.querySelector('[name="wait_agent"]')?.checked),
         ansible: Boolean(playbookSelect.value),
+        cloudInit: awxEditor.enabled(),
+        awx: awxEditor.enabled(),
+        awxRetry: awxEditor.retry(),
+        awxTimeout: awxEditor.timeout(),
       };
       const steps = window.BlueprintFormUtils.blueprintWorkflow(options);
       workflowPreview.replaceChildren(...steps.flatMap((step, index) => {
@@ -583,7 +598,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
           install_qemu_guest_agent: data.has('install_qemu_guest_agent'),
-          cloud_init_snippet_storage: data.has('install_qemu_guest_agent') && !guestCredentialRequested ? cloudInitSnippetStorage : null,
+          cloud_init_snippet_storage: data.has('install_qemu_guest_agent') && !guestCredentialRequested && !awxEditor.enabled() ? cloudInitSnippetStorage : null,
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,
@@ -611,17 +626,15 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             ansible.variables.hostname = '{{ hostname }}';
           }
         }
-        const workflow = deployment.awx && Array.isArray(item?.workflow) && item.workflow.length
-          ? item.workflow.map(step => ({ ...step, depends_on: [...(step.depends_on || [])], conditions: { ...(step.conditions || {}) } }))
-          : window.BlueprintFormUtils.blueprintWorkflow({
+        const awx = awxEditor.value();
+        const workflow = window.BlueprintAwxEditor.quickWorkflow(item, awx, {
           hostname: Boolean(schemeId),
           ipam: mode === 'ipam',
           tags: window.BlueprintProvisioningGuards.workflowNeedsTags(tags, deployment),
           waitAgent: data.has('wait_agent'),
           guestAccess: Boolean(selectedTemplateGuestCredentialId),
           ansible: Boolean(ansible),
-          awx: Boolean(deployment.awx),
-        });
+        }, awxEditor.retry(), awxEditor.timeout());
         const managerRoleIds = [...form.querySelectorAll('[name="manager_role_ids"]:checked')].map(input => Number(input.value));
         if (templateWizard && !item && roleChoices.length && !managerRoleIds.length) {
           throw new Error('Wybierz co najmniej jedną rolę zarządzającą szablonem.');
@@ -663,7 +676,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             executor: data.get('executor'),
             variables: vmVariables,
             ansible,
-            awx: deployment.awx || null,
+            awx,
           },
           workflow,
           requires_approval: data.has('requires_approval'), auto_approve_for_executors: window.BlueprintApprovalPolicyUI.parseAuto(data.get('auto_approve_for_executors')), approval_timeout_hours: window.BlueprintApprovalPolicyUI.parseTimeout(data.get('approval_timeout_hours')),
@@ -936,6 +949,7 @@ async function blueprintForm(item = null) {
     defaultWorkflow.forEach(addWorkflowStep);
 
     const deployment = item?.deployment || {};
+    const awxEditor = await window.BlueprintAwxEditor.create(deployment, credentials, item?.workflow || []);
     const initialTemplate = templates.find(template => template.id === (deployment.template || 'proxmox-vm')) || templates[0];
     const templateField = selectField('Szablon IaC', 'deployment_template', templates.map(template => ({
       value: template.id,
@@ -1127,6 +1141,7 @@ async function blueprintForm(item = null) {
           selectField('Pula IPAM', 'deployment_ipam_pool_id', poolChoices, deployment.ipam_pool_id || ''),
           formSection('Zmienne szablonu', 'Możesz używać placeholderów z pól self-service, np. {{ cpu }} lub {{ hostname }}.', templateVariables),
           ansibleSection)),
+      awxEditor.section,
       formSection('Workflow', 'Kroki są wykonywane zgodnie z zależnościami. Mapa DAG aktualizuje się podczas edycji i wskazuje błędne zależności.',
         workflowGraph,
         node('details', { class: 'workflow-editor-details wide', open: true },
@@ -1193,6 +1208,8 @@ async function blueprintForm(item = null) {
         });
         if (!workflow.length) throw new Error('Blueprint musi zawierać co najmniej jeden krok workflow.');
         window.BlueprintClassicWorkflow.assertValid(workflow);
+        const awx = awxEditor.value();
+        window.BlueprintAwxEditor.validateWorkflow(awx, workflow);
 
         const template = currentTemplate();
         const hostnameSchemeId = Number(form.elements.deployment_hostname_scheme_id.value || 0);
@@ -1221,6 +1238,7 @@ async function blueprintForm(item = null) {
           environment: deployment.environment || null,
           select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
           select_environment_on_execute: Boolean(deployment.select_environment_on_execute),
+          awx,
         };
         if (!deploymentPayload.provider_id) throw new Error('Wybierz provider dla Blueprintu.');
         if (!deploymentPayload.credentials_id) throw new Error('Wybierz dane dostępowe dla Blueprintu.');
