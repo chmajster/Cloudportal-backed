@@ -665,10 +665,46 @@ async function showVmConsole(item) {
     }
 
     const screen = node('div', { class: 'novnc-screen' });
-    const status = node('p', { class: 'muted', text: 'Łączenie z konsolą przez Cloudportal-backed…' });
+    const status = node('p', { class: 'muted novnc-status', text: 'Łączenie z konsolą przez Cloudportal-backed…' });
+    const toolbar = node('div', { class: 'novnc-toolbar', role: 'toolbar', 'aria-label': 'Sterowanie maszyną wirtualną' });
+    let ctrlAltDelButton = null;
+
+    const consolePower = async (action, label, trigger) => {
+      trigger.disabled = true;
+      try {
+        await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
+        toast(`${label}: polecenie zostało wysłane.`);
+      } catch (error) {
+        toast(error.message, 'error');
+      } finally {
+        trigger.disabled = false;
+      }
+    };
+
+    if (allowed('vms.power')) {
+      const powerOnButton = button('Power ON', () => consolePower('start', 'Uruchamianie VM', powerOnButton), 'primary');
+      const powerOffButton = button('Power OFF', () => consolePower('shutdown', 'Wyłączanie VM', powerOffButton), 'danger');
+      powerOnButton.title = 'Uruchom VM';
+      powerOffButton.title = 'Bezpiecznie wyłącz VM (ACPI)';
+      toolbar.append(powerOnButton, powerOffButton);
+    }
+
+    ctrlAltDelButton = button('CTRL+ALT+DEL', () => {
+      const activeRfb = state.consoleRfb;
+      if (!activeRfb) {
+        toast('Konsola noVNC nie jest połączona.', 'error');
+        return;
+      }
+      activeRfb.sendCtrlAltDel();
+      toast('Wysłano CTRL+ALT+DEL do VM.');
+    }, 'ghost');
+    ctrlAltDelButton.disabled = true;
+    ctrlAltDelButton.title = 'Wyślij CTRL+ALT+DEL do systemu gościa';
+    toolbar.append(ctrlAltDelButton);
+
     dom.modalTitle.textContent = 'Konsola noVNC';
     dom.modalEyebrow.textContent = item.name || `${item.node} / ${item.vm_id}`;
-    dom.modalBody.replaceChildren(status, screen);
+    dom.modalBody.replaceChildren(toolbar, status, screen);
     dom.modalActions.replaceChildren(button('Zamknij', closeModal));
     dom.modal.classList.add('modal-console');
     dom.modal.showModal();
@@ -687,9 +723,13 @@ async function showVmConsole(item) {
     state.consoleRfb = rfb;
     rfb.scaleViewport = true;
     rfb.resizeSession = true;
-    rfb.addEventListener('connect', () => { status.textContent = 'Połączono przez backend proxy.'; });
+    rfb.addEventListener('connect', () => {
+      status.textContent = 'Połączono przez backend proxy.';
+      ctrlAltDelButton.disabled = false;
+    });
     rfb.addEventListener('disconnect', event => {
       if (state.consoleRfb === rfb) state.consoleRfb = null;
+      ctrlAltDelButton.disabled = true;
       status.textContent = event.detail?.clean ? 'Konsola rozłączona.' : 'Połączenie konsoli zostało przerwane.';
     });
     rfb.addEventListener('credentialsrequired', () => {
