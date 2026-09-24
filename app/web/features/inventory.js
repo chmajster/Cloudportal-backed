@@ -652,7 +652,15 @@ function restoreVmFromBackup(item, backup) {
 async function showVmConsole(item) {
   try {
     const result = await api(`${vmBase(item)}/console`, { method: 'POST' });
-    if (result.mode !== 'novnc' || !result.rfb_module?.startsWith('/api/v1/') || !result.ws_path?.startsWith('/api/v1/')) {
+    const rfbModule = result.local_rfb_module || result.rfb_module;
+    const modulePathValid = result.local_rfb_module
+      ? result.local_rfb_module === '/ui/vendor/novnc/core/rfb.js'
+      : result.rfb_module?.startsWith('/api/v1/console-sessions/');
+    if (
+      result.mode !== 'novnc'
+      || !modulePathValid
+      || !result.ws_path?.startsWith('/api/v1/console-sessions/')
+    ) {
       throw new Error('Backend nie zwrócił poprawnej sesji noVNC.');
     }
 
@@ -665,7 +673,9 @@ async function showVmConsole(item) {
     dom.modal.classList.add('modal-console');
     dom.modal.showModal();
 
-    const module = await import(result.rfb_module);
+    // The RFB implementation is shipped with Cloudportal, so module loading
+    // cannot depend on Proxmox static-file MIME, redirects or noVNC patch level.
+    const module = await import(rfbModule);
     const RFB = module.default;
     if (typeof RFB !== 'function') throw new Error('Moduł noVNC nie udostępnia klienta RFB.');
     const websocketScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

@@ -1,0 +1,6 @@
+{
+  "name": "cloudportal-vendored-novnc",
+  "private": true,
+  "type": "module",
+  "version": "1.5.0"
+}

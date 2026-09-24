@@ -111,6 +111,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert favicon.headers['content-type'].startswith('image/')
     assert len(favicon.content) > 1000
 
+    novnc_rfb = client.get('/ui/vendor/novnc/core/rfb.js')
+    assert novnc_rfb.status_code == 200
+    assert novnc_rfb.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
+    assert 'export default class RFB' in novnc_rfb.text
+
+    novnc_license = client.get('/ui/vendor/novnc/LICENSE.txt')
+    assert novnc_license.status_code == 200
+    assert 'Mozilla Public License' in novnc_license.text
+
     theme_script = client.get('/ui/theme-init.js')
     assert theme_script.status_code == 200
     assert theme_script.headers['content-type'].startswith(('text/javascript', 'application/javascript'))
