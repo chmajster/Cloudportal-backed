@@ -360,13 +360,14 @@ function showDeploymentDetails(item) {
     ? workflow.ansible_runs
     : (workflow.ansible ? [workflow.ansible] : []);
   if (ansibleRuns.length) {
+    const orderedRuns = ansibleRuns.map((run, index) => ({ ...run, order: index + 1 }));
     content.append(node('section', { class: 'detail-section' },
       node('h3', { text: 'Konfiguracja Ansible' }),
       table([
-        { label: '#', value: (_row, index) => index + 1 },
+        { label: '#', value: row => row.order },
         { label: 'Runbook / Playbook', value: row => row.playbook },
         { label: 'Dane dostępowe', value: row => `#${row.credentials_id}` },
-      ], ansibleRuns)));
+      ], orderedRuns)));
   }
   dom.modal.classList.add('modal-wide');
   dom.modalTitle.textContent = item.name;
