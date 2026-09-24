@@ -109,8 +109,11 @@ def guest_credential_runtime_variables(deployment, *, blueprint=None):
 
     variables = {
         'ssh_username': credential.username,
-        'ssh_public_key': public_key_from_private_key(private_key) if private_key else None,
     }
+    # A password-only credential must not erase a public key explicitly entered
+    # in the Blueprint. Only override the key when the credential owns one.
+    if private_key:
+        variables['ssh_public_key'] = public_key_from_private_key(private_key)
     return variables, password
 
 
