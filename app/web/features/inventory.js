@@ -8,6 +8,7 @@ async function inventoryView() {
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
   ]);
   const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
+  const visibleVms = (vms.items || []).filter(item => item.lifecycle_status !== 'destroyed');
   const actions = allowed('inventory.import') && allowed('providers.read') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
   dom.content.replaceChildren(
     heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego zastosowania zmian.', actions),
@@ -19,7 +20,7 @@ async function inventoryView() {
         { label: 'Stan', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
         { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || `#${item.provider_id}` },
         { label: 'Stan w platformie', value: item => item.live ? badge(statusLabel(item.live.status || 'present'), statusKind(item.live.status)) : badge(statusLabel('missing'), 'danger') },
-      ], vms.items, item => inventoryVmActions(item))
+      ], visibleVms, item => inventoryVmActions(item))
     ),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Zasoby zarządzane' })),
@@ -122,6 +123,45 @@ async function adoptInventoryVm(item) {
 
 function vmBase(item) {
   return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
+}
+
+async function offerMissingVmCleanup(item, returnView = 'inventory') {
+  let refreshed;
+  try {
+    refreshed = await api('/inventory/vms/' + encodeURIComponent(item.id) + '?refresh=true');
+  } catch {
+    return false;
+  }
+
+  if (refreshed.live !== null) return false;
+
+  const label = item.name || ('VM ' + item.vm_id);
+  const location = (item.node || 'Proxmox') + ' / VMID ' + item.vm_id;
+
+  if (!allowed('inventory.delete')) {
+    toast(
+      label + ' (' + location + ') nie istnieje już w Proxmox. Brak uprawnienia inventory.delete do usunięcia nieaktualnego wpisu.',
+      'warning'
+    );
+    return true;
+  }
+
+  confirmAction(
+    'VM nie istnieje w Proxmox',
+    label + ' (' + location + ') nie została znaleziona na platformie. Usunąć nieaktualny wpis VM z aktywnych zasobów Cloudportal? Dane historyczne i audyt pozostaną zachowane.',
+    async () => {
+      await api('/inventory/vms/' + encodeURIComponent(item.id) + '/missing', { method: 'DELETE' });
+      toast('Usunięto nieaktualną VM z aktywnych zasobów Cloudportal.');
+      await navigate(returnView);
+    },
+  );
+  return true;
+}
+
+async function handleVmProviderFailure(item, error, returnView = 'inventory') {
+  if (await offerMissingVmCleanup(item, returnView)) return true;
+  toast(error.message, 'error');
+  return false;
 }
 
 async function showProxmoxTask(item, result, title) {
@@ -516,8 +556,8 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
     await renderTab(activeTab);
     dom.content.focus();
   } catch (error) {
-    toast(error.message, 'error');
-    navigate(returnView);
+    const handled = await handleVmProviderFailure(item, error, returnView);
+    if (!handled) navigate(returnView);
   }
 }
 
@@ -533,7 +573,9 @@ async function vmPower(item, action) {
   try {
     const result = await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
     await showProxmoxTask(item, result, labels[action] || 'Operacja zasilania');
-  } catch (error) { toast(error.message, 'error'); }
+  } catch (error) {
+    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+  }
 }
 
 function deleteVm(item) {
@@ -738,7 +780,7 @@ async function showVmConsole(item) {
   } catch (error) {
     state.consoleRfb = null;
     if (typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open) closeModal();
-    toast(error.message, 'error');
+    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
   }
 }
 
@@ -768,7 +810,9 @@ async function configureVm(item) {
       await showProxmoxTask(item, result, 'Zmiana konfiguracji VM');
       return false;
     }});
-  } catch (error) { toast(error.message, 'error'); }
+  } catch (error) {
+    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+  }
 }
 
 function resizeVmDisk(item) {
