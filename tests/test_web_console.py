@@ -230,6 +230,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.product-card' in stylesheet
     assert '.job-log-status' in stylesheet
     assert '.job-live-log' in stylesheet
+    assert '.job-log-page' in stylesheet
+    assert '.job-log-page-meta' in stylesheet
+    assert "navigate('/jobs/' + encodeURIComponent(item.id))" in script
+    assert "id: 'job-log'" in script
+    assert "navigationParent: 'jobs'" in script
+    assert "Skopiowano bezpośredni link do logów." in script
+    assert 'JOB_LOG_ROUTE' in script
+    assert 'window.uiRoutePathForRequest' in script
+    assert 'uiRoutePathForRequest' in core
     assert '.product-resource-tabs' not in stylesheet
     assert '.my-resources-page-head' in stylesheet
     assert '.my-resources-body' in stylesheet
