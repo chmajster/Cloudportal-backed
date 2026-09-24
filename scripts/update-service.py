@@ -6,6 +6,7 @@ keeps reporting progress while the main API, dispatcher and workers restart.
 """
 from __future__ import annotations
 
+import base64
 import hmac
 import json
 import os
@@ -623,16 +624,270 @@ def _candidate_core_healthy(payload: dict) -> bool:
     return all(bool(checks.get(name)) for name in required)
 
 
-def validate_candidate_runtime(target_sha: str, backup_dir: Path, settings: dict) -> None:
-    if INSTALL_MODE == "docker":
-        event(
-            "runtime_preflight_deferred",
-            18,
-            "Docker: izolowany runtime preflight jest wykonywany przez build, migracje, healthcheck i rollback instalatora kandydata.",
+def _docker_wait_ready(command: list[str], *, label: str, timeout: int = 90) -> None:
+    deadline = time.monotonic() + timeout
+    last_output = ""
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
         )
-        return
+        last_output = result.stdout or ""
+        if result.returncode == 0:
+            return
+        time.sleep(1)
+    for line in last_output.splitlines()[-40:]:
+        append_output("runtime-preflight: " + line)
+    raise RuntimeError(f"Runtime preflight nie przeszedł: {label}")
+
+
+def _docker_validate_candidate_runtime(target_sha: str, backup_dir: Path, settings: dict) -> None:
+    docker = shutil.which("docker")
+    if not docker:
+        raise RuntimeError("Docker Engine jest wymagany do izolowanego runtime preflight")
+
+    info = subprocess.run(
+        [docker, "info"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if info.returncode != 0:
+        raise RuntimeError("Docker Engine nie odpowiada; runtime preflight zablokowany")
+
+    dump = backup_dir / "database.dump"
+    if not dump.is_file():
+        raise RuntimeError("Backup przed aktualizacją nie zawiera database.dump")
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    event(
+        "runtime_preflight",
+        16,
+        "Docker: testowanie obrazu, migracji i API kandydata na izolowanej kopii bazy.",
+    )
+
+    suffix = f"{os.getpid()}-{int(time.time())}-{target_sha[:8]}".lower()
+    image = f"cloudportal-preflight:{suffix}"
+    network = f"cloudportal-preflight-{suffix}"
+    postgres = f"cloudportal-preflight-postgres-{suffix}"
+    redis = f"cloudportal-preflight-redis-{suffix}"
+    api = f"cloudportal-preflight-api-{suffix}"
+    created_image = False
+    created_network = False
+    containers: list[str] = []
+
+    with tempfile.TemporaryDirectory(prefix="runtime-preflight-", dir=str(DATA_DIR)) as temp:
+        root = Path(temp)
+        os.chmod(root, 0o755)
+        archive = root / "candidate.tar.gz"
+        source = root / "source"
+        config_dir = root / "config"
+        data_dir = root / "data"
+        source.mkdir()
+        config_dir.mkdir(mode=0o700)
+        data_dir.mkdir(mode=0o700)
+
+        # The candidate must not receive the production encryption key. Health only
+        # validates key availability, while restored encrypted secrets remain inert.
+        master_key = config_dir / "master.key"
+        master_key.write_bytes(base64.b64encode(os.urandom(32)) + b"\n")
+        os.chmod(master_key, 0o600)
+        os.chown(config_dir, 10001, 10001)
+        os.chown(data_dir, 10001, 10001)
+        os.chown(master_key, 10001, 10001)
+
+        download_candidate_archive(target_sha, archive, settings)
+        extract_candidate_archive(archive, source)
+
+        password = os.urandom(24).hex()
+        database_url = f"postgresql+psycopg://cloudportal:{password}@postgres/cloudportal"
+        redis_url = "redis://redis:6379/0"
+        runtime_env = [
+            "-e", f"CP_DATABASE_URL={database_url}",
+            "-e", f"CP_REDIS_URL={redis_url}",
+            "-e", "CP_MASTER_KEY_FILE=/etc/cloudportal-backed/master.key",
+            "-e", "CP_DATA_DIR=/var/lib/cloudportal-backed",
+            "-e", "CP_WORKER_COUNT=1",
+            "-e", "CP_ALLOW_HTTP=true",
+            "-e", "CP_INSTALL_MODE=docker",
+        ]
+        runtime_mounts = [
+            "-v", f"{config_dir}:/etc/cloudportal-backed:ro",
+            "-v", f"{data_dir}:/var/lib/cloudportal-backed:rw",
+        ]
+
+        try:
+            _run_runtime_command(
+                [
+                    docker, "build", "--pull",
+                    "--build-arg", f"BUILD_COMMIT={target_sha}",
+                    "-t", image, ".",
+                ],
+                cwd=source,
+                label="build obrazu Docker kandydata",
+                timeout=1800,
+            )
+            created_image = True
+
+            _run_runtime_command(
+                [docker, "network", "create", network],
+                label="utworzenie izolowanej sieci Docker",
+                timeout=60,
+            )
+            created_network = True
+
+            _run_runtime_command(
+                [
+                    docker, "run", "-d", "--name", postgres, "--network", network,
+                    "--network-alias", "postgres",
+                    "-e", "POSTGRES_DB=cloudportal",
+                    "-e", "POSTGRES_USER=cloudportal",
+                    "-e", f"POSTGRES_PASSWORD={password}",
+                    "postgres:16-alpine",
+                ],
+                label="uruchomienie izolowanego PostgreSQL",
+                timeout=120,
+            )
+            containers.append(postgres)
+            _run_runtime_command(
+                [
+                    docker, "run", "-d", "--name", redis, "--network", network,
+                    "--network-alias", "redis",
+                    "redis:7-alpine", "redis-server", "--save", "", "--appendonly", "no",
+                ],
+                label="uruchomienie izolowanego Redis",
+                timeout=120,
+            )
+            containers.append(redis)
+
+            _docker_wait_ready(
+                [docker, "exec", postgres, "pg_isready", "-U", "cloudportal", "-d", "cloudportal"],
+                label="gotowość izolowanego PostgreSQL",
+                timeout=120,
+            )
+            _docker_wait_ready(
+                [docker, "exec", redis, "redis-cli", "ping"],
+                label="gotowość izolowanego Redis",
+                timeout=60,
+            )
+
+            _run_runtime_command(
+                [docker, "cp", str(dump), f"{postgres}:/tmp/database.dump"],
+                label="kopiowanie backupu do izolowanego PostgreSQL",
+                timeout=300,
+            )
+            _run_runtime_command(
+                [
+                    docker, "exec", postgres,
+                    "pg_restore", "-U", "cloudportal", "-d", "cloudportal",
+                    "--no-owner", "--no-privileges", "--exit-on-error",
+                    "/tmp/database.dump",
+                ],
+                label="odtworzenie produkcyjnego dumpa w izolowanej bazie",
+                timeout=1800,
+            )
+
+            candidate_base = [
+                docker, "run", "--rm", "--network", network,
+                "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges:true",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777",
+                *runtime_env, *runtime_mounts, image,
+            ]
+            _run_runtime_command(
+                [*candidate_base, "alembic", "upgrade", "head"],
+                label="migracje kandydata na izolowanej kopii bazy",
+                timeout=900,
+            )
+
+            port = _free_loopback_port()
+            start = [
+                docker, "run", "-d", "--name", api, "--network", network,
+                "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges:true",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777",
+                "-p", f"127.0.0.1:{port}:8765",
+                *runtime_env, *runtime_mounts, image,
+                "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765",
+            ]
+            _run_runtime_command(
+                start,
+                label="uruchomienie izolowanego API kandydata",
+                timeout=120,
+            )
+            containers.append(api)
+
+            payload = None
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                if subprocess.run(
+                    [docker, "inspect", "-f", "{{.State.Running}}", api],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    check=False,
+                ).stdout.strip() != "true":
+                    break
+                payload = _candidate_health_payload(port)
+                if payload is not None and _candidate_core_healthy(payload):
+                    break
+                time.sleep(1)
+
+            if payload is None or not _candidate_core_healthy(payload):
+                logs = subprocess.run(
+                    [docker, "logs", "--tail", "100", api],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    check=False,
+                ).stdout or ""
+                for line in logs.splitlines()[-80:]:
+                    append_output("runtime-preflight-api: " + line)
+                checks = payload.get("checks") if isinstance(payload, dict) else None
+                raise RuntimeError(
+                    "Docker kandydat nie przeszedł izolowanego healthchecku"
+                    + (f": {checks}" if checks else "")
+                )
+        finally:
+            for container in reversed(containers):
+                subprocess.run(
+                    [docker, "rm", "-f", container],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            if created_network:
+                subprocess.run(
+                    [docker, "network", "rm", network],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            if created_image:
+                subprocess.run(
+                    [docker, "image", "rm", "-f", image],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+
+    event(
+        "runtime_preflight_ok",
+        18,
+        "Docker: migracje i API kandydata działają na izolowanej kopii produkcyjnej bazy.",
+        runtime_preflight="success",
+    )
+
+
+def validate_candidate_runtime(target_sha: str, backup_dir: Path, settings: dict) -> None:
     if not bool(settings.get("runtime_preflight", True)):
         append_output("Runtime candidate preflight disabled in updater settings.")
+        return
+    if INSTALL_MODE == "docker":
+        _docker_validate_candidate_runtime(target_sha, backup_dir, settings)
         return
 
     backend = parse_kv(CONFIG_DIR / "backend.env")
