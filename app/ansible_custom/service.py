@@ -115,20 +115,22 @@ def _walk_yaml(value):
 
 
 def _validate_task_sources(document):
+    banned_modules = {name.rsplit('.', 1)[-1] for name in BANNED_TASK_MODULES}
     for key, value in _walk_yaml(document):
+        normalized_key = key.rsplit('.', 1)[-1]
         if key.startswith('with_'):
             raise HTTPException(422, f'Custom playbook cannot use legacy controller-side lookup loop: {key}')
-        if key in BANNED_KEYS:
+        if key in BANNED_KEYS or normalized_key in BANNED_KEYS:
             raise HTTPException(422, f'Custom playbook cannot use controller-side directive: {key}')
-        if key in BANNED_TASK_MODULES:
+        if normalized_key in banned_modules:
             raise HTTPException(422, f'Custom playbook cannot use controller-side module: {key}')
-        if key in {'copy', 'ansible.builtin.copy', 'win_copy', 'ansible.windows.win_copy'}:
+        if normalized_key in {'copy', 'win_copy'}:
             if (
                 isinstance(value, dict) and value.get('src')
-                or isinstance(value, str) and re.search(r'(?i)(?:^|\\s)src\\s*=', value)
+                or isinstance(value, str) and re.search(r'(?i)(?:^|\s)src\s*=', value)
             ):
                 raise HTTPException(422, 'Custom playbook copy tasks must use content, not controller-side src')
-        if key in {'unarchive', 'ansible.builtin.unarchive'}:
+        if normalized_key == 'unarchive':
             if not isinstance(value, dict):
                 raise HTTPException(422, 'Custom playbook unarchive tasks must use mapping syntax with remote_src=true')
             if value.get('src') and value.get('remote_src') is not True:
