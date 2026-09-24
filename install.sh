@@ -448,6 +448,8 @@ docker_config=/etc/cloudportal-backed-docker
 docker_env="$docker_config/docker.env"
 docker_pending_env="$docker_config/docker.env.pending"
 docker_tls="$docker_config/tls"
+docker_updater_data=/var/lib/cloudportal-backed-docker
+docker_updater_runtime=/run/cloudportal-updater-docker
 docker_project=cloudportal-backed
 DOCKER_COMPOSE=()
 
@@ -497,12 +499,16 @@ docker_preflight() {
   ui_info "System: $NAME $VERSION_ID · $arch · tryb Docker"
   ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
 
-  for command in awk sed grep tar openssl curl df sha256sum stat hostname flock ss; do
+  for command in awk sed grep tar openssl curl df sha256sum stat hostname flock ss "$python_command" systemctl; do
     if ! command -v "$command" >/dev/null 2>&1; then
       ui_fail "Brak wymaganej komendy przed instalacją Docker: $command"
       failed=1
     fi
   done
+  if [[ ! -d /run/systemd/system ]]; then
+    ui_fail 'Tryb Docker wymaga aktywnego systemd na hoście dla niezależnego serwisu aktualizacji.'
+    failed=1
+  fi
   ((failed == 0)) || {
     ui_info 'Uzupełnij brakujące narzędzia bazowe przed uruchomieniem instalatora; preflight nie modyfikuje systemu.'
     return 1
@@ -709,6 +715,119 @@ docker_compose() {
   docker_compose_for "$release" "$docker_env" "$@"
 }
 
+docker_prepare_updater_config() {
+  local channel_ref=${1:-}
+  local token_file persistent_github_token='' persistent_github_config='' updater_config
+
+  install -d -m 0700 "$docker_config" "$docker_updater_data" "$docker_updater_data/update"
+  install -d -m 0755 "$docker_updater_runtime"
+  for token_file in "$docker_config/updater.token" "$docker_config/updater-status.token"; do
+    if [[ ! -s "$token_file" ]]; then
+      openssl rand -hex 32 > "$token_file"
+    fi
+    # Katalog hosta ma 0700; sam plik musi być czytelny dla UID 10001 po bind-mount do kontenera API.
+    chmod 0644 "$token_file"
+    chown root:root "$token_file"
+  done
+
+  if [[ -n "$github_token_file" ]]; then
+    persistent_github_token="$docker_config/github.token"
+    if [[ "$github_token_file" != "$persistent_github_token" ]]; then
+      install -m 0600 "$github_token_file" "$persistent_github_token"
+    fi
+    chown root:root "$persistent_github_token"
+  fi
+  if [[ -n "$github_config" ]]; then
+    persistent_github_config="$docker_config/github.curl.conf"
+    if [[ "$github_config" != "$persistent_github_config" ]]; then
+      install -m 0600 "$github_config" "$persistent_github_config"
+    fi
+    chown root:root "$persistent_github_config"
+  fi
+
+  updater_config="$docker_config/updater.json"
+  "$python_command" - "$updater_config" "$channel_ref" "$persistent_github_token" "$persistent_github_config" <<'PY'
+import json, os, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text()) if path.exists() else {}
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+data.setdefault('enabled', False)
+data.setdefault('interval_hours', 24)
+data.setdefault('ref', 'main')
+data.setdefault('github_token_file', '')
+data.setdefault('github_config', '')
+data.setdefault('require_ci', True)
+data.setdefault('ci_workflow', 'Backend CI')
+data.setdefault('ci_wait_minutes', 45)
+data.setdefault('candidate_validation', True)
+data.setdefault('runtime_preflight', True)
+if sys.argv[2]:
+    data['ref'] = sys.argv[2]
+if sys.argv[3]:
+    data['github_token_file'] = sys.argv[3]
+if sys.argv[4]:
+    data['github_config'] = sys.argv[4]
+path.write_text(json.dumps(data, indent=2) + '\n')
+os.chmod(path, 0o600)
+PY
+  chown root:root "$updater_config"
+}
+
+docker_activate_updater() {
+  local release=$1
+  [[ -f "$release/scripts/update-service.py" ]] || {
+    ui_fail "Release nie zawiera scripts/update-service.py: $release"
+    return 1
+  }
+
+  install -d -m 0755 /usr/local/lib/cloudportal-updater
+  install -m 0755 "$release/scripts/update-service.py" /usr/local/lib/cloudportal-updater/update-service.py
+
+  cat > /etc/systemd/system/cloudportal-updater.service <<EOF
+[Unit]
+Description=Cloudportal independent auto-update service (Docker)
+After=network-online.target docker.service
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=$python_command /usr/local/lib/cloudportal-updater/update-service.py
+Environment=CP_UPDATER_REPOSITORY=$repo
+Environment=CP_UPDATER_PORT=8766
+Environment=CP_UPDATER_SOCKET=$docker_updater_runtime/updater.sock
+Environment=CP_UPDATER_INSTALL_MODE=docker
+Environment=CP_UPDATER_CONFIG_DIR=$docker_config
+Environment=CP_UPDATER_DATA_DIR=$docker_updater_data
+Environment=CP_UPDATER_APP_ROOT=$docker_root
+Restart=always
+RestartSec=3
+UMask=0077
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable cloudportal-updater.service >/dev/null
+  if ((update_in_progress)); then
+    systemctl is-active --quiet cloudportal-updater.service || systemctl start cloudportal-updater.service
+  else
+    systemctl restart cloudportal-updater.service
+  fi
+}
+
+docker_updater_status_probe() {
+  local public_port=${1:-8443} token=''
+  [[ -s "$docker_config/updater-status.token" ]] || return 1
+  token=$(tr -d '\r\n' < "$docker_config/updater-status.token")
+  [[ -n "$token" ]] || return 1
+  curl -kfsS --connect-timeout 2 --max-time 8 \
+    -H "X-Update-Status-Token: $token" \
+    "https://127.0.0.1:$public_port/update-status" >/dev/null
+}
+
 docker_rollback_candidate() {
   local candidate_release=$1 candidate_env=$2 previous_release=$3 previous_workers=$4
   local tls_changed=$5 tls_backup_dir=$6 had_previous_tls=$7
@@ -775,6 +894,25 @@ docker_status_check() {
     ui_info "Oczekiwana liczba workerów: $expected_workers"
   else
     ui_fail "Brak konfiguracji Docker: $docker_env"
+    failed=1
+  fi
+
+  if [[ -s "$docker_config/updater.token" && -s "$docker_config/updater-status.token" ]]; then
+    ui_ok 'Updater: pliki tokenów są dostępne.'
+  else
+    ui_fail 'Updater: brakuje updater.token lub updater-status.token.'
+    failed=1
+  fi
+  if systemctl is-active --quiet cloudportal-updater.service 2>/dev/null; then
+    ui_ok 'Updater: cloudportal-updater.service aktywny.'
+    if [[ -S "$docker_updater_runtime/updater.sock" ]]; then
+      ui_ok 'Updater: socket Unix jest dostępny.'
+    else
+      ui_fail 'Updater: brakuje socketu Unix updater.sock.'
+      failed=1
+    fi
+  else
+    ui_fail 'Updater: cloudportal-updater.service nie jest aktywny.'
     failed=1
   fi
 
@@ -885,6 +1023,13 @@ docker_status_check() {
     fi
   else
     ui_fail 'Nie można wykonać HTTPS healthchecku: brak curl albo nieprawidłowy CP_HTTPS_PORT.'
+    failed=1
+  fi
+
+  if [[ "$public_port" =~ ^[0-9]+$ ]] && docker_updater_status_probe "$public_port"; then
+    ui_ok 'Updater: /update-status odpowiada przez reverse proxy.'
+  else
+    ui_fail 'Updater: /update-status nie odpowiada poprawnie przez reverse proxy.'
     failed=1
   fi
 
@@ -1016,6 +1161,11 @@ docker_repair() {
     ui_fail "Nieprawidłowa wartość CP_HTTPS_PORT: ${public_port:-brak}"
     return 1
   }
+
+  ui_info 'Weryfikuję hostowy serwis updatera i jego tokeny.'
+  docker_prepare_updater_config ''
+  docker_activate_updater "$release"
+  ui_ok 'Updater hostowy został uruchomiony i ma komplet tokenów.'
 
   ui_info 'Naprawiam zależności selektywnie; zdrowe kontenery nie będą odtwarzane.'
 
@@ -1369,6 +1519,12 @@ docker_uninstall() {
   fi
 
   ui_stage 1 3 'Zatrzymanie stacka'
+  systemctl disable --now cloudportal-updater.service >/dev/null 2>&1 || true
+  rm -rf "$docker_updater_runtime"
+  rm -f /etc/systemd/system/cloudportal-updater.service
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  rm -f /usr/local/lib/cloudportal-updater/update-service.py
+  rmdir /usr/local/lib/cloudportal-updater >/dev/null 2>&1 || true
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || {
     ui_fail 'Docker Engine nie jest dostępny; nie mogę bezpiecznie usunąć kontenerów ani wolumenów projektu.'
     exit 1
@@ -1407,8 +1563,8 @@ docker_uninstall() {
     if ((${#project_volumes[@]})); then
       docker volume rm "${project_volumes[@]}" >/dev/null
     fi
-    rm -rf "$docker_config"
-    ui_ok 'Usunięto konfigurację Docker i wolumeny aplikacji.'
+    rm -rf "$docker_config" "$docker_updater_data"
+    ui_ok 'Usunięto konfigurację Docker, stan updatera i wolumeny aplikacji.'
   else
     ui_info "Zachowano konfigurację: $docker_config"
     ui_info 'Zachowano nazwane wolumeny Docker z bazą i danymi aplikacji.'
@@ -1489,7 +1645,7 @@ docker_recovery_admin() {
 
 docker_install() {
   ui_header 'Cloudportal-backed — instalacja Docker'
-  local stages=6 release_sha effective_tarball_url candidate_sha release docker_tls_stage
+  local stages=6 release_sha effective_tarball_url candidate_sha release docker_tls_stage archive_sha release_ref
   local candidate_env previous_release tls_backup_dir=''
   local docker_tls_changed=0 had_previous_tls=0
   docker_tmp_dir=''
@@ -1529,13 +1685,23 @@ docker_install() {
   trap '[[ -z "${docker_tmp_dir:-}" ]] || rm -rf "$docker_tmp_dir"' EXIT
   docker_prepare_github_curl "$docker_tmp_dir"
   ui_info "Pobieram kod źródłowy z GitHub: $repo @ $ref"
-  release_sha=''
+  release_ref=${update_channel_ref:-$ref}
+  release_sha=${CLOUDPORTAL_RELEASE_SHA:-}
+  [[ -z "$release_sha" || "$release_sha" =~ ^[0-9a-fA-F]{40}$ ]] || {
+    ui_fail 'CLOUDPORTAL_RELEASE_SHA ma nieprawidłowy format.'
+    exit 1
+  }
   effective_tarball_url=$(curl "${DOCKER_CURL_ARGS[@]}" -w '%{url_effective}' "https://api.github.com/repos/$repo/tarball/$ref" -o "$docker_tmp_dir/source.tar.gz") || {
     ui_fail 'Nie udało się pobrać kodu źródłowego z GitHub.'
     exit 1
   }
   candidate_sha=${effective_tarball_url##*/}
-  [[ "$candidate_sha" =~ ^[0-9a-fA-F]{40}$ ]] && release_sha=${candidate_sha,,} || release_sha=$(sha256sum "$docker_tmp_dir/source.tar.gz" | awk '{print $1}')
+  archive_sha=$(sha256sum "$docker_tmp_dir/source.tar.gz" | awk '{print $1}')
+  if [[ -z "$release_sha" ]]; then
+    [[ "$candidate_sha" =~ ^[0-9a-fA-F]{40}$ ]] && release_sha=${candidate_sha,,} || release_sha=$archive_sha
+  else
+    release_sha=${release_sha,,}
+  fi
   mkdir "$docker_tmp_dir/source"
   tar -xzf "$docker_tmp_dir/source.tar.gz" -C "$docker_tmp_dir/source" --strip-components=1 --no-same-owner
   [[ -f "$docker_tmp_dir/source/Dockerfile" && -f "$docker_tmp_dir/source/docker-compose.yml" && -f "$docker_tmp_dir/source/scripts/nginx-container.conf" ]] || {
@@ -1545,6 +1711,19 @@ docker_install() {
   release=$(mktemp -d "$docker_root/releases/$(date -u +%Y%m%dT%H%M%SZ)-${release_sha:0:12}-XXXXXX")
   cp -a "$docker_tmp_dir/source/." "$release/"
   chmod -R go-w "$release"
+  "$python_command" - "$release/.cloudportal-release.json" "$repo" "$release_ref" "$release_sha" "$archive_sha" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    'repository': sys.argv[2],
+    'ref': sys.argv[3],
+    'commit_sha': sys.argv[4],
+    'archive_sha256': sys.argv[5],
+    'installed_at': datetime.now(timezone.utc).isoformat(),
+}, indent=2) + '\n')
+PY
+  chmod 0644 "$release/.cloudportal-release.json"
   ui_ok "Przygotowano kandydata release: $release"
 
   ui_stage 3 "$stages" 'Konfiguracja i sekrety'
@@ -1566,9 +1745,14 @@ CP_HTTPS_PORT=$backend_port
 CP_TLS_DIR=$docker_tls
 CP_PUBLIC_HOST=$backend_host
 CP_WORKER_COUNT=$workers
+CP_UPDATER_HOST_CONFIG_DIR=$docker_config
+CP_UPDATER_RUNTIME_DIR=$docker_updater_runtime
 EOF
   chmod 0600 "$candidate_env"
   unset postgres_password
+
+  docker_prepare_updater_config "$release_ref"
+  ui_ok 'Tokeny i konfiguracja hostowego updatera są gotowe dla kontenerów.'
 
   docker_tls_stage="$docker_tmp_dir/tls-stage"
   if [[ -n "$cert_file" ]]; then
@@ -1712,9 +1896,38 @@ EOF
   ln -sfn "$release" "$docker_root/current"
   ui_ok 'Kandydat został aktywowany jako bieżący release Docker.'
 
+  docker_activate_updater "$release"
+  ui_ok 'Niezależny hostowy updater jest aktywny.'
+
   ui_info 'Finalizuję bootstrap administratora dopiero po udanym healthchecku. Jednorazowy token, jeżeli powstanie, zostanie wyświetlony poniżej.'
   docker_compose_for "$release" "$docker_env" run --rm --no-deps -T bootstrap python -m app.bootstrap --url "https://$backend_host:$backend_port"
   ui_ok 'Bootstrap administratora zakończony po walidacji działającego stacka.'
+
+  local updater_ready=0
+  for ((attempt=1; attempt<=20; attempt++)); do
+    if docker_updater_status_probe "$backend_port"; then
+      updater_ready=1
+      break
+    fi
+    sleep 1
+  done
+  ((updater_ready == 1)) || {
+    ui_fail 'Updater nie odpowiada przez /update-status po uruchomieniu stacka.'
+    systemctl --no-pager --full status cloudportal-updater.service || true
+    journalctl --no-pager -u cloudportal-updater.service -n 80 || true
+    exit 1
+  }
+  ui_ok 'Kanał /update-status i token statusu działają poprawnie.'
+
+  if ((update_in_progress)); then
+    local updater_reload_unit="cloudportal-docker-updater-reload-$"
+    if systemd-run --quiet --collect --unit="$updater_reload_unit" --on-active=8s \
+        /bin/systemctl restart cloudportal-updater.service >/dev/null 2>&1; then
+      ui_info 'Nowa wersja updatera zostanie przeładowana po zakończeniu tej aktualizacji.'
+    else
+      ui_warn 'Nie udało się zaplanować przeładowania updatera; bieżąca aktualizacja jest zakończona.'
+    fi
+  fi
 
   ui_header 'Podsumowanie'
   ui_ok 'Instalacja Docker Cloudportal-backed zakończona.'

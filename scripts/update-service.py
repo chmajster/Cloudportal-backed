@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import ThreadingMixIn, UnixStreamServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -32,6 +33,12 @@ DATA_DIR = Path(os.environ.get("CP_UPDATER_DATA_DIR", "/var/lib/cloudportal-back
 APP_ROOT = Path(os.environ.get("CP_UPDATER_APP_ROOT", "/opt/cloudportal-backed"))
 PORT = int(os.environ.get("CP_UPDATER_PORT", "8766"))
 REPOSITORY = os.environ.get("CP_UPDATER_REPOSITORY", "chmajster/Cloudportal-backed")
+INSTALL_MODE = os.environ.get("CP_UPDATER_INSTALL_MODE", "systemd").strip().lower()
+BIND_HOST = os.environ.get(
+    "CP_UPDATER_BIND",
+    "127.0.0.1",
+).strip() or "127.0.0.1"
+SOCKET_PATH = os.environ.get("CP_UPDATER_SOCKET", "").strip()
 
 CONTROL_TOKEN = CONFIG_DIR / "updater.token"
 STATUS_TOKEN = CONFIG_DIR / "updater-status.token"
@@ -55,6 +62,10 @@ CI_POLL_SECONDS = 15
 
 lock = threading.RLock()
 update_thread: threading.Thread | None = None
+
+
+class ThreadingUnixHTTPServer(ThreadingMixIn, UnixStreamServer):
+    daemon_threads = True
 
 
 def utcnow() -> str:
@@ -613,6 +624,13 @@ def _candidate_core_healthy(payload: dict) -> bool:
 
 
 def validate_candidate_runtime(target_sha: str, backup_dir: Path, settings: dict) -> None:
+    if INSTALL_MODE == "docker":
+        event(
+            "runtime_preflight_deferred",
+            18,
+            "Docker: izolowany runtime preflight jest wykonywany przez build, migracje, healthcheck i rollback instalatora kandydata.",
+        )
+        return
     if not bool(settings.get("runtime_preflight", True)):
         append_output("Runtime candidate preflight disabled in updater settings.")
         return
@@ -827,6 +845,24 @@ def _service_active(unit: str) -> bool:
 
 
 def ensure_current_installation_healthy() -> None:
+    if INSTALL_MODE == "docker":
+        installer = CURRENT_LINK / "install.sh"
+        if not installer.is_file():
+            raise RuntimeError("Brak aktywnego instalatora Docker do walidacji stanu")
+        result = subprocess.run(
+            ["/bin/bash", str(installer), "--docker", "--status", "--no-auto-repair"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        if result.returncode != 0:
+            for line in (result.stdout or "").splitlines()[-80:]:
+                append_output("docker-health: " + line)
+            raise RuntimeError("Bieżący stack Docker nie przeszedł walidacji; auto-update wstrzymany")
+        return
+
     backend = parse_kv(CONFIG_DIR / "backend.env")
     try:
         workers = max(1, min(64, int(backend.get("CP_WORKER_COUNT", "1"))))
@@ -1038,23 +1074,36 @@ def parse_kv(path: Path) -> dict:
 
 
 def installer_args(ref: str) -> list[str]:
-    public = parse_kv(CONFIG_DIR / "public.conf")
-    backend = parse_kv(CONFIG_DIR / "backend.env")
     settings = load_settings()
-    host = public.get("host")
-    port = public.get("port")
-    workers = backend.get("CP_WORKER_COUNT", "1")
-    retention = backend.get("CP_BACKUP_RETENTION_DAYS", "14")
-    backup = backend.get("CP_BACKUP_SCHEDULE_ENABLED", "false").lower() == "true"
-    if not host or not port:
-        raise RuntimeError("Missing installed host/port configuration")
-    args = [
-        "/bin/bash", "{installer}", "--non-interactive",
-        "--host", host, "--port", port, "--workers", workers,
-        "--backup-retention-days", retention,
-        "--ref", ref,
-        "--enable-backups" if backup else "--disable-backups",
-    ]
+    if INSTALL_MODE == "docker":
+        backend = parse_kv(CONFIG_DIR / "docker.env")
+        host = backend.get("CP_PUBLIC_HOST")
+        port = backend.get("CP_HTTPS_PORT")
+        workers = backend.get("CP_WORKER_COUNT", "1")
+        if not host or not port:
+            raise RuntimeError("Missing installed Docker host/port configuration")
+        args = [
+            "/bin/bash", "{installer}", "--docker", "--non-interactive",
+            "--host", host, "--port", port, "--workers", workers,
+            "--ref", ref,
+        ]
+    else:
+        public = parse_kv(CONFIG_DIR / "public.conf")
+        backend = parse_kv(CONFIG_DIR / "backend.env")
+        host = public.get("host")
+        port = public.get("port")
+        workers = backend.get("CP_WORKER_COUNT", "1")
+        retention = backend.get("CP_BACKUP_RETENTION_DAYS", "14")
+        backup = backend.get("CP_BACKUP_SCHEDULE_ENABLED", "false").lower() == "true"
+        if not host or not port:
+            raise RuntimeError("Missing installed host/port configuration")
+        args = [
+            "/bin/bash", "{installer}", "--non-interactive",
+            "--host", host, "--port", port, "--workers", workers,
+            "--backup-retention-days", retention,
+            "--ref", ref,
+            "--enable-backups" if backup else "--disable-backups",
+        ]
     token_file = str(settings.get("github_token_file") or "")
     github_config = str(settings.get("github_config") or "")
     if token_file:
@@ -1074,7 +1123,79 @@ def download_installer(ref: str, target: Path) -> None:
     os.chmod(target, 0o700)
 
 
+def _docker_compose_base() -> list[str]:
+    env_file = CONFIG_DIR / "docker.env"
+    compose_file = CURRENT_LINK / "docker-compose.yml"
+    if not env_file.is_file() or not compose_file.is_file():
+        raise RuntimeError("Brak aktywnej konfiguracji Docker wymaganej do backupu")
+
+    docker = shutil.which("docker")
+    if docker:
+        probe = subprocess.run(
+            [docker, "compose", "version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return [
+                docker, "compose", "-p", "cloudportal-backed",
+                "--env-file", str(env_file), "-f", str(compose_file),
+            ]
+
+    docker_compose = shutil.which("docker-compose")
+    if docker_compose:
+        return [
+            docker_compose, "-p", "cloudportal-backed",
+            "--env-file", str(env_file), "-f", str(compose_file),
+        ]
+    raise RuntimeError("Docker Compose nie jest dostępny dla updatera")
+
+
+def _docker_pre_update_backup() -> Path:
+    root = DATA_DIR / "backups"
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    backup_dir = root / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    suffix = 0
+    while backup_dir.exists():
+        suffix += 1
+        backup_dir = root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{suffix}")
+    backup_dir.mkdir(mode=0o700)
+    dump = backup_dir / "database.dump"
+
+    command = _docker_compose_base() + [
+        "exec", "-T", "postgres",
+        "pg_dump", "-U", "cloudportal", "-d", "cloudportal", "-Fc",
+    ]
+    with dump.open("xb") as stream:
+        result = subprocess.run(
+            command,
+            stdout=stream,
+            stderr=subprocess.PIPE,
+            timeout=1800,
+            check=False,
+        )
+    if result.returncode != 0:
+        dump.unlink(missing_ok=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        detail = (result.stderr or b"").decode("utf-8", "replace").strip()
+        raise RuntimeError("Pre-update Docker PostgreSQL backup failed" + (": " + detail if detail else ""))
+
+    metadata = {
+        "created_at": utcnow(),
+        "install_mode": "docker",
+        "current_release": str(CURRENT_LINK.resolve()),
+        "current_commit": str(release_info().get("commit_sha") or ""),
+    }
+    atomic_json(backup_dir / "metadata.json", metadata)
+    append_output("Docker backup: " + str(backup_dir))
+    return backup_dir
+
+
 def pre_update_backup() -> Path:
+    if INSTALL_MODE == "docker":
+        return _docker_pre_update_backup()
     backup = Path("/usr/local/sbin/cloudportal-backup")
     if not backup.exists():
         raise RuntimeError("Pre-update backup command is not installed; refusing unsafe update")
@@ -1432,8 +1553,21 @@ def main() -> None:
                 finished_at=utcnow(),
             )
     threading.Thread(target=scheduler, daemon=True, name="cloudportal-update-scheduler").start()
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    server.serve_forever()
+    if SOCKET_PATH:
+        socket_path = Path(SOCKET_PATH)
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(socket_path.parent, 0o755)
+        socket_path.unlink(missing_ok=True)
+        server = ThreadingUnixHTTPServer(str(socket_path), Handler)
+        os.chmod(socket_path, 0o666)
+        try:
+            server.serve_forever()
+        finally:
+            server.server_close()
+            socket_path.unlink(missing_ok=True)
+    else:
+        server = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
+        server.serve_forever()
 
 
 if __name__ == "__main__":

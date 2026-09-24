@@ -183,3 +183,24 @@ def test_api_healthcheck_is_quiet_during_expected_startup_and_dumps_diagnostics_
     assert "Ostatni błąd curl:" in INSTALLER
     assert "systemctl --no-pager --full status cloudportal-api.service" in INSTALLER
     assert "journalctl --no-pager -u cloudportal-api.service -n 80" in INSTALLER
+
+
+def test_docker_compose_wires_updater_tokens_and_unix_socket():
+    compose = (ROOT / 'docker-compose.yml').read_text(encoding='utf-8')
+    nginx = (ROOT / 'scripts' / 'nginx-container.conf').read_text(encoding='utf-8')
+    assert 'CP_UPDATER_UNIX_SOCKET: /run/cloudportal-updater/updater.sock' in compose
+    assert 'CP_UPDATER_TOKEN_FILE: /run/cloudportal-updater-secrets/updater.token' in compose
+    assert 'CP_UPDATER_STATUS_TOKEN_FILE: /run/cloudportal-updater-secrets/updater-status.token' in compose
+    assert 'CP_UPDATER_HOST_CONFIG_DIR' in compose
+    assert 'CP_UPDATER_RUNTIME_DIR' in compose
+    assert 'host.docker.internal' not in compose
+    assert 'location = /update-status' in nginx
+    assert 'proxy_pass http://unix:/run/cloudportal-updater/updater.sock:/status$is_args$args;' in nginx
+
+
+def test_docker_status_and_repair_include_updater_channel():
+    assert "Updater: pliki tokenów są dostępne." in INSTALLER
+    assert "Updater: cloudportal-updater.service aktywny." in INSTALLER
+    assert "Updater: /update-status odpowiada przez reverse proxy." in INSTALLER
+    assert "docker_prepare_updater_config ''" in INSTALLER
+    assert 'docker_activate_updater "$release"' in INSTALLER
