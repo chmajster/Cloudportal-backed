@@ -76,7 +76,9 @@ def test_docker_installer_provisions_host_updater_and_pins_release_metadata():
     assert 'docker_activate_updater()' in INSTALLER
     assert 'docker_updater_status_probe()' in INSTALLER
     assert 'CP_UPDATER_INSTALL_MODE=docker' in INSTALLER
+    assert 'CP_UPDATER_SOCKET=$docker_updater_runtime/updater.sock' in INSTALLER
     assert 'CP_UPDATER_HOST_CONFIG_DIR=$docker_config' in INSTALLER
+    assert 'CP_UPDATER_RUNTIME_DIR=$docker_updater_runtime' in INSTALLER
     assert 'updater-status.token' in INSTALLER
     assert 'cloudportal-updater.service' in INSTALLER
     assert '"$release/.cloudportal-release.json"' in INSTALLER
@@ -88,9 +90,20 @@ def test_update_service_supports_docker_runtime():
     source = (ROOT / 'scripts' / 'update-service.py').read_text()
     assert 'CP_UPDATER_INSTALL_MODE' in source
     assert 'BIND_HOST' in source
+    assert 'SOCKET_PATH' in source
+    assert 'ThreadingUnixHTTPServer' in source
     assert 'INSTALL_MODE == "docker"' in source
     assert '"--docker", "--non-interactive"' in source
     assert '_docker_pre_update_backup()' in source
     assert 'pg_dump' in source
     assert 'docker-health:' in source
     assert 'ThreadingHTTPServer((BIND_HOST, PORT), Handler)' in source
+    assert 'ThreadingUnixHTTPServer(str(socket_path), Handler)' in source
+
+
+def test_application_updater_client_supports_unix_socket():
+    source = (ROOT / 'app' / 'updates' / 'service.py').read_text()
+    assert 'CP_UPDATER_UNIX_SOCKET' in source
+    assert 'socket.AF_UNIX' in source
+    assert '_UnixHTTPConnection' in source
+    assert 'if UPDATER_UNIX_SOCKET:' in source
