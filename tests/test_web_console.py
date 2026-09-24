@@ -352,7 +352,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'suspend', 'Wstrzymaj'" in script
     assert "'resume', 'Wznów'" in script
     assert "'reset', 'Twardy reset'" in script
-    assert 'data-blueprint-awx-editor' not in script or True
     assert "'awx_credential_id'" in script
     assert "'awx_organization_id'" in script
     assert "'awx_project_id'" in script
