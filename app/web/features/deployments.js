@@ -423,7 +423,8 @@ function createVmBrowser(vms, providerNames, deploymentById, userNames, projectN
       grid,
       () => myResourcesView(false)
     ) || null;
-    results.replaceChildren(vmBulkControls ? vmBulkControls.element : null, grid);
+    if (vmBulkControls) results.replaceChildren(vmBulkControls.element, grid);
+    else results.replaceChildren(grid);
   }
 
   search.addEventListener('input', () => {
