@@ -187,7 +187,7 @@ async function settingsView() {
       settingsValue('Workery online', workers.online !== undefined ? String(workers.online) : '—'),
       settingsValue('Workery oczekiwane', workers.expected !== undefined ? String(workers.expected) : '—'),
       settingsValue('Limit równoległych zadań', String(parallelLimit)),
-      settingsValue('Efektywnie teraz', workers.online !== undefined ? String(effectiveParallelism) : '—')),
+      settingsValue('Efektywny limit', workers.online !== undefined ? String(effectiveParallelism) : '—')),
     node('div', { class: 'settings-card-actions' },
       button('Odśwież stan', () => settingsView()),
       allowed('settings.update') ? button('Zmień równoległość', () => {
