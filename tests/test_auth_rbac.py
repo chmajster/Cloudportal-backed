@@ -367,3 +367,38 @@ def test_blueprint_execution_global_settings(client, headers):
     with session() as db:
         raw = db.get(Setting, 'blueprint_execution').value
         assert raw == {'auto_approve_for_executors': False, 'approval_timeout_hours': 12}
+
+
+def test_job_execution_concurrency_settings(client, headers):
+    from app.config import settings
+
+    defaults = client.get('/api/v1/settings/execution', headers=headers)
+    assert defaults.status_code == 200, defaults.text
+    assert defaults.json() == {'max_parallel_jobs': settings().worker_count}
+
+    saved = client.put(
+        '/api/v1/settings/execution',
+        headers=headers,
+        json={'max_parallel_jobs': 3},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json() == {'max_parallel_jobs': 3}
+
+    reloaded = client.get('/api/v1/settings/execution', headers=headers)
+    assert reloaded.status_code == 200, reloaded.text
+    assert reloaded.json() == {'max_parallel_jobs': 3}
+
+    assert client.put(
+        '/api/v1/settings/execution',
+        headers=headers,
+        json={'max_parallel_jobs': 0},
+    ).status_code == 422
+    assert client.put(
+        '/api/v1/settings/execution',
+        headers=headers,
+        json={'max_parallel_jobs': 65},
+    ).status_code == 422
+
+    with session() as db:
+        raw = db.get(Setting, 'job_execution').value
+        assert raw == {'max_parallel_jobs': 3}
