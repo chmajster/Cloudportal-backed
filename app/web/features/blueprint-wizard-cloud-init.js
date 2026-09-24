@@ -32,7 +32,11 @@
 
   function validate(state) {
     const errors = {};
-    if (!enabled(state) || !state.advancedWorkflow) return errors;
+    if (!enabled(state)) return errors;
+    if (state.guestAccountMode === 'existing_template' && !state.guestCredentialId) {
+      errors.guest_credential_id = 'Wybierz dane dostępowe SSH dla konta istniejącego w template.';
+    }
+    if (!state.advancedWorkflow) return errors;
     const seeds = state.workflow.filter(step => step.type === 'cloud_init');
     if (seeds.length !== 1 || Object.keys(seeds[0].conditions || {}).length || seeds[0].retry || seeds[0].rollback) {
       errors.workflow = 'Cloud-init wymaga jednego bezwarunkowego kroku konfiguracji bez rollbacku.';
@@ -54,18 +58,25 @@
   function preview(state, credentials) {
     const credential = credentials.find(row => String(row.id) === String(state.guestCredentialId));
     const username = credential?.username || state.sshUsername || 'clouduser';
+    const existingAccount = state.guestAccountMode === 'existing_template';
     const text = [
       '#cloud-config',
       '# Podgląd bez sekretów. Pełną konfigurację przygotuje worker.',
-      'users:',
-      '  - name: ' + JSON.stringify(username),
-      '    shell: /bin/sh',
-      ...(credential ? [
-        '    # Hasło z Dostępów zostanie zapisane wyłącznie jako solony hash.',
-        '    # Z klucza prywatnego zostanie wyprowadzony tylko klucz publiczny.',
-      ] : (state.sshPublicKey ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)] : [])),
-      'chpasswd:',
-      '  expire: false',
+      ...(existingAccount ? [
+        '# Konto ' + JSON.stringify(username) + ' już istnieje w template.',
+        '# Cloud-init nie utworzy użytkownika, nie zmieni jego hasła, kluczy SSH ani sudo.',
+        '# Wybrany credential będzie używany w późniejszych etapach dostępu do VM.',
+      ] : [
+        'users:',
+        '  - name: ' + JSON.stringify(username),
+        '    shell: /bin/sh',
+        ...(credential ? [
+          '    # Hasło z Dostępów zostanie zapisane wyłącznie jako solony hash.',
+          '    # Z klucza prywatnego zostanie wyprowadzony tylko klucz publiczny.',
+        ] : (state.sshPublicKey ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)] : [])),
+        'chpasswd:',
+        '  expire: false',
+      ]),
     ];
     if (state.installQemuGuestAgent) text.push(
       'package_update: true', 'packages:', '  - qemu-guest-agent', 'runcmd:',
@@ -97,21 +108,46 @@
       panel.append(node('p', { class: 'muted', text: 'Pozostaje starszy tryb konfiguracji. DHCP bez działającego agenta w template nie umożliwia bootstrapu przez SSH.' }));
       return panel;
     }
-    const choices = window.BlueprintProvisioningGuards.guestCredentialChoices(data.credentials || []);
-    const credential = selectField('Użytkownik, hasło lub klucz z Dostępów', 'cloud_init_guest_credential_id', [
-      { value: '', label: 'Użytkownik i klucz publiczny z parametrów VM' }, ...choices,
-    ], state.guestCredentialId, {
+    const accountMode = selectField('Konto systemowe w VM', 'cloud_init_guest_account_mode', [
+      { value: 'cloud_init_managed', label: 'Utwórz / skonfiguruj konto przez Cloud-init' },
+      { value: 'existing_template', label: 'Użyj istniejącego konta z template' },
+    ], state.guestAccountMode || 'cloud_init_managed', {
       wide: true,
-      help: 'Zapisujemy wyłącznie ID dostępu. Hasło ani klucz prywatny nie są pobierane do przeglądarki.',
+      help: 'Tryb istniejącego konta zachowuje użytkownika z obrazu/template bez zmiany hasła, kluczy SSH i sudo. Credential służy później do logowania i automatyzacji.',
     });
+    accountMode.querySelector('select').addEventListener('change', event => {
+      const value = event.currentTarget.value;
+      capture();
+      state.guestAccountMode = value;
+      rerender();
+    });
+    const choices = window.BlueprintProvisioningGuards.guestCredentialChoices(data.credentials || []);
+    const credential = selectField(
+      state.guestAccountMode === 'existing_template'
+        ? 'Dane dostępowe do istniejącego konta'
+        : 'Użytkownik, hasło lub klucz z Dostępów',
+      'cloud_init_guest_credential_id',
+      state.guestAccountMode === 'existing_template'
+        ? [{ value: '', label: 'Wybierz konto istniejące w template' }, ...choices]
+        : [{ value: '', label: 'Użytkownik i klucz publiczny z parametrów VM' }, ...choices],
+      state.guestCredentialId,
+      {
+        wide: true,
+        help: state.guestAccountMode === 'existing_template'
+          ? 'Username credentiala musi odpowiadać kontu już obecnemu w template. Cloud-init go nie modyfikuje; credential zostaje przypisany do wykonania kolejnych etapów.'
+          : 'Zapisujemy wyłącznie ID dostępu. Hasło ani klucz prywatny nie są pobierane do przeglądarki.',
+      },
+    );
     credential.querySelector('select').addEventListener('change', event => {
       const value = event.currentTarget.value;
       capture();
       state.guestCredentialId = value;
       rerender();
     });
-    panel.append(credential,
-      node('p', { class: 'muted', text: 'Konfiguracja trafi na nośnik NoCloud ISO (CIDATA) przez API Proxmoxa przed uruchomieniem VM. Wymagany jest Linux z cloud-init i aktywny storage obsługujący ISO, np. local. SSH do noda ani znany adres VM nie są potrzebne.' }),
+    panel.append(accountMode, credential,
+      node('p', { class: 'muted', text: state.guestAccountMode === 'existing_template'
+        ? 'Cloud-init wykona konfigurację systemu, sieci i opcjonalnie QEMU Guest Agent, ale zachowa istniejące konto z template. Wybrany credential będzie używany później przez etapy wymagające dostępu do systemu gościa.'
+        : 'Konfiguracja trafi na nośnik NoCloud ISO (CIDATA) przez API Proxmoxa przed uruchomieniem VM. Wymagany jest Linux z cloud-init i aktywny storage obsługujący ISO, np. local. SSH do noda ani znany adres VM nie są potrzebne.' }),
       node('p', { class: 'muted', text: 'Opcja „Instaluj QEMU Guest Agent automatycznie” poniżej dodaje pakiet oraz włączenie i uruchomienie usługi do Cloud-init. Nie instaluje agenta przez SSH.' }),
       node('details', { class: 'advanced-options' },
         node('summary', { text: 'Podgląd Cloud-init bez sekretów' }),
