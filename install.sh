@@ -797,7 +797,7 @@ Wants=network-online.target
 Type=simple
 ExecStart=$python_command /usr/local/lib/cloudportal-updater/update-service.py
 Environment=CP_UPDATER_REPOSITORY=$repo
-Environment=CP_UPDATER_PORT=8766
+# Docker updater is Unix-socket-only; it does not reserve host TCP port 8766.
 Environment=CP_UPDATER_SOCKET=$docker_updater_runtime/updater.sock
 Environment=CP_UPDATER_INSTALL_MODE=docker
 Environment=CP_UPDATER_CONFIG_DIR=$docker_config

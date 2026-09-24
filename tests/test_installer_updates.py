@@ -107,3 +107,24 @@ def test_application_updater_client_supports_unix_socket():
     assert 'socket.AF_UNIX' in source
     assert '_UnixHTTPConnection' in source
     assert 'if UPDATER_UNIX_SOCKET:' in source
+
+
+
+def test_docker_runtime_preflight_is_isolated_from_production_database():
+    source = (ROOT / 'scripts' / 'update-service.py').read_text()
+    assert '_docker_validate_candidate_runtime' in source
+    assert 'docker, "network", "create", network' in source
+    assert '"postgres:16-alpine"' in source
+    assert '"redis:7-alpine"' in source
+    assert '"pg_restore", "-U", "cloudportal", "-d", "cloudportal"' in source
+    assert '"alembic", "upgrade", "head"' in source
+    assert 'Docker: migracje i API kandydata działają na izolowanej kopii produkcyjnej bazy.' in source
+    assert 'runtime_preflight_deferred' not in source
+
+
+def test_docker_updater_is_unix_socket_only_and_does_not_require_host_8766():
+    marker = 'Description=Cloudportal independent auto-update service (Docker)'
+    block = INSTALLER.split(marker, 1)[1].split('[Install]', 1)[0]
+    assert 'CP_UPDATER_SOCKET=$docker_updater_runtime/updater.sock' in block
+    assert 'CP_UPDATER_PORT=8766' not in block
+    assert 'Unix-socket-only' in block
