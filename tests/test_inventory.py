@@ -1,5 +1,10 @@
 import uuid
 
+from sqlalchemy import select
+
+from app.database import session
+from app.models import Deployment, ManagedResource, ManagedVM, Provider, User
+
 
 def key(headers):
     return {**headers, 'Idempotency-Key': str(uuid.uuid4())}
@@ -97,3 +102,109 @@ def test_inventory_list_can_refresh_live_state(client, headers, monkeypatch):
     rows = client.get(f"/api/v1/inventory/vms?provider_id={p['id']}&refresh=true", headers=headers)
     assert rows.status_code == 200
     assert rows.json()['items'][0]['live']['status'] == 'stopped'
+
+
+def test_missing_terraform_vm_can_be_removed_only_after_provider_confirms_absence(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    p = provider(client, headers)
+    with session() as db:
+        provider_row = db.get(Provider, p['id'])
+        user_id = db.scalar(select(User.id).order_by(User.id))
+        deployment = Deployment(
+            name='stale-terraform-vm',
+            provider_id=p['id'],
+            provider='proxmox',
+            template='proxmox-vm',
+            credentials_id=provider_row.credentials_id,
+            variables={'node': 'pve01'},
+            workflow={},
+            status='successful',
+            created_by=user_id,
+        )
+        db.add(deployment)
+        db.flush()
+        vm = ManagedVM(
+            provider_id=p['id'],
+            deployment_id=deployment.id,
+            node='pve01',
+            vm_id=901,
+            name='stale-terraform-vm',
+            management_mode='terraform',
+            lifecycle_status='active',
+            created_by=user_id,
+        )
+        resource = ManagedResource(
+            deployment_id=deployment.id,
+            provider_id=p['id'],
+            provider='proxmox',
+            resource_type='vm',
+            external_id='901',
+            name='stale-terraform-vm',
+            lifecycle_status='active',
+            metadata_json={'node': 'pve01', 'vm_id': 901},
+            created_by=user_id,
+        )
+        db.add_all([vm, resource])
+        db.commit()
+        vm_id = vm.id
+        deployment_id = deployment.id
+
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'discover',
+        lambda self, resource, node=None: [] if resource == 'vms' else [],
+    )
+
+    refreshed = client.get(f'/api/v1/inventory/vms/{vm_id}?refresh=true', headers=headers)
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()['live'] is None
+
+    removed = client.delete(f'/api/v1/inventory/vms/{vm_id}/missing', headers=headers)
+    assert removed.status_code == 200, removed.text
+    assert removed.json()['deleted'] is True
+    assert removed.json()['provider_absent'] is True
+
+    with session() as db:
+        vm = db.get(ManagedVM, vm_id)
+        deployment = db.get(Deployment, deployment_id)
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == deployment_id
+        ))
+        assert vm is not None
+        assert vm.lifecycle_status == 'destroyed'
+        assert vm.destroyed_at is not None
+        assert resource.lifecycle_status == 'destroyed'
+        assert resource.destroyed_at is not None
+        assert deployment.status == 'reconciliation_required'
+
+    repaired = client.post('/api/v1/inventory/reconcile', headers=headers, json={})
+    assert repaired.status_code == 200, repaired.text
+    assert repaired.json()['repaired_count'] == 0
+
+
+def test_missing_vm_cleanup_refuses_when_vm_still_exists(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    p = provider(client, headers)
+    monkeypatch.setattr(ProxmoxProvider, 'discover', lambda self, resource, node=None: [{
+        'vmid': 902,
+        'name': 'still-there',
+        'node': 'pve01',
+        'status': 'running',
+        'type': 'qemu',
+        'template': 0,
+    }] if resource == 'vms' else [])
+
+    imported = client.post('/api/v1/inventory/vms/import', headers=key(headers), json={
+        'provider_id': p['id'], 'vm_id': 902,
+    })
+    assert imported.status_code == 201, imported.text
+    vm_id = imported.json()['id']
+
+    refused = client.delete(f'/api/v1/inventory/vms/{vm_id}/missing', headers=headers)
+    assert refused.status_code == 409, refused.text
+    assert 'still exists on Proxmox' in refused.text
+
+    with session() as db:
+        assert db.get(ManagedVM, vm_id).lifecycle_status == 'active'
