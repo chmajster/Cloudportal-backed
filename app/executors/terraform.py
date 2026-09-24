@@ -109,9 +109,11 @@ def guest_credential_runtime_variables(deployment, *, blueprint=None):
 
     variables = {
         'ssh_username': credential.username,
+        # Preserve a Blueprint-provided key for password-only credentials while
+        # keeping the explicit null shape expected by Terraform/API callers.
+        'ssh_public_key': (deployment.variables or {}).get('ssh_public_key'),
     }
-    # A password-only credential must not erase a public key explicitly entered
-    # in the Blueprint. Only override the key when the credential owns one.
+    # Only override the Blueprint key when the credential owns a private key.
     if private_key:
         variables['ssh_public_key'] = public_key_from_private_key(private_key)
     return variables, password
