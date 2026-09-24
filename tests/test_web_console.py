@@ -215,6 +215,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Wymuś stop" in script
     assert "window.vmBulkActions?.toolbar" in script
     assert "window.vmBulkActions?.decorateCard" in script
+    assert "VM jest już widoczna w „Moje zasoby”" in script
+    assert "navigate('my-resources')" in script
+    assert "allowed('jobs.read') ? api('/jobs?limit=200')" in script
+    assert "function provisionalBlueprintVm(" in script
+    assert "provisioning_placeholder: true" in script
+    assert "Komentarz: Provisioning" in script
+    assert "Provisioning został ponowiony." in script
+    assert "Usuń nieudany provisioning" in script
+    assert "item.provisioning_job?.current_stage" in script
+    assert "bulkItems" in script
+    assert ".my-resource-provisioning-state" in stylesheet
     assert "const MY_RESOURCES_VM_UI_KEY = 'cloudportal.my-resources.vms.ui.v1'" in script
     assert "function vmMetadata(" in script
     assert "function vmMatchesFilters(" in script
