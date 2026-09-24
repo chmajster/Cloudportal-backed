@@ -759,6 +759,67 @@ def register_awx_host(context, runtime, workspace, *, timeout=600):
     return result
 
 
+def cleanup_awx_after_destroy(context):
+    config = ((context.deployment.workflow or {}).get('awx') or {})
+    if not isinstance(config, dict) or not config.get('remove_on_destroy', True):
+        return False
+    credential_id = config.get('credential_id')
+    if not credential_id:
+        return False
+
+    with session() as db:
+        deployment = db.get(Deployment, context.deployment.id)
+        if deployment is None:
+            context.log('workflow.awx.cleanup.skipped: deployment metadata unavailable')
+            return False
+        from app.resource_scope.database import reference_visible
+        scope = Scope(deployment.tenant_id, deployment.project_id)
+        if not reference_visible(db, 'credential', credential_id, scope):
+            context.log('workflow.awx.cleanup.skipped: AWX credential access revoked')
+            return False
+        credential = db.get(Credential, int(credential_id))
+        if credential is None or credential.type != 'awx':
+            context.log('workflow.awx.cleanup.skipped: AWX credential unavailable')
+            return False
+        try:
+            secret = decrypt_secret(credential)
+        except Exception:
+            context.log('workflow.awx.cleanup.skipped: AWX credential could not be decrypted')
+            return False
+        endpoint = credential.endpoint
+        username = credential.username
+        verify_ssl = credential.verify_ssl
+
+    try:
+        result = AwxClient(
+            endpoint,
+            verify_ssl=verify_ssl,
+            token=secret.get('token'),
+            username=username,
+            password=secret.get('password'),
+            timeout=30,
+        ).remove_host(
+            hostname=context.deployment.name,
+            inventory_id=config.get('inventory_id'),
+            inventory_name=str(config.get('inventory_name') or 'CloudPortal'),
+        )
+    except AwxError:
+        context.log(
+            'workflow.awx.cleanup.failed: AWX unavailable; '
+            'VM destruction remains successful and stale AWX inventory may require reconciliation'
+        )
+        return False
+
+    if result.get('removed'):
+        context.log(
+            'workflow.awx.cleanup.completed: '
+            f"inventory={result.get('inventory_id')} hosts={','.join(map(str, result.get('host_ids') or []))}"
+        )
+        return True
+    context.log('workflow.awx.cleanup.completed: host already absent')
+    return False
+
+
 def blueprint_conditions_match(step, context):
     conditions = dict(step.get('conditions') or {})
     if not conditions:
@@ -1926,6 +1987,7 @@ def _execute_unfenced(job_id):
                         context.ansible.inventory = Inventory(hosts=addresses)
                         AnsibleExecutor().execute('ansible.execute', context)
                 if job.operation == 'terraform.destroy':
+                    cleanup_awx_after_destroy(context)
                     with session() as quota_db:
                         quota_job = quota_db.get(Job, job.id)
                         if quota_job is not None:
