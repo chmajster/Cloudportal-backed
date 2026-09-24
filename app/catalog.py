@@ -8,6 +8,8 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.config import settings
+from app.database import session
+from app.ansible_custom.service import custom_playbook_definition, list_custom_playbook_definitions
 
 
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$')
@@ -175,16 +177,28 @@ def _playbook_catalog(source_dir):
     return result
 
 
-def playbook_definition(playbook_id):
+def builtin_playbook_definition(playbook_id):
     _safe_slug(playbook_id)
     item = _playbook_catalog(str(settings().source_dir)).get(playbook_id)
+    return dict(item) if item is not None else None
+
+
+def playbook_definition(playbook_id, db=None):
+    _safe_slug(playbook_id)
+    builtin = builtin_playbook_definition(playbook_id)
+    if builtin is not None:
+        return {**builtin, 'custom': False}
+    if db is not None:
+        item = custom_playbook_definition(db, playbook_id)
+    else:
+        with session() as local_db:
+            item = custom_playbook_definition(local_db, playbook_id)
     if item is None:
         raise HTTPException(422, 'Unapproved playbook')
     return item
 
 
-def playbook_public(playbook_id):
-    item = playbook_definition(playbook_id)
+def _playbook_public_item(item):
     return {
         'id': item['id'],
         'name': item['name'],
@@ -197,12 +211,17 @@ def playbook_public(playbook_id):
             if definition.get('required')
         ],
         'transport': item['transport'],
+        'custom': bool(item.get('custom')),
     }
 
 
-def playbook_source_preview(playbook_id):
-    """Return approved Ansible playbook YAML files for read-only UI preview."""
-    item = playbook_definition(playbook_id)
+def playbook_public(playbook_id, db=None):
+    return _playbook_public_item(playbook_definition(playbook_id, db=db))
+
+
+def playbook_source_preview(playbook_id, db=None):
+    """Return Ansible playbook YAML files for read-only UI preview."""
+    item = playbook_definition(playbook_id, db=db)
     root = (settings().source_dir / 'ansible' / 'playbooks').resolve()
     names = []
     for key in ('file', 'wait', 'validate'):
@@ -213,20 +232,24 @@ def playbook_source_preview(playbook_id):
     files = []
     total_size = 0
     for filename in names:
-        path = (root / filename).resolve()
-        if path.parent != root or not PLAYBOOK_FILE.fullmatch(filename) or not path.is_file():
-            raise RuntimeError(f'Invalid Ansible playbook source: {filename}')
-        try:
-            content = path.read_text(encoding='utf-8')
-        except (OSError, UnicodeError):
-            raise RuntimeError(f'Unable to read Ansible playbook source: {path}') from None
+        role = 'main' if filename == item.get('file') else ('wait' if filename == item.get('wait') else 'validate')
+        if item.get('custom') and role == 'main':
+            content = str(item.get('content') or '')
+        else:
+            path = (root / filename).resolve()
+            if path.parent != root or not PLAYBOOK_FILE.fullmatch(filename) or not path.is_file():
+                raise RuntimeError(f'Invalid Ansible playbook source: {filename}')
+            try:
+                content = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                raise RuntimeError(f'Unable to read Ansible playbook source: {path}') from None
         size = len(content.encode('utf-8'))
         total_size += size
         if size > 262144 or total_size > 1048576:
             raise HTTPException(413, 'Ansible playbook source is too large to preview')
         files.append({
             'name': filename,
-            'role': 'main' if filename == item.get('file') else ('wait' if filename == item.get('wait') else 'validate'),
+            'role': role,
             'content': content,
             'size': size,
         })
@@ -236,16 +259,62 @@ def playbook_source_preview(playbook_id):
         'name': item['name'],
         'version': item['version'],
         'transport': item['transport'],
+        'custom': bool(item.get('custom')),
         'files': files,
     }
 
 
-def list_playbooks():
-    return [playbook_public(identifier) for identifier in sorted(_playbook_catalog(str(settings().source_dir)))]
+def list_playbooks(db=None):
+    builtin_items = [
+        _playbook_public_item({**item, 'custom': False})
+        for _, item in sorted(_playbook_catalog(str(settings().source_dir)).items())
+    ]
+    if db is not None:
+        custom_items = list_custom_playbook_definitions(db)
+    else:
+        with session() as local_db:
+            custom_items = list_custom_playbook_definitions(local_db)
+    return builtin_items + [_playbook_public_item(item) for item in custom_items]
 
 
-def validate_playbook_variables(playbook_id, variables):
-    item = playbook_definition(playbook_id)
+def snapshot_ansible_payload(db, payload, *, require_enabled=True):
+    """Return a job payload with immutable snapshots for every custom playbook reference."""
+    result = dict(payload or {})
+    snapshots = dict(result.get('_ansible_playbook_snapshots') or {})
+    configured = []
+    single = result.get('ansible')
+    if isinstance(single, dict) and single.get('playbook'):
+        configured.append(single)
+    for run in (result.get('ansible_runs') or []):
+        if isinstance(run, dict) and run.get('playbook'):
+            configured.append(run)
+
+    for run in configured:
+        playbook_id = str(run['playbook'])
+        if require_enabled:
+            from app.catalog_control import require_catalog_item_enabled
+            require_catalog_item_enabled(db, 'playbooks', playbook_id)
+        existing = snapshots.get(playbook_id)
+        if (
+            isinstance(existing, dict)
+            and existing.get('custom') is True
+            and existing.get('id') == playbook_id
+        ):
+            continue
+        snapshot = custom_playbook_snapshot(playbook_definition(playbook_id, db=db))
+        if snapshot is not None:
+            snapshots[playbook_id] = snapshot
+
+    if snapshots:
+        result['_ansible_playbook_snapshots'] = snapshots
+    if isinstance(single, dict):
+        legacy = snapshots.get(str(single.get('playbook') or ''))
+        if legacy is not None:
+            result['_ansible_playbook_snapshot'] = legacy
+    return result
+
+
+def validate_playbook_variables_definition(item, variables):
     definitions = item.get('variables', {})
     unknown = set(variables) - set(definitions)
     if unknown:
@@ -261,6 +330,13 @@ def validate_playbook_variables(playbook_id, variables):
             raise HTTPException(422, f'Invalid playbook variable: {name}')
         result[name] = value
     return result
+
+
+def validate_playbook_variables(playbook_id, variables, db=None):
+    return validate_playbook_variables_definition(
+        playbook_definition(playbook_id, db=db),
+        variables,
+    )
 
 
 

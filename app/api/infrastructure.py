@@ -10,8 +10,9 @@ from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDep
 from app.credentials.outputs import CredentialOutput, SSHKeyBootstrapOutput
 from app.api.schemas import (CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
                              ProxmoxTokenBootstrapInput, SSHHostKeyInput, SSHKeyBootstrapInput)
-from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, template_definition,
-                         template_public, template_source_preview, playbook_source_preview, validate_template_variables)
+from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, snapshot_ansible_payload,
+                         template_definition, template_public, template_source_preview, playbook_source_preview,
+                         validate_template_variables)
 from app.catalog_control import catalog_item_public, require_catalog_item_enabled, set_catalog_item_enabled
 from app.credentials.service import credential_in_use, credential_public, save_secret
 from app.credentials.testing import test_connection
@@ -339,21 +340,23 @@ def template_source(id: str, actor=Depends(require('terraform.read'))):
 
 @router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
 def playbooks(actor=Depends(require('ansible.read')), db=Depends(get_db, scope='function')):
-    return {'items': [catalog_item_public(db, 'playbooks', item) for item in list_playbooks()]}
+    return {'items': [catalog_item_public(db, 'playbooks', item) for item in list_playbooks(db)]}
 
 
 @router.put('/catalog/playbooks/{id}/enabled', response_model=PlaybookOutput)
 def set_playbook_enabled(id: str, data: CatalogItemStateInput, request: Request,
                          actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
-    item = playbook_public(id)
+    item = playbook_public(id, db=db)
+    if item.get('custom') and 'ansible.manage' not in request.state.permissions:
+        raise HTTPException(403, 'ansible.manage required for custom playbook state')
     set_catalog_item_enabled(db, 'playbooks', id, data.enabled)
     audit(db, request, 'catalog.playbook_enabled' if data.enabled else 'catalog.playbook_disabled', 'catalog', id)
     return catalog_item_public(db, 'playbooks', item)
 
 
 @router.get('/ansible/playbooks/{id}/source')
-def playbook_source(id: str, actor=Depends(require('ansible.read'))):
-    return playbook_source_preview(id)
+def playbook_source(id: str, actor=Depends(require('ansible.read')), db=Depends(get_db, scope='function')):
+    return playbook_source_preview(id, db=db)
 
 
 def check_job_permissions(request, operation):
@@ -371,7 +374,7 @@ def check_job_permissions(request, operation):
 def validate_ansible(db, data):
     c = ensure_credential_usable(locked_credential(db, data.credentials_id))
     require_catalog_item_enabled(db, 'playbooks', data.playbook)
-    expected = playbook_definition(data.playbook)['transport']
+    expected = playbook_definition(data.playbook, db=db)['transport']
     if c.type != expected:
         raise HTTPException(422, f'Playbook requires {expected} credential')
 
@@ -383,7 +386,15 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         blueprint = ((deployment.workflow or {}).get('blueprint') or {})
     if blueprint and operation == 'terraform.apply' and 'blueprints.execute' not in request.state.permissions:
         raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
-    if deployment and deployment.workflow.get('ansible') and operation == 'terraform.apply' and 'ansible.execute' not in request.state.permissions:
+    if (
+        deployment
+        and (
+            (deployment.workflow or {}).get('ansible')
+            or (deployment.workflow or {}).get('ansible_runs')
+        )
+        and operation == 'terraform.apply'
+        and 'ansible.execute' not in request.state.permissions
+    ):
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
     if deployment and deployment.status == 'reconciliation_required' and operation != 'terraform.plan':
         raise HTTPException(
@@ -396,7 +407,10 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
     if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
         raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
-    job_payload = dict(payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}))
+    job_payload = snapshot_ansible_payload(
+        db,
+        payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}),
+    )
     if deployment:
         job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,

@@ -217,6 +217,7 @@ class PlaybookOutput(Output):
     variables: list[str]
     required_variables: list[str]
     transport: Literal['ssh', 'winrm']
+    custom: bool = False
 
 
 class DeletedOutput(Output):

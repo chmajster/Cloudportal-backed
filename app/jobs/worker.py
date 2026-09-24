@@ -1751,12 +1751,32 @@ def _execute_unfenced(job_id):
                         raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
                     if has_released_allocations(db, context.deployment.id):
                         raise ExecutionFailed('Deployment allocations were released; execute the Blueprint again')
+            playbook_snapshots = (job.payload or {}).get('_ansible_playbook_snapshots') or {}
             for raw_run in ((job.payload or {}).get('ansible_runs') or []):
-                spec = AnsibleInput.model_validate(raw_run)
+                playbook_id = str(raw_run.get('playbook') or '') if isinstance(raw_run, dict) else ''
+                snapshot = (
+                    playbook_snapshots.get(playbook_id)
+                    if isinstance(playbook_snapshots, dict)
+                    else None
+                )
+                spec = AnsibleInput.model_validate(
+                    raw_run,
+                    context={'playbook_snapshot': snapshot},
+                )
                 run_credential = ensure_runtime_credential(db.get(Credential, spec.credentials_id))
                 context.ansible_runs.append((spec, run_credential))
             if job.payload.get('ansible'):
-                context.ansible = AnsibleInput.model_validate(job.payload['ansible'])
+                raw_ansible = job.payload['ansible']
+                playbook_id = str(raw_ansible.get('playbook') or '') if isinstance(raw_ansible, dict) else ''
+                snapshot = (
+                    playbook_snapshots.get(playbook_id)
+                    if isinstance(playbook_snapshots, dict)
+                    else None
+                ) or (job.payload or {}).get('_ansible_playbook_snapshot')
+                context.ansible = AnsibleInput.model_validate(
+                    raw_ansible,
+                    context={'playbook_snapshot': snapshot},
+                )
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
             elif context.ansible_runs:
                 context.ansible, context.ansible_credential = context.ansible_runs[0]

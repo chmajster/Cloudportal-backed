@@ -245,3 +245,244 @@ def test_template_provider_mismatch_is_rejected(client, headers):
         },
     })
     assert response.status_code == 422
+
+
+
+def _custom_playbook_payload(playbook_id='custom-hello', message='version-one'):
+    return {
+        'id': playbook_id,
+        'name': 'Custom Hello',
+        'description': 'Playbook dodany przez API Cloudportal.',
+        'category': 'Własne',
+        'transport': 'ssh',
+        'variables': {
+            'custom_message': {
+                'required': True,
+                'pattern': '[A-Za-z0-9 _.-]{1,100}',
+            },
+        },
+        'wait_for_connection': False,
+        'validate_after': False,
+        'content': (
+            '- name: Custom playbook\n'
+            '  hosts: all\n'
+            '  gather_facts: false\n'
+            '  tasks:\n'
+            '    - name: Show custom message\n'
+            '      ansible.builtin.debug:\n'
+            f'        msg: "{message} {{{{ custom_message }}}}"\n'
+        ),
+    }
+
+
+def test_custom_ansible_playbook_crud_and_catalog(client, headers):
+    created = client.post(
+        '/api/v1/ansible/custom-playbooks',
+        headers=headers,
+        json=_custom_playbook_payload(),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()['id'] == 'custom-hello'
+    assert created.json()['custom'] is True
+    assert created.json()['version'] == 1
+    assert created.json()['enabled'] is True
+
+    listed = client.get('/api/v1/ansible/playbooks', headers=headers)
+    assert listed.status_code == 200, listed.text
+    item = next(row for row in listed.json()['items'] if row['id'] == 'custom-hello')
+    assert item['custom'] is True
+    assert item['required_variables'] == ['custom_message']
+
+    detail = client.get('/api/v1/ansible/custom-playbooks/custom-hello', headers=headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()['variables']['custom_message']['required'] is True
+    assert 'version-one' in detail.json()['content']
+
+    source = client.get('/api/v1/ansible/playbooks/custom-hello/source', headers=headers)
+    assert source.status_code == 200, source.text
+    main = next(row for row in source.json()['files'] if row['role'] == 'main')
+    assert main['name'] == 'custom-custom-hello.yml'
+    assert 'version-one' in main['content']
+    assert source.json()['custom'] is True
+
+    updated_payload = _custom_playbook_payload(message='version-two')
+    updated_payload['name'] = 'Custom Hello v2'
+    updated = client.put(
+        '/api/v1/ansible/custom-playbooks/custom-hello',
+        headers=headers,
+        json=updated_payload,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['version'] == 2
+    assert updated.json()['name'] == 'Custom Hello v2'
+
+    disabled = client.put(
+        '/api/v1/ansible/custom-playbooks/custom-hello/enabled',
+        headers=headers,
+        json={'enabled': False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()['enabled'] is False
+
+    enabled = client.put(
+        '/api/v1/ansible/custom-playbooks/custom-hello/enabled',
+        headers=headers,
+        json={'enabled': True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()['enabled'] is True
+
+    deleted = client.delete('/api/v1/ansible/custom-playbooks/custom-hello', headers=headers)
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()['deleted'] is True
+    assert client.get('/api/v1/ansible/custom-playbooks/custom-hello', headers=headers).status_code == 404
+
+
+def test_custom_ansible_playbook_blocks_controller_side_execution(client, headers):
+    delegated = _custom_playbook_payload('custom-delegated')
+    delegated['content'] = (
+        '- name: Unsafe\n'
+        '  hosts: all\n'
+        '  tasks:\n'
+        '    - name: Local execution\n'
+        '      delegate_to: localhost\n'
+        '      ansible.builtin.command: id\n'
+    )
+    response = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json=delegated)
+    assert response.status_code == 422, response.text
+    assert 'controller-side' in response.text
+
+    lookup = _custom_playbook_payload('custom-lookup')
+    lookup['content'] = (
+        '- name: Unsafe lookup\n'
+        '  hosts: all\n'
+        '  tasks:\n'
+        '    - ansible.builtin.debug:\n'
+        '        msg: "{{ lookup(\'pipe\', \'id\') }}"\n'
+    )
+    response = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json=lookup)
+    assert response.status_code == 422, response.text
+    assert 'lookup' in response.text.lower()
+
+    legacy_loop = _custom_playbook_payload('custom-with-pipe')
+    legacy_loop['content'] = (
+        '- name: Unsafe legacy lookup\n'
+        '  hosts: all\n'
+        '  tasks:\n'
+        '    - ansible.builtin.debug:\n'
+        '        msg: "{{ item }}"\n'
+        '      with_pipe: id\n'
+    )
+    response = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json=legacy_loop)
+    assert response.status_code == 422, response.text
+    assert 'with_pipe' in response.text
+
+    action_shorthand = _custom_playbook_payload('custom-action-shorthand')
+    action_shorthand['content'] = (
+        '- name: Unsafe action shorthand\n'
+        '  hosts: all\n'
+        '  tasks:\n'
+        '    - name: Read controller file\n'
+        '      action: ansible.builtin.fetch src=/etc/cloudportal-backed/master.key dest=/tmp/key\n'
+    )
+    response = client.post('/api/v1/ansible/custom-playbooks', headers=headers, json=action_shorthand)
+    assert response.status_code == 422, response.text
+    assert 'action' in response.text.lower()
+
+
+def test_custom_ansible_playbook_requires_manage_permission(client, headers):
+    from conftest import new_user
+
+    _user, read_only = new_user(
+        client,
+        headers,
+        username='ansible-reader',
+        permissions=['ansible.read'],
+    )
+    response = client.post(
+        '/api/v1/ansible/custom-playbooks',
+        headers=read_only,
+        json=_custom_playbook_payload('custom-denied'),
+    )
+    assert response.status_code == 403
+
+    created = client.post(
+        '/api/v1/ansible/custom-playbooks',
+        headers=headers,
+        json=_custom_playbook_payload('custom-state-rbac'),
+    )
+    assert created.status_code == 201, created.text
+
+    _settings_user, settings_only = new_user(
+        client,
+        headers,
+        username='settings-only-playbook-user',
+        permissions=['settings.update', 'ansible.read'],
+    )
+    legacy_state = client.put(
+        '/api/v1/catalog/playbooks/custom-state-rbac/enabled',
+        headers=settings_only,
+        json={'enabled': False},
+    )
+    assert legacy_state.status_code == 403, legacy_state.text
+
+
+def test_custom_ansible_job_uses_queued_version_snapshot(client, headers, monkeypatch):
+    import uuid
+    from pathlib import Path
+
+    from app.jobs.worker import execute
+
+    created = client.post(
+        '/api/v1/ansible/custom-playbooks',
+        headers=headers,
+        json=_custom_playbook_payload('custom-snapshot', 'queued-version'),
+    )
+    assert created.status_code == 201, created.text
+
+    credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Custom playbook SSH',
+        'type': 'ssh',
+        'endpoint': 'ssh://192.0.2.80:22',
+        'username': 'clouduser',
+        'secrets': {'password': 'custom-playbook-password'},
+    })
+    assert credential.status_code == 201, credential.text
+
+    queued = client.post('/api/v1/jobs', headers={
+        **headers,
+        'Idempotency-Key': str(uuid.uuid4()),
+    }, json={
+        'operation': 'ansible.execute',
+        'ansible': {
+            'playbook': 'custom-snapshot',
+            'credentials_id': credential.json()['id'],
+            'inventory': {'hosts': ['192.0.2.80']},
+            'variables': {'custom_message': 'hello'},
+        },
+    })
+    assert queued.status_code == 202, queued.text
+
+    changed = client.put(
+        '/api/v1/ansible/custom-playbooks/custom-snapshot',
+        headers=headers,
+        json=_custom_playbook_payload('custom-snapshot', 'newer-version'),
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()['version'] == 2
+
+    observed = []
+
+    def fake_run_process(argv, cwd, env, context, secrets=()):
+        observed.append(Path(argv[3]).read_text(encoding='utf-8'))
+        return ''
+
+    monkeypatch.setattr('app.executors.ansible.run_process', fake_run_process)
+    execute(queued.json()['id'])
+
+    result = client.get('/api/v1/jobs/' + queued.json()['id'], headers=headers)
+    assert result.status_code == 200, result.text
+    assert result.json()['status'] == 'successful'
+    assert len(observed) == 1
+    assert 'queued-version' in observed[0]
+    assert 'newer-version' not in observed[0]

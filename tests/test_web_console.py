@@ -367,6 +367,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Lista respektuje Twój zakres RBAC' in script
     assert "option.dataset.address" in script
     assert "'/catalog/' + kind + '/'" in script
+    assert '/ansible/custom-playbooks' in script
+    assert 'Dodaj własny playbook Ansible' in script
+    assert 'Wczytaj plik .yml / .yaml' in script
+    assert 'ansible.manage' in script
+    assert "item.custom ? 'Własny' : 'Systemowy'" in script
     assert "item.enabled === false ? 'Włącz' : 'Wyłącz'" in script
     assert "item.enabled !== false" in script
     assert 'ansible-playbook-info' in script

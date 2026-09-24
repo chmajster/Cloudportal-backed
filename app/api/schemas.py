@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationInfo, field_validator, model_validator
 
 Name = Annotated[str, Field(min_length=1, max_length=100)]
 Password = Annotated[str, Field(min_length=12, max_length=256, json_schema_extra={'writeOnly': True})]
@@ -550,12 +550,19 @@ class AnsibleInput(Input):
     variables: dict = Field(default_factory=dict)
 
     @model_validator(mode='after')
-    def safe_variables(self):
-        # Catalog manifests are shipped with the root-owned release; API callers cannot add paths/code.
-        from app.catalog import validate_playbook_variables
+    def safe_variables(self, info: ValidationInfo):
+        from app.catalog import validate_playbook_variables, validate_playbook_variables_definition
         from fastapi import HTTPException
+        snapshot = (info.context or {}).get('playbook_snapshot')
         try:
-            self.variables = validate_playbook_variables(self.playbook, self.variables)
+            if (
+                isinstance(snapshot, dict)
+                and snapshot.get('custom') is True
+                and snapshot.get('id') == self.playbook
+            ):
+                self.variables = validate_playbook_variables_definition(snapshot, self.variables)
+            else:
+                self.variables = validate_playbook_variables(self.playbook, self.variables)
         except HTTPException as error:
             raise ValueError(str(error.detail)) from None
         return self
