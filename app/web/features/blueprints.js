@@ -256,6 +256,16 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       [{ value: '', label: 'Bez credentiala z Cloudportal' }, ...guestCredentialChoices],
       deployment.guest_credential_id || '', { wide: true,
         help: 'Cloud-init ustawi użytkownika oraz dostęp z credentiala: hasło, publiczny klucz SSH albo oba. Klucz prywatny pozostaje zaszyfrowany w Cloudportal i nie jest kopiowany do VM.' });
+    const guestPasswordField = field('Hasło SSH (opcjonalnie)', 'ssh_password', {
+      type: 'password',
+      value: '',
+      autocomplete: 'new-password',
+      help: allowed('credentials.create')
+        ? 'Możesz wpisać hasło bez tworzenia credentiala ręcznie. Przy zapisie Cloudportal utworzy dedykowany, zaszyfrowany credential SSH. Hasło nie trafi do Blueprintu ani terraform.tfvars.'
+        : 'Do bezpośredniego podania hasła wymagane jest uprawnienie credentials.create. Możesz nadal wybrać istniejący credential SSH.',
+    });
+    const guestPasswordInput = guestPasswordField.querySelector('input');
+    if (!allowed('credentials.create')) guestPasswordInput.disabled = true;
     const executorField = selectField(
       'Silnik IaC', 'executor',
       [{ value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' }],
@@ -290,6 +300,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
       ipMode, ipamField, staticIp, staticGateway,
       guestCredentialField,
       field('Użytkownik SSH', 'ssh_username', { value: variables.ssh_username || 'clouduser', required: true }),
+      guestPasswordField,
       field('Klucz publiczny SSH (opcjonalnie)', 'ssh_public_key', {
         tag: 'textarea',
         value: variables.ssh_public_key || '',
@@ -593,6 +604,14 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
         const templateId = Number(image[1]);
         if (!templateId) throw new Error('Wybierz obraz/template Proxmox.');
         const tags = blueprintTags(data.get('tags'));
+        const directGuestPassword = String(data.get('ssh_password') || '');
+        const selectedGuestCredentialId = data.get('guest_credential_id')
+          ? Number(data.get('guest_credential_id'))
+          : null;
+        if (directGuestPassword && !allowed('credentials.create')) {
+          throw new Error('Brak uprawnienia credentials.create do bezpiecznego zapisania hasła SSH.');
+        }
+        const guestCredentialRequested = Boolean(selectedGuestCredentialId || directGuestPassword);
         const vmVariables = {
           name: '{{ hostname }}',
           node: data.get('node'),
@@ -607,7 +626,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           ssh_username: data.get('ssh_username'),
           ssh_public_key: data.get('ssh_public_key') || null,
           install_qemu_guest_agent: data.has('install_qemu_guest_agent'),
-          cloud_init_snippet_storage: data.has('install_qemu_guest_agent') && !data.get('guest_credential_id') ? cloudInitSnippetStorage : null,
+          cloud_init_snippet_storage: data.has('install_qemu_guest_agent') && !guestCredentialRequested ? cloudInitSnippetStorage : null,
           dns_servers: splitValues(data.get('dns_servers')),
           dns_domain: data.get('dns_domain') || null,
           tags,
@@ -672,7 +691,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             hostname_scheme_id: Number(schemeId),
             hostname_values: hostnameValues,
             ipam_pool_id: ipamPoolId,
-            guest_credential_id: data.get('guest_credential_id') ? Number(data.get('guest_credential_id')) : null,
+            guest_credential_id: selectedGuestCredentialId,
             apmid: deployment.apmid || null,
             environment: deployment.environment || null,
             select_apmid_on_execute: Boolean(deployment.select_apmid_on_execute),
@@ -686,10 +705,39 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
           requires_approval: data.has('requires_approval'), auto_approve_for_executors: window.BlueprintApprovalPolicyUI.parseAuto(data.get('auto_approve_for_executors')), approval_timeout_hours: window.BlueprintApprovalPolicyUI.parseTimeout(data.get('approval_timeout_hours')),
           recovery_policy: data.get('recovery_policy'),
         };
-        await api(item ? '/blueprints/' + item.id : '/blueprints', {
-          method: item ? 'PUT' : 'POST',
-          body: payload,
-        });
+        let createdInlineCredentialId = null;
+        if (directGuestPassword) {
+          const inlineCredential = await api('/credentials', {
+            method: 'POST',
+            body: {
+              name: ('Blueprint ' + blueprintSlug + ' — VM SSH').slice(0, 100),
+              type: 'ssh',
+              endpoint: '',
+              username: String(data.get('ssh_username') || '').trim(),
+              verify_ssl: true,
+              expires_at: null,
+              rotation_due_at: null,
+              secrets: { password: directGuestPassword },
+            },
+          });
+          createdInlineCredentialId = Number(inlineCredential.id);
+          payload.deployment.guest_credential_id = createdInlineCredentialId;
+        }
+        try {
+          await api(item ? '/blueprints/' + item.id : '/blueprints', {
+            method: item ? 'PUT' : 'POST',
+            body: payload,
+          });
+        } catch (error) {
+          if (createdInlineCredentialId && allowed('credentials.delete')) {
+            try {
+              await api('/credentials/' + createdInlineCredentialId, { method: 'DELETE' });
+            } catch {
+              // Best effort only. Never hide the Blueprint save error.
+            }
+          }
+          throw error;
+        }
         toast(item
           ? 'Utworzono nową wersję Blueprintu.'
           : (templateWizard ? 'Szablon Terraform / OpenTofu jest gotowy do tworzenia VM.' : 'Blueprint gotowy do szybkiego tworzenia VM.'));
