@@ -47,7 +47,7 @@ function inventoryVmActions(item) {
     && allowed('jobs.execute')
     && allowed('terraform.execute');
   if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
-  if (item.live === null && item.lifecycle_status !== 'destroyed') {
+  if (allowed('inventory.delete') && item.live === null && item.lifecycle_status !== 'destroyed') {
     actions.push(button('Usuń brakującą', () => offerMissingVmCleanup(item, 'inventory'), 'danger'));
   }
   if (allowed('inventory.update')) actions.push(button('Odśwież stan', async () => {
