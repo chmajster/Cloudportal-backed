@@ -63,7 +63,7 @@
     const steps = [];
     let previous = [];
     const add = (id, type, overrides = {}) => {
-      const defaultTimeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : 600;
+      const defaultTimeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : type === 'wait_for_ip' ? 180 : 600;
       const timeout = overrides.timeout ?? defaultTimeout;
       const retry = overrides.retry ?? 0;
       steps.push({ id, type, depends_on: [...previous], conditions: {}, retry, timeout, rollback: null });
