@@ -301,6 +301,7 @@ def test_blueprint_resume_checkpoints_compatibility_ansible(monkeypatch, tmp_pat
     context = FakeContext(steps)
     context.blueprint_workflow_completed = False
     context.ansible = SimpleNamespace(inventory=None)
+    context.ansible_credential = SimpleNamespace(id=30)
     context.job.payload['_workflow_runtime'] = {
         'completed_steps': ['apply'],
         'provider_applied': True,
