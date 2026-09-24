@@ -218,6 +218,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "VM jest już widoczna w „Moje zasoby”" in script
     assert "navigate('my-resources')" in script
     assert "allowed('jobs.read') ? api('/jobs?limit=200')" in script
+    assert "const missingActiveJobIds" in script
+    assert "api('/jobs/' + encodeURIComponent(id))" in script
     assert "function provisionalBlueprintVm(" in script
     assert "provisioning_placeholder: true" in script
     assert "Komentarz: Provisioning" in script
