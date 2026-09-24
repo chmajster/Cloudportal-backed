@@ -938,6 +938,26 @@
   font-size: .7rem;
 }
 
+.my-resource-card-created {
+  display: none;
+  min-width: 0;
+}
+
+.my-resource-card-created-label {
+  color: var(--muted);
+  font-size: .63rem;
+  font-weight: 750;
+}
+
+.my-resource-card-created-value {
+  overflow: hidden;
+  color: var(--text);
+  font-size: .72rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .my-resource-card-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1211,14 +1231,44 @@
   grid-template-columns: 1fr;
 }
 
+.my-resources-vm-list-header,
 .my-resource-grid-list .my-resource-vm-card {
-  grid-template-columns: minmax(270px, 1.15fr) minmax(260px, 1fr) minmax(260px, auto);
+  grid-template-columns: minmax(250px, 1.1fr) minmax(230px, 1fr) minmax(150px, .6fr) minmax(240px, auto);
+}
+
+.my-resources-vm-list-header {
+  display: grid;
+  align-items: center;
+  gap: 18px;
+  padding: 0 16px;
+  color: var(--muted);
+  font-size: .63rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.my-resources-vm-list-header-actions {
+  text-align: right;
+}
+
+.my-resource-grid-list .my-resource-vm-card {
   align-items: center;
   gap: 14px 18px;
 }
 
 .my-resource-grid-list .my-resource-card-meta {
   align-content: center;
+}
+
+.my-resource-grid-list .my-resource-card-created {
+  display: grid;
+  gap: 3px;
+  align-content: center;
+}
+
+.my-resource-grid-list .my-resource-card-created-label {
+  display: none;
 }
 
 .my-resource-grid-list .my-resource-card-actions {
@@ -1271,8 +1321,20 @@
     grid-column: 1 / -1;
   }
 
+  .my-resources-vm-list-header {
+    display: none;
+  }
+
   .my-resource-grid-list .my-resource-vm-card {
-    grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
+    grid-template-columns: minmax(260px, 1fr) minmax(220px, .8fr);
+  }
+
+  .my-resource-grid-list .my-resource-card-created {
+    grid-column: 1 / -1;
+  }
+
+  .my-resource-grid-list .my-resource-card-created-label {
+    display: block;
   }
 
   .my-resource-grid-list .my-resource-card-actions {
