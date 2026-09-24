@@ -11,7 +11,7 @@ from sqlalchemy import func, select, update
 from app.config import settings
 from app.database import session
 from app.events.service import dispatch_event_broker_once
-from app.execution_settings import job_execution_settings
+from app.jobs.settings import job_execution_settings
 from app.inventory_sync import repair_inventory_from_states
 from app.instance_operation import normal_instance_operation
 from app.jobs.approval import approval_policy_for_job
