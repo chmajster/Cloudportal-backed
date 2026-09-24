@@ -449,6 +449,7 @@ docker_env="$docker_config/docker.env"
 docker_pending_env="$docker_config/docker.env.pending"
 docker_tls="$docker_config/tls"
 docker_updater_data=/var/lib/cloudportal-backed-docker
+docker_updater_runtime=/run/cloudportal-updater-docker
 docker_project=cloudportal-backed
 DOCKER_COMPOSE=()
 
@@ -719,6 +720,7 @@ docker_prepare_updater_config() {
   local token_file persistent_github_token='' persistent_github_config='' updater_config
 
   install -d -m 0700 "$docker_config" "$docker_updater_data" "$docker_updater_data/update"
+  install -d -m 0755 "$docker_updater_runtime"
   for token_file in "$docker_config/updater.token" "$docker_config/updater-status.token"; do
     if [[ ! -s "$token_file" ]]; then
       openssl rand -hex 32 > "$token_file"
@@ -796,7 +798,7 @@ Type=simple
 ExecStart=$python_command /usr/local/lib/cloudportal-updater/update-service.py
 Environment=CP_UPDATER_REPOSITORY=$repo
 Environment=CP_UPDATER_PORT=8766
-Environment=CP_UPDATER_BIND=0.0.0.0
+Environment=CP_UPDATER_SOCKET=$docker_updater_runtime/updater.sock
 Environment=CP_UPDATER_INSTALL_MODE=docker
 Environment=CP_UPDATER_CONFIG_DIR=$docker_config
 Environment=CP_UPDATER_DATA_DIR=$docker_updater_data
@@ -903,6 +905,12 @@ docker_status_check() {
   fi
   if systemctl is-active --quiet cloudportal-updater.service 2>/dev/null; then
     ui_ok 'Updater: cloudportal-updater.service aktywny.'
+    if [[ -S "$docker_updater_runtime/updater.sock" ]]; then
+      ui_ok 'Updater: socket Unix jest dostępny.'
+    else
+      ui_fail 'Updater: brakuje socketu Unix updater.sock.'
+      failed=1
+    fi
   else
     ui_fail 'Updater: cloudportal-updater.service nie jest aktywny.'
     failed=1
@@ -1512,6 +1520,7 @@ docker_uninstall() {
 
   ui_stage 1 3 'Zatrzymanie stacka'
   systemctl disable --now cloudportal-updater.service >/dev/null 2>&1 || true
+  rm -rf "$docker_updater_runtime"
   rm -f /etc/systemd/system/cloudportal-updater.service
   systemctl daemon-reload >/dev/null 2>&1 || true
   rm -f /usr/local/lib/cloudportal-updater/update-service.py
@@ -1736,8 +1745,8 @@ CP_HTTPS_PORT=$backend_port
 CP_TLS_DIR=$docker_tls
 CP_PUBLIC_HOST=$backend_host
 CP_WORKER_COUNT=$workers
-CP_UPDATER_URL=http://host.docker.internal:8766
 CP_UPDATER_HOST_CONFIG_DIR=$docker_config
+CP_UPDATER_RUNTIME_DIR=$docker_updater_runtime
 EOF
   chmod 0600 "$candidate_env"
   unset postgres_password
