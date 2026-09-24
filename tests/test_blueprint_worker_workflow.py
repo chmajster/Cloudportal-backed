@@ -589,6 +589,91 @@ def test_skipped_dependency_blocks_downstream_step(monkeypatch):
     assert any('workflow.step.blocked: apply:terraform_apply' in value for value in context.logs)
 
 
+def test_wait_for_agent_retries_provider_failure_three_times_every_10_seconds(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    workspace = tmp_path / 'workspace-agent-retry'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":114}}}'
+    )
+    context = FakeContext([])
+    clock = [0.0]
+    sleeps = []
+    calls = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    attempts = {'count': 0}
+
+    def guest_agent_ready(node, vm_id):
+        attempts['count'] += 1
+        calls.append((clock[0], node, vm_id))
+        if attempts['count'] <= 3:
+            raise HTTPException(502, 'Proxmox API unavailable')
+        return True
+
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(worker.time, 'sleep', sleep)
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(guest_agent_ready=guest_agent_ready),
+    )
+
+    assert worker.wait_for_agent(context, workspace, timeout=60) is True
+
+    assert [timestamp for timestamp, _node, _vm_id in calls] == [0.0, 10.0, 20.0, 30.0]
+    assert sleeps == [10, 10, 10]
+    assert [
+        log for log in context.logs
+        if log.startswith('workflow.wait_for_agent.retry:')
+    ] == [
+        'workflow.wait_for_agent.retry: attempt=1/3 delay=10s error=Proxmox API unavailable',
+        'workflow.wait_for_agent.retry: attempt=2/3 delay=10s error=Proxmox API unavailable',
+        'workflow.wait_for_agent.retry: attempt=3/3 delay=10s error=Proxmox API unavailable',
+    ]
+
+
+def test_wait_for_agent_fails_after_three_provider_retries(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    workspace = tmp_path / 'workspace-agent-retry-fail'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":115}}}'
+    )
+    context = FakeContext([])
+    clock = [0.0]
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(worker.time, 'sleep', sleep)
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(
+            guest_agent_ready=lambda node, vm_id: (_ for _ in ()).throw(
+                HTTPException(502, 'Proxmox API unavailable')
+            )
+        ),
+    )
+
+    with pytest.raises(
+        ExecutionFailed,
+        match='QEMU Guest Agent check failed after 3 retries; last provider error: Proxmox API unavailable',
+    ):
+        worker.wait_for_agent(context, workspace, timeout=60)
+
+    assert sleeps == [10, 10, 10]
+
+
 def test_wait_for_ip_polls_every_10_seconds_for_at_most_3_minutes(monkeypatch, tmp_path):
     workspace = tmp_path / 'workspace-ip-poll'
     workspace.mkdir()
