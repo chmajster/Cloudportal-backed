@@ -19,7 +19,8 @@ from app.executors.terraform import (TerraformExecutor, cleanup_qemu_bootstrap, 
                                      terraform_plan_command, workspace_lock)
 from app.deployments.recreate import recreate_resource_address
 from app.jobs.worker import execute
-from app.jobs.queue import reconcile_cancelled_jobs, reconcile_persisted_inventory, reconcile_stale_jobs
+from app.jobs.queue import (reconcile_cancelled_jobs, reconcile_deployment_job_statuses,
+                            reconcile_persisted_inventory, reconcile_stale_jobs)
 from app.terraform.state import persist_state
 
 
@@ -229,7 +230,7 @@ def test_dispatcher_reconciles_deployment_status_from_job(client, headers, monke
 
 def test_terraform_failure_and_retry(client,headers,monkeypatch):
     d=deployment(client,headers)
-    def fail(operation, context):
+    def fail(_self, operation, context):
         context.stage('terraform.plan')
         raise ExecutionFailed('terraform exited with code 1')
     monkeypatch.setattr(TerraformExecutor,'execute',fail)
