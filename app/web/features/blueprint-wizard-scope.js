@@ -3,23 +3,45 @@
 (() => {
   const parts = window.BlueprintWizardParts = window.BlueprintWizardParts || {};
 
-  function prepare(tenants, projects, projectContext, state) {
-    const tenantById = new Map(tenants.map(value => [String(value.id), value]));
-    const activeProjects = projects.filter(value => {
-      if (value.status && value.status !== 'active') return false;
-      const tenant = tenantById.get(String(value.tenant_id));
-      return !tenant || !tenant.status || tenant.status === 'active';
-    });
-    if (!activeProjects.length) {
-      throw new Error('Brak aktywnego projektu, w którym można utworzyć Blueprint.');
+  function prepare(creationScopes, projectContext, state) {
+    const rows = Array.isArray(creationScopes) ? creationScopes : [];
+    if (!rows.length) {
+      throw new Error('Brak organizacji i projektu, w których masz uprawnienie blueprints.create.');
     }
 
-    const activeTenants = tenants.filter(value => !value.status || value.status === 'active');
-    let project = activeProjects.find(value => String(value.id) === String(projectContext?.selected?.id || ''))
-      || activeProjects[0];
+    const tenantMap = new Map();
+    const projectMap = new Map();
+    rows.forEach(row => {
+      const tenantId = String(row.tenant_id);
+      const projectId = String(row.project_id);
+      if (!tenantMap.has(tenantId)) {
+        tenantMap.set(tenantId, {
+          id: tenantId,
+          name: row.tenant_name || tenantId,
+          slug: row.tenant_slug || '',
+          status: 'active',
+        });
+      }
+      if (!projectMap.has(projectId)) {
+        projectMap.set(projectId, {
+          id: projectId,
+          tenant_id: tenantId,
+          name: row.project_name || projectId,
+          slug: row.project_slug || '',
+          status: 'active',
+        });
+      }
+    });
+
+    const tenants = [...tenantMap.values()].sort((a, b) => a.name.localeCompare(b.name, 'pl'));
+    const projects = [...projectMap.values()].sort((a, b) =>
+      a.name.localeCompare(b.name, 'pl') || String(a.id).localeCompare(String(b.id)));
+
+    const selectedProjectId = String(projectContext?.selected?.id || '');
+    const project = projects.find(value => String(value.id) === selectedProjectId) || projects[0];
     state.tenantId = String(project.tenant_id);
     state.projectId = String(project.id);
-    return { tenants: activeTenants, projects: activeProjects };
+    return { tenants, projects };
   }
 
   function create(context) {
@@ -147,28 +169,38 @@
       const tenants = tenantRowsForProjects();
       const projects = projectsForTenant(state.tenantId);
 
-      if (tenants.length > 1) {
-        const tenantField = selectField('Tenant', 'tenant_id',
-          tenants.map(value => ({ value: String(value.id), label: value.name })),
-          state.tenantId, { required: true, wide: true });
-        tenantField.querySelector('select').addEventListener('change', async event => {
-          state.tenantId = event.currentTarget.value;
-          state.projectId = String(projectsForTenant(state.tenantId)[0]?.id || '');
-          await changeScope();
-        });
-        fields.push(tenantField);
-      }
+      const tenantField = selectField('Organizacja', 'tenant_id',
+        tenants.map(value => ({
+          value: String(value.id),
+          label: value.slug ? value.name + ' (' + value.slug + ')' : value.name,
+        })),
+        state.tenantId, { required: true });
+      const tenantSelect = tenantField.querySelector('select');
+      tenantSelect.disabled = tenants.length === 1;
+      tenantField.append(node('span', { class: 'field-help',
+        text: 'Lista zawiera tylko organizacje, w których RBAC pozwala Ci tworzyć Blueprinty.' }));
+      tenantSelect.addEventListener('change', async event => {
+        state.tenantId = event.currentTarget.value;
+        state.projectId = String(projectsForTenant(state.tenantId)[0]?.id || '');
+        await changeScope();
+      });
+      fields.push(tenantField);
 
-      if (projects.length > 1) {
-        const projectField = selectField('Projekt', 'project_id',
-          projects.map(value => ({ value: String(value.id), label: value.name })),
-          state.projectId, { required: true, wide: true });
-        projectField.querySelector('select').addEventListener('change', async event => {
-          state.projectId = event.currentTarget.value;
-          await changeScope();
-        });
-        fields.push(projectField);
-      }
+      const projectField = selectField('Projekt', 'project_id',
+        projects.map(value => ({
+          value: String(value.id),
+          label: value.slug ? value.name + ' (' + value.slug + ')' : value.name,
+        })),
+        state.projectId, { required: true });
+      const projectSelect = projectField.querySelector('select');
+      projectSelect.disabled = projects.length === 1;
+      projectField.append(node('span', { class: 'field-help',
+        text: 'Uprawnienie blueprints.create jest weryfikowane ponownie przez backend przy zapisie.' }));
+      projectSelect.addEventListener('change', async event => {
+        state.projectId = event.currentTarget.value;
+        await changeScope();
+      });
+      fields.push(projectField);
       return fields;
     }
 
