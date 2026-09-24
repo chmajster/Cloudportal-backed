@@ -386,7 +386,15 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         blueprint = ((deployment.workflow or {}).get('blueprint') or {})
     if blueprint and operation == 'terraform.apply' and 'blueprints.execute' not in request.state.permissions:
         raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
-    if deployment and deployment.workflow.get('ansible') and operation == 'terraform.apply' and 'ansible.execute' not in request.state.permissions:
+    if (
+        deployment
+        and (
+            (deployment.workflow or {}).get('ansible')
+            or (deployment.workflow or {}).get('ansible_runs')
+        )
+        and operation == 'terraform.apply'
+        and 'ansible.execute' not in request.state.permissions
+    ):
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
     if deployment and deployment.status == 'reconciliation_required' and operation != 'terraform.plan':
         raise HTTPException(
@@ -400,13 +408,34 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
     if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
         raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
     job_payload = dict(payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}))
-    ansible_payload = job_payload.get('ansible') if isinstance(job_payload, dict) else None
+    snapshots = dict(job_payload.get('_ansible_playbook_snapshots') or {})
+    configured_ansible = []
+    ansible_payload = job_payload.get('ansible')
     if isinstance(ansible_payload, dict) and ansible_payload.get('playbook'):
-        playbook_id = str(ansible_payload['playbook'])
+        configured_ansible.append(ansible_payload)
+    for ansible_run in (job_payload.get('ansible_runs') or []):
+        if isinstance(ansible_run, dict) and ansible_run.get('playbook'):
+            configured_ansible.append(ansible_run)
+
+    for ansible_run in configured_ansible:
+        playbook_id = str(ansible_run['playbook'])
         require_catalog_item_enabled(db, 'playbooks', playbook_id)
-        snapshot = custom_playbook_snapshot(playbook_definition(playbook_id, db=db))
-        if snapshot is not None:
-            job_payload['_ansible_playbook_snapshot'] = snapshot
+        existing_snapshot = snapshots.get(playbook_id)
+        if not (
+            isinstance(existing_snapshot, dict)
+            and existing_snapshot.get('custom') is True
+            and existing_snapshot.get('id') == playbook_id
+        ):
+            snapshot = custom_playbook_snapshot(playbook_definition(playbook_id, db=db))
+            if snapshot is not None:
+                snapshots[playbook_id] = snapshot
+
+    if snapshots:
+        job_payload['_ansible_playbook_snapshots'] = snapshots
+    if isinstance(ansible_payload, dict):
+        legacy_snapshot = snapshots.get(str(ansible_payload.get('playbook') or ''))
+        if legacy_snapshot is not None:
+            job_payload['_ansible_playbook_snapshot'] = legacy_snapshot
     if deployment:
         job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
