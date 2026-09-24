@@ -472,6 +472,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "selectField('Projekt', 'project_id'" in script
     assert "/blueprints/creation-scopes?limit=200" in script
     assert "RBAC pozwala Ci tworzyć Blueprinty" in script
+    assert "scopeAllows('hostnames.read')" in script
+    assert "scopeAllows('ipam.read')" in script
+    assert "scopeAllows('ansible.read')" in script
+    assert "Uprawnienia są nadawane przez role RBAC" in script
     assert "'X-Tenant-ID': String(state.tenantId)" in script
     assert "'X-Project-ID': String(state.projectId)" in script
     assert "!state.selectEnvironmentOnExecute" in script
