@@ -683,10 +683,10 @@ BLUEPRINT_SUPPORTED_STEPS = (
 
 
 def workflow_step_timeout(step_type, configured=600):
-    timeout = int(configured or 600)
-    if step_type in {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
-        return max(timeout, settings().execution_timeout)
-    return timeout
+    timeout = max(1, int(configured or 600))
+    # A per-step timeout may be shorter than the job-wide execution timeout, but
+    # can never extend the lifetime of the job beyond the global safety bound.
+    return min(timeout, settings().execution_timeout)
 
 
 def blueprint_workflow_order(steps):
@@ -949,7 +949,8 @@ def blueprint_conditions_match(step, context):
             raise ExecutionFailed(f'Unsupported Blueprint workflow condition: {key}')
         actual = facts[key]
         if isinstance(expected, list):
-            if actual not in expected:
+            normalized_actual = str(actual).lower()
+            if normalized_actual not in {str(value).lower() for value in expected}:
                 return False
         elif isinstance(expected, bool):
             if bool(actual) != expected:
@@ -959,8 +960,8 @@ def blueprint_conditions_match(step, context):
     return True
 
 
-def wait_for_ssh(context, workspace, timeout):
-    addresses = wait_for_ip(context, workspace, timeout=timeout)
+def wait_for_ssh(context, workspace, timeout, addresses=None):
+    addresses = list(addresses or wait_for_ip(context, workspace, timeout=timeout))
     access = _guest_access_credential(context)
     private_key = _guest_private_key(access['private_key']) if access else None
     deadline = time.monotonic() + timeout
@@ -1883,7 +1884,12 @@ def run_blueprint_workflow(context, executor):
                         context, workspace_for(step_type), timeout=timeout
                     )
                 elif step_type == 'wait_for_ssh':
-                    address = wait_for_ssh(context, workspace_for(step_type), timeout)
+                    address = wait_for_ssh(
+                        context,
+                        workspace_for(step_type),
+                        timeout,
+                        addresses=runtime['addresses'],
+                    )
                     runtime['addresses'] = [address]
                 elif step_type == 'run_ansible_playbook':
                     runtime['addresses'] = execute_configured_ansible(
