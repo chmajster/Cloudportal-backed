@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.config import settings
 from app.database import session
 from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
@@ -612,6 +612,22 @@ def test_ansible_failure_is_reported(client,headers,monkeypatch):
     monkeypatch.setattr(AnsibleExecutor,'execute',fail)
     execute(response.json()['id'])
     assert client.get('/api/v1/jobs/'+response.json()['id'],headers=headers).json()['status']=='failed'
+
+
+def test_dispatch_capacity_lock_serializes_postgresql_dispatchers():
+    from app.jobs.queue import DISPATCH_CAPACITY_LOCK_KEY, acquire_dispatch_capacity_lock
+
+    with session() as first:
+        if first.get_bind().dialect.name != 'postgresql':
+            pytest.skip('PostgreSQL advisory lock test')
+        acquire_dispatch_capacity_lock(first)
+        with session() as second:
+            acquired = second.execute(
+                text('SELECT pg_try_advisory_xact_lock(:lock_key)'),
+                {'lock_key': DISPATCH_CAPACITY_LOCK_KEY},
+            ).scalar()
+            assert acquired is False
+            second.rollback()
 
 
 def test_parallel_dispatch_capacity_uses_runtime_setting(client, headers):
