@@ -785,7 +785,8 @@ async function blueprintForm(item = null) {
         const cards = levelSteps.map(step => {
           const missing = step.depends.filter(id => !ids.has(id));
           const duplicate = step.id && counts.get(step.id) > 1;
-          const invalid = !step.id || duplicate || missing.length;
+          const selfReference = step.id && step.depends.includes(step.id);
+          const invalid = !step.id || duplicate || missing.length || selfReference;
           const dependencies = step.depends.length
             ? node('div', { class: 'workflow-dag-dependencies' },
               node('span', { class: 'muted', text: 'Zależy od:' }),
@@ -806,6 +807,7 @@ async function blueprintForm(item = null) {
             invalid ? badge('Sprawdź', 'danger') : badge('OK', 'ok')),
           dependencies,
           duplicate ? node('small', { class: 'form-error', text: 'ID kroku występuje więcej niż raz.' }) : '',
+          selfReference ? node('small', { class: 'form-error', text: 'Krok nie może zależeć od samego siebie.' }) : '',
           missing.length ? node('small', { class: 'form-error', text: 'Brak kroków: ' + missing.join(', ') }) : '');
         });
         columns.push(node('div', { class: 'workflow-dag-column' },
@@ -896,7 +898,10 @@ async function blueprintForm(item = null) {
       const controls = node('div', { class: 'workflow-step-controls' },
         button('↑', () => moveWorkflowRow(row, -1), 'ghost'),
         button('↓', () => moveWorkflowRow(row, 1), 'ghost'),
-        button('Usuń', () => { row.remove(); syncWorkflowGraph(); }, 'danger'));
+        button('Usuń', () => {
+          window.BlueprintClassicWorkflow.removeRow(workflowList, row);
+          syncWorkflowGraph();
+        }, 'danger'));
       row.append(
         node('div', { class: 'editor-card-header' },
           node('div', {},
@@ -910,6 +915,7 @@ async function blueprintForm(item = null) {
             step.type || 'terraform_apply', { required: true }),
           field('Zależy od (ID kroków)', 'workflow_depends', { value: (step.depends_on || []).join(', '), wide: true, help: 'Kilka ID oddziel przecinkami.' }),
           advanced));
+      window.BlueprintClassicWorkflow.bindIdTracking(row, workflowList, syncWorkflowGraph);
       row.querySelectorAll('input,select,textarea').forEach(control => {
         control.addEventListener('input', syncWorkflowGraph);
         control.addEventListener('change', syncWorkflowGraph);
@@ -1186,7 +1192,7 @@ async function blueprintForm(item = null) {
           return step;
         });
         if (!workflow.length) throw new Error('Blueprint musi zawierać co najmniej jeden krok workflow.');
-        if (workflow.some(step => !step.id)) throw new Error('Każdy krok workflow musi mieć ID.');
+        window.BlueprintClassicWorkflow.assertValid(workflow);
 
         const template = currentTemplate();
         const hostnameSchemeId = Number(form.elements.deployment_hostname_scheme_id.value || 0);

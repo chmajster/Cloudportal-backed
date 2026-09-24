@@ -774,8 +774,14 @@ class BlueprintInput(Input):
         if len(ids) != len(set(ids)):
             raise ValueError('Workflow step IDs must be unique')
         known = set(ids)
-        if any(set(step.depends_on) - known or step.id in step.depends_on for step in self.workflow):
-            raise ValueError('Workflow dependency is missing or self-referencing')
+        for step in self.workflow:
+            if step.id in step.depends_on:
+                raise ValueError(f'Workflow step "{step.id}" cannot depend on itself')
+            missing = sorted(set(step.depends_on) - known)
+            if missing:
+                raise ValueError(
+                    f'Workflow step "{step.id}" depends on missing step(s): {", ".join(missing)}'
+                )
         graph = {step.id: step.depends_on for step in self.workflow}
         visiting, visited = set(), set()
         def visit(node):
