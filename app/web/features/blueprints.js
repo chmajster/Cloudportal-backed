@@ -611,13 +611,16 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             ansible.variables.hostname = '{{ hostname }}';
           }
         }
-        const workflow = window.BlueprintFormUtils.blueprintWorkflow({
+        const workflow = deployment.awx && Array.isArray(item?.workflow) && item.workflow.length
+          ? item.workflow.map(step => ({ ...step, depends_on: [...(step.depends_on || [])], conditions: { ...(step.conditions || {}) } }))
+          : window.BlueprintFormUtils.blueprintWorkflow({
           hostname: Boolean(schemeId),
           ipam: mode === 'ipam',
           tags: window.BlueprintProvisioningGuards.workflowNeedsTags(tags, deployment),
           waitAgent: data.has('wait_agent'),
           guestAccess: Boolean(selectedTemplateGuestCredentialId),
           ansible: Boolean(ansible),
+          awx: Boolean(deployment.awx),
         });
         const managerRoleIds = [...form.querySelectorAll('[name="manager_role_ids"]:checked')].map(input => Number(input.value));
         if (templateWizard && !item && roleChoices.length && !managerRoleIds.length) {
@@ -660,6 +663,7 @@ async function proxmoxBlueprintForm(item = null, options = {}) {
             executor: data.get('executor'),
             variables: vmVariables,
             ansible,
+            awx: deployment.awx || null,
           },
           workflow,
           requires_approval: data.has('requires_approval'), auto_approve_for_executors: window.BlueprintApprovalPolicyUI.parseAuto(data.get('auto_approve_for_executors')), approval_timeout_hours: window.BlueprintApprovalPolicyUI.parseTimeout(data.get('approval_timeout_hours')),
@@ -871,7 +875,7 @@ async function blueprintForm(item = null) {
       ['cloud_init', 'Cloud-init: pierwszy start systemu'], ['terraform_plan', 'Terraform plan'], ['terraform_apply', 'Terraform apply'],
       ['wait_for_vm', 'Czekaj na VM'], ['wait_for_agent', 'Czekaj na guest agent'],
       ['wait_for_ip', 'Czekaj na IP'], ['wait_for_ssh', 'Czekaj na SSH'],
-      ['run_ansible_playbook', 'Uruchom Ansible'], ['create_snapshot', 'Utwórz snapshot'],
+      ['run_ansible_playbook', 'Uruchom Ansible'], ['register_awx', 'Rejestracja w AWX'], ['create_snapshot', 'Utwórz snapshot'],
       ['health_check', 'Health check'], ['condition', 'Warunek'], ['approval', 'Akceptacja'],
       ['delay', 'Opóźnienie'], ['notification', 'Powiadomienie'], ['terraform_destroy', 'Terraform destroy (tylko rollback)'],
     ];

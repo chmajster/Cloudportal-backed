@@ -4,6 +4,7 @@ import tempfile
 from urllib.parse import urlsplit, quote
 import httpx
 from fastapi import HTTPException
+from app.awx import AwxError, test_awx_connection
 from app.providers.registry import provider_for
 from app.security.core import decrypt_secret
 
@@ -13,6 +14,13 @@ def test_connection(credential):
         return provider_for(credential).test()
     secret = decrypt_secret(credential)
     try:
+        if credential.type == 'awx':
+            return test_awx_connection(
+                credential.endpoint,
+                credential.username,
+                secret,
+                verify_ssl=credential.verify_ssl,
+            )
         if credential.type == 'ssh':
             import paramiko
             endpoint = urlsplit(credential.endpoint)
@@ -73,6 +81,8 @@ def test_connection(credential):
                     raise HTTPException(422, 'No connection-test adapter registered for this credential type')
     except HTTPException:
         raise
+    except AwxError as exc:
+        raise HTTPException(502, str(exc)) from None
     except Exception:
         raise HTTPException(502, 'Credential authentication test failed; verify endpoint, authentication data and required fields') from None
     return {'ok': True, 'provider': credential.type}

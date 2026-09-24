@@ -238,6 +238,88 @@ async function testProxmoxCredentialForm(item, form) {
   });
 }
 
+
+function buildAwxEndpoint(value) {
+  let raw = String(value || '').trim().replace(/\/$/, '');
+  if (!raw) throw new Error('Podaj adres AWX.');
+  if (!raw.includes('://')) raw = 'https://' + raw;
+  const parsed = new URL(raw);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('Adres AWX musi używać HTTP lub HTTPS.');
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('Adres AWX nie może zawierać loginu, hasła, query ani fragmentu.');
+  }
+  return parsed.origin + parsed.pathname.replace(/\/$/, '');
+}
+
+function renderAwxConnectionResult(container, result = null, error = null) {
+  container.hidden = false;
+  container.classList.toggle('success', Boolean(result));
+  container.classList.toggle('error', Boolean(error));
+  if (error) {
+    container.replaceChildren(
+      node('div', { class: 'credential-connection-result-header' },
+        badge('Błąd', 'danger'), node('strong', { text: 'Nie udało się połączyć z AWX' })),
+      node('p', { class: 'credential-connection-message', text: error.message || 'Test AWX nie powiódł się.' }));
+    return;
+  }
+  container.replaceChildren(
+    node('div', { class: 'credential-connection-result-header' },
+      badge('OK', 'ok'), node('strong', { text: result?.message || 'Połączenie z AWX działa.' })),
+    node('div', { class: 'credential-connection-details' },
+      ...[
+        ['Endpoint', result?.endpoint || '—'],
+        ['Użytkownik', result?.username || '—'],
+        ['Uwierzytelnienie', result?.auth_mode === 'token' ? 'OAuth token' : 'Login i hasło'],
+        ['Wersja', result?.version || 'nie podano'],
+        ['TLS', result?.verify_ssl === false ? 'weryfikacja wyłączona' : 'weryfikacja włączona'],
+      ].map(([label, value]) => node('div', { class: 'credential-connection-detail' },
+        node('span', { text: label }), node('strong', { text: value })))));
+}
+
+async function testAwxCredentialForm(item, form) {
+  const data = new FormData(form);
+  const type = data.get('type');
+  if (type !== 'awx') throw new Error('Ten test jest dostępny wyłącznie dla AWX.');
+  const endpoint = buildAwxEndpoint(form.elements.endpoint?.value || '');
+  const username = String(form.elements.username?.value || '').trim();
+  const verifySsl = !data.has('accept_untrusted_tls');
+  const sameType = Boolean(item && item.type === 'awx');
+  const replaceSecrets = !item || !sameType || data.has('replace_secrets');
+  const identityChanged = Boolean(item && sameType && (
+    item.endpoint !== endpoint || item.username !== username || item.verify_ssl !== verifySsl
+  ));
+  if (item && sameType && !replaceSecrets && !identityChanged) {
+    return api('/credentials/' + item.id + '/test', { method: 'POST' });
+  }
+  if (item && sameType && !replaceSecrets && identityChanged) {
+    throw new Error('Zmiana adresu, użytkownika lub TLS wymaga podania nowych danych AWX.');
+  }
+  const authMode = form.elements.auth_mode?.value || 'bootstrap';
+  const secrets = {};
+  if (authMode === 'token') {
+    secrets.token = form.querySelector('[data-secret-key="token"]')?.value || '';
+    if (!secrets.token) throw new Error('Podaj OAuth token AWX.');
+  } else {
+    secrets.password = form.querySelector('[data-secret-key="password"]')?.value || '';
+    if (!secrets.password) throw new Error('Podaj hasło AWX.');
+  }
+  return api('/credentials/awx/test', {
+    method: 'POST',
+    body: {
+      name: String(data.get('name') || 'Test AWX').trim() || 'Test AWX',
+      type: 'awx',
+      endpoint,
+      username,
+      verify_ssl: verifySsl,
+      expires_at: null,
+      rotation_due_at: null,
+      secrets,
+    },
+  });
+}
+
 function sshBootstrapHostKeyPanel() {
   const knownHosts = node('input', { type: 'hidden', name: 'ssh_bootstrap_known_hosts' });
   const fingerprint = node('strong', { class: 'mono', text: 'Nie pobrano' });
@@ -452,6 +534,7 @@ function credentialForm(item = null) {
       const control = event.currentTarget;
       const form = control.closest('dialog')?.querySelector('#modal-form') || document.querySelector('#modal-form');
       if (!form) return;
+      const selectedType = form.elements.type?.value;
       const previous = control.textContent;
       control.disabled = true;
       control.textContent = 'Sprawdzanie…';
@@ -459,13 +542,20 @@ function credentialForm(item = null) {
       connectionResult.className = 'credential-connection-result pending';
       connectionResult.replaceChildren(
         node('div', { class: 'credential-connection-result-header' },
-          badge('Test', 'info'), node('strong', { text: 'Sprawdzanie połączenia z Proxmox VE…' })),
+          badge('Test', 'info'), node('strong', { text: selectedType === 'awx'
+            ? 'Sprawdzanie połączenia z AWX…' : 'Sprawdzanie połączenia z Proxmox VE…' })),
         node('p', { class: 'credential-connection-message', text: 'Weryfikuję endpoint, TLS i uwierzytelnienie bez zapisywania sekretu.' }));
       try {
-        const result = await testProxmoxCredentialForm(item, form);
-        renderProxmoxConnectionResult(connectionResult, result);
+        if (selectedType === 'awx') {
+          const result = await testAwxCredentialForm(item, form);
+          renderAwxConnectionResult(connectionResult, result);
+        } else {
+          const result = await testProxmoxCredentialForm(item, form);
+          renderProxmoxConnectionResult(connectionResult, result);
+        }
       } catch (error) {
-        renderProxmoxConnectionResult(connectionResult, null, error);
+        if (selectedType === 'awx') renderAwxConnectionResult(connectionResult, null, error);
+        else renderProxmoxConnectionResult(connectionResult, null, error);
       } finally {
         control.disabled = false;
         control.textContent = previous;
@@ -474,7 +564,7 @@ function credentialForm(item = null) {
     connectionCheck = node('section', { class: 'credential-connection-check wide' },
       node('div', { class: 'credential-connection-check-copy' },
         node('strong', { text: 'Test połączenia przed zapisem' }),
-        node('p', { text: 'Sprawdza dostęp do API, uwierzytelnienie, wersję Proxmox VE, TLS i czas odpowiedzi. Sekret nie jest zapisywany.' })),
+        node('p', { text: 'Sprawdza API, uwierzytelnienie i TLS. Dla AWX wykrywa także wersję oraz dostępne zasoby. Sekret nie jest zapisywany podczas testu.' })),
       node('div', { class: 'credential-connection-check-actions' }, connectionButton),
       connectionResult);
     fields.append(connectionCheck);
@@ -485,7 +575,7 @@ function credentialForm(item = null) {
   const render = () => {
     renderCredentialDynamic(dynamic, typeSelect.value, item);
     if (connectionCheck) {
-      connectionCheck.hidden = typeSelect.value !== 'proxmox';
+      connectionCheck.hidden = !['proxmox', 'awx'].includes(typeSelect.value);
       connectionResult.hidden = true;
       connectionResult.replaceChildren();
     }
@@ -503,7 +593,9 @@ function credentialForm(item = null) {
       const sameType = Boolean(item && item.type === type);
       const endpoint = type === 'proxmox'
         ? buildProxmoxEndpoint(form.elements.endpoint?.value || '', form.elements.port?.value || config.port?.default)
-        : (form.elements.endpoint ? form.elements.endpoint.value : (sameType ? item.endpoint : ''));
+        : type === 'awx'
+          ? buildAwxEndpoint(form.elements.endpoint?.value || '')
+          : (form.elements.endpoint ? form.elements.endpoint.value : (sameType ? item.endpoint : ''));
       const username = type === 'proxmox'
         ? buildProxmoxUsername(form.elements.username?.value || '', form.elements.realm?.value || config.realm?.default)
         : (form.elements.username ? form.elements.username.value : (sameType ? item.username : ''));
@@ -559,6 +651,29 @@ function credentialForm(item = null) {
             toast('Token Proxmox wygenerowany i zapisany. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
           } catch (error) { toast('Token wygenerowany i zapisany, ale test nie powiódł się: ' + error.message, 'error'); }
         } else toast('Token Proxmox wygenerowany i zapisany. Hasło nie zostało zachowane.');
+        navigate('credentials');
+        return;
+      }
+      if (!item && type === 'awx' && authMode === 'bootstrap') {
+        const password = form.querySelector('[data-secret-key="password"]')?.value || '';
+        if (!username) throw new Error('Podaj login AWX.');
+        if (!password) throw new Error('Podaj hasło AWX.');
+        const saved = await api('/credentials/awx/bootstrap', { method: 'POST', body: {
+          name: payload.name,
+          endpoint,
+          username,
+          password,
+          verify_ssl: verifySsl,
+          expires_at: payload.expires_at,
+          rotation_due_at: payload.rotation_due_at,
+        }});
+        try {
+          const discovery = await api('/credentials/' + saved.id + '/awx/discovery');
+          toast('AWX skonfigurowany. Wykryto ' + (discovery.inventories || []).length
+            + ' inventory i ' + (discovery.job_templates || []).length + ' job template.');
+        } catch (error) {
+          toast('AWX zapisany, ale autodiscovery nie powiodło się: ' + error.message, 'error');
+        }
         navigate('credentials');
         return;
       }

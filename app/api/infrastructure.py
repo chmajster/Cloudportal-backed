@@ -8,12 +8,13 @@ from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDep
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
                              SSHHostKeyOutput)
 from app.credentials.outputs import CredentialOutput, SSHKeyBootstrapOutput
-from app.api.schemas import (CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
+from app.api.schemas import (AwxBootstrapInput, CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
                              ProxmoxTokenBootstrapInput, SSHHostKeyInput, SSHKeyBootstrapInput)
 from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, snapshot_ansible_payload,
                          template_definition, template_public, template_source_preview, playbook_source_preview,
                          validate_template_variables)
 from app.catalog_control import catalog_item_public, require_catalog_item_enabled, set_catalog_item_enabled
+from app.awx import AwxClient, AwxError, bootstrap_awx, normalize_awx_endpoint, test_awx_connection
 from app.credentials.service import credential_in_use, credential_public, save_secret
 from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
@@ -25,7 +26,7 @@ from app.quotas.service import prepare_job_reservation, release_job_reservation
 from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
-from app.security.core import audit
+from app.security.core import audit, decrypt_secret
 from app.resource_scope.http import require
 from app.terraform.state import delete_plan
 
@@ -165,6 +166,84 @@ def test_proxmox_draft_credential(data: CredentialInput, request: Request,
     return result
 
 
+@router.post('/credentials/awx/test', response_model=CredentialTestOutput, response_model_exclude_unset=True)
+def test_awx_draft_credential(data: CredentialInput, request: Request,
+                              actor=Depends(require('credentials.test')), db=Depends(get_db, scope='function')):
+    if data.type != 'awx':
+        raise HTTPException(422, 'Ten test połączenia obsługuje wyłącznie AWX / Automation Controller.')
+    if not data.secrets or not (data.secrets.get('password') or data.secrets.get('token')):
+        raise HTTPException(422, 'Podaj hasło AWX albo OAuth token.')
+    try:
+        endpoint = normalize_awx_endpoint(data.endpoint)
+        result = test_awx_connection(
+            endpoint,
+            data.username,
+            data.secrets,
+            verify_ssl=data.verify_ssl,
+        )
+    except AwxError as exc:
+        audit(db, request, 'credential.awx_connection_tested', 'credentials', None, 'failure')
+        db.commit()
+        raise HTTPException(502, str(exc)) from None
+    audit(db, request, 'credential.awx_connection_tested', 'credentials', None)
+    return result
+
+
+@router.post('/credentials/awx/bootstrap', status_code=201, response_model=CredentialOutput)
+def bootstrap_awx_credential(data: AwxBootstrapInput, request: Request,
+                             actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
+    try:
+        endpoint, secret, _discovery = bootstrap_awx(
+            data.endpoint,
+            data.username,
+            data.password,
+            verify_ssl=data.verify_ssl,
+        )
+    except AwxError as exc:
+        audit(db, request, 'credential.awx_bootstrapped', 'credentials', None, 'failure')
+        db.commit()
+        raise HTTPException(502, str(exc)) from None
+
+    credential = Credential(
+        name=data.name,
+        type='awx',
+        endpoint=endpoint,
+        username=data.username,
+        verify_ssl=data.verify_ssl,
+        expires_at=data.expires_at,
+        rotation_due_at=data.rotation_due_at,
+        encrypted_secret=b'',
+    )
+    db.add(credential)
+    db.flush()
+    save_secret(db, credential, secret)
+    audit(db, request, 'credential.awx_bootstrapped', 'credentials', credential.id)
+    return credential_public(credential)
+
+
+@router.get('/credentials/{id}/awx/discovery')
+def discover_awx_credential(id: int, request: Request,
+                            actor=Depends(require('credentials.test')), db=Depends(get_db, scope='function')):
+    credential = find(db, Credential, id)
+    if credential.type != 'awx':
+        raise HTTPException(422, 'Credential is not an AWX credential')
+    try:
+        secret = decrypt_secret(credential)
+        result = AwxClient(
+            credential.endpoint,
+            verify_ssl=credential.verify_ssl,
+            token=secret.get('token'),
+            username=credential.username,
+            password=secret.get('password'),
+        ).discovery()
+    except AwxError as exc:
+        audit(db, request, 'credential.awx_discovered', 'credentials', id, 'failure')
+        db.commit()
+        raise HTTPException(502, str(exc)) from None
+    audit(db, request, 'credential.awx_discovered', 'credentials', id)
+    return result
+
+
 @router.get('/credentials/{id}', response_model=CredentialOutput)
 def credential(id: int, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
     return credential_public(find(db, Credential, id))
@@ -174,6 +253,11 @@ def credential(id: int, actor=Depends(require('credentials.read')), db=Depends(g
 def create_credential(data: CredentialInput, request: Request, actor=Depends(require('credentials.create')), db=Depends(get_db, scope='function')):
     if data.type == 'proxmox':
         data.endpoint = resolve_proxmox_endpoint(data.endpoint, verify_ssl=data.verify_ssl)
+    elif data.type == 'awx':
+        try:
+            data.endpoint = normalize_awx_endpoint(data.endpoint)
+        except AwxError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     def create():
         c = Credential(**data.model_dump(exclude={'secrets'}), encrypted_secret=b'')
@@ -189,6 +273,11 @@ def create_credential(data: CredentialInput, request: Request, actor=Depends(req
 def update_credential(id: int, data: CredentialInput, request: Request, actor=Depends(require('credentials.update')), db=Depends(get_db, scope='function')):
     if data.type == 'proxmox':
         data.endpoint = resolve_proxmox_endpoint(data.endpoint, verify_ssl=data.verify_ssl)
+    elif data.type == 'awx':
+        try:
+            data.endpoint = normalize_awx_endpoint(data.endpoint)
+        except AwxError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     c = locked_credential(db, id)
     if credential_in_use(db, id, pending_only=True):

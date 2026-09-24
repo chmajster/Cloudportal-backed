@@ -79,6 +79,30 @@ const CREDENTIAL_TYPE_CONFIG = {
       { key: 'password', label: 'Hasło', type: 'password', required: true, autocomplete: 'new-password' },
     ]}},
   },
+  awx: {
+    label: 'AWX / Automation Controller',
+    description: 'Podaj adres, login i hasło. CloudPortal wykryje API, utworzy OAuth token gdy AWX na to pozwala i zapisze zaszyfrowane dane do dalszego onboardingu.',
+    endpoint: {
+      label: 'Adres AWX',
+      placeholder: 'https://awx.example.com',
+      required: true,
+      help: 'Możesz podać host/IP albo pełny URL HTTP/HTTPS. Ścieżka API jest wykrywana automatycznie.',
+    },
+    username: { label: 'Login AWX', placeholder: 'admin', required: true },
+    tls: true,
+    defaultAuth: 'bootstrap',
+    authModes: {
+      bootstrap: { label: 'Login + hasło → skonfiguruj automatycznie', createOnly: true, fields: [
+        { key: 'password', label: 'Hasło AWX', type: 'password', required: true, autocomplete: 'current-password' },
+      ]},
+      token: { label: 'Istniejący OAuth token', fields: [
+        { key: 'token', label: 'OAuth token', type: 'password', required: true, autocomplete: 'new-password' },
+      ]},
+      password: { label: 'Login i hasło', fields: [
+        { key: 'password', label: 'Hasło AWX', type: 'password', required: true, autocomplete: 'new-password' },
+      ]},
+    },
+  },
   aws: {
     label: 'Amazon Web Services',
     description: 'Klucze IAM. Test wykonuje STS GetCallerIdentity.',

@@ -17,7 +17,7 @@
   };
   const WORKFLOW_TYPES = [
     'cloud_init', 'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
-    'wait_for_ip', 'wait_for_ssh', 'run_ansible_playbook', 'create_snapshot',
+    'wait_for_ip', 'wait_for_ssh', 'run_ansible_playbook', 'register_awx', 'create_snapshot',
     'health_check', 'condition', 'approval', 'delay', 'notification',
     'terraform_destroy',
   ];
@@ -70,9 +70,10 @@
     if (options.cloudInit) add('cloud_init', 'cloud_init');
     add('apply', 'terraform_apply');
     if (options.waitAgent) add('agent', 'wait_for_agent');
-    if (options.waitAgent || options.ansible || options.guestAccess) add('guest_ip', 'wait_for_ip');
+    if (options.waitAgent || options.ansible || options.guestAccess || options.awx) add('guest_ip', 'wait_for_ip');
     if (options.guestAccess) add('guest_ssh', 'wait_for_ssh');
     if (options.ansible) add('ansible', 'run_ansible_playbook');
+    if (options.awx) add('awx', 'register_awx');
     return steps;
   }
 
@@ -91,6 +92,7 @@
       wait_for_ssh: 'Czekaj na SSH',
       set_hostname: 'Ustaw hostname',
       run_ansible_playbook: 'Ansible',
+      register_awx: 'Rejestracja w AWX',
       terraform_plan: 'Terraform Plan',
       terraform_apply: 'Terraform Apply',
       terraform_destroy: 'Terraform Destroy (rollback)',
@@ -198,6 +200,15 @@
       playbookId: '',
       ansibleCredentialId: '',
       ansibleVariables: {},
+      awxEnabled: false,
+      awxCredentialId: '',
+      awxInventoryId: '',
+      awxInventoryName: 'CloudPortal',
+      awxGroupByEnvironment: true,
+      awxGroupByApmid: true,
+      awxJobTemplateId: '',
+      awxDiscovery: null,
+      awxDiscoveryError: '',
       cloudInitEnabled: true,
       installQemuGuestAgent: true,
       waitAgent: true,
@@ -323,6 +334,17 @@
     deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute);
     deployment.select_environment_on_execute = Boolean(state.selectEnvironmentOnExecute);
 
+    if (state.awxEnabled && state.awxCredentialId) {
+      deployment.awx = {
+        credential_id: Number(state.awxCredentialId),
+        inventory_id: state.awxInventoryId ? Number(state.awxInventoryId) : null,
+        inventory_name: String(state.awxInventoryName || 'CloudPortal').trim() || 'CloudPortal',
+        group_by_environment: Boolean(state.awxGroupByEnvironment),
+        group_by_apmid: Boolean(state.awxGroupByApmid),
+        job_template_id: state.awxJobTemplateId ? Number(state.awxJobTemplateId) : null,
+      };
+    }
+
     if (state.ansibleEnabled) {
       const runs = (state.ansibleRuns || []).length
         ? state.ansibleRuns
@@ -356,6 +378,7 @@
         || (state.guestAccountMode === 'existing_template' && state.guestCredentialId)
       ),
       ansible: state.ansibleEnabled,
+      awx: state.providerType === 'proxmox' && state.awxEnabled,
     });
     const selectedWorkflow = state.advancedWorkflow && state.workflow.length ? state.workflow : autoWorkflow;
     return {

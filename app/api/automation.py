@@ -149,7 +149,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
 
     proxmox_only_steps = {
         'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-        'run_ansible_playbook', 'create_snapshot', 'health_check',
+        'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
     }
     invalid_provider_steps = sorted(workflow_types & proxmox_only_steps) if provider.type != 'proxmox' else []
     if invalid_provider_steps:
@@ -159,6 +159,16 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         )
     if requested_ansible and provider.type != 'proxmox':
         raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
+    if data.deployment.awx:
+        awx_credential = find(db, Credential, data.deployment.awx.credential_id)
+        if awx_credential.type != 'awx':
+            raise HTTPException(422, 'Blueprint AWX onboarding requires an AWX credential')
+        if 'register_awx' not in workflow_types:
+            raise HTTPException(422, 'AWX onboarding configuration requires a register_awx workflow step')
+        if 'cloud_init' not in workflow_types:
+            raise HTTPException(422, 'AWX onboarding in this Blueprint requires an explicit cloud_init step')
+    elif 'register_awx' in workflow_types:
+        raise HTTPException(422, 'register_awx workflow step requires AWX onboarding configuration')
     if data.deployment.hostname_scheme_id:
         scheme = find(db, HostnameScheme, data.deployment.hostname_scheme_id)
         if not scheme.is_active:
@@ -342,7 +352,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             'Missing Blueprint workflow permissions: ' + ', '.join(sorted(missing_workflow_permissions)),
         )
     def create():
-        rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs = compile_blueprint(
+        rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs, awx = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
         )
         blueprint_variables = rendered.pop('blueprint_variables')
@@ -360,8 +370,14 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             credential_ids.add(guest_credential_id)
         if template_guest_credential_id:
             credential_ids.add(template_guest_credential_id)
+        if awx:
+            credential_ids.add(awx.credential_id)
         for credential_id in sorted(credential_ids):
             locked_credential(db, credential_id)
+        if awx:
+            awx_credential = locked_credential(db, awx.credential_id)
+            if awx_credential.type != 'awx':
+                raise HTTPException(422, 'AWX onboarding requires an AWX credential')
         configured_ansible = ansible_runs or ([parsed.ansible] if parsed.ansible else [])
         if configured_ansible:
             if provider.type != 'proxmox':
@@ -374,11 +390,13 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                 credentials_id=parsed.credentials_id, variables=parsed.variables,
                                 workflow={'ansible': primary_ansible.model_dump() if primary_ansible else None,
                                           'ansible_runs': [run.model_dump() for run in configured_ansible],
+                                          'awx': awx.model_dump() if awx else None,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
                                                         'variables': blueprint_variables, 'steps': row.workflow,
                                                         'guest_credential_id': guest_credential_id,
                                                         'template_guest_credential_id': template_guest_credential_id,
                                                         'guest_account_mode': (row.deployment or {}).get('guest_account_mode', 'cloud_init_managed'),
+                                                        'awx': awx.model_dump() if awx else None,
                                                         'requires_approval': row.requires_approval,
                                                         'auto_approve_for_executors': row.auto_approve_for_executors,
                                                         'approval_timeout_hours': row.approval_timeout_hours,

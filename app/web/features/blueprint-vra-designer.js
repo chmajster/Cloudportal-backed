@@ -17,6 +17,7 @@
     ] },
     { group: 'Automatyzacja i sterowanie', items: [
       ['run_ansible_playbook', 'Ansible playbook', 'Konfiguracja po wdrożeniu'],
+      ['register_awx', 'AWX onboarding', 'Rejestracja hosta w AWX po Cloud-init'],
       ['condition', 'Condition', 'Warunek wykonania'],
       ['approval', 'Approval', 'Brama akceptacji'],
       ['delay', 'Delay', 'Opóźnienie'],
@@ -257,7 +258,7 @@
     }
     const proxmoxOnly = new Set([
       'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-      'run_ansible_playbook', 'create_snapshot', 'health_check',
+      'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
     ]);
     if (provider && provider.type !== 'proxmox') {
       const invalid = [...workflowTypes].filter(type => proxmoxOnly.has(type));

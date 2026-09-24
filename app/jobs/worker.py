@@ -16,6 +16,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
+from app.awx import AwxClient, AwxError
 from app.config import settings
 from app.database import session
 from app.instance_operation import normal_instance_operation
@@ -204,6 +205,14 @@ def validate_authorization(db, job):
                 db, 'credential', template_guest_credential_id, scope
             ):
                 raise ExecutionFailed('Template VM credential access has been revoked')
+            awx_config = blueprint.get('awx') or {}
+            if not awx_config and target is not None:
+                awx_config = ((target.workflow or {}).get('awx') or {})
+            awx_credential_id = awx_config.get('credential_id') if isinstance(awx_config, dict) else None
+            if awx_credential_id and not reference_visible(
+                db, 'credential', awx_credential_id, scope
+            ):
+                raise ExecutionFailed('AWX credential access has been revoked')
     except HTTPException:
         raise ExecutionFailed('Job project authorization has been revoked') from None
     needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
@@ -608,7 +617,7 @@ BLUEPRINT_DECLARATIVE_STEPS = {
 BLUEPRINT_PRECOMPILED_STEPS = {'generate_hostname', 'allocate_ip'}
 BLUEPRINT_POST_APPLY_STEPS = {
     'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-    'run_ansible_playbook', 'create_snapshot', 'health_check',
+    'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
 }
 BLUEPRINT_SUPPORTED_STEPS = (
     BLUEPRINT_DECLARATIVE_STEPS
@@ -672,6 +681,82 @@ def blueprint_runtime_facts(context):
             blueprint_variables.get('apmid'),
         ),
     }
+
+
+def register_awx_host(context, runtime, workspace, *, timeout=600):
+    blueprint = (context.job.payload or {}).get('blueprint') or {}
+    config = blueprint.get('awx') or {}
+    if not config:
+        config = ((context.deployment.workflow or {}).get('awx') or {})
+    if not isinstance(config, dict) or not config.get('credential_id'):
+        raise ExecutionFailed('AWX onboarding configuration is missing')
+
+    credential_id = int(config['credential_id'])
+    with session() as db:
+        credential = db.get(Credential, credential_id)
+        if credential is None:
+            raise ExecutionFailed('AWX credential disappeared before workflow execution')
+        if credential.type != 'awx':
+            raise ExecutionFailed('AWX onboarding requires an AWX credential')
+        if credential.expires_at is not None and credential.expires_at <= now():
+            raise ExecutionFailed('AWX credential expired before workflow execution')
+        secret = decrypt_secret(credential)
+        endpoint = credential.endpoint
+        username = credential.username
+        verify_ssl = credential.verify_ssl
+
+    addresses = list(runtime.get('addresses') or [])
+    if not addresses:
+        addresses = wait_for_ip(context, workspace, timeout=timeout)
+    if not addresses:
+        raise ExecutionFailed('AWX onboarding requires a discovered VM address')
+    address = next((value for value in addresses if ':' not in value), addresses[0])
+
+    facts = blueprint_runtime_facts(context)
+    client = AwxClient(
+        endpoint,
+        verify_ssl=verify_ssl,
+        token=secret.get('token'),
+        username=username,
+        password=secret.get('password'),
+        timeout=min(max(float(timeout), 5.0), 60.0),
+    )
+    context.check()
+    try:
+        result = client.register_host(
+            hostname=context.deployment.name,
+            ansible_host=address,
+            deployment_id=context.deployment.id,
+            environment=facts.get('environment'),
+            apmid=facts.get('apmid'),
+            inventory_id=config.get('inventory_id'),
+            inventory_name=str(config.get('inventory_name') or 'CloudPortal'),
+            group_by_environment=bool(config.get('group_by_environment', True)),
+            group_by_apmid=bool(config.get('group_by_apmid', True)),
+        )
+        job_template_id = config.get('job_template_id')
+        launch = None
+        if job_template_id:
+            launch = client.launch_job_template(
+                int(job_template_id),
+                hostname=context.deployment.name,
+                deployment_id=context.deployment.id,
+            )
+    except AwxError as exc:
+        raise ExecutionFailed('AWX onboarding failed: ' + str(exc)[:350]) from None
+    context.check()
+    context.log(
+        'workflow.awx.registered: '
+        f"inventory={result['inventory_id']} host={result['host_id']} "
+        f"groups={','.join(result.get('groups') or []) or '-'}"
+    )
+    if job_template_id:
+        context.log(
+            'workflow.awx.job.launched: '
+            f"template={int(job_template_id)} job={launch.get('job') or launch.get('id') or 'unknown'}"
+        )
+    runtime['addresses'] = addresses
+    return result
 
 
 def blueprint_conditions_match(step, context):
@@ -1618,6 +1703,13 @@ def run_blueprint_workflow(context, executor):
                         workspace_for(step_type),
                         timeout=timeout,
                         addresses=runtime['addresses'],
+                    )
+                elif step_type == 'register_awx':
+                    register_awx_host(
+                        context,
+                        runtime,
+                        workspace_for(step_type),
+                        timeout=timeout,
                     )
                 elif step_type == 'create_snapshot':
                     create_blueprint_snapshot(context, workspace_for(step_type), step)

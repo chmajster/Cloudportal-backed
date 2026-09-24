@@ -59,6 +59,8 @@ function jobStageInfo(item) {
     'workflow.wait_for_vm': 'Oczekiwanie na VM',
     'workflow.wait_for_agent': 'Oczekiwanie na QEMU Guest Agent',
     'workflow.wait_for_ip': 'Oczekiwanie na adres IP',
+    'workflow.awx.registered': 'Rejestracja hosta w AWX',
+    'workflow.awx.job.launched': 'Uruchamianie Job Template AWX',
     'workflow.qemu_guest_agent.bootstrap': 'Instalacja QEMU Guest Agent',
     'workflow.guest_credential.bootstrap': 'Konfiguracja konta systemowego VM',
     'workflow.completed': 'Workflow zakończony',
