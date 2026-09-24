@@ -29,6 +29,8 @@ def test_installer_has_preflight_status_help_and_uninstall_modes():
     assert 'Połączenie HTTPS z api.github.com' in INSTALLER
     assert 'Wolne miejsce:' in INSTALLER
     assert '--status) status_mode=1' in INSTALLER
+    assert '--recovery-admin|--recovery-password) recovery_mode=1' in INSTALLER
+    assert '--recovery-password-file' in INSTALLER
     assert '--no-auto-repair) docker_auto_repair=0; docker_auto_repair_explicit=1' in INSTALLER
     assert '--uninstall) uninstall_mode=1' in INSTALLER
     assert '--force-uninstall) uninstall_mode=1; assume_yes=1' in INSTALLER
@@ -49,7 +51,9 @@ def test_installer_without_arguments_opens_action_menu():
     assert 'Odinstaluj całkowicie — usuń bazę i dane' in INSTALLER
     assert 'Odinstaluj Docker — zachowaj wolumeny i konfigurację' in INSTALLER
     assert 'Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację' in INSTALLER
-    assert "Wybierz operację [0-8]:" in INSTALLER
+    assert 'Recovery password / konto Administrator — systemd' in INSTALLER
+    assert 'Recovery password / konto Administrator — Docker' in INSTALLER
+    assert "Wybierz operację [0-10]:" in INSTALLER
 
 
 def test_installer_without_arguments_requires_tty_in_automation():
@@ -78,6 +82,17 @@ def test_docker_key_validation_starts_postgres_without_running_migrations_first(
     assert 'exec -T postgres pg_isready -U cloudportal -d cloudportal' in INSTALLER
     assert 'run --rm --no-deps -T bootstrap python -m app.bootstrap --key-only' in INSTALLER
     assert 'bez uruchamiania migracji' in INSTALLER
+
+
+def test_recovery_admin_uses_stdin_for_password_and_supports_both_runtimes():
+    assert 'recovery_prepare_inputs()' in INSTALLER
+    assert 'docker_recovery_admin()' in INSTALLER
+    assert 'native_recovery_admin()' in INSTALLER
+    assert 'python -m app.recovery --username "$recovery_username" --password-stdin' in INSTALLER
+    assert '-m app.recovery --username "$recovery_username" --password-stdin' in INSTALLER
+    assert 'run --rm --no-deps -T bootstrap' in INSTALLER
+    assert 'Tryb --non-interactive recovery wymaga --recovery-password-file FILE.' in INSTALLER
+    assert '--password "$recovery_password"' not in INSTALLER
 
 
 def test_docker_status_validates_every_required_service_and_health():
@@ -153,6 +168,8 @@ def test_help_is_plain_text_without_ansi_sequences():
     assert '--status' in result.stdout
     assert '--no-auto-repair' in result.stdout
     assert '--uninstall' in result.stdout
+    assert '--recovery-admin' in result.stdout
+    assert '--recovery-password-file' in result.stdout
     assert '--non-interactive' in result.stdout
     assert '--yes, -y' in result.stdout
     assert 'Bez parametrów instalator uruchamia interaktywne menu wyboru operacji.' in result.stdout
