@@ -390,12 +390,21 @@ class TerraformExecutor(Executor):
                     # Native media contains a password hash; never place the
                     # cleartext password in Terraform env, tfvars, or state.
                     guest_password = None
-                # Code is root-owned and approved; keep an existing provider lock on updates.
+                # Mirror the approved template source into the persistent workspace.
+                # Leaving removed *.tf files behind can silently keep obsolete
+                # resources/providers in later plans.
+                source_tf_names = {path.name for path in source.glob('*.tf')}
+                for stale in workspace.glob('*.tf'):
+                    if stale.name not in source_tf_names:
+                        stale.unlink()
                 for path in source.glob('*.tf'):
                     shutil.copyfile(path, workspace / path.name)
                 lock_source = source / '.terraform.lock.hcl'
-                if lock_source.exists() and not (workspace / '.terraform.lock.hcl').exists():
-                    shutil.copyfile(lock_source, workspace / '.terraform.lock.hcl')
+                workspace_lockfile = workspace / '.terraform.lock.hcl'
+                if lock_source.exists():
+                    shutil.copyfile(lock_source, workspace_lockfile)
+                else:
+                    workspace_lockfile.unlink(missing_ok=True)
                 variables_path = workspace / 'terraform.tfvars.json'
                 variables_path.write_text(json.dumps(runtime_variables))
                 os.chmod(variables_path, 0o600)
