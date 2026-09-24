@@ -7,10 +7,11 @@ from rq import Queue, Worker
 from rq.job import Job as RQJob
 from rq.exceptions import NoSuchJobError
 from rq.serializers import JSONSerializer
-from sqlalchemy import select, update
+from sqlalchemy import func, select, text, update
 from app.config import settings
 from app.database import session
 from app.events.service import dispatch_event_broker_once
+from app.jobs.settings import job_execution_settings
 from app.inventory_sync import repair_inventory_from_states
 from app.instance_operation import normal_instance_operation
 from app.jobs.approval import approval_policy_for_job
@@ -46,6 +47,28 @@ def provider_retry_ready(job):
 
 
 CANCELLATION_GRACE_SECONDS = 60
+DISPATCH_CAPACITY_LOCK_KEY = 4850454325908757588
+
+
+def acquire_dispatch_capacity_lock(db):
+    # Serialize the capacity calculation + RQ enqueue batch across dispatcher
+    # processes. The PostgreSQL transaction-scoped advisory lock is released
+    # automatically by the commit at the end of this dispatch cycle.
+    if db.get_bind().dialect.name == 'postgresql':
+        db.execute(
+            text('SELECT pg_advisory_xact_lock(:lock_key)'),
+            {'lock_key': DISPATCH_CAPACITY_LOCK_KEY},
+        )
+
+
+def parallel_dispatch_capacity(db, active_rq_jobs=0):
+    parallel_limit = job_execution_settings(db)['max_parallel_jobs']
+    running_jobs = db.scalar(
+        select(func.count()).select_from(Job).where(
+            Job.status.in_(['running', 'cancelling'])
+        )
+    ) or 0
+    return max(0, parallel_limit - int(running_jobs) - int(active_rq_jobs))
 
 
 def reconcile_cancelled_jobs(db):
@@ -269,23 +292,44 @@ def _dispatch_once_unfenced():
     materialize_scheduled_jobs()
     q = queue()
     with session() as db:
+        acquire_dispatch_capacity_lock(db)
         expire_waiting_approvals(db)
-        jobs = db.scalars(select(Job).where(Job.status == 'queued', Job.cancel_requested.is_(False))
-                          .with_for_update(skip_locked=True).limit(100)).all()
+        jobs = db.scalars(
+            select(Job)
+            .where(Job.status == 'queued', Job.cancel_requested.is_(False))
+            .order_by(Job.created_at.asc())
+            .with_for_update(skip_locked=True)
+            .limit(100)
+        ).all()
+
+        # A job already present in RQ reserves one concurrency slot even while
+        # its PostgreSQL status is still "queued". Without this reservation a
+        # fast dispatcher loop could enqueue another batch before workers have
+        # time to atomically claim the first one.
+        active_rq_jobs = set()
         for job in jobs:
-            if not provider_retry_ready(job):
-                continue
             try:
                 existing = RQJob.fetch(job.id, connection=redis_client(), serializer=JSONSerializer)
                 if existing.get_status(refresh=True) in {'queued', 'started', 'deferred', 'scheduled'}:
+                    active_rq_jobs.add(job.id)
                     continue
                 existing.delete()
+                job.dispatched_at = None
             except NoSuchJobError:
-                pass
+                job.dispatched_at = None
+
+        available_slots = parallel_dispatch_capacity(db, len(active_rq_jobs))
+
+        for job in jobs:
+            if available_slots <= 0:
+                break
+            if job.id in active_rq_jobs or not provider_retry_ready(job):
+                continue
             worker_target = 'app.day2.worker.execute' if job.operation.startswith('day2.') else 'app.jobs.worker.execute'
             q.enqueue(worker_target, job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)
             job.dispatched_at = now()
+            available_slots -= 1
         reconcile_cancelled_jobs(db)
         reconcile_deployment_job_statuses(db)
         reconcile_persisted_inventory(db)
