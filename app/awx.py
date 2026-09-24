@@ -12,6 +12,7 @@ No AWX secret is ever embedded in Terraform state or cloud-init user-data.
 from __future__ import annotations
 
 import json
+import yaml
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -294,11 +295,21 @@ class AwxClient:
             'hosts',
             params={'inventory': int(inventory_id), 'name': hostname},
         )
+        merged_variables = dict(variables)
+        if existing:
+            raw_existing = existing[0].get('variables')
+            if isinstance(raw_existing, str) and raw_existing.strip():
+                try:
+                    parsed = yaml.safe_load(raw_existing)
+                except yaml.YAMLError:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    merged_variables = {**parsed, **variables}
         payload = {
             'name': hostname,
             'description': 'Managed automatically by CloudPortal',
             'enabled': True,
-            'variables': json.dumps(variables, sort_keys=True),
+            'variables': json.dumps(merged_variables, sort_keys=True),
         }
         if existing:
             host_id = int(existing[0]['id'])
