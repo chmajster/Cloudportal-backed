@@ -75,7 +75,7 @@ console.log(JSON.stringify({
 def test_classic_workflow_ui_normalizes_dependency_input():
     result = run_workflow_ui("""
 console.log(JSON.stringify(
-  workflow.splitReferences(' apply, prepare\napply ,, finish ')
+  workflow.splitReferences(' apply, prepare\\napply ,, finish ')
 ));
 """)
     assert result == ['apply', 'prepare', 'finish']
