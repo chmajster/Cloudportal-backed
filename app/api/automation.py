@@ -1,12 +1,13 @@
 import re
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
 from app.catalog_control import require_catalog_item_enabled
-from app.api.outputs import (BlueprintOutput, CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
-                             HostnameReservationOutput, HostnameSchemeOutput, Items, VMClassificationSettingsOutput)
+from app.api.outputs import (BlueprintCreationScopeOutput, BlueprintOutput, CreatedDeploymentOutput, DeletedOutput,
+                             GeneratedHostnameOutput, HostnameReservationOutput, HostnameSchemeOutput, Items,
+                             VMClassificationSettingsOutput)
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
                              HostnameGenerateInput, HostnameSchemeInput)
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
@@ -16,7 +17,11 @@ from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
-from app.security.core import audit
+from app.projects.authorization import visible_projects
+from app.projects.models import Project
+from app.security.core import audit, authenticate
+from app.tenancy.authorization import Principal, identity as scoped_identity
+from app.tenancy.models import Tenant
 from app.resource_scope.http import require
 from app.vm_classification import vm_classification_settings
 
@@ -238,6 +243,45 @@ def blueprint_yaml_render(data: BlueprintInput, actor=Depends(require('blueprint
         'blueprint': data.model_dump(mode='json'),
         'yaml': dump_blueprint_yaml(data),
     }
+
+
+@router.get('/blueprints/creation-scopes', response_model=Items[BlueprintCreationScopeOutput])
+def blueprint_creation_scopes(limit: Limit = 200, offset: Offset = 0,
+                              actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    """Return only active organization/project scopes where this identity may create a Blueprint.
+
+    This endpoint intentionally does not require an already selected resource scope:
+    it is the trusted source for the scope picker itself. The built-in platform
+    Administrator sees every active project, while delegated users see only scopes
+    granted through tenant/project RBAC. API-token ceilings still apply.
+    """
+    identity = scoped_identity(db, Principal.from_token(actor))
+    if identity.platform_admin and 'blueprints.create' in identity.global_permissions:
+        predicate = Project.deleted_at.is_(None)
+    else:
+        predicate = visible_projects(identity, permission='blueprints.create')
+    rows = db.execute(
+        select(Project, Tenant)
+        .join(Tenant, Tenant.id == Project.tenant_id)
+        .where(
+            predicate,
+            Project.status == 'active',
+            Tenant.status == 'active',
+            Project.deleted_at.is_(None),
+            Tenant.deleted_at.is_(None),
+        )
+        .order_by(Tenant.name, Tenant.id, Project.name, Project.id)
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return {'items': [{
+        'tenant_id': tenant.id,
+        'tenant_name': tenant.name,
+        'tenant_slug': tenant.slug,
+        'project_id': project.id,
+        'project_name': project.name,
+        'project_slug': project.slug,
+    } for project, tenant in rows]}
 
 
 @router.get('/blueprints', response_model=Items[BlueprintOutput])
