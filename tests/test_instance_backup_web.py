@@ -14,8 +14,11 @@ def test_backup_ui_is_separate_autodiscovered_feature():
     assert "navigate('instance-backup')" in tools
     assert "Utwórz i pobierz backup" in feature
     assert "FormData" in feature
-    assert "URL.createObjectURL" in feature
-    assert "URL.revokeObjectURL" in feature
+    assert "download-ticket" in feature
+    assert "download-browser" in feature
+    assert "form.submit()" in feature
+    assert "response.blob()" not in feature
+    assert "URL.createObjectURL" not in feature
     assert "RESTORE" in feature
     assert "instance-backup.js" not in index
     assert "instance-backup" not in core

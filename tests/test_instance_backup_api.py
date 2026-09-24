@@ -78,6 +78,32 @@ def test_download_streams_cpb_with_secure_headers(system, tmp_path):
     assert response.content == path.read_bytes()
 
 
+def test_browser_download_uses_one_time_ticket(system, tmp_path):
+    client, headers, _ = system
+    backup_id, path, digest = make_ready_backup(tmp_path)
+
+    issued = client.post(
+        f"/api/v1/instance-backups/{backup_id}/download-ticket",
+        headers=headers,
+    )
+    assert issued.status_code == 200, issued.text
+    ticket = issued.json()["ticket"]
+
+    downloaded = client.post(
+        f"/api/v1/instance-backups/{backup_id}/download-browser",
+        data={"ticket": ticket},
+    )
+    assert downloaded.status_code == 200, downloaded.text
+    assert hashlib.sha256(downloaded.content).hexdigest() == digest
+    assert downloaded.content == path.read_bytes()
+
+    repeated = client.post(
+        f"/api/v1/instance-backups/{backup_id}/download-browser",
+        data={"ticket": ticket},
+    )
+    assert repeated.status_code == 410
+
+
 def test_download_permission_missing_and_incomplete_states(system, tmp_path):
     client, headers, _ = system
     backup_id, _, _ = make_ready_backup(tmp_path)

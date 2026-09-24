@@ -139,7 +139,15 @@ def reconcile_deployment_job_statuses(db):
 
         deployment.active_job_id = None
         if job.operation == 'terraform.plan':
-            deployment.status = (job.payload or {}).get('previous_status', deployment.status or 'failed')
+            previous_status = (job.payload or {}).get(
+                'previous_status',
+                deployment.status or 'failed',
+            )
+            deployment.status = (
+                'successful'
+                if previous_status == 'reconciliation_required' and job.status == 'successful'
+                else previous_status
+            )
         elif job.status != 'successful':
             deployment.status = job.status
         elif job.operation == 'terraform.destroy':

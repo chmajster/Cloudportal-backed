@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import secrets
 import shutil
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse
 from python_multipart.multipart import MultipartParser, parse_options_header
 from sqlalchemy import select
@@ -13,7 +16,7 @@ from app.config import settings
 from app.database import get_db
 from app.instance_backup.archive import sha256_file
 from app.instance_backup.models import InstanceBackup
-from app.instance_backup.paths import sanitize_filename, secure_open_new, staging_dir
+from app.instance_backup.paths import root_dir, sanitize_filename, secure_open_new, staging_dir
 from app.instance_backup.restore import (
     enqueue_restore,
     read_restore_status,
@@ -34,13 +37,43 @@ from app.instance_backup.service import (
     verify_record,
 )
 from app.instance_backup.validation import validate_uploaded_backup
-from app.security.core import audit, require
+from app.security.core import audit, digest, redis_client, require
 
 router = APIRouter(prefix="/instance-backups", tags=["instance-backups"])
 
 
 class UploadTooLarge(Exception):
     pass
+
+
+DOWNLOAD_TICKET_TTL_SECONDS = 60
+
+
+def _download_ticket_key(ticket: str) -> str:
+    return "cp:instance-backup:download:" + digest(ticket)
+
+
+def _consume_download_ticket(ticket: str) -> dict:
+    if not ticket or len(ticket) > 256:
+        raise HTTPException(410, "Download ticket is invalid or expired")
+    try:
+        raw = redis_client().eval(
+            "local v=redis.call('GET',KEYS[1]); "
+            "if v then redis.call('DEL',KEYS[1]) end; return v",
+            1,
+            _download_ticket_key(ticket),
+        )
+    except Exception:
+        raise HTTPException(503, "Download ticket store is unavailable") from None
+    if not raw:
+        raise HTTPException(410, "Download ticket is invalid or expired")
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        raise HTTPException(410, "Download ticket is invalid or expired") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(410, "Download ticket is invalid or expired")
+    return payload
 
 
 async def _stream_multipart_upload(request: Request, destination):
@@ -382,6 +415,95 @@ def verify_backup(
         "sha256": verified["sha256"],
         "format_version": verified["manifest"].get("format_version"),
     }
+
+
+@router.post("/{backup_id}/download-ticket")
+def create_download_ticket(
+    backup_id: int,
+    request: Request,
+    actor=Depends(require("instance_backups.download")),
+    db=Depends(get_db, scope="function"),
+):
+    row = _get_backup(db, backup_id)
+    state = public_status(row)
+    if not state["download_ready"]:
+        status = 410 if state["status"] == "expired" else 409
+        raise HTTPException(status, "Backup is not ready for download")
+
+    candidate = Path(row.file_path).resolve(strict=False)
+    managed_root = root_dir().resolve()
+    if not candidate.is_relative_to(managed_root) or not candidate.is_file():
+        raise HTTPException(404, "Backup file is missing on this API host")
+
+    ticket = secrets.token_urlsafe(32)
+    payload = json.dumps({
+        "backup_id": row.id,
+        "user_id": actor.user_id,
+        "token_id": actor.id,
+        "source": getattr(request.state, "source", "Cloudportal-backed"),
+    }, separators=(",", ":"))
+    try:
+        stored = redis_client().set(
+            _download_ticket_key(ticket),
+            payload,
+            ex=DOWNLOAD_TICKET_TTL_SECONDS,
+            nx=True,
+        )
+    except Exception:
+        raise HTTPException(503, "Download ticket store is unavailable") from None
+    if not stored:
+        raise HTTPException(503, "Could not create download ticket")
+
+    return {
+        "ticket": ticket,
+        "expires_in": DOWNLOAD_TICKET_TTL_SECONDS,
+    }
+
+
+@router.post("/{backup_id}/download-browser")
+def download_backup_browser(
+    backup_id: int,
+    request: Request,
+    ticket: str = Form(...),
+    db=Depends(get_db, scope="function"),
+):
+    payload = _consume_download_ticket(ticket)
+    try:
+        ticket_backup_id = int(payload.get("backup_id"))
+        ticket_user_id = int(payload.get("user_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(410, "Download ticket is invalid or expired") from None
+    if ticket_backup_id != backup_id:
+        raise HTTPException(410, "Download ticket is invalid or expired")
+
+    row = _get_backup(db, backup_id)
+    try:
+        verified = verify_record(row)
+    except FileNotFoundError:
+        raise HTTPException(404, "Backup file is missing") from None
+    except Exception as exc:
+        message = str(exc)
+        status = 410 if "expired" in message.lower() else 409
+        raise HTTPException(status, message[:500]) from None
+
+    request.state.source = str(payload.get("source") or "Cloudportal-backed")[:32]
+    audit(
+        db,
+        request,
+        "instance_backup.downloaded",
+        "instance_backups",
+        row.id,
+        user_id=ticket_user_id,
+    )
+    return FileResponse(
+        verified["path"],
+        media_type="application/octet-stream",
+        filename=sanitize_filename(row.filename),
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/{backup_id}/download")

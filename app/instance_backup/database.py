@@ -99,8 +99,24 @@ def dump_database(destination: Path) -> None:
             raise RuntimeError("PostgreSQL backup timed out") from exc
 
 
-def restore_database(dump: Path) -> None:
+def _reset_public_schema() -> None:
+    # pg_restore --clean drops only objects present in the archive. A migration
+    # from an older release would otherwise leave newer target-only tables in
+    # place and fail when Alembic tries to create them again.
     engine().dispose()
+    connection = engine().connect().execution_options(isolation_level="AUTOCOMMIT")
+    try:
+        if connection.dialect.name != "postgresql":
+            raise RuntimeError("Instance backup and restore require PostgreSQL")
+        connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+        connection.execute(text("CREATE SCHEMA public AUTHORIZATION CURRENT_USER"))
+    finally:
+        connection.close()
+        engine().dispose()
+
+
+def restore_database(dump: Path) -> None:
+    _reset_public_schema()
     command, process_env = _postgres_command("pg_restore", dump=dump)
     try:
         subprocess.run(command, env=process_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=3600)

@@ -101,8 +101,10 @@ function managedVmCard(item, providerNames, deploymentById, onSelectionChange = 
   if (canConsole) {
     actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
   }
+  const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   const canRecreate = item.management_mode === 'terraform'
     && item.deployment_id
+    && deployment?.status !== 'reconciliation_required'
     && hasCommand('inventory.recreateVm')
     && allowed('deployments.destroy')
     && allowed('deployments.create')
@@ -111,7 +113,6 @@ function managedVmCard(item, providerNames, deploymentById, onSelectionChange = 
   if (canRecreate) {
     actions.push(button('Odtwórz od zera', () => runCommand('inventory.recreateVm', item), 'danger'));
   }
-  const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   if (deployment) actions.push(button('Wdrożenie', () => showDeploymentDetails(deployment), 'ghost'));
 
   const card = node('article', {
@@ -300,6 +301,7 @@ async function myResourcesView(repairInventory = true) {
 
 function deploymentActions(item, returnTo = 'my-resources') {
   const actions = [button('Szczegóły', () => showDeploymentDetails(item))];
+  const reconciliationRequired = item.status === 'reconciliation_required';
   if (item.status === 'waiting_approval' && item.active_job_id && allowed('blueprints.approve')) {
     actions.push(button('Zatwierdź i uruchom', async () => {
       await api('/jobs/' + item.active_job_id + '/approve', { method: 'POST' });
@@ -319,10 +321,19 @@ function deploymentActions(item, returnTo = 'my-resources') {
     ), 'danger'));
   }
   if (allowed('jobs.execute') && allowed('terraform.execute') && !item.active_job_id && item.status !== 'destroyed') {
-    actions.push(button('Plan', () => createTerraformJob(item, 'terraform.plan')));
-    actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
+    actions.push(button(
+      reconciliationRequired ? 'Plan reconciliacyjny' : 'Plan',
+      () => createTerraformJob(item, 'terraform.plan'),
+      reconciliationRequired ? 'primary' : undefined,
+    ));
+    if (!reconciliationRequired) {
+      actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
+    }
   }
-  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id && item.status !== 'destroyed') actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate(returnTo); }), 'danger'));
+  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id
+      && item.status !== 'destroyed' && !reconciliationRequired) {
+    actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate(returnTo); }), 'danger'));
+  }
   return actions;
 }
 

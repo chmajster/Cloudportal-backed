@@ -89,22 +89,29 @@ async function responseError(response) {
   throw new ApiError(response.status, data);
 }
 
-async function downloadBackup(id, filename) {
-  const response = await authenticatedFetch('/instance-backups/' + id + '/download');
+async function downloadBackup(id) {
+  const response = await authenticatedFetch('/instance-backups/' + id + '/download-ticket', {
+    method: 'POST',
+  });
   if (!response.ok) return responseError(response);
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  try {
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename || 'cloudportal-backup.cpb';
-    anchor.hidden = true;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  const payload = await response.json();
+  if (!payload.ticket) throw new Error('Backend nie zwrócił biletu pobierania.');
+
+  // Native form download streams the response directly to the browser download
+  // manager. The one-time ticket stays in the POST body instead of a URL and
+  // avoids materializing multi-gigabyte archives as JavaScript Blobs.
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = API + '/instance-backups/' + id + '/download-browser';
+  form.hidden = true;
+  const input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = 'ticket';
+  input.value = payload.ticket;
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+  setTimeout(() => form.remove(), 0);
 }
 
 function progressPanel(item, onManualDownload) {

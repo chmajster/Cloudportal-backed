@@ -1728,7 +1728,18 @@ def _execute_unfenced(job_id):
             if owns_deployment:
                 deployment.active_job_id = None
                 if current.operation == 'terraform.plan':
-                    deployment.status = current.payload.get('previous_status', deployment.status or 'failed')
+                    previous_status = (current.payload or {}).get(
+                        'previous_status',
+                        deployment.status or 'failed',
+                    )
+                    if previous_status == 'reconciliation_required' and status == 'successful':
+                        deployment.status = 'successful'
+                        db.add(JobLog(
+                            job_id=current.id,
+                            message='restore.reconciliation.completed: successful terraform.plan',
+                        ))
+                    else:
+                        deployment.status = previous_status
                 elif context.rollback_destroyed:
                     deployment.status = 'destroyed'
                 else:

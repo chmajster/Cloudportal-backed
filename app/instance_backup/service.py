@@ -9,20 +9,18 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from rq import Queue
-from rq.serializers import JSONSerializer
 from sqlalchemy import select
 
 from app.config import settings
 from app.database import session
 from app.instance_backup.archive import build_archive, inspect_archive, sha256_file
+from app.instance_backup.background import submit_local
 from app.instance_backup.config import DOWNLOADABLE_STATUSES, STAGE_LABELS, STAGE_PROGRESS
 from app.instance_backup.crypto import collect_secret_material, secret_descriptor
 from app.instance_backup.database import current_alembic_revision, database_counts, dump_database
 from app.instance_backup.models import InstanceBackup, utcnow
 from app.instance_backup.paths import generated_dir, root_dir, staging_dir, uploaded_dir
 from app.instance_operation import exclusive_instance_operation
-from app.security.core import redis_client
 from app.version import build_commit, build_version
 
 
@@ -303,15 +301,7 @@ def build_backup_job(backup_id: int) -> None:
 
 
 def enqueue_backup(backup_id: int) -> None:
-    queue = Queue("cloudportal", connection=redis_client(), serializer=JSONSerializer)
-    queue.enqueue(
-        "app.instance_backup.service.build_backup_job",
-        backup_id,
-        job_id=f"instance-backup:{backup_id}:{uuid.uuid4()}",
-        job_timeout=max(settings().execution_timeout, 7200),
-        result_ttl=86400,
-        failure_ttl=86400,
-    )
+    submit_local(build_backup_job, backup_id)
 
 
 def verify_record(row: InstanceBackup) -> dict:
@@ -421,7 +411,12 @@ def cleanup_expired_backups(limit: int = 100) -> int:
         for row in rows:
             try:
                 path = _safe_record_path(row.file_path)
-                path.unlink(missing_ok=True)
+                if not path.is_file():
+                    # In a separate-host worker topology the archive belongs to
+                    # the API host. Never expire a record merely because this
+                    # worker has no corresponding local file.
+                    continue
+                path.unlink()
             except Exception:
                 continue
             row.file_path = None

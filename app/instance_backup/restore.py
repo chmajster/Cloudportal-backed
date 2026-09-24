@@ -9,14 +9,13 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from rq import Queue
-from rq.serializers import JSONSerializer
 from sqlalchemy import delete, select, text
 
 from app.config import settings
 from app.day2.models import Day2ActionRequest
 from app.database import engine, session
 from app.instance_backup.archive import extract_archive, sha256_file
+from app.instance_backup.background import submit_local
 from app.instance_backup.crypto import (
     install_local_key,
     restore_previous_local_key,
@@ -585,15 +584,10 @@ def enqueue_restore(
     safety_backup: bool,
     actor_token_id: int | None = None,
 ) -> None:
-    queue = Queue("cloudportal", connection=redis_client(), serializer=JSONSerializer)
-    queue.enqueue(
-        "app.instance_backup.restore.execute_restore",
+    submit_local(
+        execute_restore,
         backup_id,
         restore_uuid,
         safety_backup,
         actor_token_id,
-        job_id=f"instance-restore:{restore_uuid}",
-        job_timeout=max(settings().execution_timeout, 7200),
-        result_ttl=86400,
-        failure_ttl=86400,
     )
