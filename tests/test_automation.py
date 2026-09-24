@@ -1039,3 +1039,57 @@ def test_blueprint_approval_step_must_be_between_plan_and_apply(client, headers)
     })
     assert approval_before_plan.status_code == 422
     assert 'terraform_plan must be an ancestor of approval' in approval_before_plan.text
+
+
+def test_blueprint_template_guest_credential_is_reused_without_rewriting_cloud_init_user(
+    client, headers, monkeypatch
+):
+    provider_credential, provider, deployment_payload = resources(client, headers)
+    template_account = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Template local account',
+        'type': 'ssh',
+        'endpoint': 'ssh://vm.example.com:22',
+        'username': 'templateadmin',
+        'secrets': {'password': 'template-account-password-1234'},
+    })
+    assert template_account.status_code == 201, template_account.text
+
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'existing-template-account',
+        'name': 'Existing template account',
+        'deployment': {
+            'name': 'existing-template-account',
+            'provider_id': provider['id'],
+            'credentials_id': provider_credential['id'],
+            'template_guest_credential_id': template_account.json()['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'existing-template-account',
+                'ssh_username': 'clouduser',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+    assert created.json()['deployment']['template_guest_credential_id'] == template_account.json()['id']
+
+    monkeypatch.setattr(
+        'app.api.automation.provider_for',
+        lambda credential: type('Provider', (), {'ssh_preflight': lambda self: {'ok': True}})(),
+    )
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['variables']['ssh_username'] == 'clouduser'
+    assert execution.json()['workflow']['blueprint']['template_guest_credential_id'] == template_account.json()['id']
+    assert execution.json()['workflow']['blueprint']['guest_credential_id'] is None
+
+    protected = client.delete(
+        f"/api/v1/credentials/{template_account.json()['id']}",
+        headers=headers,
+    )
+    assert protected.status_code == 409
