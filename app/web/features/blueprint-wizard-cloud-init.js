@@ -194,6 +194,15 @@
       state.awxJobTemplateId = event.currentTarget.value;
     });
 
+    const removeOnDestroy = checkboxField(
+      'Usuń host z AWX po usunięciu VM',
+      'awx_remove_on_destroy',
+      state.awxRemoveOnDestroy !== false
+    );
+    removeOnDestroy.querySelector('input').addEventListener('change', event => {
+      state.awxRemoveOnDestroy = event.currentTarget.checked;
+    });
+
     panel.append(
       credential,
       state.awxDiscoveryError
@@ -212,7 +221,8 @@
       groupEnv,
       groupApmid,
       jobTemplate,
-      node('p', { class: 'muted', text: 'Po uzyskaniu adresu IP CloudPortal utworzy lub zaktualizuje host w AWX. Operacja jest idempotentna — ponowienie workflow aktualizuje ten sam host zamiast tworzyć duplikat.' })
+      removeOnDestroy,
+      node('p', { class: 'muted', text: 'Po uzyskaniu adresu IP CloudPortal utworzy lub zaktualizuje host w AWX. Operacja jest idempotentna — ponowienie workflow aktualizuje ten sam host zamiast tworzyć duplikat. Usuwanie hosta z AWX po terraform destroy jest best-effort i nie blokuje usunięcia VM, gdy AWX jest chwilowo niedostępny.' })
     );
     return panel;
   }
