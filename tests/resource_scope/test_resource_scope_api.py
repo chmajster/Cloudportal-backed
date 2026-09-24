@@ -112,6 +112,8 @@ def test_blueprint_creation_scopes_are_rbac_filtered_and_admin_sees_all(system):
     row = delegated.json()['items'][0]
     assert row['tenant_id'] == alpha['tenant_id']
     assert row['tenant_name'] and row['project_name']
+    assert 'blueprints.create' in row['permissions']
+    assert 'blueprints.read' in row['permissions']
 
     with session() as db:
         db.get(ProjectMembership, (alpha['id'], user['id'])).status = 'disabled'
