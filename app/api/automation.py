@@ -1,7 +1,7 @@
 import re
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition
 from app.catalog_control import require_catalog_item_enabled
