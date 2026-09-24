@@ -354,6 +354,7 @@
                 conditions,
               };
             });
+            state.awxEnabled = state.workflow.some(step => step.type === 'register_awx');
           }
         } else if (state.step === 7) {
           const ids = name => {
@@ -375,7 +376,10 @@
 
       function validateWorkflow() {
         const errors = {};
-        if (!state.advancedWorkflow) return errors;
+        if (!state.advancedWorkflow) {
+          Object.assign(errors, parts.cloudInit.validate(state));
+          return errors;
+        }
         if (!state.workflow.length) {
           errors.workflow = 'Workflow musi zawierać co najmniej jeden krok.';
           return errors;
@@ -978,12 +982,15 @@
           waitAgent: state.providerType === 'proxmox' && state.waitAgent,
           guestAccess: state.providerType === 'proxmox' && Boolean(state.templateGuestCredentialId),
           ansible: state.ansibleEnabled,
+          awx: state.providerType === 'proxmox' && state.awxEnabled,
+          awxRetry: state.awxRetry,
+          awxTimeout: state.awxTimeout,
         });
       }
 
       function workflowEditorRow(step, index) {
         const proxmoxOnly = new Set(['cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-          'run_ansible_playbook', 'create_snapshot', 'health_check']);
+          'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check']);
         const availableTypes = state.providerType === 'proxmox'
           ? parts.core.WORKFLOW_TYPES
           : parts.core.WORKFLOW_TYPES.filter(value => !proxmoxOnly.has(value));

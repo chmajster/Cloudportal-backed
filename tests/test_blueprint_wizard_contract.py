@@ -439,3 +439,65 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert result['deployment']['variables']['cloud_init_snippet_storage'] is None
     assert [step['type'] for step in result['workflow']] == ['cloud_init', 'terraform_apply']
 
+
+
+
+def test_wizard_payload_builds_automatic_awx_onboarding_after_cloud_init():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'AWX VM';
+state.slug = 'awx-vm';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = false;
+state.manualVmName = 'srv001';
+state.cloudInitEnabled = true;
+state.waitAgent = false;
+state.awxEnabled = true;
+state.awxCredentialId = '77';
+state.awxInventoryId = '12';
+state.awxInventoryName = 'Linux Servers';
+state.awxGroupByEnvironment = true;
+state.awxGroupByApmid = true;
+state.awxJobTemplateId = '33';
+state.environment = 'prod';
+state.apmid = 'LEO';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+
+console.log(JSON.stringify(core.buildPayload(state, data)));
+""")
+
+    assert result['deployment']['awx'] == {
+        'credential_id': 77,
+        'inventory_id': 12,
+        'inventory_name': 'Linux Servers',
+        'group_by_environment': True,
+        'group_by_apmid': True,
+        'job_template_id': 33,
+        'remove_on_destroy': True,
+    }
+    assert [step['type'] for step in result['workflow']] == [
+        'cloud_init',
+        'terraform_apply',
+        'wait_for_ip',
+        'register_awx',
+    ]
+    assert result['workflow'][-1]['depends_on'] == ['guest_ip']
+    assert result['workflow'][-1]['retry'] == 3
+    assert result['workflow'][-1]['timeout'] == 300

@@ -33,8 +33,8 @@ def save_secret(db, c, value):
             raise HTTPException(422, 'Secret is required')
         return
 
-    endpoint_types = {'proxmox', 'vmware', 'winrm', 'openstack'}
-    identity_types = {'proxmox', 'vmware', 'ssh', 'winrm', 'openstack'}
+    endpoint_types = {'proxmox', 'vmware', 'winrm', 'awx', 'openstack'}
+    identity_types = {'proxmox', 'vmware', 'ssh', 'winrm', 'awx', 'openstack'}
     if c.type in endpoint_types and not c.endpoint:
         raise HTTPException(422, 'This credential type requires an endpoint')
     if c.type in identity_types and not c.username:
@@ -56,6 +56,9 @@ def save_secret(db, c, value):
     elif c.type == 'winrm':
         if not value.get('password'):
             raise HTTPException(422, 'WinRM requires password')
+    elif c.type == 'awx':
+        if not (value.get('token') or value.get('password')):
+            raise HTTPException(422, 'AWX requires an OAuth token or password')
     elif c.type == 'aws':
         if not value.get('access_key_id') or not value.get('secret_access_key'):
             raise HTTPException(422, 'AWS requires access_key_id and secret_access_key')
@@ -94,6 +97,8 @@ def credential_in_use(db, id, *, pending_only=False):
         Deployment.workflow['ansible']['credentials_id'].as_integer() == id,
         Deployment.workflow['blueprint']['guest_credential_id'].as_integer() == id,
         Deployment.workflow['blueprint']['template_guest_credential_id'].as_integer() == id,
+        Deployment.workflow['awx']['credential_id'].as_integer() == id,
+        Deployment.workflow['blueprint']['awx']['credential_id'].as_integer() == id,
     ))
     if pending_only:
         deployments = deployments.where(Deployment.active_job_id.is_not(None))
@@ -106,6 +111,7 @@ def credential_in_use(db, id, *, pending_only=False):
             Job.payload['ansible']['credentials_id'].as_integer() == id,
             Job.payload['blueprint']['guest_credential_id'].as_integer() == id,
             Job.payload['blueprint']['template_guest_credential_id'].as_integer() == id,
+            Job.payload['blueprint']['awx']['credential_id'].as_integer() == id,
         ),
     )
     if db.scalar(deployments.limit(1)) or db.scalar(active_job_credential.limit(1)):
@@ -132,6 +138,7 @@ def credential_in_use(db, id, *, pending_only=False):
         Blueprint.deployment['guest_credential_id'].as_integer() == id,
         Blueprint.deployment['template_guest_credential_id'].as_integer() == id,
         Blueprint.deployment['ansible']['credentials_id'].as_integer() == id,
+        Blueprint.deployment['awx']['credential_id'].as_integer() == id,
     ))
     if db.scalar(blueprint_ref.limit(1)):
         return True

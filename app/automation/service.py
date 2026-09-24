@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
-from app.api.schemas import AnsibleInput
+from app.api.schemas import AnsibleInput, AwxOnboardingInput
 from app.catalog import validate_template_variables
 from app.credentials.ssh import public_key_from_private_key
 from app.ipam.service import allocate_address
@@ -194,6 +194,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     template_guest_credential_id = deployment.pop('template_guest_credential_id', None)
     guest_account_mode = deployment.pop('guest_account_mode', 'cloud_init_managed')
     ansible_runs_raw = deployment.pop('ansible_runs', []) or []
+    awx_raw = deployment.pop('awx', None)
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
@@ -329,6 +330,10 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         AnsibleInput.model_validate(item)
         for item in render_template(ansible_runs_raw, variables)
     ]
+    awx = (
+        AwxOnboardingInput.model_validate(render_template(awx_raw, variables))
+        if awx_raw else None
+    )
     rendered['blueprint_variables'] = variables
     return (
         rendered,
@@ -337,4 +342,5 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         (guest_credential['id'] if guest_credential else None),
         (template_guest_credential['id'] if template_guest_credential else None),
         ansible_runs,
+        awx,
     )

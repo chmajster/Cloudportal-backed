@@ -67,9 +67,10 @@ function blueprintWorkflow(options) {
   };
   add('apply', 'terraform_apply');
   if (options.waitAgent) add('agent', 'wait_for_agent');
-  if (options.waitAgent || options.ansible || options.guestAccess) add('guest_ip', 'wait_for_ip');
+  if (options.waitAgent || options.ansible || options.guestAccess || options.awx) add('guest_ip', 'wait_for_ip');
   if (options.guestAccess) add('guest_ssh', 'wait_for_ssh');
   if (options.ansible) add('ansible', 'run_ansible_playbook');
+  if (options.awx) add('awx', 'register_awx');
   return steps;
 }
 

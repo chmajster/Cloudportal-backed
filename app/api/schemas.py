@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationInfo, fie
 Name = Annotated[str, Field(min_length=1, max_length=100)]
 Password = Annotated[str, Field(min_length=12, max_length=256, json_schema_extra={'writeOnly': True})]
 Slug = Annotated[str, Field(pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$')]
-CredentialType = Literal['proxmox', 'vmware', 'ssh', 'winrm', 'aws', 'azure', 'openstack', 'other']
+CredentialType = Literal['proxmox', 'vmware', 'ssh', 'winrm', 'awx', 'aws', 'azure', 'openstack', 'other']
 
 
 class Input(BaseModel):
@@ -229,6 +229,12 @@ class CredentialInput(Input):
             if not self.endpoint.startswith('ssh://'):
                 raise ValueError('SSH credential endpoint must use ssh://')
             return self
+        if self.type == 'awx':
+            candidate = self.endpoint if '://' in self.endpoint else 'https://' + self.endpoint
+            parsed = urlsplit(candidate)
+            if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+                raise ValueError('AWX endpoint must use HTTP or HTTPS')
+            return self
         parsed = urlsplit(self.endpoint)
         if parsed.scheme != 'https' or not parsed.hostname:
             raise ValueError('This credential type requires an HTTPS endpoint')
@@ -239,7 +245,7 @@ class CredentialInput(Input):
     def keys_valid(cls, value):
         allowed = {'password', 'token_id', 'token_secret', 'private_key', 'known_hosts', 'access_key_id',
                    'secret_access_key', 'session_token', 'tenant_id', 'client_id', 'client_secret',
-                   'subscription_id', 'project_name', 'domain_name', 'secret'}
+                   'subscription_id', 'project_name', 'domain_name', 'token', 'secret'}
         if value is not None and (not set(value) <= allowed or not value or any(not v or v == '********' for v in value.values())):
             raise ValueError('Provide real secret values; omit secrets to preserve the stored value')
         return value
@@ -310,6 +316,37 @@ class ProxmoxTokenBootstrapInput(Input):
         parsed = urlsplit(value)
         if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path:
             raise ValueError('Proxmox endpoint must use HTTP or HTTPS and contain only host/IP and optional port')
+        return value
+
+    @field_validator('expires_at', 'rotation_due_at')
+    @classmethod
+    def lifecycle_dates_utc(cls, value):
+        if value is None:
+            return value
+        from datetime import timezone
+        candidate = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+class AwxBootstrapInput(Input):
+    name: Name
+    endpoint: Annotated[str, Field(min_length=3, max_length=2048)]
+    username: Annotated[str, Field(min_length=1, max_length=254)]
+    password: Annotated[str, Field(min_length=1, max_length=4096, json_schema_extra={'writeOnly': True})]
+    verify_ssl: bool = True
+    expires_at: datetime | None = None
+    rotation_due_at: datetime | None = None
+
+    @field_validator('endpoint')
+    @classmethod
+    def awx_endpoint_valid(cls, value):
+        value = value.strip().rstrip('/')
+        if not value:
+            raise ValueError('AWX endpoint is required')
+        candidate = value if '://' in value else 'https://' + value
+        parsed = urlsplit(candidate)
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('AWX endpoint must use HTTP or HTTPS without credentials, query or fragment')
         return value
 
     @field_validator('expires_at', 'rotation_due_at')
@@ -668,13 +705,23 @@ class BlueprintStep(Input):
     id: Slug
     type: Literal['generate_hostname', 'allocate_ip', 'release_ip', 'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
                   'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
-                  'run_ansible_playbook', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot',
+                  'run_ansible_playbook', 'register_awx', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot',
                   'set_tags', 'health_check', 'condition', 'approval', 'delay', 'notification']
     depends_on: Annotated[list[Slug], Field(max_length=50)] = Field(default_factory=list)
     conditions: dict[str, Any] = Field(default_factory=dict)
     retry: int = Field(default=0, ge=0, le=10)
     timeout: int = Field(default=600, ge=1, le=86400)
     rollback: str | None = Field(default=None, max_length=63)
+
+
+class AwxOnboardingInput(Input):
+    credential_id: int = Field(gt=0)
+    inventory_id: int | None = Field(default=None, gt=0)
+    inventory_name: Annotated[str, Field(min_length=1, max_length=100)] = 'CloudPortal'
+    group_by_environment: bool = True
+    group_by_apmid: bool = True
+    job_template_id: int | None = Field(default=None, gt=0)
+    remove_on_destroy: bool = True
 
 
 class BlueprintDeployment(Input):
@@ -686,6 +733,7 @@ class BlueprintDeployment(Input):
     executor: Literal['terraform', 'opentofu'] = 'terraform'
     ansible: AnsibleInput | None = None
     ansible_runs: Annotated[list[AnsibleInput], Field(max_length=20)] = Field(default_factory=list)
+    awx: AwxOnboardingInput | None = None
     hostname_scheme_id: int | None = Field(default=None, gt=0)
     ipam_pool_id: int | None = Field(default=None, gt=0)
     hostname_values: dict[Slug, Annotated[str, Field(min_length=1, max_length=253)]] = Field(default_factory=dict)
@@ -827,7 +875,7 @@ class BlueprintInput(Input):
 
             vm_runtime_types = {
                 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-                'run_ansible_playbook', 'create_snapshot', 'health_check',
+                'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
             }
             for step in self.workflow:
                 if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
