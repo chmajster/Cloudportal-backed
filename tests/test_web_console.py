@@ -352,6 +352,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'suspend', 'Wstrzymaj'" in script
     assert "'resume', 'Wznów'" in script
     assert "'reset', 'Twardy reset'" in script
+    assert "button('Power ON'" in script
+    assert "button('Power OFF'" in script
+    assert "button('CTRL+ALT+DEL'" in script
+    assert "consolePower('start'" in script
+    assert "consolePower('shutdown'" in script
+    assert 'activeRfb.sendCtrlAltDel()' in script
+    assert 'novnc-toolbar' in script
     assert 'destroy_unreferenced_disks' in script
     assert 'credential-secret-panel' in script
     assert 'Akceptuj certyfikat self-signed / niezaufany' in script
