@@ -589,6 +589,43 @@ def test_skipped_dependency_blocks_downstream_step(monkeypatch):
     assert any('workflow.step.blocked: apply:terraform_apply' in value for value in context.logs)
 
 
+def test_wait_for_ip_polls_every_10_seconds_for_at_most_3_minutes(monkeypatch, tmp_path):
+    workspace = tmp_path / 'workspace-ip-poll'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"outputs":{"vm_id":{"value":113}}}'
+    )
+    context = FakeContext([])
+    clock = [0.0]
+    sleeps = []
+    calls = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(worker.time, 'sleep', sleep)
+    monkeypatch.setattr(
+        worker,
+        'provider_for',
+        lambda credential: SimpleNamespace(
+            guest_addresses=lambda node, vm_id: calls.append((clock[0], node, vm_id)) or []
+        ),
+    )
+
+    with pytest.raises(ExecutionFailed, match='Timed out after 180s waiting for VM IP address'):
+        worker.wait_for_ip(context, workspace, timeout=600)
+
+    assert [timestamp for timestamp, _node, _vm_id in calls] == [
+        float(second) for second in range(0, 180, 10)
+    ]
+    assert sleeps == [10] * 18
+    assert len(calls) == 18
+    assert 'workflow.wait_for_ip.polling: interval=10s timeout=180s attempts=18' in context.logs
+    assert 'workflow.wait_for_ip.poll: attempt=18/18' in context.logs
+
+
 def test_wait_for_ip_uses_configured_static_address_without_guest_agent(monkeypatch, tmp_path):
     workspace = tmp_path / 'workspace-static'
     workspace.mkdir()
