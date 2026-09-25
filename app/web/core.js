@@ -101,7 +101,12 @@ async function routedFormView() {
       label: match.route.label || '',
     });
   }
-  await match.route.handler(match);
+  try {
+    await match.route.handler(match);
+  } catch (error) {
+    if (typeof window.clearSemanticSurface === 'function') window.clearSemanticSurface();
+    throw error;
+  }
 }
 function registerCommand(name, handler) {
   if (!name || typeof handler !== 'function') throw new Error('Invalid UI command registration');
