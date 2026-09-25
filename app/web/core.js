@@ -1132,8 +1132,7 @@ function showApp() {
   emitUiEvent('app-shown', { identity: state.identity });
   renderNavigation();
   const mustChangePassword = state.identity.user.must_change_password;
-  navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'deployments');
-  if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
+  navigate(mustChangePassword ? '/account/password?required=1' : location.hash.slice(1) || 'deployments');
 }
 function navigationGroup(route) {
   if (typeof window.uiNavigationGroup === 'function') return window.uiNavigationGroup(route);
