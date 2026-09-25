@@ -227,7 +227,7 @@ async function accountView() {
       user.must_change_password ? badge('Wymagana zmiana', 'warning') : badge('Hasło ustawione', 'ok')),
     node('p', { class: user.must_change_password ? 'form-error account-security-copy' : 'muted account-security-copy', text: passwordMessage }),
     node('div', { class: 'account-security-actions' },
-      button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary')));
+      button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => navigate('/account/password' + (user.must_change_password ? '?required=1' : '')), 'primary')));
 
   const permissionPanel = node('section', { class: 'panel account-permissions-panel' },
     node('div', { class: 'account-permissions-header' },
@@ -295,6 +295,13 @@ function changePassword(required = false) {
   });
 }
 
+registerRoutedForm({
+  id: 'account-password',
+  pattern: /^\/account\/password$/,
+  parent: 'account',
+  permission: null,
+  label: 'Moje konto',
+}, match => changePassword(match.searchParams.get('required') === '1' || Boolean(state.identity?.user?.must_change_password)));
 registerRoutedForm({
   id: 'users-roles',
   pattern: /^\/access\/users\/(?<id>\d+)\/roles$/,
