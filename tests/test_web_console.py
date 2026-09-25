@@ -179,6 +179,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('tokens.create'" in script
     assert "registerCommand('providers.create'" in script
     assert "registerCommand('blueprints.create'" in script
+    assert "id: 'blueprint-wizard'" in script
+    assert "navigationParent: 'blueprints'" in script
+    assert 'function blueprintWizardRouteFromLocation()' in script
+    assert "render: openBlueprintWizard" in script
+    assert "return '/blueprints/new/step/' + stepNumber + query" in script
+    assert "return '/blueprints/edit/' + encodeURIComponent(String(item.id))" in script
     assert "registerCommand('deployments.create'" in script
     assert "registerCommand('deployments.open'" in script
     assert "api('/blueprints?available=true&limit=200')" in script
@@ -276,6 +282,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "navigationParent: 'jobs'" in script
     assert "Skopiowano bezpośredni link do logów." in script
     assert 'JOB_LOG_ROUTE' in script
+    assert 'BLUEPRINT_WIZARD_ROUTE' in navigation
+    assert "'blueprint-wizard': '/blueprints/new/step/1'" in navigation
+    assert "resolvedId === 'blueprint-wizard'" in navigation
     assert 'window.uiRoutePathForRequest' in script
     assert 'uiRoutePathForRequest' in core
     assert '.product-resource-tabs' not in stylesheet
@@ -936,6 +945,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.hostname-generator-info' in stylesheet
     assert '.blueprint-run-summary' in stylesheet
     assert '.blueprint-wizard-shell' in stylesheet
+    assert '.blueprint-wizard-page' in stylesheet
+    assert '.blueprint-wizard-page-toolbar' in stylesheet
+    assert '.blueprint-wizard-page-actions' in stylesheet
     assert '.vra-designer-shell' in stylesheet
     assert '.vra-graph-viewport' in stylesheet
     assert '.vra-yaml-editor' in stylesheet

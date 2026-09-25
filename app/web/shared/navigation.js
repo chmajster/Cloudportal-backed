@@ -53,6 +53,7 @@
     ipam: '/ipam',
     deployments: '/products',
     blueprints: '/blueprints',
+    'blueprint-wizard': '/blueprints/new/step/1',
     catalog: '/catalog',
     jobs: '/jobs',
     schedules: '/operations/schedules',
@@ -80,6 +81,7 @@
     Object.entries(ROUTE_PATHS).map(([id, path]) => [path, id])
   );
   const JOB_LOG_ROUTE = /^\/jobs\/([^/]+)$/;
+  const BLUEPRINT_WIZARD_ROUTE = /^\/blueprints\/(?:new|edit\/\d+(?:\/[^/?]+)?)\/step\/([1-9]\d*)$/;
 
   const NAVIGATION_POSITION = new Map(
     CLIENT_NAVIGATION_ROUTES.map((routeId, index) => [routeId, index])
@@ -98,14 +100,16 @@
 
   function resolveView(value) {
     const normalized = normalizeRouteValue(value);
-    if (JOB_LOG_ROUTE.test(normalized)) return 'job-log';
-    if (PATH_ROUTES.has(normalized)) return PATH_ROUTES.get(normalized);
-    if (ROUTE_PATHS[normalized]) return normalized;
-    if (normalized.startsWith('/')) {
-      const first = '/' + normalized.split('/').filter(Boolean)[0];
+    const pathname = normalized.split('?')[0];
+    if (JOB_LOG_ROUTE.test(pathname)) return 'job-log';
+    if (BLUEPRINT_WIZARD_ROUTE.test(pathname)) return 'blueprint-wizard';
+    if (PATH_ROUTES.has(pathname)) return PATH_ROUTES.get(pathname);
+    if (ROUTE_PATHS[pathname]) return pathname;
+    if (pathname.startsWith('/')) {
+      const first = '/' + pathname.split('/').filter(Boolean)[0];
       if (PATH_ROUTES.has(first)) return PATH_ROUTES.get(first);
     }
-    return normalized.replace(/^\//, '') || 'deployments';
+    return pathname.replace(/^\//, '') || 'deployments';
   }
 
   function routePath(routeOrId) {
@@ -115,10 +119,16 @@
 
   function routePathForRequest(value, resolvedId) {
     const normalized = normalizeRouteValue(value);
+    const pathname = normalized.split('?')[0];
     if (resolvedId === 'job-log') {
-      if (JOB_LOG_ROUTE.test(normalized)) return normalized;
+      if (JOB_LOG_ROUTE.test(pathname)) return normalized;
       const current = normalizeRouteValue(location.hash.slice(1));
-      if (JOB_LOG_ROUTE.test(current)) return current;
+      if (JOB_LOG_ROUTE.test(current.split('?')[0])) return current;
+    }
+    if (resolvedId === 'blueprint-wizard') {
+      if (BLUEPRINT_WIZARD_ROUTE.test(pathname)) return normalized;
+      const current = normalizeRouteValue(location.hash.slice(1));
+      if (BLUEPRINT_WIZARD_ROUTE.test(current.split('?')[0])) return current;
     }
     return routePath(resolvedId);
   }

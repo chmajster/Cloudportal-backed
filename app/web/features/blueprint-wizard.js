@@ -15,6 +15,47 @@
     ['Podsumowanie', 'Podsumowanie'],
   ];
 
+  function normalizedWizardStep(value) {
+    const step = Number.parseInt(value, 10);
+    if (!Number.isFinite(step)) return 0;
+    return Math.min(STEPS.length - 1, Math.max(0, step));
+  }
+
+  function blueprintWizardPath({ item = null, step = 0, slug = '', hostnameSchemeId = '' } = {}) {
+    const stepNumber = normalizedWizardStep(step) + 1;
+    const query = hostnameSchemeId
+      ? '?hostnameSchemeId=' + encodeURIComponent(String(hostnameSchemeId))
+      : '';
+    if (!item?.id) return '/blueprints/new/step/' + stepNumber + query;
+    const readableSlug = String(slug || item.slug || item.name || 'blueprint').trim() || 'blueprint';
+    return '/blueprints/edit/' + encodeURIComponent(String(item.id))
+      + '/' + encodeURIComponent(readableSlug)
+      + '/step/' + stepNumber
+      + query;
+  }
+
+  function replaceBlueprintWizardRoute(item, state, options = {}) {
+    if (options.page !== true) return;
+    const path = blueprintWizardPath({
+      item,
+      step: state.step,
+      slug: state.slug,
+      hostnameSchemeId: options.hostnameSchemeId || '',
+    });
+    if (location.hash.slice(1) !== path) {
+      history.replaceState(history.state, '', '#' + path);
+    }
+  }
+
+  function navigateBlueprintWizard(options = {}) {
+    return navigate(blueprintWizardPath({
+      item: options.item || null,
+      step: options.initialStep || 0,
+      slug: options.item?.slug || '',
+      hostnameSchemeId: options.hostnameSchemeId || '',
+    }));
+  }
+
   function safeApi(path, fallback = [], options = {}) {
     return api(path, options).then(result => result.items || result).catch(() => fallback);
   }
@@ -111,6 +152,9 @@
 
       const state = parts.core.stateDefaults();
       const editingItem = options.item || null;
+      const pageMode = options.page === true;
+      state.step = normalizedWizardStep(options.initialStep || 0);
+      state.maxStep = editingItem ? STEPS.length - 1 : state.step;
       const scopeData = parts.scope.prepare(creationScopes, projectContext, state);
       const data = {
         tenants: scopeData.tenants,
@@ -1318,6 +1362,7 @@
             body: payload,
             headers: parts.core.scopeHeaders(state),
           });
+          if (pageMode) replaceBlueprintWizardRoute(created, state, options);
           progress.replaceChildren(
             node('span', { class: 'blueprint-wizard-success-icon' }, appIcon('check')),
             node('h3', { text: editingItem ? 'Blueprint został zaktualizowany i zapisany jako nowa wersja.' : 'Blueprint został utworzony i jest gotowy do użycia.' }),
@@ -1363,6 +1408,13 @@
 
       function render() {
         if (state.submitting) return;
+        if (pageMode) {
+          replaceBlueprintWizardRoute(editingItem, state, options);
+          dom.pageTitle.textContent = editingItem
+            ? ('Edytuj Blueprint · ' + (state.name || editingItem.name))
+            : 'Nowy Blueprint';
+          dom.pageEyebrow.textContent = 'Blueprinty · krok ' + (state.step + 1) + ' z ' + STEPS.length;
+        }
         navRoot.replaceChildren(renderNavigation());
         bodyRoot.replaceChildren(renderStepBody());
         renderFooter();
@@ -1371,15 +1423,31 @@
         bodyRoot.scrollTo?.({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
       }
 
-      dom.modal.classList.add('modal-wide');
-      dom.modalTitle.textContent = editingItem ? ('Edytuj Blueprint · ' + editingItem.name) : 'Nowy Blueprint';
-      dom.modalEyebrow.textContent = editingItem ? 'Kreator krok po kroku · edycja' : 'Kreator krok po kroku';
       navRoot = node('div', { class: 'blueprint-wizard-nav-host' });
       bodyRoot = node('div', { class: 'blueprint-wizard-body' });
       const shell = node('div', { class: 'blueprint-wizard-shell' }, navRoot, bodyRoot);
-      dom.modalBody.replaceChildren(shell);
-      footerRoot = dom.modalActions;
-      if (!dom.modal.open) dom.modal.showModal();
+
+      if (pageMode) {
+        footerRoot = node('div', { class: 'blueprint-wizard-page-actions' });
+        const pageHeader = node('div', { class: 'blueprint-wizard-page-toolbar' },
+          button('← Blueprinty', () => navigate('blueprints'), 'ghost'),
+          node('div', { class: 'blueprint-wizard-page-context' },
+            node('strong', { text: editingItem ? 'Edycja wersjonowanego Blueprintu' : 'Tworzenie nowego Blueprintu' }),
+            node('span', { class: 'muted', text: 'Kreator działa jako osobna strona, a każdy krok ma własny adres URL.' })));
+        dom.content.replaceChildren(
+          node('section', { class: 'panel blueprint-wizard-page' },
+            pageHeader,
+            shell,
+            footerRoot)
+        );
+      } else {
+        dom.modal.classList.add('modal-wide');
+        dom.modalTitle.textContent = editingItem ? ('Edytuj Blueprint · ' + editingItem.name) : 'Nowy Blueprint';
+        dom.modalEyebrow.textContent = editingItem ? 'Kreator krok po kroku · edycja' : 'Kreator krok po kroku';
+        dom.modalBody.replaceChildren(shell);
+        footerRoot = dom.modalActions;
+        if (!dom.modal.open) dom.modal.showModal();
+      }
 
       blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, discoverProvider, render });
       try {
@@ -1399,6 +1467,10 @@
     }
   }
 
-  window.BlueprintWizard = { open: openBlueprintWizard };
+  window.BlueprintWizard = Object.freeze({
+    open: navigateBlueprintWizard,
+    render: openBlueprintWizard,
+    path: blueprintWizardPath,
+  });
   registerExtension('blueprint-wizard', () => {});
 })();

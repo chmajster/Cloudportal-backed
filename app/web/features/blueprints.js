@@ -42,6 +42,59 @@ function canManageBlueprintByRole(item) {
   return [...required].some(id => owned.has(id));
 }
 
+function blueprintWizardRouteFromLocation() {
+  const raw = String(location.hash.slice(1) || '').split('/page/')[0];
+  const [pathname, query = ''] = raw.split('?');
+  const createMatch = pathname.match(/^\/blueprints\/new\/step\/([1-9]\d*)$/);
+  const editMatch = pathname.match(/^\/blueprints\/edit\/(\d+)(?:\/([^/]+))?\/step\/([1-9]\d*)$/);
+  const params = new URLSearchParams(query);
+
+  if (createMatch) {
+    return {
+      mode: 'create',
+      step: Number(createMatch[1]),
+      hostnameSchemeId: params.get('hostnameSchemeId') || '',
+    };
+  }
+  if (editMatch) {
+    return {
+      mode: 'edit',
+      id: Number(editMatch[1]),
+      slug: editMatch[2] ? decodeURIComponent(editMatch[2]) : '',
+      step: Number(editMatch[3]),
+      hostnameSchemeId: params.get('hostnameSchemeId') || '',
+    };
+  }
+  return null;
+}
+
+async function blueprintWizardView() {
+  const route = blueprintWizardRouteFromLocation();
+  if (!route) {
+    await navigate('blueprints');
+    return;
+  }
+  if (!window.BlueprintWizard?.render) {
+    throw new Error('Kreator Blueprintu nie został załadowany.');
+  }
+
+  let item = null;
+  if (route.mode === 'edit') {
+    if (!allowed('blueprints.update')) throw new Error('Brak uprawnienia do edycji Blueprintów.');
+    item = await api('/blueprints/' + route.id);
+    if (!canManageBlueprintByRole(item)) throw new Error('Brak roli zarządzającej tym Blueprintem.');
+  } else if (!allowed('blueprints.create')) {
+    throw new Error('Brak uprawnienia do tworzenia Blueprintów.');
+  }
+
+  await window.BlueprintWizard.render({
+    item,
+    page: true,
+    initialStep: route.step - 1,
+    hostnameSchemeId: route.hostnameSchemeId || undefined,
+  });
+}
+
 async function blueprintsView() {
   const [blueprintResult, roleResult] = await Promise.all([
     api('/blueprints?limit=200'),
@@ -50,7 +103,6 @@ async function blueprintsView() {
   const blueprints = blueprintResult.items;
   const roleNames = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
-  const canQuickProxmox = canDesignBlueprint && allowed('hostnames.read') && allowed('ipam.read');
   const actions = [];
   if (allowed('blueprints.create') && canDesignBlueprint) {
     actions.push(button('Nowy Blueprint — kreator', () => window.BlueprintWizard.open(), 'primary'));
@@ -75,8 +127,10 @@ async function blueprintsView() {
       const executionControl = window.BlueprintProvisioningGuards.executionControl(item, () => executeBlueprint(item));
       if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
-      if (allowed('blueprints.update') && canManage && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
-      if (allowed('blueprints.update') && canManage && canDesignBlueprint) { if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item))); result.push(button('Edytuj', () => window.BlueprintWizard.open({ item }))); }
+      if (allowed('blueprints.update') && canManage && canDesignBlueprint) {
+        if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item)));
+        result.push(button('Edytuj', () => window.BlueprintWizard.open({ item })));
+      }
       if (allowed('blueprints.delete') && canManage) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
@@ -1403,4 +1457,12 @@ registerCommand('blueprints.proxmoxWithHostnameScheme', schemeId => window.Bluep
 registerCommand('blueprints.execute', executeBlueprint);
 registerCommand('blueprints.create', () => window.BlueprintWizard.open());
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
+registerView({
+  id: 'blueprint-wizard',
+  label: 'Kreator Blueprintu',
+  permission: null,
+  order: 71,
+  navigation: false,
+  navigationParent: 'blueprints',
+}, blueprintWizardView);
 })();
