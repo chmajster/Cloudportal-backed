@@ -330,6 +330,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.my-resources-vm-controls' in stylesheet
     assert '.my-resources-filter-panel' in stylesheet
     assert '.my-resource-grid-list' in stylesheet
+    assert '.my-resource-grid-list .my-resource-provisioning-head,' in stylesheet
+    assert 'display: contents;' in stylesheet
+    assert 'grid-template-columns: minmax(150px, .7fr) max-content max-content minmax(260px, 2fr);' in stylesheet
     assert '.my-resources-vm-view-toggle' in stylesheet
     assert '.my-resources-bulk-bar' in stylesheet
     assert '.my-resources-bulk-actions' in stylesheet
