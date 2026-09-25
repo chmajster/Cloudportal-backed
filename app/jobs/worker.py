@@ -637,13 +637,13 @@ def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addr
     for index, (spec, credential) in enumerate(runs):
         if index in completed:
             context.log(
-                f'workflow.ansible.run.resumed: {index + 1}/{len(runs)}:{spec.playbook}'
+                f'workflow.ansible.run.resumed: {index + 1}/{len(runs)}:{getattr(spec, 'playbook', 'ansible')}'
             )
             continue
         context.ansible = spec
         context.ansible_credential = credential
         context.stage(
-            f'workflow.ansible.run.start:{index + 1}/{len(runs)}:{spec.playbook}'
+            f'workflow.ansible.run.start:{index + 1}/{len(runs)}:{getattr(spec, 'playbook', 'ansible')}'
         )
         addresses = wait_for_ansible_transport(
             context,
@@ -658,7 +658,7 @@ def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addr
         completed.add(index)
         runtime['ansible_inflight_run'] = None
         context.stage(
-            f'workflow.ansible.run.completed:{index + 1}/{len(runs)}:{spec.playbook}'
+            f'workflow.ansible.run.completed:{index + 1}/{len(runs)}:{getattr(spec, 'playbook', 'ansible')}'
         )
         persist_workflow_runtime(context, runtime)
     runtime['ansible_ran'] = len(completed) >= len(runs)
