@@ -238,7 +238,7 @@ async function myResourcesView(repairInventory = true) {
 }
 
 function deploymentActions(item, returnTo = 'my-resources') {
-  const actions = [button('Szczegóły', () => showDeploymentDetails(item))];
+  const actions = [button('Szczegóły', () => navigate('/resources/deployments/' + encodeURIComponent(item.id)))];
   const reconciliationRequired = item.status === 'reconciliation_required';
   if (item.status === 'waiting_approval' && item.active_job_id && allowed('blueprints.approve')) {
     actions.push(button('Zatwierdź i uruchom', async () => {
@@ -1356,6 +1356,14 @@ async function jobLogView() {
 }
 
 registerRoutedForm({
+  id: 'deployment-details',
+  pattern: /^\/resources\/deployments\/(?<id>[^/]+)$/,
+  parent: 'my-resources',
+  permission: 'deployments.read',
+  label: 'Moje zasoby',
+}, async match => showDeploymentDetails(await api('/deployments/' + encodeURIComponent(match.params.id))));
+
+registerRoutedForm({
   id: 'deployments-manual-create',
   pattern: /^\/products\/manual\/new$/,
   parent: 'deployments',
@@ -1371,7 +1379,7 @@ registerRoutedForm({
 }, match => runStandaloneAnsible(match.searchParams.get('playbook') || null));
 
 registerCommand('deployments.create', () => navigate('/products/manual/new'));
-registerCommand('deployments.open', showDeploymentDetails);
+registerCommand('deployments.open', item => navigate('/resources/deployments/' + encodeURIComponent(item.id)));
 registerCommand('ansible.run', playbookId => navigate('/jobs/ansible/new' + (playbookId ? '?playbook=' + encodeURIComponent(playbookId) : '')));
 registerView({ id: 'deployments', label: 'Produkty', iconName: 'box', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: null, order: 111 }, myResourcesView);
