@@ -31,7 +31,7 @@ async function inventoryView() {
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
         { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
         { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
-      ], resources.items, item => [button('Szczegóły', () => showObjectDetails(item.name, item.metadata_json || {}, 'Zasób zarządzany'))])
+      ], resources.items, item => [button('Szczegóły', () => navigate('/resources/managed/' + encodeURIComponent(item.id)))])
     )
   );
 }
@@ -930,6 +930,27 @@ async function routedVmItem(match) {
   if (!item) throw new Error('Nie znaleziono VM w inventory.');
   return item;
 }
+
+registerRoutedForm({
+  id: 'managed-resource-details',
+  pattern: /^\/resources\/managed\/(?<id>[^/]+)$/,
+  parent: 'my-resources',
+  permission: 'inventory.read',
+  label: 'Moje zasoby',
+}, async match => {
+  const rows = (await api('/inventory/resources?limit=200')).items || [];
+  const item = rows.find(value => String(value.id) === String(match.params.id));
+  if (!item) throw new Error('Nie znaleziono zasobu zarządzanego.');
+  showObjectDetails(item.name || item.resource_type || 'Zasób', {
+    Typ: item.resource_type,
+    Platforma: item.provider,
+    'External ID': item.external_id,
+    IP: item.primary_ip || '—',
+    Status: statusLabel(item.lifecycle_status),
+    Wdrożenie: item.deployment_id,
+    ...(item.metadata_json || {}),
+  }, 'Zasób zarządzany');
+});
 
 registerRoutedForm({
   id: 'inventory-vm-details',
