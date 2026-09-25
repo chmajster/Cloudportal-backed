@@ -3,7 +3,7 @@
 (() => {
   const parts = window.BlueprintWizardParts = window.BlueprintWizardParts || {};
 
-  function prepare(creationScopes, projectContext, state) {
+  function prepare(creationScopes, projectContext, state, options = {}) {
     const rows = Array.isArray(creationScopes) ? creationScopes : [];
     if (!rows.length) {
       throw new Error('Brak organizacji i projektu, w których masz uprawnienie blueprints.create.');
@@ -38,8 +38,12 @@
     const projects = [...projectMap.values()].sort((a, b) =>
       a.name.localeCompare(b.name, 'pl') || String(a.id).localeCompare(String(b.id)));
 
-    const selectedProjectId = String(projectContext?.selected?.id || '');
-    const project = projects.find(value => String(value.id) === selectedProjectId) || projects[0];
+    const selectedProjectId = String(options.projectId || projectContext?.selected?.id || '');
+    const selectedTenantId = String(options.tenantId || '');
+    const project = projects.find(value =>
+      String(value.id) === selectedProjectId
+      && (!selectedTenantId || String(value.tenant_id) === selectedTenantId)
+    ) || projects[0];
     state.tenantId = String(project.tenant_id);
     state.projectId = String(project.id);
     return { tenants, projects };
@@ -104,6 +108,7 @@
       state.selectedTemplateVmid = '';
       state.selectedTemplateNode = '';
       state.selectedTemplateName = '';
+      state.pendingHostnameScheme = null;
       state.hostnameSchemeId = String(data.schemes[0]?.id || '');
       state.hostnameEnabled = Boolean(scopeAllows('hostnames.read') && data.schemes.length);
       state.ipamPoolId = data.pools.some(value => String(value.id) === String(state.ipamPoolId))
@@ -149,7 +154,8 @@
       ]);
 
       data.providers = providers;
-      data.templates = templates.filter(value => value.enabled !== false);
+      data.templates = templates.filter(value =>
+        value.enabled !== false || value.id === options.item?.deployment?.template);
       data.schemes = schemes.filter(value => value.is_active);
       data.pools = pools;
       data.credentials = credentials;
@@ -186,7 +192,7 @@
         })),
         state.tenantId, { required: true });
       const tenantSelect = tenantField.querySelector('select');
-      tenantSelect.disabled = tenants.length === 1;
+      tenantSelect.disabled = tenants.length === 1 || Boolean(options.item);
       tenantField.append(node('span', { class: 'field-help',
         text: 'Lista zawiera tylko organizacje, w których RBAC pozwala Ci tworzyć Blueprinty.' }));
       tenantSelect.addEventListener('change', async event => {
@@ -203,7 +209,7 @@
         })),
         state.projectId, { required: true });
       const projectSelect = projectField.querySelector('select');
-      projectSelect.disabled = projects.length === 1;
+      projectSelect.disabled = projects.length === 1 || Boolean(options.item);
       projectField.append(node('span', { class: 'field-help',
         text: 'Uprawnienie blueprints.create jest weryfikowane ponownie przez backend przy zapisie.' }));
       projectSelect.addEventListener('change', async event => {
