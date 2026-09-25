@@ -86,14 +86,25 @@ def authorize(db, principal, project_id, permission, *, tenant_id=None, write=Fa
 
 
 def visible_projects(actor, permission='projects.read'):
-    parent_exists = exists(select(Tenant.id).where(Tenant.id == Project.tenant_id, Tenant.deleted_at.is_(None)))
+    parent_exists = exists(
+        select(Tenant.id)
+        .where(Tenant.id == Project.tenant_id, Tenant.deleted_at.is_(None))
+        .correlate(Project)
+    )
     base = and_(Project.deleted_at.is_(None), parent_exists)
     if 'projects.admin' in actor.global_permissions and permission in actor.global_permissions:
         return base
     if actor.token_ceiling is not None and permission not in actor.token_ceiling:
         return and_(base, False)
-    active_parent = exists(select(Tenant.id).where(Tenant.id == Project.tenant_id,
-        Tenant.deleted_at.is_(None), Tenant.status != 'disabled'))
+    active_parent = exists(
+        select(Tenant.id)
+        .where(
+            Tenant.id == Project.tenant_id,
+            Tenant.deleted_at.is_(None),
+            Tenant.status != 'disabled',
+        )
+        .correlate(Project)
+    )
     tenant_member = exists(select(TenantMembership.user_id).where(
         TenantMembership.tenant_id == Project.tenant_id,
         TenantMembership.user_id == actor.user_id,
