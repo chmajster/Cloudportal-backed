@@ -732,6 +732,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function allowsRuntimeEnvironment(item)' in script
     assert "registerExtension('blueprint-runtime-apmid'" in script
     assert "'/vm-classification/options'" in script
+    assert "const apmidSelectable = allowsRuntimeApmid(item, fixedAp);" in script
+    assert "const environmentSelectable = allowsRuntimeEnvironment(item);" in script
     assert "'runtime_apmid'" in script
     assert "'runtime_environment'" in script
     assert 'Ten Blueprint pozwala wybrać APMID podczas tworzenia VM.' in script
@@ -751,6 +753,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'set_tags'" not in script
     assert 'function multiCheckboxField(' in script
     assert 'function toDateTimeLocal(' in script
+    assert "item.dataset.toastMessage === text" in script
+    assert "'data-toast-message': text" in script
     assert 'table-search-empty' in script
     assert 'function tablePreferenceKey(' in script
     assert 'function readTablePreferences(' in script

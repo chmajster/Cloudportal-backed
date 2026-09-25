@@ -39,8 +39,13 @@ function allowsRuntimeEnvironment(item) {
 async function prepare(item, fields) {
   const fixedAp = fixedApmid(item);
   const fixedEnv = fixedEnvironment(item);
-  const apmidSelectable = item?.deployment?.template === 'proxmox-vm' && allowsRuntimeApmid(item, fixedAp);
-  const environmentSelectable = item?.deployment?.template === 'proxmox-vm' && allowsRuntimeEnvironment(item);
+  // Mirror backend compile_blueprint() semantics exactly. Runtime
+  // classification is controlled by the Blueprint flags (plus the legacy
+  // no-fixed-APMID fallback), not by deployment.template. Product payloads may
+  // omit or transform the template field, which previously hid the selector
+  // while the backend still required an APMID.
+  const apmidSelectable = allowsRuntimeApmid(item, fixedAp);
+  const environmentSelectable = allowsRuntimeEnvironment(item);
 
   let classification = null;
   if (apmidSelectable || environmentSelectable) {
