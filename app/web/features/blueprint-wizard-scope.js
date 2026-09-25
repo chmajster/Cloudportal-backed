@@ -6,7 +6,8 @@
   function prepare(creationScopes, projectContext, state, options = {}) {
     const rows = Array.isArray(creationScopes) ? creationScopes : [];
     if (!rows.length) {
-      throw new Error('Brak organizacji i projektu, w których masz uprawnienie blueprints.create.');
+      const permission = options.item ? 'blueprints.update' : 'blueprints.create';
+      throw new Error('Brak organizacji i projektu, w których masz uprawnienie ' + permission + '.');
     }
 
     const tenantMap = new Map();
@@ -194,7 +195,9 @@
       const tenantSelect = tenantField.querySelector('select');
       tenantSelect.disabled = tenants.length === 1 || Boolean(options.item);
       tenantField.append(node('span', { class: 'field-help',
-        text: 'Lista zawiera tylko organizacje, w których RBAC pozwala Ci tworzyć Blueprinty.' }));
+        text: options.item
+          ? 'Lista zawiera tylko organizacje, w których RBAC pozwala Ci edytować ten Blueprint.'
+          : 'Lista zawiera tylko organizacje, w których RBAC pozwala Ci tworzyć Blueprinty.' }));
       tenantSelect.addEventListener('change', async event => {
         state.tenantId = event.currentTarget.value;
         state.projectId = String(projectsForTenant(state.tenantId)[0]?.id || '');
@@ -211,7 +214,8 @@
       const projectSelect = projectField.querySelector('select');
       projectSelect.disabled = projects.length === 1 || Boolean(options.item);
       projectField.append(node('span', { class: 'field-help',
-        text: 'Uprawnienie blueprints.create jest weryfikowane ponownie przez backend przy zapisie.' }));
+        text: (options.item ? 'blueprints.update' : 'blueprints.create')
+          + ' jest weryfikowane ponownie przez backend przy zapisie.' }));
       projectSelect.addEventListener('change', async event => {
         state.projectId = event.currentTarget.value;
         await changeScope();
