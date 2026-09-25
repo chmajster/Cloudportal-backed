@@ -25,15 +25,28 @@ function fixedEnvironment(item) {
   return '';
 }
 
+function runtimeFlag(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value == null) return false;
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'tak', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'nie', 'off', ''].includes(normalized)) return false;
+  return Boolean(value);
+}
+
 function allowsRuntimeApmid(item, fixed) {
   const deployment = item?.deployment || {};
-  if (deployment.select_apmid_on_execute === true) return true;
-  if (Object.prototype.hasOwnProperty.call(deployment, 'select_apmid_on_execute')) return false;
+  if (Object.prototype.hasOwnProperty.call(deployment, 'select_apmid_on_execute')) {
+    return runtimeFlag(deployment.select_apmid_on_execute);
+  }
   return !fixed;
 }
 
 function allowsRuntimeEnvironment(item) {
-  return item?.deployment?.select_environment_on_execute === true;
+  const deployment = item?.deployment || {};
+  return Object.prototype.hasOwnProperty.call(deployment, 'select_environment_on_execute')
+    ? runtimeFlag(deployment.select_environment_on_execute)
+    : false;
 }
 
 async function prepare(item, fields, scopeHeaders = {}) {
@@ -52,19 +65,22 @@ async function prepare(item, fields, scopeHeaders = {}) {
     classification = await api('/vm-classification/options', { headers: scopeHeaders });
   }
 
+  let selectedEnvironment = '';
+  let selectedApmid = '';
+
   if (environmentSelectable) {
     const environments = ['test', 'dev', 'nonprod', 'prod']
       .filter(name => classification?.environments?.[name] !== false);
     if (!environments.length) {
       throw new Error('Blueprint wymaga wyboru Environment, ale wszystkie środowiska są wyłączone.');
     }
-    const selected = environments.includes(fixedEnv) ? fixedEnv : environments[0];
+    selectedEnvironment = environments.includes(fixedEnv) ? fixedEnv : environments[0];
     fields.append(formSection(
       'Environment',
       'Ten Blueprint pozwala wybrać środowisko podczas tworzenia VM.',
       selectField('Environment', 'runtime_environment',
         environments.map(value => ({ value, label: value.toUpperCase() })),
-        selected,
+        selectedEnvironment,
         {
           required: true,
           wide: true,
@@ -87,7 +103,7 @@ async function prepare(item, fields, scopeHeaders = {}) {
     if (!apmids.length) {
       throw new Error('Blueprint wymaga wyboru APMID, ale w ustawieniach nie ma żadnego APMID.');
     }
-    const selected = apmids.includes(fixedAp)
+    selectedApmid = apmids.includes(fixedAp)
       ? fixedAp
       : apmids.includes('LEO') ? 'LEO' : apmids[0];
     fields.append(formSection(
@@ -95,7 +111,7 @@ async function prepare(item, fields, scopeHeaders = {}) {
       'Ten Blueprint pozwala wybrać APMID podczas tworzenia VM.',
       selectField('APMID', 'runtime_apmid',
         apmids.map(value => ({ value, label: value })),
-        selected,
+        selectedApmid,
         {
           required: true,
           wide: true,
@@ -112,6 +128,8 @@ async function prepare(item, fields, scopeHeaders = {}) {
   return {
     fixedApmid: fixedAp,
     fixedEnvironment: fixedEnv,
+    defaultApmid: apmidSelectable ? selectedApmid : '',
+    defaultEnvironment: environmentSelectable ? selectedEnvironment : '',
     apmidSelectable,
     environmentSelectable,
   };
@@ -120,10 +138,10 @@ async function prepare(item, fields, scopeHeaders = {}) {
 function read(form, context) {
   return {
     apmid: context?.apmidSelectable
-      ? String(form.elements.runtime_apmid?.value || '').trim().toUpperCase()
+      ? String(form.elements.runtime_apmid?.value || context?.defaultApmid || '').trim().toUpperCase()
       : '',
     environment: context?.environmentSelectable
-      ? String(form.elements.runtime_environment?.value || '').trim().toLowerCase()
+      ? String(form.elements.runtime_environment?.value || context?.defaultEnvironment || '').trim().toLowerCase()
       : '',
   };
 }
@@ -172,6 +190,7 @@ registerExtension('blueprint-runtime-apmid', () => {
     fixedEnvironment,
     allowsRuntimeApmid,
     allowsRuntimeEnvironment,
+    runtimeFlag,
     prepare,
     read,
     hostnameTokens,
