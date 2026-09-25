@@ -651,7 +651,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Opcjonalne ustawienia dostępu" in script
     assert "Blueprint został utworzony i jest gotowy do użycia." in script
     assert 'Pattern hostname' in script
-    assert "button('Nowy pattern', () => hostnameSchemeForm(), 'primary')" in script
+    assert "button('Nowy pattern', () => navigate('/admin/tools/hostnames/new'), 'primary')" in script
     assert 'const schemeId = item == null ? null : Number(item.id);' in script
     assert 'const editing = Number.isInteger(schemeId) && schemeId > 0;' in script
     assert "editing ? `/hostname-schemes/${schemeId}` : '/hostname-schemes'" in script
