@@ -94,7 +94,6 @@ def test_installer_busy_skips_request(client, monkeypatch, capsys):
     prepare_client(client, monkeypatch)
     def busy(*args):
         raise BlockingIOError()
-    monkeypatch.setattr(client.fcntl, 'flock', 'flock') if False else None
     monkeypatch.setattr(client.fcntl, 'flock', busy)
     monkeypatch.setattr(client, 'request_updater', lambda *a: pytest.fail('must not call updater'))
     assert client.main([]) == 0
