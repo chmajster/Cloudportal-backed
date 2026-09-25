@@ -148,7 +148,7 @@ async function tokensView() {
       { label: 'Status', value: token => { const status = token.revoked_at ? 'revoked' : token.expires_at && new Date(token.expires_at) < new Date() ? 'expired' : 'active'; return badge(statusLabel(status), status === 'active' ? 'ok' : 'danger'); } },
       { label: 'Ostatnio użyty', value: token => formatDate(token.last_used_at) },
     ], tokens, token => {
-      const result = [button('Zakres', () => showPermissionSummary(`Zakres: ${token.name}`, token.scopes))];
+      const result = [button('Zakres', () => navigate('/access/tokens/' + encodeURIComponent(token.id) + '/scope'))];
       if (allowed('tokens.revoke') && !token.revoked_at) result.push(button('Unieważnij', () => confirmAction('Unieważnij token', `Token ${token.name} natychmiast przestanie działać.`, async () => {
         await api(`/tokens/${token.id}/revoke`, { method: 'POST' });
         toast('Token unieważniony.');
@@ -295,6 +295,18 @@ function changePassword(required = false) {
   });
 }
 
+registerRoutedForm({
+  id: 'tokens-scope',
+  pattern: /^\/access\/tokens\/(?<id>\d+)\/scope$/,
+  parent: 'tokens',
+  permission: 'tokens.read',
+  label: 'Tokeny API',
+}, async match => {
+  const tokens = (await api('/tokens?limit=200')).items;
+  const token = tokens.find(item => Number(item.id) === Number(match.params.id));
+  if (!token) throw new Error('Nie znaleziono tokenu.');
+  showPermissionSummary('Zakres: ' + token.name, token.scopes);
+});
 registerRoutedForm({
   id: 'account-password',
   pattern: /^\/account\/password$/,
