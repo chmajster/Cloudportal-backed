@@ -43,15 +43,13 @@ def sha256_file(path: Path) -> str:
 def _safe_archive_member(member: tarfile.TarInfo) -> bool:
     name = member.name.replace('\\', '/')
     parts = [part for part in name.split('/') if part not in {'', '.'}]
-    return (
-        member.isfile()
-        and bool(name)
+    safe_path = (
+        bool(name)
         and SAFE_ARCHIVE_NAME.fullmatch(name) is not None
         and not name.startswith('/')
         and '..' not in parts
-        and not member.issym()
-        and not member.islnk()
     )
+    return safe_path and (member.isfile() or member.isdir()) and not member.issym() and not member.islnk()
 
 
 def _local_name(value: str) -> str:
