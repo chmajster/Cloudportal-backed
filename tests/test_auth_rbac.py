@@ -374,7 +374,8 @@ def test_job_execution_concurrency_settings(client, headers):
 
     defaults = client.get('/api/v1/settings/execution', headers=headers)
     assert defaults.status_code == 200, defaults.text
-    assert defaults.json() == {'max_parallel_jobs': settings().worker_count}
+    assert settings().worker_count == 10
+    assert defaults.json() == {'max_parallel_jobs': 10}
 
     saved = client.put(
         '/api/v1/settings/execution',
