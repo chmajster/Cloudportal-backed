@@ -17,7 +17,7 @@ async function providersView() {
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
       const actions = [];
-      actions.push(button('Przeglądaj zasoby', () => discoverProvider(item)));
+      actions.push(button('Przeglądaj zasoby', () => navigate('/providers/' + encodeURIComponent(item.id) + '/resources')));
       if (allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => navigate('/providers/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'provider'))));
       if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Platforma „${item.name}” zostanie usunięta. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
@@ -136,6 +136,18 @@ async function discoverProvider(provider) {
   });
 }
 
+registerRoutedForm({
+  id: 'providers-resources',
+  pattern: /^\/providers\/(?<id>\d+)\/resources$/,
+  parent: 'providers',
+  permission: 'providers.read',
+  label: 'Platformy',
+}, async match => {
+  const providers = (await api('/providers?limit=200')).items;
+  const item = providers.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono platformy.');
+  await discoverProvider(item);
+});
 registerRoutedForm({
   id: 'providers-create',
   pattern: /^\/providers\/new$/,
