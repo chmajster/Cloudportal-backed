@@ -6,7 +6,7 @@ async function ipamView() {
     api('/ipam/pools?limit=200'),
     api('/ipam/allocations?limit=200'),
   ]);
-  const actions = allowed('ipam.create') ? [button('Nowa pula', () => ipamPoolForm(), 'primary')] : [];
+  const actions = allowed('ipam.create') ? [button('Nowa pula', () => navigate('/ipam/pools/new'), 'primary')] : [];
   dom.content.replaceChildren(
     heading('Centralne pule IPv4, rezerwacje i przypisania do wdrożeń.', actions),
     node('section', { class: 'panel' },
@@ -20,7 +20,7 @@ async function ipamView() {
       ], pools.items, item => {
         const result = [];
         if (allowed('ipam.allocate') && item.is_active) result.push(button('Przydziel IP', () => allocateIp(item), 'primary'));
-        if (allowed('ipam.update')) result.push(button('Edytuj', () => ipamPoolForm(item)));
+        if (allowed('ipam.update')) result.push(button('Edytuj', () => navigate('/ipam/pools/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'pool'))));
         if (allowed('ipam.delete')) result.push(button('Usuń', () => confirmAction('Usuń pulę IPAM', `Pula ${item.name} zostanie usunięta tylko jeśli nie ma historii alokacji.`, async () => {
           await api(`/ipam/pools/${item.id}`, { method: 'DELETE' });
           navigate('ipam');
@@ -122,5 +122,24 @@ function allocateIp(pool) {
   }});
 }
 
+registerRoutedForm({
+  id: 'ipam-pool-create',
+  pattern: /^\/ipam\/pools\/new$/,
+  parent: 'ipam',
+  permission: 'ipam.create',
+  label: 'IPAM',
+}, () => ipamPoolForm());
+registerRoutedForm({
+  id: 'ipam-pool-edit',
+  pattern: /^\/ipam\/pools\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'ipam',
+  permission: 'ipam.update',
+  label: 'IPAM',
+}, async match => {
+  const pools = (await api('/ipam/pools?limit=200')).items;
+  const item = pools.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono puli IPAM.');
+  ipamPoolForm(item);
+});
 registerView({ id: 'ipam', label: 'IPAM', icon: 'I', permission: 'ipam.read', order: 90 }, ipamView);
 })();
