@@ -278,12 +278,25 @@ function allowed(permission) {
   return !permission || Boolean(state.identity?.permissions?.includes(permission));
 }
 function toast(message, type = '') {
+  const text = String(message || '').trim();
+  const duplicate = [...dom.toastRegion.querySelectorAll('.toast')].find(item =>
+    item.dataset.toastMessage === text && item.dataset.toastType === String(type || '')
+  );
+  if (duplicate) {
+    // Keep one visible notification for repeated validation/API errors instead
+    // of stacking identical toasts after consecutive submit attempts.
+    duplicate.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+    return duplicate;
+  }
+
   const item = node('div', {
     class: `toast ${type}`,
     role: type === 'error' ? 'alert' : 'status',
     'aria-live': type === 'error' ? 'assertive' : 'polite',
+    'data-toast-message': text,
+    'data-toast-type': String(type || ''),
   },
-  node('span', { class: 'toast-message', text: message }),
+  node('span', { class: 'toast-message', text }),
   node('button', {
     class: 'toast-close',
     type: 'button',
@@ -293,6 +306,7 @@ function toast(message, type = '') {
   }, '×'));
   dom.toastRegion.append(item);
   window.setTimeout(() => item.remove(), type === 'error' ? 12000 : 5000);
+  return item;
 }
 function formatDate(value) {
   if (!value) return '—';
