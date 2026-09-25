@@ -41,7 +41,7 @@
     const uniqueIds = new Set(ids.filter(id => (counts.get(id) || 0) === 1));
     const graph = new Map(rows
       .filter(step => uniqueIds.has(step.id))
-      .map(step => [step.id, step.depends_on.filter(id => uniqueIds.has(id))]));
+      .map(step => [step.id, step.depends_on.filter(id => uniqueIds.has(id) && id !== step.id)]));
     const visiting = new Set();
     const visited = new Set();
     const stack = [];
