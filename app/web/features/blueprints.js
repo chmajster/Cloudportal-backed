@@ -107,7 +107,7 @@ async function blueprintsView() {
   if (allowed('blueprints.create') && canDesignBlueprint) {
     actions.push(button('Nowy Blueprint — kreator', () => window.BlueprintWizard.open(), 'primary'));
     if (window.ApplianceBlueprintUI && allowed('terraform.execute')) {
-      actions.push(button('Importuj appliance OVA', () => window.ApplianceBlueprintUI.open().catch(error => toast(error.message, 'error'))));
+      actions.push(button('Importuj appliance OVA', () => navigate('/blueprints/appliances/import')));
     }
     if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open()));
   }
@@ -124,7 +124,7 @@ async function blueprintsView() {
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
-      const executionControl = window.BlueprintProvisioningGuards.executionControl(item, () => executeBlueprint(item));
+      const executionControl = window.BlueprintProvisioningGuards.executionControl(item, () => navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/execute'));
       if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
       if (allowed('blueprints.update') && canManage && canDesignBlueprint) {
@@ -1452,9 +1452,20 @@ async function executeBlueprint(item) {
   }
 }
 
+registerRoutedForm({
+  id: 'blueprints-execute',
+  pattern: /^\/blueprints\/(?<id>\d+)(?:\/[^/]+)?\/execute$/,
+  parent: 'blueprints',
+  permission: 'blueprints.execute',
+  label: 'Blueprinty',
+}, async match => {
+  const item = await api('/blueprints/' + match.params.id);
+  await executeBlueprint(item);
+});
+
 registerCommand('blueprints.proxmoxTemplateWizard', item => item ? window.BlueprintWizard.open({ item }) : window.BlueprintWizard.open());
 registerCommand('blueprints.proxmoxWithHostnameScheme', schemeId => window.BlueprintWizard.open({ hostnameSchemeId: schemeId }));
-registerCommand('blueprints.execute', executeBlueprint);
+registerCommand('blueprints.execute', item => navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/execute'));
 registerCommand('blueprints.create', () => window.BlueprintWizard.open());
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
 registerView({
