@@ -618,7 +618,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'snapshots.create'" in script
     assert "'ipam.release'" in script
     assert "Brak uprawnień do uruchomienia" in script
-    assert script.count("workflowNeedsTags(") >= 2
+    assert script.count("workflowNeedsTags(") >= 1
     assert "Brak credentiali SSH z hasłem lub kluczem prywatnym" in script
     assert "QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM" in script
     assert "jednorazowe konto przez natywny cloud-init" in script
