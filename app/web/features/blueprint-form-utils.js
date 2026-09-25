@@ -47,6 +47,38 @@ function blueprintTags(value) {
   return [...new Set(String(value || '').split(/[,\n]+/).map(item => item.trim().toLowerCase()).filter(Boolean))];
 }
 
+function blueprintTemplateVariableField(name, spec, value) {
+  const type = schemaType(spec);
+  const label = FIELD_LABELS[name] || spec.title || name;
+  const current = value ?? spec.default ?? '';
+  const wrapper = field(label, `deployment_var_${name}`, {
+    tag: type === 'array' ? 'textarea' : 'input',
+    value: Array.isArray(current) ? current.join('\n') : String(current),
+    wide: type === 'array' || ['ssh_public_key', 'subnet_id'].includes(name),
+    help: `Typ: ${type}. Możesz użyć wartości lub placeholdera, np. {{ cpu }}.`,
+  });
+  wrapper.dataset.blueprintTemplateVariable = name;
+  return wrapper;
+}
+
+function readBlueprintTemplateVariables(root, template) {
+  const result = {};
+  for (const [name, spec] of Object.entries(template?.variables_schema?.properties || {})) {
+    const control = root.elements?.[`deployment_var_${name}`] || root.querySelector?.(`[name="deployment_var_${name}"]`);
+    if (!control) continue;
+    const raw = String(control.value ?? '').trim();
+    if (!raw) continue;
+    if (/{{\s*[^}]+\s*}}/.test(raw)) { result[name] = raw; continue; }
+    const type = schemaType(spec);
+    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
+    else if (type === 'number') result[name] = Number(raw);
+    else if (type === 'boolean') result[name] = ['true', '1', 'tak', 'yes'].includes(raw.toLowerCase());
+    else if (type === 'array') result[name] = splitValues(raw);
+    else result[name] = raw;
+  }
+  return result;
+}
+
 function setSelectChoices(select, choices, selected = '', placeholder = '') {
   select.replaceChildren();
   if (placeholder) select.append(node('option', { value: '', text: placeholder }));
@@ -90,6 +122,7 @@ registerExtension('blueprint-form-utils', () => {
   window.BlueprintFormUtils = Object.freeze({
     jsonValue, parseObject, parseArray, hostnamePatternTokens, normalizeHostnamePattern,
     blueprintTags, setSelectChoices, blueprintWorkflow,
+    blueprintTemplateVariableField, readBlueprintTemplateVariables,
   });
 });
 })();
