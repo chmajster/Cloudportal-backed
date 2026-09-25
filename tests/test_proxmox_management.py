@@ -315,7 +315,7 @@ def test_guest_agent_ping_uses_http_success_not_data_payload(monkeypatch):
 
     assert provider.guest_agent_ready('pve01', 114) is True
     assert observed == [(
-        'GET',
+        'POST',
         '/nodes/pve01/qemu/114/agent/ping',
         {'return_response': True, 'accepted_statuses': {500}},
     )]
