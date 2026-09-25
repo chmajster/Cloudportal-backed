@@ -251,6 +251,12 @@ async function executeBlueprint(item, scope = null) {
           hostname_values: window.BlueprintRuntimeApmid.readHostnameValues(form),
         };
         const runtimeClassification = window.BlueprintRuntimeApmid.read(form, apmidContext);
+        if (apmidContext?.apmidSelectable && !runtimeClassification.apmid) {
+          throw new Error('Wybierz APMID przed utworzeniem VM.');
+        }
+        if (apmidContext?.environmentSelectable && !runtimeClassification.environment) {
+          throw new Error('Wybierz Environment przed utworzeniem VM.');
+        }
         if (runtimeClassification.apmid) payload.apmid = runtimeClassification.apmid;
         if (runtimeClassification.environment) payload.environment = runtimeClassification.environment;
 
