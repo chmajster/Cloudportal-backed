@@ -1260,12 +1260,8 @@
   grid-template-columns: 1fr;
 }
 
-.my-resources-vm-list-header,
-.my-resource-grid-list .my-resource-vm-card {
-  grid-template-columns: minmax(250px, 1.1fr) minmax(230px, 1fr) minmax(150px, .6fr) minmax(240px, auto);
-}
-
 .my-resources-vm-list-header {
+  grid-template-columns: minmax(250px, 1.1fr) minmax(230px, 1fr) minmax(150px, .6fr) minmax(240px, auto);
   display: grid;
   align-items: center;
   gap: 18px;
@@ -1282,15 +1278,26 @@
 }
 
 .my-resource-grid-list .my-resource-vm-card {
+  grid-template-columns: minmax(250px, 1.05fr) minmax(260px, 1.2fr) minmax(150px, .55fr) minmax(260px, auto);
+  grid-template-areas:
+    "head meta created actions"
+    "provisioning provisioning provisioning provisioning";
   align-items: center;
-  gap: 14px 18px;
+  gap: 12px 20px;
+  padding: 15px 16px;
+}
+
+.my-resource-grid-list .my-resource-card-head {
+  grid-area: head;
 }
 
 .my-resource-grid-list .my-resource-card-meta {
+  grid-area: meta;
   align-content: center;
 }
 
 .my-resource-grid-list .my-resource-card-created {
+  grid-area: created;
   display: grid;
   gap: 3px;
   align-content: center;
@@ -1300,12 +1307,46 @@
   display: none;
 }
 
+.my-resource-grid-list .my-resource-provisioning-state {
+  grid-area: provisioning;
+  grid-template-columns: minmax(170px, .55fr) minmax(250px, .8fr) minmax(0, 1.65fr);
+  align-items: start;
+  gap: 12px 18px;
+  margin-top: 1px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.my-resource-grid-list .my-resource-provisioning-head,
+.my-resource-grid-list .my-resource-provisioning-stage {
+  min-width: 0;
+}
+
+.my-resource-grid-list .my-resource-provisioning-stage {
+  align-items: center;
+}
+
+.my-resource-grid-list .my-resource-provisioning-error {
+  min-width: 0;
+  margin: 0;
+  padding-top: 1px;
+  line-height: 1.45;
+}
+
 .my-resource-grid-list .my-resource-card-actions {
+  grid-area: actions;
   justify-content: flex-end;
+  align-items: center;
+  align-self: center;
+}
+
+.my-resource-grid-list .my-resource-card-actions .button {
+  flex: 0 0 auto;
 }
 
 .my-resource-grid-list .my-resource-card-actions .button.primary {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
 }
 
 .my-resources-bulk-bar {
@@ -1356,18 +1397,25 @@
 
   .my-resource-grid-list .my-resource-vm-card {
     grid-template-columns: minmax(260px, 1fr) minmax(220px, .8fr);
-  }
-
-  .my-resource-grid-list .my-resource-card-created {
-    grid-column: 1 / -1;
+    grid-template-areas:
+      "head meta"
+      "created actions"
+      "provisioning provisioning";
   }
 
   .my-resource-grid-list .my-resource-card-created-label {
     display: block;
   }
 
-  .my-resource-grid-list .my-resource-card-actions {
+  .my-resource-grid-list .my-resource-provisioning-state {
+    grid-template-columns: minmax(170px, .65fr) minmax(220px, 1fr);
+  }
+
+  .my-resource-grid-list .my-resource-provisioning-error {
     grid-column: 1 / -1;
+  }
+
+  .my-resource-grid-list .my-resource-card-actions {
     justify-content: flex-start;
   }
 }
@@ -1395,10 +1443,28 @@
 
   .my-resource-grid-list .my-resource-vm-card {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "head"
+      "meta"
+      "created"
+      "provisioning"
+      "actions";
+  }
+
+  .my-resource-grid-list .my-resource-provisioning-state {
+    grid-template-columns: 1fr;
+  }
+
+  .my-resource-grid-list .my-resource-provisioning-error {
+    grid-column: auto;
   }
 
   .my-resource-grid-list .my-resource-card-actions {
-    grid-column: auto;
+    justify-content: flex-start;
+  }
+
+  .my-resource-grid-list .my-resource-card-actions .button {
+    flex: 1 1 140px;
   }
 
   .my-resources-bulk-actions {
