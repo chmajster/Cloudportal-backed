@@ -753,6 +753,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'set_tags'" not in script
     assert 'function multiCheckboxField(' in script
     assert 'function toDateTimeLocal(' in script
+    assert "item.dataset.toastMessage === text" in script
+    assert "'data-toast-message': text" in script
     assert 'table-search-empty' in script
     assert 'function tablePreferenceKey(' in script
     assert 'function readTablePreferences(' in script
