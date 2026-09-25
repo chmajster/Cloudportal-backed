@@ -92,6 +92,89 @@ def test_hostname_scheme_edit_cannot_reset_sequence(client, headers):
 
 
 
+def test_blueprint_bundle_creates_hostname_scheme_atomically(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    blueprint = {
+        'slug': 'bundled-hostname',
+        'name': 'Bundled hostname',
+        'deployment': {
+            'name': '{{ hostname }}',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {**deployment_payload['variables'], 'name': '{{ hostname }}'},
+            'hostname_values': {'env': 'prod'},
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+    bundle = {
+        'blueprint': blueprint,
+        'hostname_scheme': {
+            'name': 'Bundled hostname pattern',
+            'pattern': 'srv-{env}-{number}',
+            'next_number': 1,
+            'padding': 3,
+            'is_active': True,
+        },
+    }
+
+    created = client.post('/api/v1/blueprints/bundle', headers=headers, json=bundle)
+    assert created.status_code == 201, created.text
+    scheme_id = created.json()['deployment']['hostname_scheme_id']
+    assert scheme_id
+
+    schemes = client.get('/api/v1/hostname-schemes?limit=200', headers=headers)
+    assert any(row['id'] == scheme_id and row['name'] == 'Bundled hostname pattern'
+               for row in schemes.json()['items'])
+
+    broken = {
+        **bundle,
+        'blueprint': {
+            **blueprint,
+            'slug': 'bundled-hostname-broken',
+            'name': 'Bundled hostname broken',
+            'deployment': {
+                **blueprint['deployment'],
+                'provider_id': 999999,
+            },
+        },
+        'hostname_scheme': {
+            **bundle['hostname_scheme'],
+            'name': 'Must rollback with Blueprint',
+        },
+    }
+    failed = client.post('/api/v1/blueprints/bundle', headers=headers, json=broken)
+    assert failed.status_code == 404, failed.text
+    schemes = client.get('/api/v1/hostname-schemes?limit=200', headers=headers)
+    assert all(row['name'] != 'Must rollback with Blueprint' for row in schemes.json()['items'])
+
+
+def test_blueprint_save_rejects_invalid_static_proxmox_network(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    payload = {
+        'slug': 'invalid-static-network',
+        'name': 'Invalid static network',
+        'deployment': {
+            'name': 'invalid-static-network',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'invalid-static-network',
+                'ipv4_address': '192.0.2.10/24',
+                'ipv4_gateway': '198.51.100.1',
+                'dns_servers': ['not-an-ip'],
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+    response = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert response.status_code == 422, response.text
+    assert 'dns_servers' in response.text or 'same subnet' in response.text
+
+
+
 def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
 
