@@ -42,6 +42,7 @@
       slug: state.slug,
       hostnameSchemeId: options.hostnameSchemeId || '',
     });
+    state.routePath = path;
     if (location.hash.slice(1) !== path) {
       history.replaceState(history.state, '', '#' + path);
     }
