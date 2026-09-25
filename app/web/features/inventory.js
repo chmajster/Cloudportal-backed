@@ -460,7 +460,7 @@ async function vmBackupsContent(item) {
         { label: 'Rozmiar', value: backup => formatBytes(backup.size) },
         { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString('pl-PL') : '—' },
         { label: 'Chroniony', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
-      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => restoreVmFromBackup(item, backup), 'primary')] : []));
+      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/restore?archive=' + encodeURIComponent(backup.volid || '')), 'primary')] : []));
     } catch (error) {
       content.replaceChildren(node('p', { class: 'form-error', text: error.message }));
     }
@@ -677,7 +677,7 @@ async function listVmBackups(item) {
         { label: 'Rozmiar', value: backup => formatBytes(backup.size) },
         { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString('pl-PL') : '—' },
         { label: 'Chroniony', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
-      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => restoreVmFromBackup(item, backup), 'primary')] : []);
+      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/restore?archive=' + encodeURIComponent(backup.volid || '')), 'primary')] : []);
       dom.modalBody.replaceChildren(rows.length ? backupTable : node('p', { class: 'muted', text: 'Brak backupów dla tej VM.' }));
       dom.modalActions.replaceChildren(button('Zamknij', closeModal));
       return false;
@@ -977,6 +977,17 @@ registerRoutedForm({
   permission: 'backups.create',
   label: 'Moje zasoby',
 }, async match => backupVm(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-backup-restore',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/backups\/restore$/,
+  parent: 'my-resources',
+  permission: 'backups.restore',
+  label: 'Moje zasoby',
+}, async match => {
+  const archive = match.searchParams.get('archive') || '';
+  if (!archive) throw new Error('Brak identyfikatora backupu.');
+  restoreVmFromBackup(await routedVmItem(match), { volid: archive });
+});
 registerRoutedForm({
   id: 'inventory-compute-edit',
   pattern: /^\/resources\/vm\/(?<id>[^/]+)\/edit\/compute$/,
