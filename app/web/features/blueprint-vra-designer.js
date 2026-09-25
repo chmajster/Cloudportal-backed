@@ -1091,6 +1091,29 @@
     }
   }
 
-  window.BlueprintVRADesigner = { open: openDesigner, validateReferences: validateBlueprintReferences };
+  registerRoutedForm({
+    id: 'blueprint-designer-create',
+    pattern: /^\/blueprints\/designer\/new$/,
+    parent: 'blueprints',
+    permission: 'blueprints.create',
+    label: 'Blueprint Designer',
+    surface: false,
+  }, () => openDesigner());
+  registerRoutedForm({
+    id: 'blueprint-designer-edit',
+    pattern: /^\/blueprints\/(?<id>\d+)(?:\/[^/]+)?\/designer$/,
+    parent: 'blueprints',
+    permission: 'blueprints.update',
+    label: 'Blueprint Designer',
+    surface: false,
+  }, async match => openDesigner(await api('/blueprints/' + match.params.id)));
+
+  window.BlueprintVRADesigner = {
+    open: item => item
+      ? navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/designer')
+      : navigate('/blueprints/designer/new'),
+    render: openDesigner,
+    validateReferences: validateBlueprintReferences,
+  };
   registerExtension('blueprint-vra-designer', () => {});
 })();
