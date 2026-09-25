@@ -19,7 +19,7 @@ async function ipamView() {
         { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
       ], pools.items, item => {
         const result = [];
-        if (allowed('ipam.allocate') && item.is_active) result.push(button('Przydziel IP', () => allocateIp(item), 'primary'));
+        if (allowed('ipam.allocate') && item.is_active) result.push(button('Przydziel IP', () => navigate('/ipam/pools/' + encodeURIComponent(item.id) + '/allocate'), 'primary'));
         if (allowed('ipam.update')) result.push(button('Edytuj', () => navigate('/ipam/pools/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'pool'))));
         if (allowed('ipam.delete')) result.push(button('Usuń', () => confirmAction('Usuń pulę IPAM', `Pula ${item.name} zostanie usunięta tylko jeśli nie ma historii alokacji.`, async () => {
           await api(`/ipam/pools/${item.id}`, { method: 'DELETE' });
@@ -38,7 +38,7 @@ async function ipamView() {
         { label: 'Utworzono', value: item => formatDate(item.created_at) },
       ], allocations.items, item => {
         const result = [];
-        if (allowed('ipam.allocate') && item.status === 'reserved') result.push(button('Przypisz', () => assignIpAllocation(item), 'primary'));
+        if (allowed('ipam.allocate') && item.status === 'reserved') result.push(button('Przypisz', () => navigate('/ipam/allocations/' + encodeURIComponent(item.id) + '/assign'), 'primary'));
         if (allowed('ipam.release') && item.status !== 'released') result.push(button('Zwolnij', () => confirmAction('Zwolnij adres', `${item.address} wróci do puli.`, async () => {
           await api(`/ipam/allocations/${item.id}/release`, { method: 'POST' });
           toast('Adres IP zwolniony.');
@@ -122,6 +122,30 @@ function allocateIp(pool) {
   }});
 }
 
+registerRoutedForm({
+  id: 'ipam-pool-allocate',
+  pattern: /^\/ipam\/pools\/(?<id>\d+)\/allocate$/,
+  parent: 'ipam',
+  permission: 'ipam.allocate',
+  label: 'IPAM',
+}, async match => {
+  const pools = (await api('/ipam/pools?limit=200')).items;
+  const pool = pools.find(value => Number(value.id) === Number(match.params.id));
+  if (!pool) throw new Error('Nie znaleziono puli IPAM.');
+  allocateIp(pool);
+});
+registerRoutedForm({
+  id: 'ipam-allocation-assign',
+  pattern: /^\/ipam\/allocations\/(?<id>\d+)\/assign$/,
+  parent: 'ipam',
+  permission: 'ipam.allocate',
+  label: 'IPAM',
+}, async match => {
+  const rows = (await api('/ipam/allocations?limit=200')).items;
+  const item = rows.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono alokacji IP.');
+  await assignIpAllocation(item);
+});
 registerRoutedForm({
   id: 'ipam-pool-create',
   pattern: /^\/ipam\/pools\/new$/,
