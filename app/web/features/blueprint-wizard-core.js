@@ -240,7 +240,7 @@
       advancedWorkflow: false,
       workflow: [],
       visibilityBackend: true,
-      visibilityCloudportal: false,
+      visibilityCloudportal: true,
       visibilityApi: true,
       allowedRoleIds: [],
       allowedUserIds: [],
