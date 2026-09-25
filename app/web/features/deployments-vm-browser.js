@@ -267,6 +267,10 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     }
   }
 
+  if (provisioningJob?.id && allowed('jobs.read')) {
+    actions.push(button('Logi', () => navigate('/jobs/' + encodeURIComponent(provisioningJob.id)), 'ghost'));
+  }
+
   if (canOpen) {
     actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', item, 'overview', 'my-resources'), 'primary'));
   }
