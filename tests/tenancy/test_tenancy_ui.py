@@ -20,6 +20,7 @@ const context = {
   state: {view: 'tenants'},
   document: {addEventListener: (event, handler) => {listeners[event] = handler;}},
   registerView: (route, handler) => { handlers[route.id] = handler; permission = route.permission; },
+  registerRoutedForm: () => {},
   node, selectField: () => node('select'),
   heading: (text, actions) => node('heading', {text}, actions),
   table: (cols, rows, actions) => node('table', {}, rows.map(row => cols.map(col => col.value(row)))),
