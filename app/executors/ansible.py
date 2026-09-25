@@ -23,7 +23,8 @@ InventoryDumper.add_representer(UnsafeString, lambda dumper, value: dumper.repre
 class AnsibleExecutor(Executor):
     def execute(self, operation, context):
         spec = context.ansible
-        payload = context.job.payload or {}
+        job = getattr(context, 'job', None)
+        payload = getattr(job, 'payload', None) or {}
         snapshots = payload.get('_ansible_playbook_snapshots') or {}
         snapshot = (
             snapshots.get(spec.playbook)
