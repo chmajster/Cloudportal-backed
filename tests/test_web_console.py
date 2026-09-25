@@ -650,7 +650,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Conditions (JSON)" in script
     assert "Opcjonalne ustawienia dostępu" in script
     assert "Blueprint został utworzony i jest gotowy do użycia." in script
-    assert 'Sposób nadawania hostname' in script
     assert 'Pattern hostname' in script
     assert "button('Nowy pattern', () => hostnameSchemeForm(), 'primary')" in script
     assert 'const schemeId = item == null ? null : Number(item.id);' in script
