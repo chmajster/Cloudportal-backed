@@ -55,5 +55,5 @@ output "vm_id" {
 }
 
 output "primary_ip" {
-  value = null
+  value = ""
 }
