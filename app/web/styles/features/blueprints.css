@@ -142,7 +142,7 @@
 .blueprint-wizard-nav-host { position: sticky; top: 0; z-index: 2; padding-bottom: 2px; background: var(--surface); }
 .blueprint-wizard-steps {
   display: grid;
-  grid-template-columns: repeat(9, minmax(86px, 1fr));
+  grid-template-columns: repeat(10, minmax(86px, 1fr));
   gap: 6px;
   overflow-x: auto;
   padding: 2px 0 10px;
@@ -394,7 +394,7 @@
 }
 
 @media (max-width: 900px) {
-  .blueprint-wizard-steps { grid-template-columns: repeat(9, 118px); }
+  .blueprint-wizard-steps { grid-template-columns: repeat(10, 118px); }
   .blueprint-wizard-card-grid-three { grid-template-columns: 1fr; }
   .blueprint-wizard-presets { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
