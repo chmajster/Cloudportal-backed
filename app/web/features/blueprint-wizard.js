@@ -51,9 +51,10 @@
     }));
   }
 
-  const safeApi = (path, fallback = [], options = {}) => api(path, options).then(result => result.items || result).catch(() => fallback);
+  const safeApi = (path, _fallback = [], options = {}) => api(path, options).then(result => result.items || result);
+  const optionalApi = (path, fallback = [], options = {}) => api(path, options).then(result => result.items || result).catch(() => fallback);
   async function openBlueprintWizard(options = {}) {
-    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit || !parts.awx) {
+    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit || !parts.awx || !parts.validation) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
       return;
     }
@@ -61,11 +62,11 @@
     try {
       const [creationScopes, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
         safeApi('/blueprints/creation-scopes?limit=200'),
-        safeApi('/project-context', { selected: null, version: 0 }),
+        optionalApi('/project-context', { selected: null, version: 0 }),
         allowed('ansible.read') ? safeApi('/ansible/playbooks') : Promise.resolve([]),
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
         allowed('users.read') ? safeApi('/users?limit=200') : Promise.resolve([]),
-        safeApi('/settings/vm-classification', {
+        optionalApi('/settings/vm-classification', {
           environments: { test: true, dev: true, nonprod: true, prod: true },
           apmids: [],
           hostname_defaults: { location: 'wro', role: 'server' },
@@ -77,7 +78,7 @@
       const pageMode = options.page === true;
       state.step = normalizedWizardStep(options.initialStep || 0);
       state.maxStep = editingItem ? STEPS.length - 1 : state.step;
-      const scopeData = parts.scope.prepare(creationScopes, projectContext, state);
+      const scopeData = parts.scope.prepare(creationScopes, projectContext, state, options);
       const data = {
         tenants: scopeData.tenants,
         projects: scopeData.projects,
@@ -151,6 +152,12 @@
       async function loadNodeResources() {
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         if (!provider || provider.type !== 'proxmox' || !state.node) return;
+        state.storages = [];
+        state.snippetStorages = [];
+        state.networks = [];
+        state.storage = '';
+        state.network = '';
+        state.cloudInitSnippetStorage = '';
         try {
           const requestOptions = { headers: parts.core.scopeHeaders(state) };
           const [storageResult, networkResult, qemuReadiness] = await Promise.all([
@@ -188,6 +195,13 @@
           }
         } catch (error) {
           state.providerError = error.message;
+          state.providerConnected = false;
+          state.storages = [];
+          state.snippetStorages = [];
+          state.networks = [];
+          state.storage = '';
+          state.network = '';
+          state.cloudInitSnippetStorage = '';
         }
       }
 
@@ -286,7 +300,10 @@
             root.querySelectorAll('[data-generic-variable]').forEach(input => {
               const template = data.templates.find(value => value.id === state.terraformTemplateId);
               const spec = template?.variables_schema?.properties?.[input.dataset.genericVariable] || {};
-              state.genericVariables[input.dataset.genericVariable] = parts.core.coerceSchemaValue(spec, input.value);
+              state.genericVariables[input.dataset.genericVariable] = parts.core.coerceSchemaValue(
+                spec,
+                input.type === 'checkbox' ? input.checked : input.value
+              );
             });
           }
         } else if (state.step === 3) {
@@ -342,98 +359,8 @@
         }
       }
 
-      function validateWorkflow() {
-        const errors = {};
-        if (!state.advancedWorkflow) {
-          Object.assign(errors, parts.cloudInit.validate(state));
-          return errors;
-        }
-        if (!state.workflow.length) {
-          errors.workflow = 'Workflow musi zawierać co najmniej jeden krok.';
-          return errors;
-        }
-        const ids = state.workflow.map(value => value.id);
-        if (ids.some(value => !value)) errors.workflow = 'Każdy krok workflow musi mieć ID.';
-        if (new Set(ids).size !== ids.length) errors.workflow = 'ID kroków workflow muszą być unikalne.';
-        const known = new Set(ids);
-        for (const step of state.workflow) {
-          if (step.conditions?.__invalid) errors.workflow = 'Conditions muszą być poprawnym obiektem JSON.';
-          if (step.depends_on.some(value => !known.has(value) || value === step.id)) errors.workflow = 'Workflow zawiera nieprawidłową zależność.';
-        }
-        if (!state.workflow.some(value => ['create_vm', 'clone_vm', 'terraform_apply'].includes(value.type))) {
-          errors.workflow = 'Workflow musi zawierać krok tworzący lub stosujący VM.';
-        }
-        Object.assign(errors, parts.cloudInit.validate(state));
-        return errors;
-      }
-
       function validateStep(index) {
-        const errors = {};
-        if (index === 0) {
-          if (!state.tenantId || !state.projectId) errors.project_id = 'Wybierz Tenant i Projekt dla Blueprintu.';
-          if (!state.name) errors.name = 'Podaj nazwę Blueprintu.';
-          if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(state.slug)) errors.slug = 'Slug musi mieć 1–63 znaków i używać liter, cyfr, _, . lub -.';
-        } else if (index === 1) {
-          const provider = data.providers.find(value => String(value.id) === String(state.providerId));
-          if (!provider) errors.provider = 'Wybierz platformę.';
-          if (provider?.type === 'proxmox') {
-            if (!state.node) errors.node = 'Wybierz docelowy node.';
-            if (!state.selectedTemplateVmid) errors.template = 'Wybierz template/VM bazową.';
-            if (!state.providerConnected) errors.provider = state.providerError || 'Nie udało się odczytać zasobów Proxmox.';
-          } else if (!state.terraformTemplateId) {
-            errors.template = 'Wybierz szablon IaC zgodny z providerem.';
-          }
-          if (!provider?.credentials_id) errors.provider = 'Provider nie ma przypisanych credentials.';
-        } else if (index === 2) {
-          if (state.providerType === 'proxmox') {
-            if (!Number.isFinite(Number(state.cpu)) || Number(state.cpu) < 1) errors.cpu = 'CPU musi być większe od 0.';
-            if (!Number.isFinite(Number(state.memory)) || Number(state.memory) < 512) errors.memory = 'RAM musi mieć co najmniej 512 MiB.';
-            if (!Number.isFinite(Number(state.disk)) || Number(state.disk) < 1) errors.disk = 'Dysk musi mieć co najmniej 1 GiB.';
-            if (!state.storage) errors.storage = 'Wybierz storage.';
-            if (!state.network) errors.network = 'Wybierz sieć/bridge.';
-            if (!state.selectEnvironmentOnExecute && !state.environment) errors.environment = 'Wybierz Environment.';
-            if (!state.selectApmidOnExecute && !state.apmid) errors.apmid = 'Podaj lub wybierz APMID.';
-            if (state.selectEnvironmentOnExecute
-                && !['test', 'dev', 'nonprod', 'prod'].some(name => data.vmClassification?.environments?.[name] !== false)) {
-              errors.select_environment_on_execute = 'Brak włączonych Environment do wyboru podczas tworzenia VM.';
-            }
-            if (state.selectApmidOnExecute && !(data.vmClassification?.apmids || []).length) {
-              errors.select_apmid_on_execute = 'Brak skonfigurowanych APMID do wyboru podczas tworzenia VM.';
-            }
-          } else {
-            const template = data.templates.find(value => value.id === state.terraformTemplateId);
-            const required = parts.core.requiredTemplateVariables(template);
-            for (const name of required) {
-              if (name === 'name') continue;
-              const value = state.genericVariables[name];
-              if (value === undefined || value === null || value === '') errors['generic_' + name] = 'Pole jest wymagane.';
-            }
-          }
-        } else if (index === 3) {
-          Object.assign(errors, parts.hostname.validateHostname(state, data));
-        } else if (index === 4) {
-          Object.assign(errors, parts.network.validateNetwork(state, data));
-        } else if (index === 5 && state.ansibleEnabled) {
-          const runs = state.ansibleRuns || [];
-          if (!runs.length) errors.ansible_runs = 'Dodaj co najmniej jeden runbook Ansible.';
-          runs.forEach((run, runIndex) => {
-            const playbook = data.playbooks.find(value => value.id === run.playbook);
-            if (!playbook) errors['ansible_playbook_' + runIndex] = 'Runbook #' + (runIndex + 1) + ': wybierz playbook.';
-            if (!run.credentials_id) errors['ansible_credentials_' + runIndex] = 'Runbook #' + (runIndex + 1) + ': wybierz credentials.';
-            for (const name of playbook?.required_variables || []) {
-              if (name === 'hostname' && state.hostnameEnabled) continue;
-              if (!run.variables?.[name]) {
-                errors['ansible_' + runIndex + '_' + name] = 'Runbook #' + (runIndex + 1) + ': uzupełnij zmienną ' + name + '.';
-              }
-            }
-          });
-        } else if (index === 6) {
-          Object.assign(errors, validateWorkflow());
-        } else if (index === 7) {
-          Object.assign(errors, parts.awx.validate(state));
-        }
-        state.errors = errors;
-        return !Object.keys(errors).length;
+        return parts.validation.validateStep(index, state, data, editingItem);
       }
 
       function stepHeading(title, description) {
@@ -658,7 +585,9 @@
             const type = parts.core.schemaType(spec);
             const value = state.genericVariables[name] ?? spec.default ?? '';
             let wrapper;
-            if (spec.enum) {
+            if (type === 'boolean') {
+              wrapper = checkboxField(FIELD_LABELS[name] || spec.title || name, 'generic_' + name, Boolean(value));
+            } else if (spec.enum) {
               wrapper = selectField(FIELD_LABELS[name] || spec.title || name, 'generic_' + name,
                 spec.enum.map(value => ({ value, label: String(value) })), value,
                 { required: required.has(name) });
@@ -673,7 +602,16 @@
             const input = wrapper.querySelector('input,select,textarea');
             input.dataset.genericVariable = name;
             input.addEventListener('input', () => {
-              state.genericVariables[name] = parts.core.coerceSchemaValue(spec, input.value);
+              state.genericVariables[name] = parts.core.coerceSchemaValue(
+                spec,
+                input.type === 'checkbox' ? input.checked : input.value
+              );
+            });
+            input.addEventListener('change', () => {
+              state.genericVariables[name] = parts.core.coerceSchemaValue(
+                spec,
+                input.type === 'checkbox' ? input.checked : input.value
+              );
             });
             grid.append(wrapper);
           }
@@ -895,7 +833,11 @@
 
       function renderHostname() {
         const content = parts.hostname.renderSchemeCards({
-          state, data, rerender: render, saveStateFromInput,
+          state,
+          data,
+          rerender: render,
+          saveStateFromInput,
+          canCreate: blueprintScope.allows('hostnames.create'),
         });
         const toggle = content.querySelector('[name="hostname_enabled"]');
         if (toggle) toggle.addEventListener('change', () => {
@@ -1279,11 +1221,25 @@
         bodyRoot.replaceChildren(progress);
         try {
           progress.querySelector('span').textContent = 'Zapisywanie definicji i workflow…';
-          const created = await api(editingItem ? `/blueprints/${editingItem.id}` : '/blueprints', {
+          const inlineHostnameScheme = state.hostnameSchemeId === '__pending__'
+            ? state.pendingHostnameScheme
+            : null;
+          const requestPath = inlineHostnameScheme
+            ? (editingItem ? `/blueprints/${editingItem.id}/bundle` : '/blueprints/bundle')
+            : (editingItem ? `/blueprints/${editingItem.id}` : '/blueprints');
+          const requestBody = inlineHostnameScheme
+            ? { blueprint: payload, hostname_scheme: inlineHostnameScheme }
+            : payload;
+          const created = await api(requestPath, {
             method: editingItem ? 'PUT' : 'POST',
-            body: payload,
+            body: requestBody,
             headers: parts.core.scopeHeaders(state),
+            idempotent: !editingItem,
           });
+          window.CloudportalBlueprintScope = {
+            tenant_id: String(state.tenantId),
+            project_id: String(state.projectId),
+          };
           if (pageMode) replaceBlueprintWizardRoute(created, state, options);
           progress.replaceChildren(
             node('span', { class: 'blueprint-wizard-success-icon' }, appIcon('check')),
