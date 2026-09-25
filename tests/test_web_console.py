@@ -281,7 +281,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "item.status === 'cancelling'" in script
     assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
     assert "runCommand('inventory.openVm', vm, 'overview', 'my-resources')" in script
-    assert "registerCommand('inventory.consoleVm', showVmConsole)" in script
+    assert "registerCommand('inventory.consoleVm', item => navigate('/resources/vm/'" in script
     assert "const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm')" in script
     assert "runCommand('inventory.consoleVm', item)" in script
     assert "/resources/vm/" in script
