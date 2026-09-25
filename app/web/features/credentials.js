@@ -490,7 +490,7 @@ function renderCredentialDynamic(container, type, item) {
 
 async function credentialsView() {
   const credentials = (await api('/credentials?limit=200')).items;
-  const actions = allowed('credentials.create') ? [button('Dodaj dane dostępowe', () => credentialForm(), 'primary')] : [];
+  const actions = allowed('credentials.create') ? [button('Dodaj dane dostępowe', () => navigate('/access/credentials/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Sekrety są szyfrowane i nigdy nie wracają do przeglądarki.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -512,7 +512,7 @@ function credentialActions(item) {
       toast('Połączenie działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
     } catch (error) { toast(error.message, 'error'); }
   }));
-  if (allowed('credentials.update')) actions.push(button('Edytuj', () => credentialForm(item)));
+  if (allowed('credentials.update')) actions.push(button('Edytuj', () => navigate('/access/credentials/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'credential'))));
   if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń dane dostępowe', 'Pozycja „' + item.name + '” zostanie trwale usunięta.', async () => {
     await api('/credentials/' + item.id, { method: 'DELETE' }); toast('Dane dostępowe usunięte.'); navigate('credentials');
   }), 'danger'));
@@ -732,5 +732,24 @@ function credentialForm(item = null) {
   });
 }
 
+registerRoutedForm({
+  id: 'credentials-create',
+  pattern: /^\/access\/credentials\/new$/,
+  parent: 'credentials',
+  permission: 'credentials.create',
+  label: 'Dane dostępowe',
+}, () => credentialForm());
+registerRoutedForm({
+  id: 'credentials-edit',
+  pattern: /^\/access\/credentials\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'credentials',
+  permission: 'credentials.update',
+  label: 'Dane dostępowe',
+}, async match => {
+  const credentials = (await api('/credentials?limit=200')).items;
+  const item = credentials.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono danych dostępowych.');
+  credentialForm(item);
+});
 registerView({ id: 'credentials', label: 'Dane dostępowe', icon: 'K', permission: 'credentials.read', order: 40 }, credentialsView);
 })();
