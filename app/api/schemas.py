@@ -477,6 +477,7 @@ class ApplianceVMVariables(Input):
     node: Slug
     storage: Slug
     network: Slug = 'vmbr0'
+    network_count: int = Field(default=1, ge=1, le=8)
     vlan_id: int | None = Field(default=None, ge=1, le=4094)
     cpu: int = Field(default=2, ge=1, le=128)
     memory: int = Field(default=4096, ge=128, le=1048576)
