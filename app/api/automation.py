@@ -196,12 +196,12 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         if 'cloud_init' not in workflow_types:
             raise HTTPException(422, 'Existing template account mode requires an explicit cloud_init workflow step')
     if data.deployment.guest_credential_id:
-        if data.deployment.template != 'proxmox-vm':
-            raise HTTPException(422, 'Guest credential injection is currently supported only for proxmox-vm')
+        if provider.type != 'proxmox':
+            raise HTTPException(422, 'Guest credential injection is currently supported only for Proxmox templates')
         guest_credential_cloud_init(db, data.deployment.guest_credential_id)
     if data.deployment.template_guest_credential_id:
-        if data.deployment.template != 'proxmox-vm':
-            raise HTTPException(422, 'Template guest credential is currently supported only for proxmox-vm')
+        if provider.type != 'proxmox':
+            raise HTTPException(422, 'Template guest credential is currently supported only for Proxmox templates')
         guest_credential_cloud_init(db, data.deployment.template_guest_credential_id)
     for role_id in set(data.allowed_role_ids):
         find(db, Role, role_id)
