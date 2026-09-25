@@ -637,18 +637,19 @@ class ProxmoxProvider(InfrastructureProvider):
     def guest_agent_ready(self, node, vm_id):
         path = f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/agent/ping'
         response = self._request(
-            'GET',
+            'POST',
             path,
             return_response=True,
-            # Proxmox uses HTTP 500 while the QEMU Guest Agent channel exists
-            # but is not ready yet. This is a readiness state, not an API
-            # authentication/transport failure.
+            # QEMU Guest Agent ping is an action endpoint in Proxmox and must
+            # be invoked with POST. Proxmox uses HTTP 500 while the guest agent
+            # channel exists but is not ready yet; that is a readiness state,
+            # not an API authentication/transport failure.
             accepted_statuses={500},
         )
         if response.status_code == 500:
             return False
-        # The ping endpoint may return {"data": null} on success. HTTP 2xx is
-        # therefore the readiness signal; checking the data payload is wrong.
+        # The ping endpoint may return {"data": null} or an empty result on
+        # success. HTTP 2xx is therefore the readiness signal.
         return 200 <= response.status_code < 300
 
     def guest_exec(self, node, vm_id, command, timeout=120):
