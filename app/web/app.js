@@ -66,7 +66,11 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !(typeof window.modalSurfaceOpen === 'function' && window.modalSurfaceOpen())
       && dom.appView.classList.contains('menu-open')) setMobileMenu(false);
 });
-window.addEventListener('hashchange', () => { if (!dom.appView.hidden && location.hash.slice(1) !== state.view) navigate(location.hash.slice(1)); });
+window.addEventListener('hashchange', () => {
+  if (dom.appView.hidden) return;
+  const requested = location.hash.slice(1);
+  if (requested !== state.routePath) navigate(requested);
+});
 
 loadTheme();
 loadSidebarState();
