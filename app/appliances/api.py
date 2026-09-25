@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import uuid
 from pathlib import Path
@@ -92,7 +91,10 @@ async def _stream_ova(request: Request, destination: Path):
             raise ValueError('Multipart musi zawierać wyłącznie pole file')
         if file_seen or current_file is not None:
             raise ValueError('Można wysłać tylko jeden plik OVA')
-        client_filename = filename.decode('utf-8', 'replace')
+        raw_filename = filename.decode('utf-8', 'replace').replace('\\', '/')
+        client_filename = Path(raw_filename).name
+        if not client_filename or len(client_filename) > 255 or any(ord(ch) < 32 for ch in client_filename):
+            raise ValueError('Nazwa pliku OVA jest nieprawidłowa')
         if not client_filename.lower().endswith('.ova'):
             raise ValueError('Akceptowane są wyłącznie pliki .ova')
         current_file = _secure_open_new(destination)
