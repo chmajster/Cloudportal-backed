@@ -18,6 +18,7 @@ const node = (tag, attrs = {}, ...children) => ({tag, attrs, children,
 const context = {
   console, Promise, Set, JSON, String, Number, Math, encodeURIComponent,
   state: {view: 'tenants'},
+  viewIs: id => context.state.view === id,
   document: {addEventListener: (event, handler) => {listeners[event] = handler;}},
   registerView: (route, handler) => { handlers[route.id] = handler; permission = route.permission; },
   registerRoutedForm: () => {},
