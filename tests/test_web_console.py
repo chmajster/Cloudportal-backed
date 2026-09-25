@@ -555,7 +555,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "hostname_values" in script
     assert "ipam_pool_id" in script
     assert "guest_credential_id" in script
-    assert "Credential ustawiany na VM" in script
+    assert "Wybrano Credential VM" in script
     assert "field.hidden = !supported" in script
     assert "value === 'proxmox-vm'" in script
     assert "supports_cloud_init_ssh_key === true" in script
@@ -573,7 +573,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM" in script
     assert "jednorazowe konto przez natywny cloud-init" in script
     assert "statycznego IP/IPAM" in script
-    assert "Credential ustawiany na VM" in script
+    assert "Wybrano Credential VM" in script
     assert "blueprint-wizard-ssh-credential-users" in script
     assert "wybrać użytkownika z zapisanych Credentiali" in script
     assert "Instaluj QEMU Guest Agent automatycznie" in script
