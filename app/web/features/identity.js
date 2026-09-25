@@ -17,7 +17,7 @@ async function usersView() {
 
 function userActions(user) {
   const actions = [];
-  if (allowed('roles.assign') && allowed('roles.read')) actions.push(button('Role', () => assignUserRoles(user)));
+  if (allowed('roles.assign') && allowed('roles.read')) actions.push(button('Role', () => navigate('/access/users/' + encodeURIComponent(user.id) + '/roles')));
   if (allowed('users.update')) {
     actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
@@ -295,6 +295,18 @@ function changePassword(required = false) {
   });
 }
 
+registerRoutedForm({
+  id: 'users-roles',
+  pattern: /^\/access\/users\/(?<id>\d+)\/roles$/,
+  parent: 'users',
+  permission: 'roles.assign',
+  label: 'Użytkownicy',
+}, async match => {
+  const users = (await api('/users?limit=200')).items;
+  const user = users.find(item => Number(item.id) === Number(match.params.id));
+  if (!user) throw new Error('Nie znaleziono użytkownika.');
+  await assignUserRoles(user);
+});
 registerRoutedForm({
   id: 'users-create',
   pattern: /^\/access\/users\/new$/,
