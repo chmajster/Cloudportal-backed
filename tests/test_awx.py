@@ -89,6 +89,46 @@ def test_register_host_is_metadata_driven_and_groups_are_automatic():
 
 
 
+class FakeLaunchAwxClient(AwxClient):
+    def __init__(self):
+        self.payload = None
+
+    def request(self, method, path, **kwargs):
+        assert method == 'POST'
+        assert path == 'job_templates/33/launch/'
+        self.payload = kwargs['json']
+
+        class Response:
+            @staticmethod
+            def json():
+                return {'job': 444}
+
+        return Response()
+
+
+def test_launch_job_template_receives_runtime_environment_and_apmid():
+    client = FakeLaunchAwxClient()
+
+    result = client.launch_job_template(
+        33,
+        hostname='srv001',
+        deployment_id='dep-123',
+        environment='NonProd',
+        apmid='leo',
+    )
+
+    assert result == {'job': 444}
+    assert client.payload == {
+        'limit': 'srv001',
+        'extra_vars': {
+            'cloudportal_onboarding': True,
+            'cloudportal_deployment_id': 'dep-123',
+            'environment': 'nonprod',
+            'apmid': 'LEO',
+        },
+    }
+
+
 class FakeRemovalAwxClient(AwxClient):
     def __init__(self):
         self.deleted = []
