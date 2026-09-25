@@ -227,9 +227,12 @@ class BlueprintManagerRole(Base):
 
 class Blueprint(ResourceScope, Timestamp, Base):
     __tablename__ = "blueprints"
-    __table_args__ = scope_constraints("blueprints")
+    __table_args__ = (
+        *scope_constraints("blueprints"),
+        UniqueConstraint("tenant_id", "project_id", "slug", name="uq_blueprints_scope_slug"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    slug: Mapped[str] = mapped_column(String(63), unique=True)
+    slug: Mapped[str] = mapped_column(String(63))
     name: Mapped[str] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(Text, default="")
     version: Mapped[int] = mapped_column(Integer, default=1)
