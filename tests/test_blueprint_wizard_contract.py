@@ -8,6 +8,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-core.js'
+RUNTIME_APMID = ROOT / 'app' / 'web' / 'features' / 'blueprint-runtime-apmid.js'
 
 
 def run_core(expression: str):
@@ -275,6 +276,35 @@ console.log(JSON.stringify({ empty, partial, complete }));
         'X-Tenant-ID': 'tenant-1',
         'X-Project-ID': 'project-1',
     }
+
+
+def test_runtime_apmid_flag_normalizes_legacy_values_and_read_has_safe_fallback():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node is required for Blueprint runtime classification tests')
+    script = f"""
+global.window = {{}};
+global.registerExtension = (_name, initialize) => initialize();
+eval(require('fs').readFileSync({json.dumps(str(RUNTIME_APMID))}, 'utf8'));
+const runtime = window.BlueprintRuntimeApmid;
+const trueValues = [true, 1, 'true', '1', 'yes', 'tak', 'on'].map(runtime.runtimeFlag);
+const falseValues = [false, 0, null, '', 'false', '0', 'no', 'nie', 'off'].map(runtime.runtimeFlag);
+const item = {{ deployment: {{ select_apmid_on_execute: 'true' }} }};
+const form = {{ elements: {{}} }};
+const read = runtime.read(form, {{ apmidSelectable: true, defaultApmid: 'LEO', environmentSelectable: true, defaultEnvironment: 'dev' }});
+console.log(JSON.stringify({{
+  trueValues,
+  falseValues,
+  selectable: runtime.allowsRuntimeApmid(item, ''),
+  read,
+}}));
+"""
+    result = subprocess.run([node, '-e', script], check=True, capture_output=True, text=True)
+    payload = json.loads(result.stdout)
+    assert payload['trueValues'] == [True] * 7
+    assert payload['falseValues'] == [False] * 9
+    assert payload['selectable'] is True
+    assert payload['read'] == {'apmid': 'LEO', 'environment': 'dev'}
 
 
 def test_wizard_runtime_classification_switches_default_to_fixed_values():
