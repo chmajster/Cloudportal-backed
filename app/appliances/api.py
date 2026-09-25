@@ -179,8 +179,13 @@ async def create_ova_blueprint(
     actor=Depends(require('blueprints.create')),
     db=Depends(get_db, scope='function'),
 ):
-    if 'terraform.execute' not in request.state.permissions:
-        raise HTTPException(403, 'terraform.execute jest wymagane do importu appliance OVA')
+    required_permissions = {'terraform.execute', 'providers.read', 'credentials.read'}
+    missing_permissions = sorted(required_permissions - set(request.state.permissions))
+    if missing_permissions:
+        raise HTTPException(
+            403,
+            'Import appliance OVA wymaga uprawnień: ' + ', '.join(missing_permissions),
+        )
     if db.scalar(select(Blueprint.id).where(Blueprint.slug == slug).limit(1)):
         raise HTTPException(409, 'Blueprint o takim slug już istnieje')
 
