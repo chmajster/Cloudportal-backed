@@ -1433,7 +1433,7 @@
           button('← Blueprinty', () => navigate('blueprints'), 'ghost'),
           node('div', { class: 'blueprint-wizard-page-context' },
             node('strong', { text: editingItem ? 'Edycja wersjonowanego Blueprintu' : 'Tworzenie nowego Blueprintu' }),
-            node('span', { class: 'muted', text: 'Każdy krok ma własny adres URL i można go odświeżyć bez otwierania popupu.' })));
+            node('span', { class: 'muted', text: 'Kreator działa jako osobna strona, a każdy krok ma własny adres URL.' })));
         dom.content.replaceChildren(
           node('section', { class: 'panel blueprint-wizard-page' },
             pageHeader,
