@@ -3,13 +3,13 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
-from app.catalog import template_definition
+from app.catalog import template_definition, validate_template_variables
 from app.catalog_control import require_catalog_item_enabled
 from app.api.outputs import (BlueprintCreationScopeOutput, BlueprintOutput, CreatedDeploymentOutput, DeletedOutput,
                              GeneratedHostnameOutput, HostnameReservationOutput, HostnameSchemeOutput, Items,
                              VMClassificationSettingsOutput)
-from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput, DeploymentInput,
-                             HostnameGenerateInput, HostnameSchemeInput)
+from app.api.schemas import (BlueprintBundleInput, BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput,
+                             DeploymentInput, HostnameGenerateInput, HostnameSchemeInput)
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
@@ -27,6 +27,12 @@ from app.vm_classification import vm_classification_settings
 
 
 router = APIRouter(tags=['automation'])
+
+
+BlueprintScopePermission = Literal[
+    'blueprints.read', 'blueprints.create', 'blueprints.update',
+    'blueprints.delete', 'blueprints.execute', 'blueprints.approve',
+]
 
 
 def scheme_public(row):
@@ -123,6 +129,32 @@ def release_hostname(id: str, request: Request, actor=Depends(require('hostnames
     return hostname_public(row)
 
 
+def validate_blueprint_template_variables(data: BlueprintInput):
+    """Validate static IaC variables when they can be checked at Blueprint-save time.
+
+    Proxmox Blueprints created by the step-by-step wizard contain only the generated
+    hostname placeholder. Replacing that single placeholder lets the canonical
+    template model reject invalid IPv4/DNS/VLAN/CPU/RAM/storage data before a
+    Blueprint can be persisted. Legacy self-service Blueprints may template other
+    values; those remain execution-time validated because their concrete values do
+    not exist yet.
+    """
+    variables = dict(data.deployment.variables or {})
+    if data.deployment.template != 'proxmox-vm':
+        return
+
+    templated = []
+    for name, value in variables.items():
+        if isinstance(value, str) and re.search(r'{{\s*[A-Za-z0-9_]+\s*}}', value):
+            if name == 'name' and re.fullmatch(r'{{\s*hostname\s*}}', value):
+                variables[name] = 'blueprint-validation'
+            else:
+                templated.append(name)
+    if templated:
+        return
+    validate_template_variables(data.deployment.template, variables)
+
+
 def validate_blueprint_references(db, data, blueprint_id=None):
     provider = find(db, Provider, data.deployment.provider_id)
     existing = db.get(Blueprint, blueprint_id) if blueprint_id is not None else None
@@ -146,6 +178,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
             require_catalog_item_enabled(db, 'playbooks', ansible_run.playbook)
     if provider.type != template_meta['provider']:
         raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
+    validate_blueprint_template_variables(data)
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
     workflow_types = {str(step.type) for step in data.workflow}
@@ -247,19 +280,20 @@ def blueprint_yaml_render(data: BlueprintInput, actor=Depends(require('blueprint
 
 @router.get('/blueprints/creation-scopes', response_model=Items[BlueprintCreationScopeOutput])
 def blueprint_creation_scopes(limit: Limit = 200, offset: Offset = 0,
+                              permission: BlueprintScopePermission = 'blueprints.create',
                               actor=Depends(authenticate), db=Depends(get_db, scope='function')):
-    """Return only active organization/project scopes where this identity may create a Blueprint.
+    """Return active Blueprint scopes for one explicitly requested permission.
 
-    This endpoint intentionally does not require an already selected resource scope:
-    it is the trusted source for the scope picker itself. The built-in platform
-    Administrator sees every active project, while delegated users see only scopes
-    granted through tenant/project RBAC. API-token ceilings still apply.
+    The default remains blueprints.create for backward compatibility with the
+    creation wizard. The Blueprint list requests blueprints.read so delegated
+    project grants work even though resource-scoped permissions intentionally do
+    not appear in /auth/me.
     """
     identity = scoped_identity(db, Principal.from_token(actor))
-    if identity.platform_admin and 'blueprints.create' in identity.global_permissions:
+    if identity.platform_admin and permission in identity.global_permissions:
         predicate = Project.deleted_at.is_(None)
     else:
-        predicate = visible_projects(identity, permission='blueprints.create')
+        predicate = visible_projects(identity, permission=permission)
     rows = db.execute(
         select(Project, Tenant)
         .join(Tenant, Tenant.id == Project.tenant_id)
@@ -322,6 +356,20 @@ def blueprint_yaml(id: int, request: Request,
     return {'yaml': dump_blueprint_yaml(payload, version=row.version)}
 
 
+def blueprint_with_inline_hostname_scheme(db, data: BlueprintInput, hostname_scheme: HostnameSchemeInput | None,
+                                          request: Request, actor):
+    if hostname_scheme is None:
+        return data
+    if 'hostnames.create' not in request.state.permissions:
+        raise HTTPException(403, 'hostnames.create required to create an inline hostname pattern')
+    scheme = HostnameScheme(**hostname_scheme.model_dump(), created_by=actor.user_id)
+    db.add(scheme)
+    db.flush()
+    audit(db, request, 'hostname_scheme.created', 'hostname_schemes', scheme.id)
+    deployment = data.deployment.model_copy(update={'hostname_scheme_id': scheme.id})
+    return data.model_copy(update={'deployment': deployment})
+
+
 @router.post('/blueprints', status_code=201, response_model=BlueprintOutput)
 def create_blueprint(data: BlueprintInput, request: Request, actor=Depends(require('blueprints.create')), db=Depends(get_db, scope='function')):
     manager_roles = validate_blueprint_references(db, data)
@@ -336,10 +384,42 @@ def create_blueprint(data: BlueprintInput, request: Request, actor=Depends(requi
     return idempotent(db, request, actor, data.model_dump(mode='json'), create)
 
 
+@router.post('/blueprints/bundle', status_code=201, response_model=BlueprintOutput)
+def create_blueprint_bundle(bundle: BlueprintBundleInput, request: Request,
+                            actor=Depends(require('blueprints.create')), db=Depends(get_db, scope='function')):
+    def create():
+        data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
+        manager_roles = validate_blueprint_references(db, data)
+        values = data.model_dump(mode='json', exclude={'manager_role_ids'})
+        row = Blueprint(**values, created_by=actor.user_id)
+        row.manager_roles = manager_roles
+        db.add(row)
+        db.flush()
+        audit(db, request, 'blueprint.created', 'blueprints', row.id)
+        return blueprint_public(row)
+    return idempotent(db, request, actor, bundle.model_dump(mode='json'), create)
+
+
 @router.put('/blueprints/{id}', response_model=BlueprintOutput)
 def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
     require_blueprint_manager(row, actor)
+    manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
+    for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
+        setattr(row, key, value)
+    row.manager_roles = manager_roles
+    row.version += 1
+    audit(db, request, 'blueprint.updated', 'blueprints', id)
+    db.flush()
+    return blueprint_public(row)
+
+
+@router.put('/blueprints/{id}/bundle', response_model=BlueprintOutput)
+def update_blueprint_bundle(id: int, bundle: BlueprintBundleInput, request: Request,
+                            actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
+    row = find(db, Blueprint, id)
+    require_blueprint_manager(row, actor)
+    data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
