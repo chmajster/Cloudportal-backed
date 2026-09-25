@@ -72,7 +72,7 @@ def test_merge_migration_upgrades_both_published_tips(tmp_path, monkeypatch, sta
         command.upgrade(config, starting_revision)
         uid, did, cid, pid = legacy_deployment(engine())
         command.upgrade(config, 'head'); command.upgrade(config, 'head')
-        assert ScriptDirectory.from_config(config).get_heads() == ['1b7d4a9c2e61']
+        assert ScriptDirectory.from_config(config).get_heads() == ['2d7e4a1b6c90']
         assert {'project_credential_access', 'user_project_contexts', 'day2_action_requests',
                 'quota_reservations', 'quota_allocations'} <= set(inspect(engine()).get_table_names())
         with engine().connect() as connection:
