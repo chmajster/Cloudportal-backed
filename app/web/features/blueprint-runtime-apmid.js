@@ -36,7 +36,7 @@ function allowsRuntimeEnvironment(item) {
   return item?.deployment?.select_environment_on_execute === true;
 }
 
-async function prepare(item, fields) {
+async function prepare(item, fields, scopeHeaders = {}) {
   const fixedAp = fixedApmid(item);
   const fixedEnv = fixedEnvironment(item);
   // Mirror backend compile_blueprint() semantics exactly. Runtime
@@ -49,7 +49,7 @@ async function prepare(item, fields) {
 
   let classification = null;
   if (apmidSelectable || environmentSelectable) {
-    classification = await api('/vm-classification/options');
+    classification = await api('/vm-classification/options', { headers: scopeHeaders });
   }
 
   if (environmentSelectable) {
