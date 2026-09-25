@@ -140,7 +140,7 @@ def _ovf_metadata(raw: bytes) -> dict:
 
 def inspect_ova(path: Path) -> dict:
     try:
-        archive = tarfile.open(path, mode='r:*')
+        archive = tarfile.open(path, mode='r:')
     except (tarfile.TarError, OSError) as exc:
         raise HTTPException(422, 'Plik nie jest poprawnym archiwum OVA') from exc
 
@@ -218,7 +218,7 @@ def convert_ova_disks(ova_path: Path, workdir: Path) -> dict:
     os.chmod(workdir, 0o700)
 
     converted = []
-    with tarfile.open(ova_path, mode='r:*') as archive:
+    with tarfile.open(ova_path, mode='r:') as archive:
         members = {member.name: member for member in archive.getmembers()}
         for index, member_name in enumerate(metadata['disk_members']):
             member = members[member_name]
