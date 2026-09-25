@@ -76,7 +76,7 @@ async function blueprintsView() {
       if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
       if (allowed('blueprints.update') && canManage && canQuickProxmox && item.deployment?.template === 'proxmox-vm') result.push(button('Szybka edycja', () => proxmoxBlueprintForm(item)));
-      if (allowed('blueprints.update') && canManage && canDesignBlueprint) { if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item))); result.push(button('Edytuj klasycznie', () => blueprintForm(item))); }
+      if (allowed('blueprints.update') && canManage && canDesignBlueprint) { if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item))); result.push(button('Edytuj', () => window.BlueprintWizard.open({ item }))); }
       if (allowed('blueprints.delete') && canManage) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
       return result;
     }));
@@ -1398,7 +1398,7 @@ async function executeBlueprint(item) {
   }
 }
 
-registerCommand('blueprints.proxmoxTemplateWizard', item => item ? proxmoxBlueprintForm(item) : window.BlueprintWizard.open());
+registerCommand('blueprints.proxmoxTemplateWizard', item => item ? window.BlueprintWizard.open({ item }) : window.BlueprintWizard.open());
 registerCommand('blueprints.proxmoxWithHostnameScheme', schemeId => window.BlueprintWizard.open({ hostnameSchemeId: schemeId }));
 registerCommand('blueprints.execute', executeBlueprint);
 registerCommand('blueprints.create', () => window.BlueprintWizard.open());
