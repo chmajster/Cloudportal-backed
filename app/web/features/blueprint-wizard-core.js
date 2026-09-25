@@ -182,6 +182,7 @@
       templateGuestCredentialId: '',
       guestAccountMode: 'cloud_init_managed',
       genericVariables: {},
+      variablesSchema: {},
       hostnameEnabled: true,
       hostnameSchemeId: '',
       hostnameValues: {},
@@ -243,6 +244,128 @@
       'X-Project-ID': String(state.projectId),
     };
   }
+
+  function hydrateStateFromBlueprint(state, blueprint, data = {}) {
+    if (!blueprint) return state;
+    const deployment = blueprint.deployment || {};
+    const variables = deployment.variables || {};
+    const workflow = Array.isArray(blueprint.workflow) ? blueprint.workflow : [];
+    const workflowTypes = new Set(workflow.map(step => String(step?.type || '')));
+
+    state.name = blueprint.name || '';
+    state.slug = blueprint.slug || '';
+    state.slugTouched = true;
+    state.description = blueprint.description || '';
+    state.active = blueprint.is_active !== false;
+    state.variablesSchema = { ...(blueprint.variables_schema || {}) };
+
+    state.providerId = String(deployment.provider_id || '');
+    const provider = (data.providers || []).find(value => String(value.id) === state.providerId);
+    state.providerType = provider?.type || state.providerType || '';
+    state.providerCredentialId = String(deployment.credentials_id || provider?.credentials_id || '');
+    state.terraformTemplateId = deployment.template || state.terraformTemplateId || '';
+    state.executor = deployment.executor || 'terraform';
+
+    state.node = String(variables.node || '');
+    state.selectedTemplateVmid = variables.template_id == null ? '' : String(variables.template_id);
+    state.selectedTemplateNode = String(variables.template_node || variables.node || '');
+    state.selectedTemplateName = String(variables.template_name || '');
+    state.cpu = Number(variables.cpu ?? state.cpu);
+    state.memory = Number(variables.memory ?? state.memory);
+    state.disk = Number(variables.disk ?? state.disk);
+    state.storage = String(variables.storage || '');
+    state.network = String(variables.network || 'vmbr0');
+    state.vlanId = variables.vlan_id == null ? '' : String(variables.vlan_id);
+    state.tags = Array.isArray(variables.tags) ? variables.tags.join(', ') : String(variables.tags || '');
+    state.sshUsername = String(variables.ssh_username || 'clouduser');
+    state.sshPublicKey = String(variables.ssh_public_key || '');
+
+    state.guestCredentialId = deployment.guest_credential_id == null ? '' : String(deployment.guest_credential_id);
+    state.templateGuestCredentialId = deployment.template_guest_credential_id == null ? '' : String(deployment.template_guest_credential_id);
+    state.guestAccountMode = deployment.guest_account_mode || 'cloud_init_managed';
+
+    state.hostnameSchemeId = deployment.hostname_scheme_id == null ? '' : String(deployment.hostname_scheme_id);
+    state.hostnameEnabled = Boolean(state.hostnameSchemeId);
+    state.hostnameValues = { ...(deployment.hostname_values || {}) };
+    state.manualVmName = state.hostnameEnabled ? '' : String(deployment.name || variables.name || '');
+
+    state.ipamPoolId = deployment.ipam_pool_id == null ? '' : String(deployment.ipam_pool_id);
+    if (state.ipamPoolId) state.ipMode = 'ipam';
+    else if (variables.ipv4_address) state.ipMode = 'static';
+    else state.ipMode = 'dhcp';
+    state.ipv4Address = String(variables.ipv4_address || '');
+    state.ipv4Gateway = String(variables.ipv4_gateway || '');
+    state.dnsServers = Array.isArray(variables.dns_servers) ? variables.dns_servers.join(', ') : String(variables.dns_servers || '');
+    state.dnsDomain = String(variables.dns_domain || '');
+
+    state.environment = String(deployment.environment || '').toLowerCase();
+    state.apmid = String(deployment.apmid || '').toUpperCase();
+    state.selectEnvironmentOnExecute = Boolean(deployment.select_environment_on_execute);
+    state.selectApmidOnExecute = Boolean(deployment.select_apmid_on_execute);
+
+    state.cloudInitEnabled = workflowTypes.has('cloud_init');
+    state.installQemuGuestAgent = variables.install_qemu_guest_agent !== false;
+    state.waitAgent = workflowTypes.has('wait_for_agent');
+    state.workflow = workflow.map(step => ({
+      ...step,
+      depends_on: [...(step.depends_on || [])],
+      conditions: { ...(step.conditions || {}) },
+    }));
+    state.advancedWorkflow = true;
+
+    const ansibleRuns = Array.isArray(deployment.ansible_runs) && deployment.ansible_runs.length
+      ? deployment.ansible_runs
+      : (deployment.ansible ? [deployment.ansible] : []);
+    state.ansibleRuns = ansibleRuns.map(run => ({
+      playbook: run.playbook,
+      credentials_id: Number(run.credentials_id),
+      variables: { ...(run.variables || {}) },
+    }));
+    state.ansibleEnabled = state.ansibleRuns.length > 0;
+    if (state.ansibleRuns[0]) {
+      state.playbookId = state.ansibleRuns[0].playbook || '';
+      state.ansibleCredentialId = String(state.ansibleRuns[0].credentials_id || '');
+      state.ansibleVariables = { ...(state.ansibleRuns[0].variables || {}) };
+    }
+
+    const awx = deployment.awx || {};
+    state.awxEnabled = Boolean(deployment.awx || workflowTypes.has('register_awx'));
+    state.awxCredentialId = awx.credential_id == null ? '' : String(awx.credential_id);
+    state.awxOrganizationId = awx.organization_id == null ? '' : String(awx.organization_id);
+    state.awxProjectId = awx.project_id == null ? '' : String(awx.project_id);
+    state.awxInventoryId = awx.inventory_id == null ? '' : String(awx.inventory_id);
+    state.awxInventoryName = awx.inventory_name || 'CloudPortal';
+    state.awxGroupByEnvironment = awx.group_by_environment !== false;
+    state.awxGroupByApmid = awx.group_by_apmid !== false;
+    state.awxJobTemplateId = awx.job_template_id == null ? '' : String(awx.job_template_id);
+    state.awxRemoveOnDestroy = awx.remove_on_destroy !== false;
+    const awxStep = workflow.find(step => step.type === 'register_awx');
+    if (awxStep) {
+      state.awxRetry = Number(awxStep.retry ?? 3);
+      state.awxTimeout = Number(awxStep.timeout ?? 300);
+    }
+
+    state.visibilityBackend = blueprint.visibility?.backend ?? true;
+    state.visibilityCloudportal = blueprint.visibility?.cloudportal ?? false;
+    state.visibilityApi = blueprint.visibility?.api ?? true;
+    state.allowedRoleIds = [...(blueprint.allowed_role_ids || [])].map(Number);
+    state.allowedUserIds = [...(blueprint.allowed_user_ids || [])].map(Number);
+    state.managerRoleIds = [...(blueprint.manager_role_ids || [])].map(Number);
+    state.requiresApproval = Boolean(blueprint.requires_approval);
+    state.autoApproveForExecutors = blueprint.auto_approve_for_executors == null
+      ? 'inherit' : String(Boolean(blueprint.auto_approve_for_executors));
+    state.approvalTimeoutHours = blueprint.approval_timeout_hours == null ? '' : String(blueprint.approval_timeout_hours);
+    state.recoveryPolicy = blueprint.recovery_policy || 'preserve';
+
+    if (provider?.type === 'proxmox') {
+      state.genericVariables = {};
+    } else {
+      state.genericVariables = { ...variables };
+      delete state.genericVariables.name;
+    }
+    return state;
+  }
+
 
   function requiredTemplateVariables(template) {
     return new Set(template?.variables_schema?.required || []);
@@ -415,7 +538,7 @@
       allowed_role_ids: state.allowedRoleIds.map(Number),
       allowed_user_ids: state.allowedUserIds.map(Number),
       manager_role_ids: state.managerRoleIds.map(Number),
-      variables_schema: {},
+      variables_schema: { ...(state.variablesSchema || {}) },
       deployment: buildDeployment(state, data),
       workflow: selectedWorkflow,
       requires_approval: state.requiresApproval,
@@ -444,6 +567,7 @@
     requiredTemplateVariables,
     hostnameDefaultsForSelectedScheme,
     stateDefaults,
+    hydrateStateFromBlueprint,
     buildDeployment,
     buildPayload,
     valueById,
