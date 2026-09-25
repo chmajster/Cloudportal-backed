@@ -780,7 +780,7 @@ class BlueprintInput(Input):
             missing = sorted(set(step.depends_on) - known)
             if missing:
                 raise ValueError(
-                    f'Workflow step "{step.id}" depends on missing step(s): {", ".join(missing)}'
+                    f'Workflow step "{step.id}" has missing dependency step(s): {", ".join(missing)}'
                 )
         condition_keys = {'provider', 'executor', 'has_ansible', 'hostname', 'environment', 'apmid'}
         for step in self.workflow:
