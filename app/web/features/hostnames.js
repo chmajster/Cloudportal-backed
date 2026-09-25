@@ -74,7 +74,7 @@ async function hostnamesView() {
   });
   const actions = [];
   if (allowed('hostnames.create')) actions.push(button('Nowy pattern', () => navigate('/admin/tools/hostnames/new'), 'primary'));
-  if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => generateHostname(schemes.items)));
+  if (allowed('hostnames.reserve')) actions.push(button('Generuj hostname', () => navigate('/admin/tools/hostnames/generate')));
   if (allowed('blueprints.read')) actions.push(button('Przejdź do Blueprintów', () => navigate('blueprints')));
   dom.content.replaceChildren(
     heading('Generator hostname tworzy centralne patterny nazw VM. Pattern można przypisać do Blueprintu, a podczas jego uruchomienia Cloudportal zarezerwuje kolejny unikalny hostname i użyje go jako nazwy VM.', [
@@ -125,7 +125,7 @@ async function hostnamesView() {
         { label: 'Utworzono', value: item => formatDate(item.created_at) },
       ], reservations.items, item => {
         const result = [];
-        if (allowed('hostnames.reserve') && item.status === 'reserved') result.push(button('Przypisz', () => assignHostname(item), 'primary'));
+        if (allowed('hostnames.reserve') && item.status === 'reserved') result.push(button('Przypisz', () => navigate('/admin/tools/hostnames/reservations/' + encodeURIComponent(item.id) + '/assign'), 'primary'));
         if (allowed('hostnames.release') && item.status !== 'released') result.push(button('Zwolnij', () => confirmAction(
           'Zwolnij nazwę hosta',
           `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`,
@@ -272,6 +272,25 @@ function generateHostname(schemes) {
   });
 }
 
+registerRoutedForm({
+  id: 'hostname-generate',
+  pattern: /^\/admin\/tools\/hostnames\/generate$/,
+  parent: 'tools',
+  permission: 'hostnames.reserve',
+  label: 'Generator hostname',
+}, async () => generateHostname((await api('/hostname-schemes?limit=200')).items));
+registerRoutedForm({
+  id: 'hostname-reservation-assign',
+  pattern: /^\/admin\/tools\/hostnames\/reservations\/(?<id>\d+)\/assign$/,
+  parent: 'tools',
+  permission: 'hostnames.reserve',
+  label: 'Generator hostname',
+}, async match => {
+  const rows = (await api('/hostnames?limit=200')).items;
+  const item = rows.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono rezerwacji hostname.');
+  await assignHostname(item);
+});
 registerRoutedForm({
   id: 'hostname-pattern-create',
   pattern: /^\/admin\/tools\/hostnames\/new$/,
