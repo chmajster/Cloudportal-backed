@@ -1099,9 +1099,29 @@ async function blueprintForm(item = null) {
       value: value.id, label: `${value.name} · ${value.cidr}`,
     })));
 
+    const blueprintSelector = selectField(
+      'Blueprint', 'designer_blueprint_id',
+      [
+        { value: '', label: 'Nowy Blueprint' },
+        ...blueprintResult.items
+          .slice()
+          .sort((left, right) => String(left.name || left.slug || '').localeCompare(String(right.name || right.slug || ''), 'pl', { sensitivity: 'base' }))
+          .map(blueprint => ({
+            value: blueprint.id,
+            label: (blueprint.name || blueprint.slug) + ' · v' + blueprint.version,
+          })),
+      ],
+      item?.id || '',
+      {
+        wide: true,
+        help: 'Wybierz istniejący Blueprint, aby otworzyć go w Automation Designer, albo wybierz „Nowy Blueprint”, aby utworzyć nowy.',
+      }
+    );
+
     const fields = node('div', { class: 'form-grid blueprint-designer' },
-      formSection('Blueprint', 'Nazwa, identyfikator i krótki opis widoczny dla użytkownika.',
+      formSection('Blueprint', 'Wybierz Blueprint do edycji, a następnie ustaw jego nazwę, identyfikator i opis.',
         node('div', { class: 'form-grid' },
+          blueprintSelector,
           field('Slug', 'slug', { required: true, value: item?.slug || '', placeholder: 'np. ubuntu-web' }),
           field('Nazwa', 'name', { required: true, value: item?.name || '', placeholder: 'np. Ubuntu Web Server' }),
           field('Opis', 'description', { tag: 'textarea', value: item?.description || '', wide: true }),
@@ -1154,6 +1174,16 @@ async function blueprintForm(item = null) {
           node('summary', { text: 'Edytuj kroki workflow' }),
           workflowList,
           node('div', { class: 'editor-add-row' }, button('Dodaj krok', () => addWorkflowStep({ type: 'terraform_apply' }), 'primary')))));
+
+    blueprintSelector.querySelector('select').addEventListener('change', event => {
+      const selectedId = Number(event.currentTarget.value || 0);
+      if (selectedId === Number(item?.id || 0)) return;
+      const selectedBlueprint = selectedId
+        ? blueprintResult.items.find(blueprint => Number(blueprint.id) === selectedId)
+        : null;
+      closeModal();
+      blueprintForm(selectedBlueprint);
+    });
 
     deploymentHostnameSchemeField.querySelector('select').addEventListener('change', syncDeploymentNameMode);
     syncDeploymentNameMode();
