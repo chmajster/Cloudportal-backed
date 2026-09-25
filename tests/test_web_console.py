@@ -588,7 +588,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "state.installQemuGuestAgent && (state.guestCredentialId || !snippetAvailable || !sshReady)" in script
     assert "Wybrano Credential VM, więc workflow celowo pomija upload snippets i SSH do noda PVE." in script
     assert "snippetStorages" in script
-    assert "ansibleVariables.hostname = '{{ hostname }}'" in script
+    assert "variables.hostname = '{{ hostname }}'" in script
+    assert "playbook?.required_variables" in script
     assert "add('clone', 'clone_vm')" not in script
     assert "if (options.cloudInit) add('cloud_init', 'cloud_init')" in script
     assert "registerExtension('blueprint-wizard-cloud-init'" in script
