@@ -1184,7 +1184,13 @@ async function navigate(view) {
     ? window.uiResolveView(requestedView)
     : requestedView;
   if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
-  const available = routes.filter(item => allowed(item.permission) && (!state.identity.user.must_change_password || item.id === 'account'));
+  const requestedRoutedForm = matchRoutedForm(requestedView);
+  const available = routes.filter(item =>
+    allowed(item.permission)
+    && (!state.identity.user.must_change_password
+      || item.id === 'account'
+      || (item.id === 'routed-form' && requestedRoutedForm?.route?.parent === 'account'))
+  );
   const visibleAvailable = available
     .filter(navigationRouteVisible)
     .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || navigationRouteRank(a) - navigationRouteRank(b) || a.id.localeCompare(b.id));
