@@ -4,7 +4,7 @@
 async function usersView() {
   const users = (await api('/users?limit=200')).items;
   const actions = [];
-  if (allowed('users.create')) actions.push(button('Dodaj użytkownika', createUser, 'primary'));
+  if (allowed('users.create')) actions.push(button('Dodaj użytkownika', () => navigate('/access/users/new'), 'primary'));
   dom.content.replaceChildren(heading('Konta ludzi i konta serwisowe. Uprawnienia wynikają wyłącznie z przypisanych ról.', actions),
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
@@ -19,7 +19,7 @@ function userActions(user) {
   const actions = [];
   if (allowed('roles.assign') && allowed('roles.read')) actions.push(button('Role', () => assignUserRoles(user)));
   if (allowed('users.update')) {
-    actions.push(button('Edytuj', () => editUser(user)));
+    actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
     actions.push(button(user.is_active ? 'Wyłącz' : 'Włącz', () => userCommand(user, user.is_active ? 'disable' : 'enable')));
     if (!user.is_service_account && user.is_active && user.auth_source !== 'ldap') actions.push(button('Reset hasła', () => resetUserPassword(user)));
@@ -106,11 +106,11 @@ function resetUserPassword(user) {
 
 async function rolesView() {
   const roles = (await api('/roles?limit=200')).items;
-  const actions = allowed('roles.create') ? [button('Dodaj rolę', () => roleForm(), 'primary')] : [];
+  const actions = allowed('roles.create') ? [button('Dodaj rolę', () => navigate('/access/roles/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Role grupują uprawnienia do poszczególnych modułów. System chroni ostatniego aktywnego administratora.', actions),
     table([{ label: 'Rola', value: role => node('strong', { text: role.name }) }, { label: 'Uprawnienia', value: role => badge(`${role.permissions.length} uprawnień`, role.permissions.length ? 'info' : '') }], roles, role => {
       const actions = [];
-      if (allowed('roles.update')) actions.push(button('Edytuj', () => roleForm(role)));
+      if (allowed('roles.update')) actions.push(button('Edytuj', () => navigate('/access/roles/edit/' + encodeURIComponent(role.id) + '/' + encodeURIComponent(role.name || 'role'))));
       if (allowed('roles.delete')) actions.push(button('Usuń', () => confirmAction('Usuń rolę', `Rola ${role.name} zostanie trwale usunięta.`, async () => { await api(`/roles/${role.id}`, { method: 'DELETE' }); toast('Rola usunięta.'); navigate('roles'); }), 'danger'));
       return actions;
     }));
@@ -139,7 +139,7 @@ async function tokensView() {
   ]);
   const tokens = tokenResult.items;
   const users = new Map(userResult.items.map(user => [Number(user.id), user.username]));
-  const actions = allowed('tokens.create') ? [button('Utwórz token', createToken, 'primary')] : [];
+  const actions = allowed('tokens.create') ? [button('Utwórz token', () => navigate('/access/tokens/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Tokeny API mają jawny, ograniczony zakres. Sekret jest dostępny wyłącznie po utworzeniu.', actions),
     table([
       { label: 'Nazwa', value: token => node('div', {}, node('strong', { text: token.name }), node('div', { class: 'mono muted', text: token.token_prefix })) },
@@ -295,8 +295,54 @@ function changePassword(required = false) {
   });
 }
 
-registerCommand('users.create', createUser);
-registerCommand('tokens.create', createToken);
+registerRoutedForm({
+  id: 'users-create',
+  pattern: /^\/access\/users\/new$/,
+  parent: 'users',
+  permission: 'users.create',
+  label: 'Użytkownicy',
+}, () => createUser());
+registerRoutedForm({
+  id: 'users-edit',
+  pattern: /^\/access\/users\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'users',
+  permission: 'users.update',
+  label: 'Użytkownicy',
+}, async match => {
+  const users = (await api('/users?limit=200')).items;
+  const user = users.find(item => Number(item.id) === Number(match.params.id));
+  if (!user) throw new Error('Nie znaleziono użytkownika.');
+  editUser(user);
+});
+registerRoutedForm({
+  id: 'roles-create',
+  pattern: /^\/access\/roles\/new$/,
+  parent: 'roles',
+  permission: 'roles.create',
+  label: 'Role i RBAC',
+}, () => roleForm());
+registerRoutedForm({
+  id: 'roles-edit',
+  pattern: /^\/access\/roles\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'roles',
+  permission: 'roles.update',
+  label: 'Role i RBAC',
+}, async match => {
+  const roles = (await api('/roles?limit=200')).items;
+  const role = roles.find(item => Number(item.id) === Number(match.params.id));
+  if (!role) throw new Error('Nie znaleziono roli.');
+  await roleForm(role);
+});
+registerRoutedForm({
+  id: 'tokens-create',
+  pattern: /^\/access\/tokens\/new$/,
+  parent: 'tokens',
+  permission: 'tokens.create',
+  label: 'Tokeny API',
+}, () => createToken());
+
+registerCommand('users.create', () => navigate('/access/users/new'));
+registerCommand('tokens.create', () => navigate('/access/tokens/new'));
 registerView({ id: 'users', label: 'Użytkownicy', icon: 'U', permission: 'users.read', order: 10 }, usersView);
 registerView({ id: 'roles', label: 'Role i RBAC', icon: 'R', permission: 'roles.read', order: 20 }, rolesView);
 registerView({ id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read', order: 30 }, tokensView);
