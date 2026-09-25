@@ -1237,6 +1237,16 @@ async function jobLogView() {
   const inventoryState = node('div', { class: 'job-log-inventory-state muted' });
   const actionHost = node('div', { class: 'action-group job-log-page-actions' });
   const logOutput = node('div', { class: 'log-output mono job-live-log', text: 'Oczekiwanie na logi…' });
+
+  const copyLink = button('Kopiuj link', async () => {
+    try {
+      await copyText(location.href);
+      toast('Skopiowano bezpośredni link do logów.');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }, 'ghost');
+
   const headingHost = heading('Logi zadania ' + short(jobId, 18), [
     button('← Zadania', () => navigate('jobs'), 'ghost'),
     copyLink,
@@ -1247,15 +1257,6 @@ async function jobLogView() {
     inventoryState,
     actionHost,
     logOutput);
-
-  const copyLink = button('Kopiuj link', async () => {
-    try {
-      await copyText(location.href);
-      toast('Skopiowano bezpośredni link do logów.');
-    } catch (error) {
-      toast(error.message, 'error');
-    }
-  }, 'ghost');
 
   dom.content.replaceChildren(headingHost, pageHost);
 
