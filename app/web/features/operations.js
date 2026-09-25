@@ -3,7 +3,7 @@
 (() => {
 async function schedulesView() {
   const schedules = (await api('/schedules?limit=200')).items;
-  const actions = allowed('schedules.create') && allowed('deployments.read') ? [button('Nowy harmonogram', () => scheduleForm(), 'primary')] : [];
+  const actions = allowed('schedules.create') && allowed('deployments.read') ? [button('Nowy harmonogram', () => navigate('/operations/schedules/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Trwałe operacje Terraform uruchamiane przez dispatcher z ponowną kontrolą uprawnień.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -16,7 +16,7 @@ async function schedulesView() {
     ], schedules, item => {
       const result = [];
       if (allowed('schedules.update')) {
-        if (allowed('deployments.read')) result.push(button(item.is_active ? 'Edytuj' : 'Włącz i edytuj', () => scheduleForm(item)));
+        if (allowed('deployments.read')) result.push(button(item.is_active ? 'Edytuj' : 'Włącz i edytuj', () => navigate('/operations/schedules/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'schedule'))));
         if (item.is_active) result.push(button('Wyłącz', async () => { await api(`/schedules/${item.id}/disable`, { method: 'POST' }); navigate('schedules'); }));
       }
       if (allowed('schedules.delete')) result.push(button('Usuń', () => confirmAction('Usuń harmonogram', item.name, async () => {
@@ -78,7 +78,7 @@ async function scheduleForm(item = null) {
 
 async function webhooksView() {
   const [hooks, deliveries] = await Promise.all([api('/webhooks?limit=200'), api('/webhook-deliveries?limit=200')]);
-  const actions = allowed('webhooks.create') ? [button('Nowy webhook', () => webhookForm(), 'primary')] : [];
+  const actions = allowed('webhooks.create') ? [button('Nowy webhook', () => navigate('/operations/webhooks/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Podpisane HMAC dostawy HTTPS. Host musi znajdować się w allowliście backendu.', actions),
     node('section', { class: 'panel' },
       node('div', { class: 'panel-header' }, node('h2', { text: 'Endpointy' })),
@@ -90,7 +90,7 @@ async function webhooksView() {
       ], hooks.items, item => {
         const result = [];
         if (allowed('webhooks.update')) {
-          result.push(button('Edytuj', () => webhookForm(item)));
+          result.push(button('Edytuj', () => navigate('/operations/webhooks/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'webhook'))));
           result.push(button('Rotuj sekret', async () => {
             const value = await api(`/webhooks/${item.id}/rotate-secret`, { method: 'POST' });
             showSecret('Nowy webhook secret', value.secret);
@@ -151,6 +151,44 @@ function webhookForm(item = null) {
   }});
 }
 
+registerRoutedForm({
+  id: 'schedules-create',
+  pattern: /^\/operations\/schedules\/new$/,
+  parent: 'schedules',
+  permission: 'schedules.create',
+  label: 'Harmonogramy',
+}, () => scheduleForm());
+registerRoutedForm({
+  id: 'schedules-edit',
+  pattern: /^\/operations\/schedules\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'schedules',
+  permission: 'schedules.update',
+  label: 'Harmonogramy',
+}, async match => {
+  const rows = (await api('/schedules?limit=200')).items;
+  const item = rows.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono harmonogramu.');
+  await scheduleForm(item);
+});
+registerRoutedForm({
+  id: 'webhooks-create',
+  pattern: /^\/operations\/webhooks\/new$/,
+  parent: 'webhooks',
+  permission: 'webhooks.create',
+  label: 'Webhooki',
+}, () => webhookForm());
+registerRoutedForm({
+  id: 'webhooks-edit',
+  pattern: /^\/operations\/webhooks\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'webhooks',
+  permission: 'webhooks.update',
+  label: 'Webhooki',
+}, async match => {
+  const rows = (await api('/webhooks?limit=200')).items;
+  const item = rows.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono webhooka.');
+  webhookForm(item);
+});
 registerView({ id: 'schedules', label: 'Harmonogramy', icon: 'S', permission: 'schedules.read', order: 130 }, schedulesView);
 registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhooks.read', order: 140 }, webhooksView);
 })();
