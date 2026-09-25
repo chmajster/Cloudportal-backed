@@ -8,7 +8,7 @@ x-backend: &backend
     CP_REDIS_URL: redis://redis:6379/0
     CP_MASTER_KEY_FILE: /etc/cloudportal-backed/master.key
     CP_DATA_DIR: /var/lib/cloudportal-backed
-    CP_WORKER_COUNT: ${CP_WORKER_COUNT:-1}
+    CP_WORKER_COUNT: ${CP_WORKER_COUNT:-10}
     CP_PUBLIC_HOST: ${CP_PUBLIC_HOST:-localhost}
     CP_HTTPS_PORT: ${CP_HTTPS_PORT:-8443}
     CP_INSTALL_MODE: docker
