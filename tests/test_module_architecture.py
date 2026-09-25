@@ -14,6 +14,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'resource-scope',
         'quotas',
         'infrastructure',
+        'custom-ansible',
         'proxmox-management',
         'automation',
         'inventory',
