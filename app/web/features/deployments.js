@@ -11,7 +11,8 @@ async function launchProductBlueprint(item) {
     toast('Uruchamianie Blueprintu nie jest dostępne.', 'error');
     return;
   }
-  await runCommand('blueprints.execute', item);
+  await navigate('/products/' + encodeURIComponent(item.id)
+    + '/' + encodeURIComponent(item.slug || item.name || 'product') + '/create');
 }
 
 function productCard(item) {
