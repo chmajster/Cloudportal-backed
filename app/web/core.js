@@ -4,7 +4,7 @@ const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
 const THEME_KEY = 'cloudportal.console.theme';
 const SIDEBAR_COLLAPSED_KEY = 'cloudportal.console.sidebar.collapsed';
-const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
+const state = { session: null, identity: null, view: 'dashboard', routePath: '', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
 
 const dom = {
   loginView: document.querySelector('#login-view'),
@@ -1191,9 +1191,11 @@ async function navigate(view) {
     .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || navigationRouteRank(a) - navigationRouteRank(b) || a.id.localeCompare(b.id));
   const route = available.find(item => item.id === resolvedView) || visibleAvailable[0] || available[0];
   state.view = route.id;
-  location.hash = typeof window.uiRoutePathForRequest === 'function'
+  const targetRoutePath = typeof window.uiRoutePathForRequest === 'function'
     ? window.uiRoutePathForRequest(requestedView, route.id)
     : (typeof window.uiRoutePath === 'function' ? window.uiRoutePath(route.id) : route.id);
+  state.routePath = targetRoutePath;
+  location.hash = targetRoutePath;
   dom.pageTitle.textContent = route.label;
   dom.pageEyebrow.textContent = typeof window.uiPageEyebrow === 'function'
     ? window.uiPageEyebrow(route)
