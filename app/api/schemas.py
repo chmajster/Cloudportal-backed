@@ -739,7 +739,7 @@ class BlueprintVariable(Input):
 
 class BlueprintVisibility(Input):
     backend: bool = True
-    cloudportal: bool = False
+    cloudportal: bool = True
     api: bool = True
 
 
