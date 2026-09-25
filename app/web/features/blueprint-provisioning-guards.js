@@ -36,7 +36,7 @@
       selected || '', { wide: true,
         help: 'Cloud-init utworzy albo zaktualizuje użytkownika z Credentiala. Klucz prywatny nie jest kopiowany do VM; wykorzystywany jest wyłącznie odpowiadający mu klucz publiczny.' });
     const sync = value => {
-      const supported = value === 'proxmox-vm';
+      const supported = value === 'proxmox-vm' || value === 'proxmox' || value?.provider === 'proxmox';
       field.hidden = !supported;
       if (!supported) field.querySelector('select').value = '';
     };
@@ -50,7 +50,7 @@
       selected || '', { wide: true,
         help: 'Credential opisuje konto, które już istnieje w bazowej VM/template. Cloudportal go nie tworzy. Konto jest używane jako domyślny dostęp SSH dla późniejszych kroków workflow.' });
     const sync = value => {
-      const supported = value === 'proxmox-vm';
+      const supported = value === 'proxmox-vm' || value === 'proxmox' || value?.provider === 'proxmox';
       field.hidden = !supported;
       if (!supported) field.querySelector('select').value = '';
     };
