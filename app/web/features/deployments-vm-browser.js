@@ -273,6 +273,9 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
   if (canConsole) {
     actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
   }
+  if (provisioningJob?.id && allowed('jobs.read')) {
+    actions.push(button('Logi', () => navigate('/jobs/' + encodeURIComponent(provisioningJob.id)), 'ghost'));
+  }
   const canRecreate = !provisioningVisible
     && item.management_mode === 'terraform'
     && item.deployment_id
