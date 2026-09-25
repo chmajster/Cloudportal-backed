@@ -3157,6 +3157,20 @@ server {
         proxy_read_timeout 5s;
         proxy_connect_timeout 2s;
     }
+    location ~ ^/api/v1/(?:appliances/ova-blueprints|instance-backups/upload)$ {
+        limit_except POST { deny all; }
+        client_max_body_size 100g;
+        client_body_timeout 7200s;
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 7200s;
+        proxy_send_timeout 7200s;
+        proxy_connect_timeout 5s;
+    }
     location ~ ^/api/v1/console-sessions/[A-Za-z0-9_-]+/websocket$ {
         proxy_pass http://127.0.0.1:8765;
         proxy_http_version 1.1;
