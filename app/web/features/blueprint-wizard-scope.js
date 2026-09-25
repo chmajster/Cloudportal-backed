@@ -99,7 +99,11 @@
       state.providerId = String(preferred.id);
       state.providerType = preferred.type;
       state.providerCredentialId = String(preferred.credentials_id || '');
-      state.terraformTemplateId = data.templates.find(value => value.provider === preferred.type)?.id || '';
+      state.terraformTemplateId = parts.core.preferredTerraformTemplate(
+        data.templates,
+        preferred.type,
+        state.terraformTemplateId
+      )?.id || '';
       state.node = '';
       state.templates = [];
       state.nodes = [];
