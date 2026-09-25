@@ -52,6 +52,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'shared/page-layout.js',
         'shared/page-surfaces.js',
         'shared/platforms.js',
+        'shared/routed-forms.js',
         'shared/polling.js',
         'shared/status.js',
     ]
@@ -141,6 +142,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     core = scripts['core.js'].text
     loader = scripts['loader.js'].text
     navigation = scripts['shared/navigation.js'].text
+    routed_forms = scripts['shared/routed-forms.js'].text
 
     assert "fetch('./manifest.json'" in loader
     assert "loadFeatureScript('app.js')" in loader
@@ -151,11 +153,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function registerView(' in core
     assert 'function registerCommand(' in core
     assert 'function registerExtension(' in core
-    assert 'const routedForms = [];' in core
-    assert 'function registerRoutedForm(' in core
-    assert 'function matchRoutedForm(' in core
-    assert 'function routedFormView()' in core
-    assert "id: 'routed-form'" in core
+    assert 'const routedForms = [];' in routed_forms
+    assert 'function registerRoutedForm(' in routed_forms
+    assert 'function matchRoutedForm(' in routed_forms
+    assert 'window.registerRoutedForm = registerRoutedForm' in routed_forms
+    assert 'function routedFormView()' in script
+    assert "id: 'routed-form'" in script
     assert 'routePath:' in core
     assert "split('/page/')[0]" in core
     assert 'dismissCloudportalSurfaceForNavigation' in core
