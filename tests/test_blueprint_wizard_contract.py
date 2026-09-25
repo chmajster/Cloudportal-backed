@@ -168,6 +168,22 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     ]
 
 
+def test_standard_proxmox_wizard_never_selects_appliance_template_by_catalog_order():
+    result = run_core("""
+const templates = [
+  { id: 'proxmox-appliance', provider: 'proxmox' },
+  { id: 'proxmox-vm', provider: 'proxmox' },
+  { id: 'aws-ec2', provider: 'aws' },
+];
+console.log(JSON.stringify({
+  proxmox: core.preferredTerraformTemplate(templates, 'proxmox', 'proxmox-appliance'),
+  aws: core.preferredTerraformTemplate(templates, 'aws', 'aws-ec2'),
+}));
+""")
+    assert result['proxmox']['id'] == 'proxmox-vm'
+    assert result['aws']['id'] == 'aws-ec2'
+
+
 def test_wizard_slug_and_default_workflow_are_deterministic():
     result = run_core("""
 console.log(JSON.stringify({
