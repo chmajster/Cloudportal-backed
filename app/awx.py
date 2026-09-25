@@ -440,16 +440,29 @@ class AwxClient:
             'inventory_id': int(inventory['id']),
         }
 
-    def launch_job_template(self, template_id: int, *, hostname: str, deployment_id: str) -> dict:
+    def launch_job_template(
+        self,
+        template_id: int,
+        *,
+        hostname: str,
+        deployment_id: str,
+        environment: str | None = None,
+        apmid: str | None = None,
+    ) -> dict:
+        extra_vars = {
+            'cloudportal_onboarding': True,
+            'cloudportal_deployment_id': deployment_id,
+        }
+        if environment:
+            extra_vars['environment'] = str(environment).lower()
+        if apmid:
+            extra_vars['apmid'] = str(apmid).upper()
         data = self.request(
             'POST',
             f'job_templates/{int(template_id)}/launch/',
             json={
                 'limit': hostname,
-                'extra_vars': {
-                    'cloudportal_onboarding': True,
-                    'cloudportal_deployment_id': deployment_id,
-                },
+                'extra_vars': extra_vars,
             },
         ).json()
         return data if isinstance(data, dict) else {}
