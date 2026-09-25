@@ -241,6 +241,7 @@ async def create_ova_blueprint(
             node=node,
             storage=storage,
             network=network,
+            network_count=converted.get('networks') or 1,
             import_file_ids=uploaded_volumes,
             cpu=converted['cpu'],
             memory=converted['memory'],
