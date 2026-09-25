@@ -490,8 +490,8 @@
         project_id: state.awxProjectId ? Number(state.awxProjectId) : null,
         inventory_id: state.awxInventoryId ? Number(state.awxInventoryId) : null,
         inventory_name: String(state.awxInventoryName || 'CloudPortal').trim() || 'CloudPortal',
-        group_by_environment: Boolean(state.awxGroupByEnvironment),
-        group_by_apmid: Boolean(state.awxGroupByApmid),
+        group_by_environment: Boolean(state.awxGroupByEnvironment || state.selectEnvironmentOnExecute),
+        group_by_apmid: Boolean(state.awxGroupByApmid || state.selectApmidOnExecute),
         job_template_id: state.awxJobTemplateId ? Number(state.awxJobTemplateId) : null,
         remove_on_destroy: Boolean(state.awxRemoveOnDestroy),
       };
