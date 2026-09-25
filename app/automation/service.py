@@ -179,6 +179,21 @@ def guest_credential_cloud_init(db, credential_id):
     }
 
 
+def runtime_selection_flag(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    if normalized in {'true', '1', 'yes', 'tak', 'on'}:
+        return True
+    if normalized in {'false', '0', 'no', 'nie', 'off', ''}:
+        return False
+    return bool(value)
+
+
 def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
@@ -186,8 +201,8 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     deployment = deepcopy(blueprint.deployment)
 
     has_apmid_selection_flag = 'select_apmid_on_execute' in deployment
-    select_apmid_on_execute = bool(deployment.pop('select_apmid_on_execute', False))
-    select_environment_on_execute = bool(deployment.pop('select_environment_on_execute', False))
+    select_apmid_on_execute = runtime_selection_flag(deployment.pop('select_apmid_on_execute', False))
+    select_environment_on_execute = runtime_selection_flag(deployment.pop('select_environment_on_execute', False))
     fixed_apmid = deployment.pop('apmid', None)
     fixed_environment = deployment.pop('environment', None)
     guest_credential_id = deployment.pop('guest_credential_id', None)
