@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.database import session
-from app.ansible_custom.service import custom_playbook_definition, list_custom_playbook_definitions
+from app.ansible_custom.service import custom_playbook_definition, custom_playbook_snapshot, list_custom_playbook_definitions
 
 
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$')

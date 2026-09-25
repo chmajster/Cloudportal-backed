@@ -230,15 +230,11 @@ async function myResourcesView(repairInventory = true) {
     requestAnimationFrame(() => window.scrollTo({ top: preservedScrollY, behavior: 'auto' }));
   }
 
-  const provisioningActive = deployments.some(item =>
-    item.active_job_id || ['waiting_approval', 'queued', 'running', 'cancelling', 'waiting_provider', 'recovery_queued'].includes(String(item.status || '')));
-  if (provisioningActive) {
-    myResourcesPollTimer = window.setTimeout(() => {
-      if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
-        myResourcesView(false).catch(error => toast(error.message, 'error'));
-      }
-    }, 2000);
-  }
+  myResourcesPollTimer = window.DeploymentProvisioningPoll.schedule(deployments, () => {
+    if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
+      myResourcesView(false).catch(error => toast(error.message, 'error'));
+    }
+  });
 }
 
 function deploymentActions(item, returnTo = 'my-resources') {
@@ -336,38 +332,6 @@ async function createTerraformJob(item, operation) {
 
 function deploymentVariableValue(container, name) {
   return container.querySelector('[name="' + name + '"]')?.value || '';
-}
-
-function deploymentVariableWrapper(container, name) {
-  return container.querySelector('[data-template-variable="' + name + '"]');
-}
-
-function deploymentVariableRequired(template, name) {
-  return new Set(template?.variables_schema?.required || []).has(name);
-}
-
-function deploymentSetSelectChoices(select, choices, selected = '', placeholder = '') {
-  select.replaceChildren();
-  if (placeholder) select.append(node('option', { value: '', text: placeholder }));
-  choices.forEach(choice => select.append(node('option', {
-    value: choice.value,
-    text: choice.label,
-    selected: String(choice.value) === String(selected),
-  })));
-  if (!select.value && choices.length === 1) select.value = String(choices[0].value);
-}
-
-function deploymentReplaceVariableWithSelect(container, template, name, label, choices, selected, placeholder, help) {
-  const current = deploymentVariableWrapper(container, name);
-  if (!current) return null;
-  const replacement = selectField(label, name, choices, selected, {
-    required: deploymentVariableRequired(template, name),
-    placeholder,
-  });
-  replacement.setAttribute('data-template-variable', name);
-  if (help) replacement.append(node('small', { class: 'field-help', text: help }));
-  current.replaceWith(replacement);
-  return replacement.querySelector('select');
 }
 
 function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedNode = '', onSelect = null) {

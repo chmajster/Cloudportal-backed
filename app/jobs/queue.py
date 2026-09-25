@@ -47,6 +47,7 @@ def provider_retry_ready(job):
 
 
 CANCELLATION_GRACE_SECONDS = 60
+STALE_JOB_HEARTBEAT_SECONDS = 180
 DISPATCH_CAPACITY_LOCK_KEY = 4850454325908757588
 
 
@@ -224,10 +225,12 @@ def expire_waiting_approvals(db):
         if deployment is not None:
             delete_plan(deployment.id)
 
-        if has_resource:
+        runtime = dict(payload.get('_workflow_runtime') or {})
+        provider_mutated = runtime.get('provider_applied') is True
+        if has_resource and provider_mutated:
             job.status = 'failed'
             job.error = (
-                'Approval request expired after infrastructure state was created; '
+                'Approval request expired after this job created or changed infrastructure; '
                 'inspect the deployment and clean up manually'
             )
             if deployment is not None and deployment.active_job_id == job.id:
@@ -238,16 +241,25 @@ def expire_waiting_approvals(db):
             job.error = 'Approval request expired'
             if deployment is not None and deployment.active_job_id == job.id:
                 deployment.active_job_id = None
-                deployment.status = 'cancelled'
-                released_at = current_time
-                db.execute(update(HostnameReservation).where(
-                    HostnameReservation.resource_id == deployment.id,
-                    HostnameReservation.status != 'released',
-                ).values(status='released', released_at=released_at))
-                db.execute(update(IPAllocation).where(
-                    IPAllocation.resource_id == deployment.id,
-                    IPAllocation.status != 'released',
-                ).values(status='released', released_at=released_at))
+                previous_status = str(payload.get('previous_status') or '').strip()
+                if has_resource and previous_status and previous_status not in {
+                    'queued', 'running', 'waiting_approval', 'cancelling'
+                }:
+                    # Re-apply approval can expire while a pre-existing healthy VM
+                    # still exists. Restore its previous deployment status instead
+                    # of falsely marking the resource itself as cancelled/failed.
+                    deployment.status = previous_status
+                else:
+                    deployment.status = 'cancelled'
+                    released_at = current_time
+                    db.execute(update(HostnameReservation).where(
+                        HostnameReservation.resource_id == deployment.id,
+                        HostnameReservation.status != 'released',
+                    ).values(status='released', released_at=released_at))
+                    db.execute(update(IPAllocation).where(
+                        IPAllocation.resource_id == deployment.id,
+                        IPAllocation.status != 'released',
+                    ).values(status='released', released_at=released_at))
 
         db.add(JobLog(job_id=job.id, message='workflow.approval.expired: ' + job.error))
         queue_job_webhooks(db, job)
@@ -257,7 +269,10 @@ def reconcile_stale_jobs(db):
     rows = db.scalars(select(Job).where(
         Job.status == 'running',
         Job.cancel_requested.is_(False),
-        Job.heartbeat_at < now() - timedelta(seconds=settings().execution_timeout + 180),
+        # Heartbeats are refreshed by Context.check() during Terraform/Ansible
+        # subprocesses and workflow polling. Do not reserve a concurrency slot for
+        # an entire execution timeout after a worker has disappeared.
+        Job.heartbeat_at < now() - timedelta(seconds=STALE_JOB_HEARTBEAT_SECONDS),
     ).with_for_update(skip_locked=True)).all()
     for job in rows:
         mark_job_reservation_uncertain(db, job)

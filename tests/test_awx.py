@@ -190,3 +190,76 @@ def test_discovery_exposes_awx_projects_and_job_template_relationships():
         'playbook': 'initial.yml',
         'execution_environment': 4,
     }]
+
+
+class FakePagedAwxClient(AwxClient):
+    def __init__(self):
+        self.pages = []
+
+    def request(self, method, path, **kwargs):
+        page = int((kwargs.get('params') or {}).get('page') or 1)
+        self.pages.append(page)
+
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def json(self):
+                return self.payload
+
+        if page == 1:
+            return Response({'results': [{'id': 1}], 'next': '/api/v2/hosts/?page=2'})
+        return Response({'results': [{'id': 2}], 'next': None})
+
+
+def test_list_resource_follows_awx_pagination():
+    client = FakePagedAwxClient()
+    assert client.list_resource('hosts') == [{'id': 1}, {'id': 2}]
+    assert client.pages == [1, 2]
+
+
+class FakeExistingHostAwxClient(AwxClient):
+    def __init__(self):
+        self.payload = None
+
+    def list_resource(self, resource, *, params=None):
+        assert resource == 'hosts'
+        return [{
+            'id': 101,
+            'name': 'srv001',
+            'variables': 'owner: platform\ncustom_flag: true\nansible_host: 10.0.0.1\n',
+        }]
+
+    def request(self, method, path, **kwargs):
+        assert method == 'PATCH'
+        assert path == 'hosts/101/'
+        self.payload = kwargs['json']
+
+        class Response:
+            @staticmethod
+            def json():
+                return {'id': 101, 'name': 'srv001'}
+
+        return Response()
+
+
+def test_ensure_host_preserves_non_cloudportal_variables():
+    client = FakeExistingHostAwxClient()
+
+    client.ensure_host(
+        inventory_id=42,
+        hostname='srv001',
+        ansible_host='10.20.30.40',
+        variables={
+            'ansible_host': '10.20.30.40',
+            'cloudportal_managed': True,
+            'cloudportal_deployment_id': 'dep-123',
+        },
+    )
+
+    import json
+    variables = json.loads(client.payload['variables'])
+    assert variables['owner'] == 'platform'
+    assert variables['custom_flag'] is True
+    assert variables['ansible_host'] == '10.20.30.40'
+    assert variables['cloudportal_deployment_id'] == 'dep-123'

@@ -762,12 +762,13 @@ def test_runtime_wait_logs_safe_provider_error(monkeypatch, tmp_path):
     assert any('workflow.wait_for_vm.retry: Proxmox API unavailable' in value for value in context.logs)
 
 
-def test_terraform_destroy_rollback_uses_global_execution_timeout(monkeypatch):
+def test_workflow_step_timeout_respects_step_limit_and_global_ceiling(monkeypatch):
     monkeypatch.setattr(worker.settings(), 'execution_timeout', 3600)
-    assert worker.workflow_step_timeout('terraform_destroy', 30) == 3600
-    assert worker.workflow_step_timeout('terraform_apply', 30) == 3600
-    assert worker.workflow_step_timeout('terraform_plan', 30) == 3600
+    assert worker.workflow_step_timeout('terraform_destroy', 30) == 30
+    assert worker.workflow_step_timeout('terraform_apply', 30) == 30
+    assert worker.workflow_step_timeout('terraform_plan', 30) == 30
     assert worker.workflow_step_timeout('wait_for_ip', 30) == 30
+    assert worker.workflow_step_timeout('terraform_apply', 7200) == 3600
 
 
 def test_plan_step_is_reused_by_apply_step(monkeypatch, tmp_path):
@@ -838,3 +839,98 @@ def test_wait_for_ansible_transport_uses_credential_transport(monkeypatch):
     context.ansible_credential = SimpleNamespace(type='winrm')
     assert worker.wait_for_ansible_transport(context, '/tmp/workspace', timeout=30) == ['192.0.2.50']
     assert observed[-1] == (['192.0.2.50'], 5986, 'WinRM HTTPS')
+
+
+def test_ansible_resume_refuses_ambiguous_inflight_run(monkeypatch):
+    context = FakeContext([])
+    context.ansible_runs = [
+        (SimpleNamespace(playbook='bootstrap-linux', inventory=None), SimpleNamespace(id=31)),
+    ]
+    runtime = {
+        'step_states': {},
+        'plan_ready': False,
+        'plan_sha256': None,
+        'applied': True,
+        'inventory_synced': True,
+        'ansible_ran': False,
+        'ansible_completed_runs': set(),
+        'ansible_inflight_run': 0,
+        'awx_launches': {},
+    }
+    monkeypatch.setattr(
+        worker.AnsibleExecutor,
+        'execute',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('ambiguous Ansible run must not be repeated automatically')
+        ),
+    )
+
+    with pytest.raises(ExecutionFailed, match='Automatic resume refused to repeat an Ansible run'):
+        worker.execute_configured_ansible(
+            context, runtime, '/tmp/workspace', addresses=['192.0.2.131']
+        )
+
+
+def test_apply_checkpoint_is_persisted_before_guest_bootstrap(monkeypatch):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps)
+    context.blueprint_workflow_completed = False
+    executor = FakeExecutor()
+    checkpoints = []
+
+    monkeypatch.setattr(
+        worker,
+        'persist_workflow_runtime',
+        lambda _context, runtime: checkpoints.append(
+            (bool(runtime.get('applied')), bool(runtime.get('inventory_synced')))
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        'ensure_qemu_guest_bootstrap',
+        lambda _context, _workspace, timeout=600: (
+            checkpoints.append(('bootstrap', checkpoints[-1])) or False
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda _context, _workspace: {'external_id': '132', 'vm_id': 132, 'node': 'pve01'},
+    )
+
+    worker.run_blueprint_workflow(context, executor)
+
+    bootstrap = next(item for item in checkpoints if item[0] == 'bootstrap')
+    assert bootstrap[1] == (True, False)
+    assert (True, True) in checkpoints
+
+
+def test_snapshot_reuses_existing_deterministic_snapshot(monkeypatch):
+    context = FakeContext([])
+    created = []
+    provider = SimpleNamespace(
+        snapshots=lambda node, vm_id: [{'name': 'bp-job-1234-snapshot'}],
+        create_snapshot=lambda *args: created.append(args) or 'UPID:unexpected',
+        task_status=lambda node, upid: {'status': 'stopped', 'exitstatus': 'OK'},
+    )
+    monkeypatch.setattr(worker, 'vm_id_from_state', lambda workspace: 133)
+    monkeypatch.setattr(worker, 'provider_for', lambda credential: provider)
+
+    worker.create_blueprint_snapshot(
+        context,
+        '/tmp/workspace',
+        {'id': 'snapshot', 'type': 'create_snapshot', 'timeout': 30},
+    )
+
+    assert created == []
+    assert 'workflow.snapshot.reused: bp-job-1234-snapshot' in context.logs
+
+
+def test_condition_list_matching_is_case_insensitive():
+    context = FakeContext([])
+    assert worker.blueprint_conditions_match(
+        {'type': 'condition', 'conditions': {'apmid': ['leo', 'other']}},
+        context,
+    )
