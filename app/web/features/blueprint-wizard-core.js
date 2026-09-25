@@ -127,6 +127,19 @@
     return String(raw ?? '');
   }
 
+  function preferredTerraformTemplate(templates, providerType, currentId = '') {
+    const matching = (templates || []).filter(value => value.provider === providerType);
+    if (providerType === 'proxmox') {
+      // The standard Blueprint wizard creates clone-based VMs. OVA/appliance
+      // Blueprints have a separate import flow and must never be selected here
+      // just because "proxmox-appliance" sorts before "proxmox-vm".
+      return matching.find(value => value.id === 'proxmox-vm') || null;
+    }
+    return matching.find(value => String(value.id) === String(currentId || ''))
+      || matching[0]
+      || null;
+  }
+
   function defaultGenericVariables(template) {
     const result = {};
     const properties = template?.variables_schema?.properties || {};
@@ -568,6 +581,7 @@
     workflowLabel,
     schemaType,
     coerceSchemaValue,
+    preferredTerraformTemplate,
     defaultGenericVariables,
     scopeHeaders,
     requiredTemplateVariables,
