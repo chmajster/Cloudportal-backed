@@ -328,7 +328,7 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       })),
     provisioningVisible ? node('div', { class: 'my-resource-provisioning-state' },
       node('div', { class: 'my-resource-provisioning-head' },
-        node('strong', { text: 'Komentarz: Provisioning' }),
+        node('strong', { text: 'Provisioning' }),
         badge(statusLabel(provisioningJob?.status || deployment?.status || 'queued'),
           provisioningFailed ? 'danger' : 'warning')),
       node('div', { class: 'my-resource-provisioning-stage' },
