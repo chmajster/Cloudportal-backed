@@ -921,7 +921,7 @@ async function jobsView() {
   const jobs = (await api('/jobs?limit=200')).items;
   const actions = [];
   if (allowed('jobs.execute') && allowed('ansible.execute') && allowed('ansible.read') && allowed('credentials.read')) {
-    actions.push(button('Uruchom Ansible', runStandaloneAnsible, 'primary'));
+    actions.push(button('Uruchom Ansible', () => navigate('/jobs/ansible/new'), 'primary'));
   }
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.', actions),
     table([
@@ -1355,9 +1355,24 @@ async function jobLogView() {
   await poll();
 }
 
-registerCommand('deployments.create', createDeployment);
+registerRoutedForm({
+  id: 'deployments-manual-create',
+  pattern: /^\/products\/manual\/new$/,
+  parent: 'deployments',
+  permission: 'deployments.create',
+  label: 'Produkty',
+}, () => createDeployment());
+registerRoutedForm({
+  id: 'jobs-ansible-create',
+  pattern: /^\/jobs\/ansible\/new$/,
+  parent: 'jobs',
+  permission: 'jobs.execute',
+  label: 'Zadania',
+}, match => runStandaloneAnsible(match.searchParams.get('playbook') || null));
+
+registerCommand('deployments.create', () => navigate('/products/manual/new'));
 registerCommand('deployments.open', showDeploymentDetails);
-registerCommand('ansible.run', runStandaloneAnsible);
+registerCommand('ansible.run', playbookId => navigate('/jobs/ansible/new' + (playbookId ? '?playbook=' + encodeURIComponent(playbookId) : '')));
 registerView({ id: 'deployments', label: 'Produkty', iconName: 'box', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: null, order: 111 }, myResourcesView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);
