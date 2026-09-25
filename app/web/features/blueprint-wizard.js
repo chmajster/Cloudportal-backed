@@ -130,9 +130,17 @@
         state.providerConnected = false;
         state.providerError = '';
         const matchingTemplates = data.templates.filter(value => value.provider === provider.type);
-        if (!matchingTemplates.some(value => value.id === state.terraformTemplateId)) {
-          state.terraformTemplateId = matchingTemplates[0]?.id || '';
-          state.genericVariables = parts.core.defaultGenericVariables(matchingTemplates[0]);
+        const preferredTemplate = parts.core.preferredTerraformTemplate(
+          data.templates,
+          provider.type,
+          state.terraformTemplateId
+        );
+        if (preferredTemplate && preferredTemplate.id !== state.terraformTemplateId) {
+          state.terraformTemplateId = preferredTemplate.id;
+          state.genericVariables = parts.core.defaultGenericVariables(preferredTemplate);
+        } else if (!preferredTemplate) {
+          state.terraformTemplateId = '';
+          state.genericVariables = {};
         }
         if (provider.type !== 'proxmox') {
           state.nodes = [];
@@ -162,7 +170,11 @@
             state.selectedTemplateNode = first?.node || '';
             state.selectedTemplateName = first?.name || '';
           }
-          state.terraformTemplateId = data.templates.find(value => value.provider === 'proxmox')?.id || 'proxmox-vm';
+          state.terraformTemplateId = parts.core.preferredTerraformTemplate(
+            data.templates,
+            'proxmox',
+            state.terraformTemplateId
+          )?.id || 'proxmox-vm';
           state.providerConnected = true;
           await loadNodeResources();
         } catch (error) {
