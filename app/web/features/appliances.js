@@ -255,7 +255,7 @@ async function appliancesView() {
   const appliances = (result.items || []).filter(item => item.deployment?.template === 'proxmox-appliance');
   const actions = [];
   if (allowed('blueprints.create') && allowed('terraform.execute') && allowed('providers.read') && allowed('credentials.read')) {
-    actions.push(button('Importuj OVA jako Blueprint', () => openOvaImport().catch(error => toast(error.message, 'error')), 'primary'));
+    actions.push(button('Importuj OVA jako Blueprint', () => navigate('/blueprints/appliances/import'), 'primary'));
   }
   actions.push(button('Blueprinty', () => navigate('blueprints')));
 
@@ -283,7 +283,20 @@ async function appliancesView() {
   );
 }
 
-window.ApplianceBlueprintUI = Object.freeze({ open: openOvaImport });
+registerRoutedForm({
+  id: 'appliances-import',
+  pattern: /^\/blueprints\/appliances\/import$/,
+  parent: 'blueprints',
+  permission: 'blueprints.create',
+  label: 'Appliance OVA',
+}, async () => {
+  if (!allowed('terraform.execute') || !allowed('providers.read') || !allowed('credentials.read')) {
+    throw new Error('Brak uprawnień wymaganych do importu OVA.');
+  }
+  await openOvaImport();
+});
+
+window.ApplianceBlueprintUI = Object.freeze({ open: () => navigate('/blueprints/appliances/import') });
 registerExtension('appliance-blueprints', () => {});
 registerView({
   id: 'appliances',

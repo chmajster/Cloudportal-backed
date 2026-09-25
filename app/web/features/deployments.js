@@ -11,7 +11,8 @@ async function launchProductBlueprint(item) {
     toast('Uruchamianie Blueprintu nie jest dostępne.', 'error');
     return;
   }
-  await runCommand('blueprints.execute', item);
+  await navigate('/products/' + encodeURIComponent(item.id)
+    + '/' + encodeURIComponent(item.slug || item.name || 'product') + '/create');
 }
 
 function productCard(item) {
@@ -112,7 +113,7 @@ function managedResourceCard(item, providerNames) {
       node('span', { text: providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider || '—' }),
       item.primary_ip ? node('span', { class: 'mono', text: item.primary_ip }) : null),
     node('div', { class: 'my-resource-card-actions' },
-      button('Szczegóły', () => showObjectDetails(item.name || 'Zasób', details, 'Zasób zarządzany'))));
+      button('Szczegóły', () => navigate('/resources/managed/' + encodeURIComponent(item.id)))));
 }
 
 async function myResourcesView(repairInventory = true) {
@@ -238,7 +239,7 @@ async function myResourcesView(repairInventory = true) {
 }
 
 function deploymentActions(item, returnTo = 'my-resources') {
-  const actions = [button('Szczegóły', () => showDeploymentDetails(item))];
+  const actions = [button('Szczegóły', () => navigate('/resources/deployments/' + encodeURIComponent(item.id)))];
   const reconciliationRequired = item.status === 'reconciliation_required';
   if (item.status === 'waiting_approval' && item.active_job_id && allowed('blueprints.approve')) {
     actions.push(button('Zatwierdź i uruchom', async () => {
@@ -921,7 +922,7 @@ async function jobsView() {
   const jobs = (await api('/jobs?limit=200')).items;
   const actions = [];
   if (allowed('jobs.execute') && allowed('ansible.execute') && allowed('ansible.read') && allowed('credentials.read')) {
-    actions.push(button('Uruchom Ansible', runStandaloneAnsible, 'primary'));
+    actions.push(button('Uruchom Ansible', () => navigate('/jobs/ansible/new'), 'primary'));
   }
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.', actions),
     table([
@@ -1355,9 +1356,32 @@ async function jobLogView() {
   await poll();
 }
 
-registerCommand('deployments.create', createDeployment);
-registerCommand('deployments.open', showDeploymentDetails);
-registerCommand('ansible.run', runStandaloneAnsible);
+registerRoutedForm({
+  id: 'deployment-details',
+  pattern: /^\/resources\/deployments\/(?<id>[^/]+)$/,
+  parent: 'my-resources',
+  permission: 'deployments.read',
+  label: 'Moje zasoby',
+}, async match => showDeploymentDetails(await api('/deployments/' + encodeURIComponent(match.params.id))));
+
+registerRoutedForm({
+  id: 'deployments-manual-create',
+  pattern: /^\/products\/manual\/new$/,
+  parent: 'deployments',
+  permission: 'deployments.create',
+  label: 'Produkty',
+}, () => createDeployment());
+registerRoutedForm({
+  id: 'jobs-ansible-create',
+  pattern: /^\/jobs\/ansible\/new$/,
+  parent: 'jobs',
+  permission: 'jobs.execute',
+  label: 'Zadania',
+}, match => runStandaloneAnsible(match.searchParams.get('playbook') || null));
+
+registerCommand('deployments.create', () => navigate('/products/manual/new'));
+registerCommand('deployments.open', item => navigate('/resources/deployments/' + encodeURIComponent(item.id)));
+registerCommand('ansible.run', playbookId => navigate('/jobs/ansible/new' + (playbookId ? '?playbook=' + encodeURIComponent(playbookId) : '')));
 registerView({ id: 'deployments', label: 'Produkty', iconName: 'box', permission: 'deployments.read', order: 110 }, deploymentsView);
 registerView({ id: 'my-resources', label: 'Moje zasoby', iconName: 'server', permission: null, order: 111 }, myResourcesView);
 registerView({ id: 'jobs', label: 'Zadania', icon: 'J', permission: 'jobs.read', order: 120 }, jobsView);

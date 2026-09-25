@@ -103,6 +103,7 @@
     const pathname = normalized.split('?')[0];
     if (JOB_LOG_ROUTE.test(pathname)) return 'job-log';
     if (BLUEPRINT_WIZARD_ROUTE.test(pathname)) return 'blueprint-wizard';
+    if (typeof window.matchRoutedForm === 'function' && window.matchRoutedForm(pathname)) return 'routed-form';
     if (PATH_ROUTES.has(pathname)) return PATH_ROUTES.get(pathname);
     if (ROUTE_PATHS[pathname]) return pathname;
     if (pathname.startsWith('/')) {
@@ -130,10 +131,18 @@
       const current = normalizeRouteValue(location.hash.slice(1));
       if (BLUEPRINT_WIZARD_ROUTE.test(current.split('?')[0])) return current;
     }
+    if (resolvedId === 'routed-form') {
+      if (typeof window.matchRoutedForm === 'function' && window.matchRoutedForm(normalized)) return normalized;
+      const current = normalizeRouteValue(location.hash.slice(1));
+      if (typeof window.matchRoutedForm === 'function' && window.matchRoutedForm(current)) return current;
+    }
     return routePath(resolvedId);
   }
 
   function navigationParent(route) {
+    if (route?.id === 'routed-form' && typeof window.routedFormParent === 'function') {
+      return window.routedFormParent() || route?.navigationParent || route?.id || '';
+    }
     return route?.navigationParent || route?.id || '';
   }
 

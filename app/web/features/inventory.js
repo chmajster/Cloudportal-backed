@@ -9,7 +9,7 @@ async function inventoryView() {
   ]);
   const providerNames = new Map(providerResult.items.map(provider => [Number(provider.id), provider.name]));
   const visibleVms = (vms.items || []).filter(item => item.lifecycle_status !== 'destroyed');
-  const actions = allowed('inventory.import') && allowed('providers.read') ? [button('Importuj istniejącą VM', importInventoryVm, 'primary')] : [];
+  const actions = allowed('inventory.import') && allowed('providers.read') ? [button('Importuj istniejącą VM', () => navigate('/resources/import'), 'primary')] : [];
   dom.content.replaceChildren(
     heading('Katalog zasobów odkrytych i zarządzanych przez Terraform. Przejęcie zarządzania zawsze wykonuje import i tylko plan — bez automatycznego zastosowania zmian.', actions),
     node('section', { class: 'panel' },
@@ -31,14 +31,14 @@ async function inventoryView() {
         { label: 'IP', class: 'mono', value: item => item.primary_ip || '—' },
         { label: 'Status', value: item => badge(statusLabel(item.lifecycle_status), statusKind(item.lifecycle_status)) },
         { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 18) },
-      ], resources.items, item => [button('Szczegóły', () => showObjectDetails(item.name, item.metadata_json || {}, 'Zasób zarządzany'))])
+      ], resources.items, item => [button('Szczegóły', () => navigate('/resources/managed/' + encodeURIComponent(item.id)))])
     )
   );
 }
 
 function inventoryVmActions(item) {
   const actions = [];
-  if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('Szczegóły', () => showVmDetailsPage(item), 'primary'));
+  if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('Szczegóły', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/overview'), 'primary'));
   const canRecreate = item.lifecycle_status === 'active'
     && item.management_mode === 'terraform'
     && item.deployment_id
@@ -55,7 +55,7 @@ function inventoryVmActions(item) {
     toast('Stan zasobu odświeżony.');
     navigate('inventory');
   }));
-  if (allowed('deployments.adopt') && allowed('terraform.read') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => adoptInventoryVm(item)));
+  if (allowed('deployments.adopt') && allowed('terraform.read') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/adopt')));
   if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z platformy źródłowej.', async () => {
     await api(`/inventory/vms/${item.id}`, { method: 'DELETE' });
     navigate('inventory');
@@ -281,15 +281,15 @@ function vmDetailActions(item) {
       ['stop', 'Wymuś stop', 'danger'],
     ].forEach(([action, label, kind]) => actions.push(button(label, () => vmPower(item, action), kind)));
   }
-  if (allowed('vms.console')) actions.push(button('Konsola', () => showVmConsole(item), 'primary'));
-  if (allowed('snapshots.create')) actions.push(button('Snapshot', () => createVmSnapshot(item)));
-  if (allowed('backups.create')) actions.push(button('Backup', () => backupVm(item)));
+  if (allowed('vms.console')) actions.push(button('Konsola', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'), 'primary'));
+  if (allowed('snapshots.create')) actions.push(button('Snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new')));
+  if (allowed('backups.create')) actions.push(button('Backup', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
   if (allowed('vms.update')) {
-    actions.push(button('CPU / RAM', () => configureVm(item)));
-    actions.push(button('Powiększ dysk', () => resizeVmDisk(item)));
+    actions.push(button('CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute')));
+    actions.push(button('Powiększ dysk', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/disk')));
   }
-  if (allowed('vms.migrate')) actions.push(button('Migracja', () => migrateVm(item)));
-  if (allowed('vms.clone')) actions.push(button('Klonuj', () => cloneVm(item)));
+  if (allowed('vms.migrate')) actions.push(button('Migracja', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/migrate')));
+  if (allowed('vms.clone')) actions.push(button('Klonuj', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/clone')));
   if (allowed('vms.template')) actions.push(button('→ Szablon', () => confirmAction(
     'Konwertuj do szablonu',
     'Operacja zmieni VM w szablon.',
@@ -393,7 +393,7 @@ function vmHardwareContent(item, status) {
   ].filter(([, value]) => value !== undefined && value !== null && value !== '');
   return node('section', { class: 'panel' },
     node('div', { class: 'panel-header' }, node('h2', { text: 'Hardware i telemetria' }),
-      allowed('vms.update') ? button('Edytuj CPU / RAM', () => configureVm(item)) : ''),
+      allowed('vms.update') ? button('Edytuj CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute')) : ''),
     table([
       { label: 'Parametr', value: row => node('strong', { text: row[0] }) },
       { label: 'Wartość', value: row => row[1] },
@@ -406,7 +406,7 @@ async function vmSnapshotsContent(item) {
   const snapshots = (await api(`${base}/snapshots`)).items || [];
   return node('section', { class: 'panel' },
     node('div', { class: 'panel-header' }, node('h2', { text: 'Snapshoty' }),
-      allowed('snapshots.create') ? button('Nowy snapshot', () => createVmSnapshot(item), 'primary') : ''),
+      allowed('snapshots.create') ? button('Nowy snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new'), 'primary') : ''),
     table([
       { label: 'Snapshot', value: snap => node('strong', { text: snap.name }) },
       { label: 'Opis', value: snap => snap.description || '—' },
@@ -460,13 +460,13 @@ async function vmBackupsContent(item) {
         { label: 'Rozmiar', value: backup => formatBytes(backup.size) },
         { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString('pl-PL') : '—' },
         { label: 'Chroniony', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
-      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => restoreVmFromBackup(item, backup), 'primary')] : []));
+      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/restore?archive=' + encodeURIComponent(backup.volid || '')), 'primary')] : []));
     } catch (error) {
       content.replaceChildren(node('p', { class: 'form-error', text: error.message }));
     }
   };
   const headerActions = [];
-  if (allowed('backups.create')) headerActions.push(button('Nowy backup', () => backupVm(item), 'primary'));
+  if (allowed('backups.create')) headerActions.push(button('Nowy backup', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new'), 'primary'));
   headerActions.push(button('Odśwież', load));
   shell.append(
     node('div', { class: 'panel-header' }, node('h2', { text: 'Backupy' }), node('div', { class: 'action-group' }, headerActions)),
@@ -493,12 +493,16 @@ async function vmAuditContent(item) {
 }
 
 async function showVmDetailsPage(item, initialTab = 'overview', parentView = null) {
-  const returnView = parentView || (state.view === 'my-resources' ? 'my-resources' : 'inventory');
+  const returnView = parentView || (viewIs('my-resources') ? 'my-resources' : 'inventory');
   const returnLabel = 'Moje zasoby';
+  const routedDetails = state.view === 'routed-form'
+    && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
     const status = await api(`${vmBase(item)}/status`);
-    state.view = returnView;
-    location.hash = returnView;
+    if (!routedDetails) {
+      state.view = returnView;
+      location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(returnView) : returnView;
+    }
     dom.pageEyebrow.textContent = `${returnLabel} / ${item.node || 'Proxmox'} / VMID ${item.vm_id}`;
     dom.pageTitle.textContent = status.name || item.name || `VM ${item.vm_id}`;
     dom.navigation.querySelectorAll('.nav-link').forEach(link => link.classList.toggle('active', link.dataset.route === returnView));
@@ -517,6 +521,11 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
 
     const renderTab = async id => {
       activeTab = id;
+      if (routedDetails) {
+        const tabPath = '/resources/vm/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(id);
+        state.routePath = tabPath;
+        history.replaceState(history.state, '', '#' + tabPath);
+      }
       tabBar.querySelectorAll('.vm-tab').forEach(tab => {
         const active = tab.dataset.tab === id;
         tab.classList.toggle('active', active);
@@ -583,7 +592,7 @@ async function vmPower(item, action) {
     const result = await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
     await showProxmoxTask(item, result, labels[action] || 'Operacja zasilania');
   } catch (error) {
-    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+    await handleVmProviderFailure(item, error, viewIs('my-resources') ? 'my-resources' : 'inventory');
   }
 }
 
@@ -666,7 +675,7 @@ async function listVmBackups(item) {
         { label: 'Rozmiar', value: backup => formatBytes(backup.size) },
         { label: 'Utworzono', value: backup => backup.ctime ? new Date(backup.ctime * 1000).toLocaleString('pl-PL') : '—' },
         { label: 'Chroniony', value: backup => backup.protected ? badge('Tak', 'ok') : 'Nie' },
-      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => restoreVmFromBackup(item, backup), 'primary')] : []);
+      ], rows, backup => allowed('backups.restore') ? [button('Przywróć', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/restore?archive=' + encodeURIComponent(backup.volid || '')), 'primary')] : []);
       dom.modalBody.replaceChildren(rows.length ? backupTable : node('p', { class: 'muted', text: 'Brak backupów dla tej VM.' }));
       dom.modalActions.replaceChildren(button('Zamknij', closeModal));
       return false;
@@ -789,7 +798,7 @@ async function showVmConsole(item) {
   } catch (error) {
     state.consoleRfb = null;
     if (typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open) closeModal();
-    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+    await handleVmProviderFailure(item, error, viewIs('my-resources') ? 'my-resources' : 'inventory');
   }
 }
 
@@ -820,7 +829,7 @@ async function configureVm(item) {
       return false;
     }});
   } catch (error) {
-    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+    await handleVmProviderFailure(item, error, viewIs('my-resources') ? 'my-resources' : 'inventory');
   }
 }
 
@@ -915,8 +924,120 @@ async function cloneVm(item) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
-registerCommand('inventory.openVm', showVmDetailsPage);
-registerCommand('inventory.consoleVm', showVmConsole);
+async function routedVmItem(match) {
+  const rows = (await api('/inventory/vms?limit=200')).items || [];
+  const item = rows.find(value => String(value.id) === String(match.params.id));
+  if (!item) throw new Error('Nie znaleziono VM w inventory.');
+  return item;
+}
+
+registerRoutedForm({
+  id: 'managed-resource-details',
+  pattern: /^\/resources\/managed\/(?<id>[^/]+)$/,
+  parent: 'my-resources',
+  permission: 'inventory.read',
+  label: 'Moje zasoby',
+}, async match => {
+  const rows = (await api('/inventory/resources?limit=200')).items || [];
+  const item = rows.find(value => String(value.id) === String(match.params.id));
+  if (!item) throw new Error('Nie znaleziono zasobu zarządzanego.');
+  showObjectDetails(item.name || item.resource_type || 'Zasób', {
+    Typ: item.resource_type,
+    Platforma: item.provider,
+    'External ID': item.external_id,
+    IP: item.primary_ip || '—',
+    Status: statusLabel(item.lifecycle_status),
+    Wdrożenie: item.deployment_id,
+    ...(item.metadata_json || {}),
+  }, 'Zasób zarządzany');
+});
+
+registerRoutedForm({
+  id: 'inventory-vm-details',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/(?<tab>overview|hardware|snapshots|backups|audit)$/,
+  parent: 'my-resources',
+  permission: 'vms.read',
+  label: 'Moje zasoby',
+  surface: false,
+}, async match => showVmDetailsPage(await routedVmItem(match), match.params.tab, 'my-resources'));
+
+registerRoutedForm({
+  id: 'inventory-import',
+  pattern: /^\/resources\/import$/,
+  parent: 'my-resources',
+  permission: 'inventory.import',
+  label: 'Moje zasoby',
+}, () => importInventoryVm());
+registerRoutedForm({
+  id: 'inventory-adopt',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/adopt$/,
+  parent: 'my-resources',
+  permission: 'deployments.adopt',
+  label: 'Moje zasoby',
+}, async match => adoptInventoryVm(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-console',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/console$/,
+  parent: 'my-resources',
+  permission: 'vms.console',
+  label: 'Moje zasoby',
+}, async match => showVmConsole(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-snapshot-create',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/snapshots\/new$/,
+  parent: 'my-resources',
+  permission: 'snapshots.create',
+  label: 'Moje zasoby',
+}, async match => createVmSnapshot(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-backup-create',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/backups\/new$/,
+  parent: 'my-resources',
+  permission: 'backups.create',
+  label: 'Moje zasoby',
+}, async match => backupVm(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-backup-restore',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/backups\/restore$/,
+  parent: 'my-resources',
+  permission: 'backups.restore',
+  label: 'Moje zasoby',
+}, async match => {
+  const archive = match.searchParams.get('archive') || '';
+  if (!archive) throw new Error('Brak identyfikatora backupu.');
+  restoreVmFromBackup(await routedVmItem(match), { volid: archive });
+});
+registerRoutedForm({
+  id: 'inventory-compute-edit',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/edit\/compute$/,
+  parent: 'my-resources',
+  permission: 'vms.update',
+  label: 'Moje zasoby',
+}, async match => configureVm(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-disk-edit',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/edit\/disk$/,
+  parent: 'my-resources',
+  permission: 'vms.update',
+  label: 'Moje zasoby',
+}, async match => resizeVmDisk(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-migrate',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/migrate$/,
+  parent: 'my-resources',
+  permission: 'vms.migrate',
+  label: 'Moje zasoby',
+}, async match => migrateVm(await routedVmItem(match)));
+registerRoutedForm({
+  id: 'inventory-clone',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/clone$/,
+  parent: 'my-resources',
+  permission: 'vms.clone',
+  label: 'Moje zasoby',
+}, async match => cloneVm(await routedVmItem(match)));
+
+registerCommand('inventory.openVm', (item, initialTab = 'overview') => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(initialTab || 'overview')));
+registerCommand('inventory.consoleVm', item => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'));
 registerCommand('inventory.recreateVm', recreateVm);
 registerView({ id: 'inventory', label: 'Moje zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
 })();

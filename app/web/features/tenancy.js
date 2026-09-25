@@ -36,13 +36,13 @@
   async function tenantsView() {
     const current = ++generation;
     const page = await api(`/tenants?limit=${pageSize}&offset=${listOffset}${listStatus ? '&status=' + encodeURIComponent(listStatus) : ''}`);
-    if (current !== generation || state.view !== 'tenants') return;
+    if (current !== generation || !viewIs('tenants')) return;
     const filter = selectField('Status', 'tenant_status', [{ value: '', label: 'Wszystkie dostępne' }, ...states], listStatus);
     filter.querySelector('select').addEventListener('change', event => {
       listStatus = event.target.value; listOffset = 0; tenantsView().catch(error => toast(error.message, 'error'));
     });
     const actions = allowed('tenants.admin') && allowed('tenants.create')
-      ? [action('Nowy tenant', () => tenantForm(), 'primary')] : [];
+      ? [action('Nowy tenant', () => navigate('/tenants/new'), 'primary')] : [];
     dom.content.replaceChildren(heading('Tenanci i delegowane uprawnienia. Listę i dostęp do obiektów filtruje backend.', actions),
       foundationNotice(), filter,
       table([
@@ -51,21 +51,21 @@
         { label: 'Status', value: item => badge(labels[item.status], item.status === 'active' ? 'ok' : 'warning') },
         { label: 'Systemowy', value: item => item.is_system ? 'Tak — chroniony' : 'Nie' },
         { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
-      ], page.items, item => [action('Szczegóły', () => tenantDetails(item.id))]),
+      ], page.items, item => [action('Szczegóły', () => navigate('/tenants/' + encodeURIComponent(item.id)))]),
       pageControls(page, offset => { listOffset = offset; return tenantsView(); }));
   }
 
   async function tenantDetails(id) {
     const current = ++generation;
     const [item, scope] = await Promise.all([api(`/tenants/${id}`), api(`/tenants/${id}/permissions`)]);
-    if (current !== generation || state.view !== 'tenants') return;
+    if (current !== generation || !viewIs('tenants')) return;
     const permits = permission => scope.permissions.includes(permission);
     const editable = item.status === 'active' || scope.global_administration;
     const actions = [];
-    if (permits('tenants.update') && editable) actions.push(action('Edytuj', () => tenantForm(item, scope)));
-    if (permits('tenants.members.read')) actions.push(action('Członkowie', () => membersView(item.id, scope)));
+    if (permits('tenants.update') && editable) actions.push(action('Edytuj', () => navigate('/tenants/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'tenant'))));
+    if (permits('tenants.members.read')) actions.push(action('Członkowie', () => navigate('/tenants/' + encodeURIComponent(item.id) + '/members')));
     if (permits('projects.read')) actions.push(action('Projekty', () => document.dispatchEvent(new CustomEvent('cloudportal:tenant-projects', { detail: { tenantId: item.id } }))));
-    if (permits('tenants.audit.read')) actions.push(action('Historia audytu', () => auditView(item.id)));
+    if (permits('tenants.audit.read')) actions.push(action('Historia audytu', () => navigate('/tenants/' + encodeURIComponent(item.id) + '/audit')));
     if (!item.is_system && scope.global_administration && permits('tenants.delete')) {
       actions.push(action('Usuń tenant', () => openModal({
         title: `Usuń tenant: ${item.name}`, danger: true, submitLabel: 'Usuń pusty tenant',
@@ -132,13 +132,13 @@
     const current = ++generation;
     const [item, scope, page] = await Promise.all([api(`/tenants/${id}`), api(`/tenants/${id}/permissions`),
       api(`/tenants/${id}/members?limit=${pageSize}&offset=${offset}`)]);
-    if (current !== generation || state.view !== 'tenants') return;
+    if (current !== generation || !viewIs('tenants')) return;
     const permits = permission => scope.permissions.includes(permission);
     const editable = item.status === 'active' || scope.global_administration;
     const manager = editable && permits('tenants.members.manage');
     const assigner = editable && permits('tenants.roles.assign');
-    const actions = [action('Szczegóły tenanta', () => tenantDetails(id))];
-    if (manager && allowed('users.read')) actions.push(action('Dodaj członka', () => memberForm(id, assigner), 'primary'));
+    const actions = [action('Szczegóły tenanta', () => navigate('/tenants/' + encodeURIComponent(id)))];
+    if (manager && allowed('users.read')) actions.push(action('Dodaj członka', () => navigate('/tenants/' + encodeURIComponent(id) + '/members/new'), 'primary'));
     openModal({ title: `${item.name} — członkowie`, wide: true, body: node('div', { class: 'stack' },
       node('div', { class: 'action-group' }, actions),
       table([
@@ -149,7 +149,7 @@
         { label: 'Wersja', value: row => row.version },
       ], page.items, row => {
         const rowActions = [];
-        if (assigner) rowActions.push(action('Przypisz role', () => memberForm(id, true, row)));
+        if (assigner) rowActions.push(action('Przypisz role', () => navigate('/tenants/' + encodeURIComponent(id) + '/members/' + encodeURIComponent(row.user_id) + '/roles')));
         if (manager) {
           rowActions.push(action(row.status === 'active' ? 'Wyłącz' : 'Włącz', async () => {
             await api(`/tenants/${id}/members/${row.user_id}`, { method: 'PUT', body: {
@@ -160,7 +160,7 @@
             danger: true, submitLabel: 'Usuń członkostwo', body: node('p', { text: 'Usuwa dostęp w tym tenancie, nie konto użytkownika. Backend chroni ostatniego menedżera.' }),
             onSubmit: async () => {
               await api(`/tenants/${id}/members/${row.user_id}?expected_version=${row.version}`, { method: 'DELETE' });
-              await membersView(id); return false;
+              await navigate('/tenants/' + encodeURIComponent(id) + '/members'); return false;
             },
           }), 'danger'));
         }
@@ -187,7 +187,7 @@
     let more;
     async function loadRoles() {
       const page = await api(`/tenants/${id}/assignable-roles?limit=${pageSize}&offset=${offset}`);
-      if (current !== generation || state.view !== 'tenants') return;
+      if (current !== generation || !viewIs('tenants')) return;
       page.items.forEach(role => {
         if (renderedRoles.has(role.id)) return;
         const existingFallback = choices.querySelector('[data-role-id="' + role.id + '"]');
@@ -208,7 +208,7 @@
     let userField = null;
     if (!member) {
       const users = await api('/users?limit=200');
-      if (current !== generation || state.view !== 'tenants') return;
+      if (current !== generation || !viewIs('tenants')) return;
       const candidates = (users.items || []).filter(user => user.is_active !== false && user.is_locked !== true);
       userField = selectField('Użytkownik', 'user_id',
         candidates.map(user => ({
@@ -219,7 +219,7 @@
       userField.append(node('span', { class: 'field-help',
         text: 'Po dodaniu użytkownika wybierz role RBAC. Backend nie pozwoli nadać uprawnień szerszych niż Twoje w tej organizacji.' }));
     }
-    if (current !== generation || state.view !== 'tenants') return;
+    if (current !== generation || !viewIs('tenants')) return;
     const body = node('div', { class: 'stack' },
       member ? node('p', { text: `${member.username} / ID ${member.user_id}` }) : userField,
       node('p', { class: 'muted', text: 'Uprawnienia są nadawane przez role RBAC w tej organizacji; nie zmieniają globalnych uprawnień konta.' }),
@@ -243,9 +243,9 @@
   async function auditView(id, offset = 0) {
     const current = ++generation;
     const page = await api(`/tenants/${id}/audit?limit=${pageSize}&offset=${offset}`);
-    if (current !== generation || state.view !== 'tenants') return;
+    if (current !== generation || !viewIs('tenants')) return;
     openModal({ title: 'Historia tenanta', eyebrow: 'Istniejący audit / wybrany scope', wide: true,
-      body: node('div', { class: 'stack' }, action('Szczegóły tenanta', () => tenantDetails(id)),
+      body: node('div', { class: 'stack' }, action('Szczegóły tenanta', () => navigate('/tenants/' + encodeURIComponent(id))),
         table([
           { label: 'Czas', value: row => formatDate(row.timestamp) },
           { label: 'Operacja', value: row => row.action },
@@ -258,6 +258,83 @@
   }
 
   document.addEventListener('cloudportal:app-hidden', () => { generation++; listOffset = 0; listStatus = ''; });
+  registerRoutedForm({
+    id: 'tenants-details',
+    pattern: /^\/tenants\/(?<id>\d+)$/,
+    parent: 'tenants',
+    permission: null,
+    label: 'Tenanci',
+  }, match => tenantDetails(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'tenants-members',
+    pattern: /^\/tenants\/(?<id>\d+)\/members$/,
+    parent: 'tenants',
+    permission: null,
+    label: 'Tenanci',
+  }, match => membersView(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'tenants-audit',
+    pattern: /^\/tenants\/(?<id>\d+)\/audit$/,
+    parent: 'tenants',
+    permission: null,
+    label: 'Tenanci',
+  }, match => auditView(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'tenants-member-create',
+    pattern: /^\/tenants\/(?<id>\d+)\/members\/new$/,
+    parent: 'tenants',
+    permission: null,
+    label: 'Tenanci',
+  }, async match => {
+    const id = Number(match.params.id);
+    const scope = await api('/tenants/' + id + '/permissions');
+    if (!scope.permissions.includes('tenants.members.manage')) throw new Error('Brak uprawnienia do dodawania członków.');
+    await memberForm(id, scope.permissions.includes('tenants.roles.assign'));
+  });
+  registerRoutedForm({
+    id: 'tenants-member-roles',
+    pattern: /^\/tenants\/(?<id>\d+)\/members\/(?<userId>\d+)\/roles$/,
+    parent: 'tenants',
+    permission: null,
+    label: 'Tenanci',
+  }, async match => {
+    const id = Number(match.params.id);
+    const [scope, page] = await Promise.all([
+      api('/tenants/' + id + '/permissions'),
+      api('/tenants/' + id + '/members?limit=200&offset=0'),
+    ]);
+    if (!scope.permissions.includes('tenants.roles.assign')) throw new Error('Brak uprawnienia do przypisywania ról.');
+    const member = page.items.find(row => Number(row.user_id) === Number(match.params.userId));
+    if (!member) throw new Error('Nie znaleziono członka tenanta.');
+    await memberForm(id, true, member);
+  });
+
+  registerRoutedForm({
+    id: 'tenants-create',
+    pattern: /^\/tenants\/new$/,
+    parent: 'tenants',
+    permission: null,
+    label: 'Tenanci',
+  }, async () => {
+    if (!allowed('tenants.admin') || !allowed('tenants.create')) throw new Error('Brak uprawnienia do tworzenia tenantów.');
+    tenantForm();
+  });
+  registerRoutedForm({
+    id: 'tenants-edit',
+    pattern: /^\/tenants\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+    parent: 'tenants',
+    permission: null,
+    label: 'Tenanci',
+  }, async match => {
+    const [item, scope] = await Promise.all([
+      api('/tenants/' + match.params.id),
+      api('/tenants/' + match.params.id + '/permissions'),
+    ]);
+    const editable = item.status === 'active' || scope.global_administration;
+    if (!editable || !scope.permissions.includes('tenants.update')) throw new Error('Brak uprawnienia do edycji tego tenanta.');
+    tenantForm(item, scope);
+  });
+
   // Global identity permissions intentionally do not include tenant grants.
   // An authenticated account can open the view; backend SQL decides what is visible.
   registerView({ id: 'tenants', label: 'Tenanci', icon: 'T', permission: null, order: 165 }, tenantsView);

@@ -4,7 +4,7 @@ const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
 const THEME_KEY = 'cloudportal.console.theme';
 const SIDEBAR_COLLAPSED_KEY = 'cloudportal.console.sidebar.collapsed';
-const state = { session: null, identity: null, view: 'dashboard', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
+const state = { session: null, identity: null, view: 'dashboard', routePath: '', refreshPromise: null, consoleRfb: null, taskPollTimer: null, taskPollNonce: 0 };
 
 const dom = {
   loginView: document.querySelector('#login-view'),
@@ -1058,8 +1058,7 @@ function showApp() {
   emitUiEvent('app-shown', { identity: state.identity });
   renderNavigation();
   const mustChangePassword = state.identity.user.must_change_password;
-  navigate(mustChangePassword ? 'account' : location.hash.slice(1) || 'deployments');
-  if (mustChangePassword) window.setTimeout(() => changePassword(true), 0);
+  navigate(mustChangePassword ? '/account/password?required=1' : location.hash.slice(1) || 'deployments');
 }
 function navigationGroup(route) {
   if (typeof window.uiNavigationGroup === 'function') return window.uiNavigationGroup(route);
@@ -1079,6 +1078,10 @@ function navigationRouteVisible(route) {
   return route.navigation !== false
     && (typeof window.uiNavigationVisible !== 'function' || window.uiNavigationVisible(route));
 }
+function routeNavigationParent(route) {
+  if (route?.id === 'routed-form') return (window.routedFormParent?.() || route.navigationParent || '');
+  return route?.navigationParent || '';
+}
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
@@ -1091,7 +1094,7 @@ function renderNavigation() {
     previousGroup = group;
     const exact = state.view === route.id;
     const item = node('button', {
-      class: `nav-link ${exact || currentRoute?.navigationParent === route.id ? 'active' : ''}`, type: 'button',
+      class: `nav-link ${exact || routeNavigationParent(currentRoute) === route.id ? 'active' : ''}`, type: 'button',
       title: route.label, 'aria-current': exact ? 'page' : null, onClick: () => navigate(route.id),
     }, node('span', { class: 'nav-icon', 'aria-hidden': 'true' }, appRouteIcon(route)), node('span', { class: 'nav-label', text: route.label }));
     item.dataset.route = route.id;
@@ -1107,34 +1110,40 @@ async function navigate(view) {
     ? window.uiResolveView(requestedView)
     : requestedView;
   if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
-  const available = routes.filter(item => allowed(item.permission) && (!state.identity.user.must_change_password || item.id === 'account'));
+  const requestedRoutedForm = window.matchRoutedForm?.(requestedView) || null;
+  const available = routes.filter(item =>
+    allowed(item.permission)
+    && (!state.identity.user.must_change_password
+      || item.id === 'account'
+      || (item.id === 'routed-form' && requestedRoutedForm?.route?.parent === 'account'))
+  );
   const visibleAvailable = available
     .filter(navigationRouteVisible)
     .sort((a, b) => navigationGroupRank(a) - navigationGroupRank(b) || navigationRouteRank(a) - navigationRouteRank(b) || a.id.localeCompare(b.id));
   const route = available.find(item => item.id === resolvedView) || visibleAvailable[0] || available[0];
   state.view = route.id;
-  location.hash = typeof window.uiRoutePathForRequest === 'function'
+  const targetRoutePath = typeof window.uiRoutePathForRequest === 'function'
     ? window.uiRoutePathForRequest(requestedView, route.id)
     : (typeof window.uiRoutePath === 'function' ? window.uiRoutePath(route.id) : route.id);
+  state.routePath = targetRoutePath;
+  location.hash = targetRoutePath;
   dom.pageTitle.textContent = route.label;
   dom.pageEyebrow.textContent = typeof window.uiPageEyebrow === 'function'
     ? window.uiPageEyebrow(route)
     : route.id === 'dashboard'
       ? 'Stan systemu'
-      : route.navigationParent
-        ? (routes.find(item => item.id === route.navigationParent)?.label || 'Narzędzia')
+      : routeNavigationParent(route)
+        ? (routes.find(item => item.id === routeNavigationParent(route))?.label || 'Narzędzia')
         : 'Zarządzanie lokalne';
   dom.navigation.querySelectorAll('.nav-link').forEach(item => {
     const exact = item.dataset.route === route.id;
-    item.classList.toggle('active', exact || route.navigationParent === routes.find(candidate => candidate.id === item.dataset.route)?.id);
+    item.classList.toggle('active', exact || routeNavigationParent(route) === routes.find(candidate => candidate.id === item.dataset.route)?.id);
     exact ? item.setAttribute('aria-current', 'page') : item.removeAttribute('aria-current');
   });
   setMobileMenu(false);
   loading();
   try { await views[route.id](); }
-  catch (error) {
-    dom.content.replaceChildren(node('div', { class: 'panel' }, node('h2', { text: 'Nie udało się załadować widoku' }), node('p', { class: 'form-error', text: error.message }), button('Spróbuj ponownie', () => navigate(route.id), 'primary')));
-  }
+  catch (error) { dom.content.replaceChildren(node('div', { class: 'panel' }, node('h2', { text: 'Nie udało się załadować widoku' }), node('p', { class: 'form-error', text: error.message }), button('Spróbuj ponownie', () => navigate(route.id), 'primary'))); }
   dom.content.focus();
 }
 function showObjectDetails(title, value, eyebrow = 'Szczegóły') {

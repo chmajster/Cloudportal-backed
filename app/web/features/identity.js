@@ -4,7 +4,7 @@
 async function usersView() {
   const users = (await api('/users?limit=200')).items;
   const actions = [];
-  if (allowed('users.create')) actions.push(button('Dodaj użytkownika', createUser, 'primary'));
+  if (allowed('users.create')) actions.push(button('Dodaj użytkownika', () => navigate('/access/users/new'), 'primary'));
   dom.content.replaceChildren(heading('Konta ludzi i konta serwisowe. Uprawnienia wynikają wyłącznie z przypisanych ról.', actions),
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
@@ -17,9 +17,9 @@ async function usersView() {
 
 function userActions(user) {
   const actions = [];
-  if (allowed('roles.assign') && allowed('roles.read')) actions.push(button('Role', () => assignUserRoles(user)));
+  if (allowed('roles.assign') && allowed('roles.read')) actions.push(button('Role', () => navigate('/access/users/' + encodeURIComponent(user.id) + '/roles')));
   if (allowed('users.update')) {
-    actions.push(button('Edytuj', () => editUser(user)));
+    actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
     actions.push(button(user.is_active ? 'Wyłącz' : 'Włącz', () => userCommand(user, user.is_active ? 'disable' : 'enable')));
     if (!user.is_service_account && user.is_active && user.auth_source !== 'ldap') actions.push(button('Reset hasła', () => resetUserPassword(user)));
@@ -106,11 +106,11 @@ function resetUserPassword(user) {
 
 async function rolesView() {
   const roles = (await api('/roles?limit=200')).items;
-  const actions = allowed('roles.create') ? [button('Dodaj rolę', () => roleForm(), 'primary')] : [];
+  const actions = allowed('roles.create') ? [button('Dodaj rolę', () => navigate('/access/roles/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Role grupują uprawnienia do poszczególnych modułów. System chroni ostatniego aktywnego administratora.', actions),
     table([{ label: 'Rola', value: role => node('strong', { text: role.name }) }, { label: 'Uprawnienia', value: role => badge(`${role.permissions.length} uprawnień`, role.permissions.length ? 'info' : '') }], roles, role => {
       const actions = [];
-      if (allowed('roles.update')) actions.push(button('Edytuj', () => roleForm(role)));
+      if (allowed('roles.update')) actions.push(button('Edytuj', () => navigate('/access/roles/edit/' + encodeURIComponent(role.id) + '/' + encodeURIComponent(role.name || 'role'))));
       if (allowed('roles.delete')) actions.push(button('Usuń', () => confirmAction('Usuń rolę', `Rola ${role.name} zostanie trwale usunięta.`, async () => { await api(`/roles/${role.id}`, { method: 'DELETE' }); toast('Rola usunięta.'); navigate('roles'); }), 'danger'));
       return actions;
     }));
@@ -139,7 +139,7 @@ async function tokensView() {
   ]);
   const tokens = tokenResult.items;
   const users = new Map(userResult.items.map(user => [Number(user.id), user.username]));
-  const actions = allowed('tokens.create') ? [button('Utwórz token', createToken, 'primary')] : [];
+  const actions = allowed('tokens.create') ? [button('Utwórz token', () => navigate('/access/tokens/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Tokeny API mają jawny, ograniczony zakres. Sekret jest dostępny wyłącznie po utworzeniu.', actions),
     table([
       { label: 'Nazwa', value: token => node('div', {}, node('strong', { text: token.name }), node('div', { class: 'mono muted', text: token.token_prefix })) },
@@ -148,7 +148,7 @@ async function tokensView() {
       { label: 'Status', value: token => { const status = token.revoked_at ? 'revoked' : token.expires_at && new Date(token.expires_at) < new Date() ? 'expired' : 'active'; return badge(statusLabel(status), status === 'active' ? 'ok' : 'danger'); } },
       { label: 'Ostatnio użyty', value: token => formatDate(token.last_used_at) },
     ], tokens, token => {
-      const result = [button('Zakres', () => showPermissionSummary(`Zakres: ${token.name}`, token.scopes))];
+      const result = [button('Zakres', () => navigate('/access/tokens/' + encodeURIComponent(token.id) + '/scope'))];
       if (allowed('tokens.revoke') && !token.revoked_at) result.push(button('Unieważnij', () => confirmAction('Unieważnij token', `Token ${token.name} natychmiast przestanie działać.`, async () => {
         await api(`/tokens/${token.id}/revoke`, { method: 'POST' });
         toast('Token unieważniony.');
@@ -227,7 +227,7 @@ async function accountView() {
       user.must_change_password ? badge('Wymagana zmiana', 'warning') : badge('Hasło ustawione', 'ok')),
     node('p', { class: user.must_change_password ? 'form-error account-security-copy' : 'muted account-security-copy', text: passwordMessage }),
     node('div', { class: 'account-security-actions' },
-      button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => changePassword(user.must_change_password), 'primary')));
+      button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => navigate('/account/password' + (user.must_change_password ? '?required=1' : '')), 'primary')));
 
   const permissionPanel = node('section', { class: 'panel account-permissions-panel' },
     node('div', { class: 'account-permissions-header' },
@@ -295,8 +295,85 @@ function changePassword(required = false) {
   });
 }
 
-registerCommand('users.create', createUser);
-registerCommand('tokens.create', createToken);
+registerRoutedForm({
+  id: 'tokens-scope',
+  pattern: /^\/access\/tokens\/(?<id>\d+)\/scope$/,
+  parent: 'tokens',
+  permission: 'tokens.read',
+  label: 'Tokeny API',
+}, async match => {
+  const tokens = (await api('/tokens?limit=200')).items;
+  const token = tokens.find(item => Number(item.id) === Number(match.params.id));
+  if (!token) throw new Error('Nie znaleziono tokenu.');
+  showPermissionSummary('Zakres: ' + token.name, token.scopes);
+});
+registerRoutedForm({
+  id: 'account-password',
+  pattern: /^\/account\/password$/,
+  parent: 'account',
+  permission: null,
+  label: 'Moje konto',
+}, match => changePassword(match.searchParams.get('required') === '1' || Boolean(state.identity?.user?.must_change_password)));
+registerRoutedForm({
+  id: 'users-roles',
+  pattern: /^\/access\/users\/(?<id>\d+)\/roles$/,
+  parent: 'users',
+  permission: 'roles.assign',
+  label: 'Użytkownicy',
+}, async match => {
+  const users = (await api('/users?limit=200')).items;
+  const user = users.find(item => Number(item.id) === Number(match.params.id));
+  if (!user) throw new Error('Nie znaleziono użytkownika.');
+  await assignUserRoles(user);
+});
+registerRoutedForm({
+  id: 'users-create',
+  pattern: /^\/access\/users\/new$/,
+  parent: 'users',
+  permission: 'users.create',
+  label: 'Użytkownicy',
+}, () => createUser());
+registerRoutedForm({
+  id: 'users-edit',
+  pattern: /^\/access\/users\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'users',
+  permission: 'users.update',
+  label: 'Użytkownicy',
+}, async match => {
+  const users = (await api('/users?limit=200')).items;
+  const user = users.find(item => Number(item.id) === Number(match.params.id));
+  if (!user) throw new Error('Nie znaleziono użytkownika.');
+  editUser(user);
+});
+registerRoutedForm({
+  id: 'roles-create',
+  pattern: /^\/access\/roles\/new$/,
+  parent: 'roles',
+  permission: 'roles.create',
+  label: 'Role i RBAC',
+}, () => roleForm());
+registerRoutedForm({
+  id: 'roles-edit',
+  pattern: /^\/access\/roles\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'roles',
+  permission: 'roles.update',
+  label: 'Role i RBAC',
+}, async match => {
+  const roles = (await api('/roles?limit=200')).items;
+  const role = roles.find(item => Number(item.id) === Number(match.params.id));
+  if (!role) throw new Error('Nie znaleziono roli.');
+  await roleForm(role);
+});
+registerRoutedForm({
+  id: 'tokens-create',
+  pattern: /^\/access\/tokens\/new$/,
+  parent: 'tokens',
+  permission: 'tokens.create',
+  label: 'Tokeny API',
+}, () => createToken());
+
+registerCommand('users.create', () => navigate('/access/users/new'));
+registerCommand('tokens.create', () => navigate('/access/tokens/new'));
 registerView({ id: 'users', label: 'Użytkownicy', icon: 'U', permission: 'users.read', order: 10 }, usersView);
 registerView({ id: 'roles', label: 'Role i RBAC', icon: 'R', permission: 'roles.read', order: 20 }, rolesView);
 registerView({ id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read', order: 30 }, tokensView);

@@ -220,7 +220,7 @@ async function catalogView() {
     actions.push(button('Nowy szablon Terraform / OpenTofu', () => openProxmoxTemplateWizard(), 'primary'));
   }
   if (allowed('ansible.manage')) {
-    actions.push(button('Dodaj własny playbook Ansible', () => customPlaybookForm(), 'primary'));
+    actions.push(button('Dodaj własny playbook Ansible', () => navigate('/catalog/ansible/new'), 'primary'));
   }
 
   const sections = [
@@ -236,7 +236,7 @@ async function catalogView() {
         { label: 'Status', value: item => badge(item.enabled === false ? 'Wyłączony' : 'Aktywny', item.enabled === false ? 'danger' : 'ok') },
         { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
       ], templates.items, item => {
-        const rowActions = [button('Pola', () => showTemplateFields(item))];
+        const rowActions = [button('Pola', () => navigate('/catalog/templates/' + encodeURIComponent(item.id) + '/fields'))];
         if (allowed('settings.update')) {
           rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCatalogItem('templates', item), item.enabled === false ? 'primary' : 'danger'));
         }
@@ -316,7 +316,7 @@ async function catalogView() {
           }, 'primary'));
         }
         if (item.custom && allowed('ansible.manage')) {
-          rowActions.push(button('Edytuj', () => customPlaybookForm(item)));
+          rowActions.push(button('Edytuj', () => navigate('/catalog/ansible/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'playbook'))));
           rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCustomPlaybook(item), item.enabled === false ? 'primary' : 'danger'));
           rowActions.push(button('Usuń', () => deleteCustomPlaybook(item), 'danger'));
         } else if (!item.custom && allowed('settings.update')) {
@@ -332,5 +332,36 @@ async function catalogView() {
   );
 }
 
+registerRoutedForm({
+  id: 'catalog-template-fields',
+  pattern: /^\/catalog\/templates\/(?<id>[^/]+)\/fields$/,
+  parent: 'catalog',
+  permission: 'terraform.read',
+  label: 'Katalog IaC',
+}, async match => {
+  const templates = (await api('/templates')).items;
+  const item = templates.find(value => String(value.id) === String(match.params.id));
+  if (!item) throw new Error('Nie znaleziono szablonu.');
+  showTemplateFields(item);
+});
+registerRoutedForm({
+  id: 'catalog-ansible-create',
+  pattern: /^\/catalog\/ansible\/new$/,
+  parent: 'catalog',
+  permission: 'ansible.manage',
+  label: 'Katalog IaC',
+}, () => customPlaybookForm());
+registerRoutedForm({
+  id: 'catalog-ansible-edit',
+  pattern: /^\/catalog\/ansible\/edit\/(?<id>[^/]+)(?:\/[^/]+)?$/,
+  parent: 'catalog',
+  permission: 'ansible.manage',
+  label: 'Katalog IaC',
+}, async match => {
+  const playbooks = (await api('/ansible/playbooks')).items;
+  const item = playbooks.find(value => String(value.id) === String(match.params.id) && value.custom);
+  if (!item) throw new Error('Nie znaleziono własnego playbooka.');
+  await customPlaybookForm(item);
+});
 registerView({ id: 'catalog', label: 'Katalog IaC', icon: 'C', permission: 'terraform.read', order: 60 }, catalogView);
 })();

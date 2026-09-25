@@ -53,6 +53,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'shared/page-surfaces.js',
         'shared/platforms.js',
         'shared/polling.js',
+        'shared/routed-forms.js',
         'shared/status.js',
     ]
     assert {
@@ -141,6 +142,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     core = scripts['core.js'].text
     loader = scripts['loader.js'].text
     navigation = scripts['shared/navigation.js'].text
+    routed_forms = scripts['shared/routed-forms.js'].text
 
     assert "fetch('./manifest.json'" in loader
     assert "loadFeatureScript('app.js')" in loader
@@ -151,11 +153,21 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function registerView(' in core
     assert 'function registerCommand(' in core
     assert 'function registerExtension(' in core
+    assert 'const routedForms = [];' in routed_forms
+    assert 'function registerRoutedForm(' in routed_forms
+    assert 'function matchRoutedForm(' in routed_forms
+    assert 'window.registerRoutedForm = registerRoutedForm' in routed_forms
+    assert 'function routedFormView()' in script
+    assert "id: 'routed-form'" in script
+    assert 'routePath:' in core
     assert "split('/page/')[0]" in core
     assert 'dismissCloudportalSurfaceForNavigation' in core
     assert 'closeCloudportalSurface' in core
     assert 'function modalSurfaceOpen()' in script
     assert 'dom.modal.showModal = renderSurface' in script
+    assert 'prepareSemanticSurface' in script
+    assert 'pendingSemanticSurface' in script
+    assert 'semanticPath' in script
     assert 'history.pushState(' in script
     assert 'cloudportalPageSurface' in script
     assert "window.addEventListener('popstate'" in script
@@ -186,6 +198,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "return '/blueprints/new/step/' + stepNumber + query" in script
     assert "return '/blueprints/edit/' + encodeURIComponent(String(item.id))" in script
     assert "registerCommand('deployments.create'" in script
+    assert "navigate('/providers/new')" in script
+    assert "navigate('/access/credentials/new')" in script
+    assert "navigate('/access/users/new')" in script
+    assert "navigate('/access/roles/new')" in script
+    assert "navigate('/ipam/pools/new')" in script
+    assert "navigate('/operations/schedules/new')" in script
+    assert "navigate('/operations/webhooks/new')" in script
+    assert "navigate('/projects/new')" in script
+    assert "navigate('/tenants/new')" in script
+    assert "navigate('/jobs/ansible/new')" in script
+    assert "navigate('/blueprints/appliances/import')" in script
     assert "registerCommand('deployments.open'" in script
     assert "api('/blueprints?available=true&limit=200')" in script
     assert "label: 'Produkty'" in script
@@ -261,9 +284,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "item.status === 'cancelling'" in script
     assert "runCommand('inventory.openVm', item, 'overview', 'my-resources')" in script
     assert "runCommand('inventory.openVm', vm, 'overview', 'my-resources')" in script
-    assert "registerCommand('inventory.consoleVm', showVmConsole)" in script
+    assert "registerCommand('inventory.consoleVm', item => navigate('/resources/vm/'" in script
     assert "const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm')" in script
     assert "runCommand('inventory.consoleVm', item)" in script
+    assert "/resources/vm/" in script
+    assert "id: 'inventory-vm-details'" in script
+    assert "surface: false" in script
+    assert "/edit/compute" in script
+    assert "/snapshots/new" in script
+    assert "/backups/new" in script
     assert 'offerMissingVmCleanup' in script
     assert "'/missing', { method: 'DELETE' }" in script
     assert 'VM nie istnieje w Proxmox' in script
@@ -282,6 +311,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "navigationParent: 'jobs'" in script
     assert "Skopiowano bezpośredni link do logów." in script
     assert 'JOB_LOG_ROUTE' in script
+    assert "return 'routed-form'" in navigation
+    assert "resolvedId === 'routed-form'" in navigation
     assert 'BLUEPRINT_WIZARD_ROUTE' in navigation
     assert "'blueprint-wizard': '/blueprints/new/step/1'" in navigation
     assert "resolvedId === 'blueprint-wizard'" in navigation

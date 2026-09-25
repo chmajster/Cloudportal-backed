@@ -40,14 +40,14 @@
     if (listStatus) query.set('status', listStatus);
     if (tenantFilter) query.set('tenant_id', tenantFilter);
     const [page, scopes] = await Promise.all([api('/projects?' + query), api('/project-context/creation-scopes?limit=1')]);
-    const valid = () => current === generation && state.view === 'projects';
+    const valid = () => current === generation && viewIs('projects');
     const selection = globalThis.CPProjectContext ? await globalThis.CPProjectContext.panel(projectsView, valid) : null;
     if (!valid()) return;
     const filter = selectField('Status', 'project_status', [{ value: '', label: 'Wszystkie dostępne' }, ...statuses], listStatus);
     filter.querySelector('select').addEventListener('change', event => {
       listStatus = event.target.value; listOffset = 0; projectsView().catch(error => toast(error.message, 'error'));
     });
-    const actions = scopes.total ? [action('Nowy projekt', () => projectForm(), 'primary')] : [];
+    const actions = scopes.total ? [action('Nowy projekt', () => navigate('/projects/new'), 'primary')] : [];
     if (tenantFilter) actions.push(action('Wszystkie dostępne tenanty', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
     dom.content.replaceChildren(heading('Projekty, członkostwa i uprawnienia w kontekście Tenant / Project.', actions), notice(), selection, filter,
       table([
@@ -57,21 +57,21 @@
         { label: 'Środowisko domyślne', value: row => row.default_environment },
         { label: 'Status', value: row => labels[row.status] },
         { label: 'Systemowy', value: row => row.is_system ? 'Tak — chroniony' : 'Nie' },
-      ], page.items, row => [action('Szczegóły', () => details(row.id))]),
+      ], page.items, row => [action('Szczegóły', () => navigate('/projects/' + encodeURIComponent(row.id)))]),
       controls(page, offset => { listOffset = offset; return projectsView(); }));
   }
 
   async function details(id) {
     const current = ++generation;
     const [item, scope] = await Promise.all([api(`/projects/${id}`), api(`/projects/${id}/permissions`)]);
-    if (current !== generation || state.view !== 'projects') return;
+    if (current !== generation || !viewIs('projects')) return;
     const permits = p => scope.permissions.includes(p);
     const actions = [];
     if (permits('projects.select') && globalThis.CPProjectContext) actions.push(action('Wybierz kontekst',
-      () => globalThis.CPProjectContext.choose(item, () => current === generation && state.view === 'projects')));
-    if (permits('projects.update')) actions.push(action('Edytuj', () => projectForm(item, scope)));
-    if (permits('projects.members.read')) actions.push(action('Członkowie', () => members(id)));
-    if (permits('projects.audit.read')) actions.push(action('Audyt', () => history(id)));
+      () => globalThis.CPProjectContext.choose(item, () => current === generation && viewIs('projects'))));
+    if (permits('projects.update')) actions.push(action('Edytuj', () => navigate('/projects/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'project'))));
+    if (permits('projects.members.read')) actions.push(action('Członkowie', () => navigate('/projects/' + encodeURIComponent(id) + '/members')));
+    if (permits('projects.audit.read')) actions.push(action('Audyt', () => navigate('/projects/' + encodeURIComponent(id) + '/audit')));
     if (!item.is_system && permits('projects.delete')) actions.push(action('Usuń pusty projekt', () => openModal({
       title: `Usuń projekt: ${item.name}`, danger: true, submitLabel: 'Usuń projekt',
       body: node('p', { text: 'Backend wymaga pustego projektu i zgodnej wersji. Historia audytu zostanie zachowana.' }),
@@ -107,13 +107,13 @@
     let offset = 0, more;
     async function loadScopes() {
       const page = await api(`/project-context/creation-scopes?limit=${pageSize}&offset=${offset}`);
-      if (current !== generation || state.view !== 'projects') return;
+      if (current !== generation || !viewIs('projects')) return;
       page.items.forEach(t => select.append(node('option', { value: t.tenant_id, text: `${t.name} / ${t.slug}` })));
       offset += page.items.length; more.disabled = offset >= page.total;
     }
     more = action('Pokaż kolejne tenanty', loadScopes);
     if (item) select.disabled = true; else await loadScopes();
-    if (current !== generation || state.view !== 'projects') return;
+    if (current !== generation || !viewIs('projects')) return;
     const canDisable = scope?.global_administration || scope?.inherited_permissions.includes('projects.admin');
     const body = node('div', { class: 'form-grid' }, tenantSelect, item ? null : more,
       field('Nazwa', 'name', { value: item?.name || '', required: true, maxlength: 100 }),
@@ -147,17 +147,17 @@
   async function members(id, offset = 0) {
     const current = ++generation;
     const [scope, page] = await Promise.all([api(`/projects/${id}/permissions`), api(`/projects/${id}/members?limit=${pageSize}&offset=${offset}`)]);
-    if (current !== generation || state.view !== 'projects') return;
+    if (current !== generation || !viewIs('projects')) return;
     const manager = scope.permissions.includes('projects.members.manage'), assigner = scope.permissions.includes('projects.roles.assign');
-    const actions = [action('Szczegóły projektu', () => details(id))];
-    if (manager) actions.push(action('Dodaj członka', () => memberForm(id, assigner), 'primary'));
+    const actions = [action('Szczegóły projektu', () => navigate('/projects/' + encodeURIComponent(id)))];
+    if (manager) actions.push(action('Dodaj członka', () => navigate('/projects/' + encodeURIComponent(id) + '/members/new'), 'primary'));
     openModal({ title: 'Członkowie projektu', wide: true, body: node('div', { class: 'stack' },
       node('div', { class: 'action-group' }, actions), table([
         { label: 'Użytkownik', value: row => row.username }, { label: 'ID', value: row => row.user_id },
         { label: 'Status', value: row => labels[row.status] }, { label: 'Role (ID)', value: row => row.role_ids.join(', ') || 'Brak' },
       ], page.items, row => {
         const actions = [];
-        if (assigner) actions.push(action('Role', () => memberForm(id, true, row)));
+        if (assigner) actions.push(action('Role', () => navigate('/projects/' + encodeURIComponent(id) + '/members/' + encodeURIComponent(row.user_id) + '/roles')));
         if (manager) {
           actions.push(action(row.status === 'active' ? 'Wyłącz' : 'Włącz', async () => {
             await api(`/projects/${id}/members/${row.user_id}`, { method: 'PUT', body: { status: row.status === 'active' ? 'disabled' : 'active', expected_version: row.version } });
@@ -167,7 +167,7 @@
             body: node('p', { text: 'Usuwa wyłącznie członkostwo w projekcie. Konto użytkownika i członkostwo tenanta pozostają.' }),
             onSubmit: async () => {
               await api(`/projects/${id}/members/${row.user_id}?expected_version=${row.version}`, { method: 'DELETE' });
-              await members(id); return false;
+              await navigate('/projects/' + encodeURIComponent(id) + '/members'); return false;
             },
           }), 'danger'));
         }
@@ -189,7 +189,7 @@
     let roleOffset = 0, userOffset = 0, moreRoles, moreUsers;
     async function loadRoles() {
       const page = await api(`/projects/${id}/assignable-roles?limit=${pageSize}&offset=${roleOffset}`);
-      if (current !== generation || state.view !== 'projects') return;
+      if (current !== generation || !viewIs('projects')) return;
       for (const role of page.items) if (!rendered.has(role.id)) {
         const existingFallback = roles.querySelector('[data-role-id="' + role.id + '"]');
         const checked = existingFallback?.querySelector('input[type="checkbox"]')?.checked
@@ -204,13 +204,13 @@
     }
     async function loadUsers() {
       const page = await api(`/projects/${id}/eligible-members?limit=${pageSize}&offset=${userOffset}`);
-      if (current !== generation || state.view !== 'projects') return;
+      if (current !== generation || !viewIs('projects')) return;
       for (const user of page.items) select.append(node('option', { value: user.user_id, text: `${user.username} (#${user.user_id})` }));
       userOffset += page.items.length; moreUsers.disabled = userOffset >= page.total;
     }
     moreRoles = action('Kolejne role', loadRoles); moreUsers = action('Kolejni członkowie tenanta', loadUsers);
     if (assigner) await loadRoles(); if (!member) await loadUsers();
-    if (current !== generation || state.view !== 'projects') return;
+    if (current !== generation || !viewIs('projects')) return;
     openModal({ title: member ? 'Role członka projektu' : 'Dodaj członka projektu', body: node('div', { class: 'stack' },
       member ? node('p', { text: member.username }) : userField, member ? null : moreUsers,
       node('p', { class: 'muted', text: 'Uprawnienia są nadawane przez role RBAC tylko w tym projekcie. Role projektowe nie rozszerzają uprawnień globalnych.' }),
@@ -230,12 +230,85 @@
   async function history(id, offset = 0) {
     const current = ++generation;
     const page = await api(`/projects/${id}/audit?limit=${pageSize}&offset=${offset}`);
-    if (current !== generation || state.view !== 'projects') return;
-    openModal({ title: 'Audyt projektu', wide: true, body: node('div', { class: 'stack' }, action('Szczegóły projektu', () => details(id)),
+    if (current !== generation || !viewIs('projects')) return;
+    openModal({ title: 'Audyt projektu', wide: true, body: node('div', { class: 'stack' }, action('Szczegóły projektu', () => navigate('/projects/' + encodeURIComponent(id))),
       table([{ label: 'Czas', value: row => formatDate(row.timestamp) }, { label: 'Operacja', value: row => row.action },
         { label: 'Użytkownik', value: row => row.user_id ?? 'System' }, { label: 'Obiekt', value: row => row.resource_id },
         { label: 'Wynik', value: row => row.result }], page.items), controls(page, next => history(id, next))) });
   }
+  registerRoutedForm({
+    id: 'projects-details',
+    pattern: /^\/projects\/(?<id>\d+)$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, match => details(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'projects-members',
+    pattern: /^\/projects\/(?<id>\d+)\/members$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, match => members(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'projects-audit',
+    pattern: /^\/projects\/(?<id>\d+)\/audit$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, match => history(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'projects-member-create',
+    pattern: /^\/projects\/(?<id>\d+)\/members\/new$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, async match => {
+    const id = Number(match.params.id);
+    const scope = await api('/projects/' + id + '/permissions');
+    if (!scope.permissions.includes('projects.members.manage')) throw new Error('Brak uprawnienia do dodawania członków projektu.');
+    await memberForm(id, scope.permissions.includes('projects.roles.assign'));
+  });
+  registerRoutedForm({
+    id: 'projects-member-roles',
+    pattern: /^\/projects\/(?<id>\d+)\/members\/(?<userId>\d+)\/roles$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, async match => {
+    const id = Number(match.params.id);
+    const [scope, page] = await Promise.all([
+      api('/projects/' + id + '/permissions'),
+      api('/projects/' + id + '/members?limit=200&offset=0'),
+    ]);
+    if (!scope.permissions.includes('projects.roles.assign')) throw new Error('Brak uprawnienia do przypisywania ról projektowych.');
+    const member = page.items.find(row => Number(row.user_id) === Number(match.params.userId));
+    if (!member) throw new Error('Nie znaleziono członka projektu.');
+    await memberForm(id, true, member);
+  });
+
+  registerRoutedForm({
+    id: 'projects-create',
+    pattern: /^\/projects\/new$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, () => projectForm());
+  registerRoutedForm({
+    id: 'projects-edit',
+    pattern: /^\/projects\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, async match => {
+    const [item, scope] = await Promise.all([
+      api('/projects/' + match.params.id),
+      api('/projects/' + match.params.id + '/permissions'),
+    ]);
+    if (!scope.permissions.includes('projects.update')) throw new Error('Brak uprawnienia do edycji tego projektu.');
+    await projectForm(item, scope);
+  });
+
   document.addEventListener('cloudportal:app-hidden', () => { generation++; listOffset = 0; tenantFilter = ''; listStatus = ''; });
   document.addEventListener('cloudportal:tenant-projects', event => {
     generation++; tenantFilter = String(event.detail?.tenantId || ''); listOffset = 0;

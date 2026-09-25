@@ -1,98 +1,10 @@
 'use strict';
 (() => {
-function blueprintTemplateVariableField(name, spec, value) {
-  const type = schemaType(spec);
-  const label = FIELD_LABELS[name] || spec.title || name;
-  const current = value ?? spec.default ?? '';
-  const help = `Typ: ${type}. Możesz użyć wartości lub placeholdera, np. {{ cpu }}.`;
-  const wrapper = field(label, `deployment_var_${name}`, {
-    tag: type === 'array' ? 'textarea' : 'input',
-    value: Array.isArray(current) ? current.join('\n') : String(current),
-    wide: type === 'array' || ['ssh_public_key', 'subnet_id'].includes(name),
-    help,
-  });
-  wrapper.dataset.blueprintTemplateVariable = name;
-  return wrapper;
-}
-function readBlueprintTemplateVariables(root, template) {
-  const result = {};
-  const properties = template?.variables_schema?.properties || {};
-  for (const [name, spec] of Object.entries(properties)) {
-    const control = root.elements?.[`deployment_var_${name}`] || root.querySelector?.(`[name="deployment_var_${name}"]`);
-    if (!control) continue;
-    const raw = String(control.value ?? '').trim();
-    if (!raw) continue;
-    if (/{{\s*[^}]+\s*}}/.test(raw)) {
-      result[name] = raw;
-      continue;
-    }
-    const type = schemaType(spec);
-    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
-    else if (type === 'number') result[name] = Number(raw);
-    else if (type === 'boolean') result[name] = ['true', '1', 'tak', 'yes'].includes(raw.toLowerCase());
-    else if (type === 'array') result[name] = splitValues(raw);
-    else result[name] = raw;
-  }
-  return result;
-}
 function canManageBlueprintByRole(item) {
   const required = new Set((item?.manager_role_ids || []).map(Number));
   if (!required.size) return true;
   const owned = new Set((state.identity?.roles || []).map(role => Number(role.id)));
   return [...required].some(id => owned.has(id));
-}
-
-function blueprintWizardRouteFromLocation() {
-  const raw = String(location.hash.slice(1) || '').split('/page/')[0];
-  const [pathname, query = ''] = raw.split('?');
-  const createMatch = pathname.match(/^\/blueprints\/new\/step\/([1-9]\d*)$/);
-  const editMatch = pathname.match(/^\/blueprints\/edit\/(\d+)(?:\/([^/]+))?\/step\/([1-9]\d*)$/);
-  const params = new URLSearchParams(query);
-
-  if (createMatch) {
-    return {
-      mode: 'create',
-      step: Number(createMatch[1]),
-      hostnameSchemeId: params.get('hostnameSchemeId') || '',
-    };
-  }
-  if (editMatch) {
-    return {
-      mode: 'edit',
-      id: Number(editMatch[1]),
-      slug: editMatch[2] ? decodeURIComponent(editMatch[2]) : '',
-      step: Number(editMatch[3]),
-      hostnameSchemeId: params.get('hostnameSchemeId') || '',
-    };
-  }
-  return null;
-}
-
-async function blueprintWizardView() {
-  const route = blueprintWizardRouteFromLocation();
-  if (!route) {
-    await navigate('blueprints');
-    return;
-  }
-  if (!window.BlueprintWizard?.render) {
-    throw new Error('Kreator Blueprintu nie został załadowany.');
-  }
-
-  let item = null;
-  if (route.mode === 'edit') {
-    if (!allowed('blueprints.update')) throw new Error('Brak uprawnienia do edycji Blueprintów.');
-    item = await api('/blueprints/' + route.id);
-    if (!canManageBlueprintByRole(item)) throw new Error('Brak roli zarządzającej tym Blueprintem.');
-  } else if (!allowed('blueprints.create')) {
-    throw new Error('Brak uprawnienia do tworzenia Blueprintów.');
-  }
-
-  await window.BlueprintWizard.render({
-    item,
-    page: true,
-    initialStep: route.step - 1,
-    hostnameSchemeId: route.hostnameSchemeId || undefined,
-  });
 }
 
 async function blueprintsView() {
@@ -107,9 +19,9 @@ async function blueprintsView() {
   if (allowed('blueprints.create') && canDesignBlueprint) {
     actions.push(button('Nowy Blueprint — kreator', () => window.BlueprintWizard.open(), 'primary'));
     if (window.ApplianceBlueprintUI && allowed('terraform.execute')) {
-      actions.push(button('Importuj appliance OVA', () => window.ApplianceBlueprintUI.open().catch(error => toast(error.message, 'error'))));
+      actions.push(button('Importuj appliance OVA', () => navigate('/blueprints/appliances/import')));
     }
-    if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open()));
+    if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => navigate('/blueprints/designer/new')));
   }
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
@@ -124,11 +36,11 @@ async function blueprintsView() {
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
       const result = [];
-      const executionControl = window.BlueprintProvisioningGuards.executionControl(item, () => executeBlueprint(item));
+      const executionControl = window.BlueprintProvisioningGuards.executionControl(item, () => navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/execute'));
       if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
       if (allowed('blueprints.update') && canManage && canDesignBlueprint) {
-        if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item)));
+        if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/designer')));
         result.push(button('Edytuj', () => window.BlueprintWizard.open({ item })));
       }
       if (allowed('blueprints.delete') && canManage) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
@@ -1044,7 +956,7 @@ async function blueprintForm(item = null) {
     const saveDeploymentVariables = () => {
       if (!deploymentVariablesReady) return;
       const previousTemplate = templates.find(template => template.id === currentTemplateId);
-      if (previousTemplate) variableState.set(currentTemplateId, readBlueprintTemplateVariables(templateVariables, previousTemplate));
+      if (previousTemplate) variableState.set(currentTemplateId, window.BlueprintFormUtils.readBlueprintTemplateVariables(templateVariables, previousTemplate));
     };
 
     const refreshCredentialChoices = () => {
@@ -1087,7 +999,7 @@ async function blueprintForm(item = null) {
       templateVariables.replaceChildren();
       const values = variableState.get(template.id) || {};
       Object.entries(template.variables_schema?.properties || {}).forEach(([name, spec]) => {
-        templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
+        templateVariables.append(window.BlueprintFormUtils.blueprintTemplateVariableField(name, spec, values[name]));
       });
       deploymentVariablesReady = true;
       templateGuestCredentialControl.sync(template.id);
@@ -1304,7 +1216,7 @@ async function blueprintForm(item = null) {
         const template = currentTemplate();
         const hostnameSchemeId = Number(form.elements.deployment_hostname_scheme_id.value || 0);
         const deploymentVariables = {
-          ...(variableState.get(template.id) || readBlueprintTemplateVariables(form, template)),
+          ...(variableState.get(template.id) || window.BlueprintFormUtils.readBlueprintTemplateVariables(form, template)),
         };
         if (hostnameSchemeId && Object.prototype.hasOwnProperty.call(template.variables_schema?.properties || {}, 'name')) {
           deploymentVariables.name = '{{ hostname }}';
@@ -1452,17 +1364,14 @@ async function executeBlueprint(item) {
   }
 }
 
+window.BlueprintsFeature = Object.freeze({
+  canManage: canManageBlueprintByRole,
+  execute: executeBlueprint,
+});
+
 registerCommand('blueprints.proxmoxTemplateWizard', item => item ? window.BlueprintWizard.open({ item }) : window.BlueprintWizard.open());
 registerCommand('blueprints.proxmoxWithHostnameScheme', schemeId => window.BlueprintWizard.open({ hostnameSchemeId: schemeId }));
-registerCommand('blueprints.execute', executeBlueprint);
+registerCommand('blueprints.execute', item => navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/execute'));
 registerCommand('blueprints.create', () => window.BlueprintWizard.open());
 registerView({ id: 'blueprints', label: 'Blueprinty', icon: 'B', permission: 'blueprints.read', order: 70 }, blueprintsView);
-registerView({
-  id: 'blueprint-wizard',
-  label: 'Kreator Blueprintu',
-  permission: null,
-  order: 71,
-  navigation: false,
-  navigationParent: 'blueprints',
-}, blueprintWizardView);
 })();

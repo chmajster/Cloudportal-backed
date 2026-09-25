@@ -8,7 +8,7 @@ async function providersView() {
   ]);
   const providers = providerResult.items;
   const credentialNames = new Map(credentialResult.items.map(item => [Number(item.id), item.name]));
-  const actions = allowed('providers.create') && allowed('credentials.read') ? [button('Dodaj platformę', () => providerForm(), 'primary')] : [];
+  const actions = allowed('providers.create') && allowed('credentials.read') ? [button('Dodaj platformę', () => navigate('/providers/new'), 'primary')] : [];
   dom.content.replaceChildren(heading('Połączenia z platformami infrastruktury. Każda platforma korzysta z przypisanych, zaszyfrowanych danych dostępowych.', actions),
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -17,8 +17,8 @@ async function providersView() {
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
       const actions = [];
-      actions.push(button('Przeglądaj zasoby', () => discoverProvider(item)));
-      if (allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => providerForm(item)));
+      actions.push(button('Przeglądaj zasoby', () => navigate('/providers/' + encodeURIComponent(item.id) + '/resources')));
+      if (allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => navigate('/providers/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'provider'))));
       if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Platforma „${item.name}” zostanie usunięta. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
         toast('Platforma usunięta.');
@@ -136,6 +136,37 @@ async function discoverProvider(provider) {
   });
 }
 
-registerCommand('providers.create', () => providerForm());
+registerRoutedForm({
+  id: 'providers-resources',
+  pattern: /^\/providers\/(?<id>\d+)\/resources$/,
+  parent: 'providers',
+  permission: 'providers.read',
+  label: 'Platformy',
+}, async match => {
+  const providers = (await api('/providers?limit=200')).items;
+  const item = providers.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono platformy.');
+  await discoverProvider(item);
+});
+registerRoutedForm({
+  id: 'providers-create',
+  pattern: /^\/providers\/new$/,
+  parent: 'providers',
+  permission: 'providers.create',
+  label: 'Platformy',
+}, () => providerForm());
+registerRoutedForm({
+  id: 'providers-edit',
+  pattern: /^\/providers\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+  parent: 'providers',
+  permission: 'providers.update',
+  label: 'Platformy',
+}, async match => {
+  const providers = (await api('/providers?limit=200')).items;
+  const item = providers.find(value => Number(value.id) === Number(match.params.id));
+  if (!item) throw new Error('Nie znaleziono platformy.');
+  await providerForm(item);
+});
+registerCommand('providers.create', () => navigate('/providers/new'));
 registerView({ id: 'providers', label: 'Platformy', icon: 'P', permission: 'providers.read', order: 50 }, providersView);
 })();

@@ -5,6 +5,7 @@
   const nativeShowModal = dom.modal.showModal.bind(dom.modal);
   const nativeCloseModal = dom.modal.close.bind(dom.modal);
   let activeSurface = null;
+  let pendingSemanticSurface = null;
   let surfaceSequence = 0;
 
   function surfaceRoute(view, token) {
@@ -21,6 +22,18 @@
 
   function modalSurfaceOpen() {
     return Boolean(activeSurface) || dom.modal.open;
+  }
+
+  function prepareSemanticSurface({ path, returnView, label = '' } = {}) {
+    pendingSemanticSurface = {
+      path: String(path || location.hash.slice(1) || ''),
+      returnView: String(returnView || state.view || 'dashboard'),
+      label: String(label || ''),
+    };
+  }
+
+  function clearSemanticSurface() {
+    pendingSemanticSurface = null;
   }
 
   function cleanupRuntime() {
@@ -56,7 +69,9 @@
 
     if (dom.modal.open) nativeCloseModal();
 
-    const returnView = state.view;
+    const semantic = pendingSemanticSurface;
+    pendingSemanticSurface = null;
+    const returnView = semantic?.returnView || state.view;
     const route = routes.find(item => item.id === returnView);
     const token = 'surface-' + (++surfaceSequence);
     const wide = dom.modal.classList.contains('modal-wide');
@@ -67,7 +82,7 @@
       back,
       node('span', {
         class: 'page-surface-parent',
-        text: route?.label || dom.pageTitle.textContent || 'Cloudportal',
+        text: semantic?.label || route?.label || dom.pageTitle.textContent || 'Cloudportal',
       })
     );
     const page = node('section', {
@@ -76,14 +91,16 @@
         + (consoleMode ? ' page-surface-console' : ''),
     }, navigation, shell);
 
-    activeSurface = { page, returnView, token };
-    state.modalPage = { returnView, token };
+    activeSurface = { page, returnView, token, semantic: Boolean(semantic), semanticPath: semantic?.path || '' };
+    state.modalPage = { returnView, token, semantic: Boolean(semantic) };
     dom.content.replaceChildren(page);
-    history.pushState(
-      { cloudportalPageSurface: true, returnView, token },
-      '',
-      surfaceRoute(returnView, token)
-    );
+    if (!semantic) {
+      history.pushState(
+        { cloudportalPageSurface: true, returnView, token },
+        '',
+        surfaceRoute(returnView, token)
+      );
+    }
     dom.content.focus();
     window.setTimeout(() => shell.querySelector('input,select,textarea,button')?.focus(), 20);
   }
@@ -93,7 +110,8 @@
       if (dom.modal.open) nativeCloseModal();
       return false;
     }
-    if (history.state?.cloudportalPageSurface
+    if (!activeSurface.semantic
+        && history.state?.cloudportalPageSurface
         && history.state.token === activeSurface.token) {
       history.back();
       return true;
@@ -106,7 +124,7 @@
   function dismissCloudportalSurfaceForNavigation() {
     if (!activeSurface) return false;
     const current = teardownSurface();
-    if (current && history.state?.cloudportalPageSurface) {
+    if (current && !current.semantic && history.state?.cloudportalPageSurface) {
       const path = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(current.returnView) : current.returnView;
       history.replaceState(null, '', '#' + path);
     }
@@ -135,6 +153,8 @@
   dom.modal.showModal = renderSurface;
 
   window.modalSurfaceOpen = modalSurfaceOpen;
+  window.prepareSemanticSurface = prepareSemanticSurface;
+  window.clearSemanticSurface = clearSemanticSurface;
   window.closeCloudportalSurface = closeCloudportalSurface;
   window.dismissCloudportalSurfaceForNavigation = dismissCloudportalSurfaceForNavigation;
   window.surfaceBaseView = surfaceBaseView;

@@ -17,21 +17,15 @@
 
   function normalizedWizardStep(value) {
     const step = Number.parseInt(value, 10);
-    if (!Number.isFinite(step)) return 0;
-    return Math.min(STEPS.length - 1, Math.max(0, step));
+    return Number.isFinite(step) ? Math.min(STEPS.length - 1, Math.max(0, step)) : 0;
   }
 
   function blueprintWizardPath({ item = null, step = 0, slug = '', hostnameSchemeId = '' } = {}) {
     const stepNumber = normalizedWizardStep(step) + 1;
-    const query = hostnameSchemeId
-      ? '?hostnameSchemeId=' + encodeURIComponent(String(hostnameSchemeId))
-      : '';
+    const query = hostnameSchemeId ? '?hostnameSchemeId=' + encodeURIComponent(String(hostnameSchemeId)) : '';
     if (!item?.id) return '/blueprints/new/step/' + stepNumber + query;
     const readableSlug = String(slug || item.slug || item.name || 'blueprint').trim() || 'blueprint';
-    return '/blueprints/edit/' + encodeURIComponent(String(item.id))
-      + '/' + encodeURIComponent(readableSlug)
-      + '/step/' + stepNumber
-      + query;
+    return '/blueprints/edit/' + encodeURIComponent(String(item.id)) + '/' + encodeURIComponent(readableSlug) + '/step/' + stepNumber + query;
   }
 
   function replaceBlueprintWizardRoute(item, state, options = {}) {
@@ -42,6 +36,7 @@
       slug: state.slug,
       hostnameSchemeId: options.hostnameSchemeId || '',
     });
+    state.routePath = path;
     if (location.hash.slice(1) !== path) {
       history.replaceState(history.state, '', '#' + path);
     }
@@ -56,80 +51,7 @@
     }));
   }
 
-  function safeApi(path, fallback = [], options = {}) {
-    return api(path, options).then(result => result.items || result).catch(() => fallback);
-  }
-  function dualListGroup(title, name, rows, selected, description = '') {
-    const picked = new Set((selected || []).map(value => String(value)));
-    const labelFor = row => {
-      const primary = row.name || row.username || ('#' + row.id);
-      return row.email ? primary + ' — ' + row.email : primary;
-    };
-    const sorted = rows.slice().sort((a, b) => labelFor(a).localeCompare(labelFor(b), 'pl'));
-    const availableSelect = node('select', {
-      class: 'blueprint-wizard-dual-select',
-      multiple: true,
-      size: 8,
-      'aria-label': title + ' — dostępne',
-    });
-    const selectedSelect = node('select', {
-      class: 'blueprint-wizard-dual-select',
-      multiple: true,
-      size: 8,
-      'aria-label': title + ' — wybrane',
-      'data-dual-list-name': name,
-    });
-
-    const optionFor = row => node('option', {
-      value: String(row.id),
-      text: labelFor(row),
-      title: labelFor(row),
-    });
-    const refill = () => {
-      const current = new Set([...selectedSelect.options].map(option => option.value));
-      availableSelect.replaceChildren(...sorted.filter(row => !current.has(String(row.id))).map(optionFor));
-      selectedSelect.replaceChildren(...sorted.filter(row => current.has(String(row.id))).map(optionFor));
-    };
-    sorted.forEach(row => (picked.has(String(row.id)) ? selectedSelect : availableSelect).append(optionFor(row)));
-
-    const move = (source, target, all = false) => {
-      const moving = [...source.options].filter(option => all || option.selected).map(option => option.value);
-      if (!moving.length) return;
-      const targetValues = new Set([...target.options].map(option => option.value));
-      moving.forEach(value => targetValues.add(value));
-      const selectedValues = target === selectedSelect
-        ? targetValues
-        : new Set([...selectedSelect.options].map(option => option.value).filter(value => !moving.includes(value)));
-      selectedSelect.replaceChildren(...sorted.filter(row => selectedValues.has(String(row.id))).map(optionFor));
-      refill();
-      selectedSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    };
-
-    availableSelect.addEventListener('dblclick', () => move(availableSelect, selectedSelect));
-    selectedSelect.addEventListener('dblclick', () => move(selectedSelect, availableSelect));
-
-    const controls = node('div', { class: 'blueprint-wizard-dual-controls', 'aria-label': 'Przenoszenie pozycji' },
-      node('button', { type: 'button', class: 'button ghost', title: 'Dodaj zaznaczone', 'aria-label': 'Dodaj zaznaczone', onClick: () => move(availableSelect, selectedSelect) }, '›'),
-      node('button', { type: 'button', class: 'button ghost', title: 'Dodaj wszystkie', 'aria-label': 'Dodaj wszystkie', onClick: () => move(availableSelect, selectedSelect, true) }, '»'),
-      node('button', { type: 'button', class: 'button ghost', title: 'Usuń zaznaczone', 'aria-label': 'Usuń zaznaczone', onClick: () => move(selectedSelect, availableSelect) }, '‹'),
-      node('button', { type: 'button', class: 'button ghost', title: 'Usuń wszystkie', 'aria-label': 'Usuń wszystkie', onClick: () => move(selectedSelect, availableSelect, true) }, '«'));
-
-    const body = node('div', { class: 'blueprint-wizard-dual-list' },
-      node('div', { class: 'blueprint-wizard-dual-column' },
-        node('span', { class: 'blueprint-wizard-dual-title', text: 'Dostępne' }),
-        availableSelect),
-      controls,
-      node('div', { class: 'blueprint-wizard-dual-column' },
-        node('span', { class: 'blueprint-wizard-dual-title', text: 'Wybrane' }),
-        selectedSelect));
-
-    if (!rows.length) body.replaceChildren(node('span', { class: 'muted', text: 'Brak dostępnych pozycji.' }));
-    return node('fieldset', { class: 'blueprint-wizard-dual-fieldset' },
-      node('legend', { text: title }),
-      description ? node('p', { class: 'muted', text: description }) : null,
-      body);
-  }
-
+  const safeApi = (path, fallback = [], options = {}) => api(path, options).then(result => result.items || result).catch(() => fallback);
   async function openBlueprintWizard(options = {}) {
     if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit || !parts.awx) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
@@ -1161,14 +1083,14 @@
         );
         if (allowed('roles.read')) {
           content.append(
-            dualListGroup('Dozwolone role', 'allowed_role_ids', data.roles, state.allowedRoleIds,
+            parts.ui.dualListGroup('Dozwolone role', 'allowed_role_ids', data.roles, state.allowedRoleIds,
               'Pusta lista „Wybrane” oznacza brak ograniczenia po roli.'),
-            dualListGroup('Role zarządzające Blueprintem', 'manager_role_ids', data.managerRoles, state.managerRoleIds,
+            parts.ui.dualListGroup('Role zarządzające Blueprintem', 'manager_role_ids', data.managerRoles, state.managerRoleIds,
               'Rola zarządzająca musi mieć blueprints.read/update/delete i może być przypisana tylko do jednego Blueprintu.')
           );
         }
         if (allowed('users.read')) {
-          content.append(dualListGroup('Dozwoleni użytkownicy', 'allowed_user_ids', data.users, state.allowedUserIds,
+          content.append(parts.ui.dualListGroup('Dozwoleni użytkownicy', 'allowed_user_ids', data.users, state.allowedUserIds,
             'Pusta lista „Wybrane” oznacza brak ograniczenia po użytkowniku.'));
         }
         content.querySelectorAll('input,select').forEach(control => {
