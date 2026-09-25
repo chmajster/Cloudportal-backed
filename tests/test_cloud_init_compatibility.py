@@ -45,51 +45,11 @@ def node_json(script):
     return json.loads(result.stdout)
 
 
-def test_quick_editor_delegates_cloud_init_without_rebuilding_its_dag():
+def test_legacy_blueprint_editors_are_replaced_by_step_by_step_wizard():
     source = (ROOT / 'app/web/features/blueprints.js').read_text()
-    opening = 'async function proxmoxBlueprintForm(item = null, options = {}) {'
-    guard = source.split(opening, 1)[1].split('\n  try {', 1)[0]
-    item = {
-        'workflow': [
-            {'id': 'cloud', 'type': 'cloud_init', 'depends_on': []},
-            {'id': 'plan', 'type': 'terraform_plan', 'depends_on': ['cloud']},
-            {'id': 'approval', 'type': 'approval', 'depends_on': ['plan']},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['approval']},
-        ],
-        'deployment': {'guest_credential_id': 17, 'variables': {'cloud_init_snippet_storage': 'local'}},
-    }
-    script = 'const blueprintForm = async item => structuredClone(item);\n'
-    script += opening + guard + '\nthrow new Error("legacy quick editor");}\n'
-    script += '(async () => {\n'
-    script += 'const native = await proxmoxBlueprintForm(' + json.dumps(item) + ');\n'
-    script += 'const legacy = await proxmoxBlueprintForm({workflow:[]}).catch(error => error.message);\n'
-    script += 'console.log(JSON.stringify({native, legacy}));\n})();'
-    result = node_json(script)
-    assert result['native'] == item
-    assert result['legacy'] == 'legacy quick editor'
-
-
-
-def test_quick_editor_keeps_awx_cloud_init_workflow_in_quick_editor():
-    source = (ROOT / 'app/web/features/blueprints.js').read_text()
-    opening = 'async function proxmoxBlueprintForm(item = null, options = {}) {'
-    guard = source.split(opening, 1)[1].split('\n  try {', 1)[0]
-    item = {
-        'workflow': [
-            {'id': 'cloud_init', 'type': 'cloud_init', 'depends_on': []},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud_init']},
-            {'id': 'guest_ip', 'type': 'wait_for_ip', 'depends_on': ['apply']},
-            {'id': 'awx', 'type': 'register_awx', 'depends_on': ['guest_ip']},
-        ],
-        'deployment': {'awx': {'credential_id': 77}},
-    }
-    script = 'const blueprintForm = async item => ({editor:"classic", item});\n'
-    script += opening + guard + '\nthrow new Error("quick editor");}\n'
-    script += '(async () => {\n'
-    script += 'const result = await proxmoxBlueprintForm(' + json.dumps(item) + ').catch(error => error.message);\n'
-    script += 'console.log(JSON.stringify(result));\n})();'
-    result = node_json(script)
-    assert result == 'quick editor'
+    assert 'async function proxmoxBlueprintForm' not in source
+    assert 'async function blueprintForm' not in source
+    assert "registerCommand('blueprints.proxmoxTemplateWizard', item => item ? window.BlueprintWizard.open({ item }) : window.BlueprintWizard.open())" in source
 
 
 def test_quick_workflow_builds_required_cloud_init_before_awx():
@@ -117,9 +77,10 @@ console.log(JSON.stringify(steps));
     assert validate_cloud_init_workflow(result)
 
 
-def test_classic_cloud_init_action_is_available_only_for_proxmox():
-    source = (ROOT / 'app/web/features/blueprints.js').read_text()
-    assert "['cloud_init', 'Cloud-init: pierwszy start systemu']" in source
+def test_wizard_cloud_init_action_is_available_only_for_proxmox():
+    source = (ROOT / 'app/web/features/blueprint-wizard-cloud-init.js').read_text()
+    assert "state.providerType === 'proxmox'" in source
+    assert "Utwórz Cloud-init przy pierwszym starcie VM" in source
     guards = ROOT / 'app/web/features/blueprint-provisioning-guards.js'
     script = 'global.window = {}; global.registerExtension = (_name, initialize) => initialize();\n'
     script += 'eval(require("fs").readFileSync(' + json.dumps(str(guards)) + ', "utf8"));\n'

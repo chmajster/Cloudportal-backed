@@ -14,6 +14,7 @@
     if (!checked) {
       if (parts.awx?.toggleStep) parts.awx.toggleStep(state, false);
       else state.awxEnabled = false;
+      state.guestAccountMode = 'cloud_init_managed';
     }
     if (!state.advancedWorkflow) return;
     const existing = state.workflow.filter(step => step.type === 'cloud_init');
@@ -36,6 +37,10 @@
 
   function validate(state) {
     const errors = {};
+    if (state.guestAccountMode === 'existing_template' && !enabled(state)) {
+      errors.cloud_init_enabled = 'Tryb istniejącego konta z template wymaga kroku Cloud-init.';
+      return errors;
+    }
     if (!enabled(state)) return errors;
     if (state.guestAccountMode === 'existing_template'
         && !state.guestCredentialId

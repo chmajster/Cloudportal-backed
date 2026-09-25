@@ -4,8 +4,20 @@
   const parts = window.BlueprintWizardParts = window.BlueprintWizardParts || {};
 
   function renderSchemeCards(context) {
-    const { state, data, rerender, saveStateFromInput } = context;
+    const { state, data, rerender, saveStateFromInput, canCreate = false } = context;
     const core = parts.core;
+    const pendingRow = () => state.pendingHostnameScheme ? {
+      id: '__pending__',
+      ...state.pendingHostnameScheme,
+      is_active: true,
+      pending: true,
+    } : null;
+    const syncPendingRow = () => {
+      data.schemes = (data.schemes || []).filter(value => String(value.id) !== '__pending__');
+      const row = pendingRow();
+      if (row) data.schemes.push(row);
+    };
+    syncPendingRow();
     const schemes = data.schemes.filter(value => value.is_active);
     const selected = String(state.hostnameSchemeId || '');
 
@@ -39,6 +51,7 @@
           headers: core.scopeHeaders(state),
         });
         data.schemes = result.items || [];
+        syncPendingRow();
         const activeSchemes = data.schemes.filter(value => value.is_active);
         const stillAvailable = activeSchemes.some(value =>
           String(value.id) === String(state.hostnameSchemeId || ''));
@@ -146,7 +159,7 @@
       }),
       node('div', { class: 'blueprint-wizard-inline-actions wide' },
         button('Anuluj', () => { state.creatingScheme = false; rerender(); }, 'ghost'),
-        button('Zapisz pattern', async () => {
+        button('Zapisz pattern', () => {
           const name = createPanel.querySelector('[name="new_scheme_name"]').value.trim();
           const pattern = createPanel.querySelector('[name="new_scheme_pattern"]').value.trim();
           const next = Number(createPanel.querySelector('[name="new_scheme_next"]').value || 1);
@@ -155,21 +168,19 @@
             toast('Podaj nazwę i pattern hostname.', 'error');
             return;
           }
-          try {
-            const created = await api('/hostname-schemes', {
-              method: 'POST',
-              body: { name, pattern, next_number: next, padding, is_active: true },
-              headers: core.scopeHeaders(state),
-            });
-            data.schemes.push(created);
-            state.hostnameSchemeId = String(created.id);
-            state.creatingScheme = false;
-            state.newSchemeName = '';
-            toast('Pattern hostname został utworzony.');
-            rerender();
-          } catch (error) {
-            toast(error.message, 'error');
-          }
+          state.pendingHostnameScheme = {
+            name,
+            pattern,
+            next_number: next,
+            padding,
+            is_active: true,
+          };
+          syncPendingRow();
+          state.hostnameSchemeId = '__pending__';
+          state.creatingScheme = false;
+          state.newSchemeName = '';
+          toast('Pattern zostanie utworzony atomowo razem z Blueprintem.');
+          rerender();
         }, 'primary'))
     );
 
@@ -197,10 +208,10 @@
             grid,
             selectedScheme ? tokenFields : node('div', { class: 'blueprint-wizard-info', text: 'Wybierz pattern hostname z listy powyżej.' }),
             node('div', { class: 'blueprint-wizard-inline-actions' },
-              allowed('hostnames.create')
+              canCreate
                 ? button('Utwórz nowy pattern', () => { state.creatingScheme = true; rerender(); }, 'ghost')
                 : null),
-            allowed('hostnames.create') ? createPanel : null)
+            canCreate ? createPanel : null)
         : field('Stała nazwa VM', 'manual_vm_name', {
             value: state.manualVmName,
             required: true,

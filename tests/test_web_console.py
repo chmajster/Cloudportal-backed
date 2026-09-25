@@ -70,6 +70,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/blueprint-wizard-network.js',
         'features/blueprint-wizard-scope.js',
         'features/blueprint-wizard-ui.js',
+        'features/blueprint-wizard-validation.js',
         'features/blueprint-wizard.js',
         'features/blueprints.js',
         'features/hostnames.js',
@@ -183,7 +184,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "location.hash.slice(1) || 'deployments'" in core
     assert 'const visibleAvailable = available' in core
     assert '.filter(navigationRouteVisible)' in script
-    assert 'currentRoute?.navigationParent === route.id' in core
+    assert 'routeNavigationParent(currentRoute) === route.id' in core
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
@@ -251,7 +252,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "api('/jobs/' + encodeURIComponent(id))" in script
     assert "function provisionalBlueprintVm(" in script
     assert "provisioning_placeholder: true" in script
-    assert "Komentarz: Provisioning" in script
+    assert "node('strong', { text: 'Provisioning' })" in script
     assert "Provisioning został ponowiony." in script
     assert "Usuń nieudany provisioning" in script
     assert "item.provisioning_job?.current_stage" in script
@@ -491,7 +492,20 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.ansible-playbook-code' in stylesheet
     assert "'/source'" in script or "+ '/source'" in script
     assert '.terraform-template-code' in stylesheet
-    assert 'Obraz / szablon Proxmox' in script
+    assert 'async function proxmoxBlueprintForm' not in script
+    assert 'async function blueprintForm' not in script
+    assert "registerExtension('blueprint-wizard-validation'" in script
+    assert "Template / VM bazowa" in script
+    assert 'Automatyczny hostname' in script
+    assert 'Przykładowy hostname' in script
+    assert "field('Slug', 'slug'" in script
+    assert 'name: state.name' in script
+    assert 'new_scheme_next' in script
+    assert "state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName" in script
+    assert 'Role zarządzające Blueprintem' in script
+    assert 'może być przypisana tylko do jednego Blueprintu' in script
+    assert "options.hostnameSchemeId && data.schemes.some" in script
+    assert 'Rzeczywisty numer zostanie zarezerwowany dopiero podczas wykonania Blueprintu.' in script
     assert '/providers/' in script and '/templates' in script
     assert '.proxmox-template-card' in stylesheet
     assert 'data-workflow-row' in script
@@ -513,14 +527,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function discoverVmOptions(' in script
     assert 'function storageLabel(' in script
     assert 'function hostnameValueFields(' in script
-    assert 'function proxmoxBlueprintForm(' in script
-    assert 'const workflowGraph = node(' in script
-    assert 'const syncWorkflowGraph = () =>' in script
-    assert 'const moveWorkflowRow = (row, direction) =>' in script
-    assert 'workflow-dag-card' in script
-    assert 'workflow-preview-visual' in script
-    assert 'Obraz / szablon Proxmox' in script
-    assert 'Sposób nadawania hostname' in script
     assert 'Nowy szablon Terraform / OpenTofu' in script
     assert "registerCommand('blueprints.proxmoxTemplateWizard'" in script
     assert "registerCommand('blueprints.execute'" in script
@@ -569,7 +575,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "dualListGroup('Role zarządzające Blueprintem'" in script
     assert "new Set(['Administrator', 'Infrastructure Administrator'])" in script
     assert "state.managerRoleIds = resetSelection" in script
-    assert "const defaultManagerRoleIds = item" in script
     assert "dualListGroup('Dozwoleni użytkownicy'" in script
     assert "'Dodaj zaznaczone'" in script
     assert "'Dodaj wszystkie'" in script
@@ -579,12 +584,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji." in script
     assert "selectField('Organizacja', 'tenant_id'" in script
     assert "selectField('Projekt', 'project_id'" in script
-    assert "/blueprints/creation-scopes?limit=200" in script
+    assert "const scopePermission = editingItem ? 'blueprints.update' : 'blueprints.create';" in script
+    assert "'/blueprints/creation-scopes?permission=' + encodeURIComponent(scopePermission)" in script
     assert "RBAC pozwala Ci tworzyć Blueprinty" in script
     assert "scopeAllows('hostnames.read')" in script
     assert "scopeAllows('ipam.read')" in script
     assert "scopeAllows('ansible.read')" in script
-    assert "Uprawnienia są nadawane przez role RBAC" in script
     assert "'X-Tenant-ID': String(state.tenantId)" in script
     assert "'X-Project-ID': String(state.projectId)" in script
     assert "!state.selectEnvironmentOnExecute" in script
@@ -613,7 +618,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'snapshots.create'" in script
     assert "'ipam.release'" in script
     assert "Brak uprawnień do uruchomienia" in script
-    assert script.count("workflowNeedsTags(") >= 2
+    assert script.count("workflowNeedsTags(") >= 1
     assert "Brak credentiali SSH z hasłem lub kluczem prywatnym" in script
     assert "QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM" in script
     assert "jednorazowe konto przez natywny cloud-init" in script
@@ -625,10 +630,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Czekaj na QEMU Guest Agent po Terraform apply" in script
     assert "install_qemu_guest_agent" in script
     assert "cloud_init_snippet_storage" in script
-    assert "Hasło SSH (opcjonalnie)" in script
-    assert "secrets: { password: directGuestPassword }" in script
-    assert "guestCredentialRequested" in script
-    assert "data.has('install_qemu_guest_agent') && !guestCredentialRequested" in script
     assert "ssh_password: data.get('ssh_password')" not in script
     assert "state.installQemuGuestAgent && (state.guestCredentialId || !snippetAvailable || !sshReady)" in script
     assert "Wybrano Credential VM, więc workflow celowo pomija upload snippets i SSH do noda PVE." in script
@@ -649,28 +650,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Conditions (JSON)" in script
     assert "Opcjonalne ustawienia dostępu" in script
     assert "Blueprint został utworzony i jest gotowy do użycia." in script
-    assert 'SRLXXX' in script
-    assert 'Sposób nadawania hostname' in script
     assert 'Pattern hostname' in script
-    assert "button('Nowy pattern', () => hostnameSchemeForm(), 'primary')" in script
+    assert "button('Nowy pattern', () => navigate('/admin/tools/hostnames/new'), 'primary')" in script
     assert 'const schemeId = item == null ? null : Number(item.id);' in script
     assert 'const editing = Number.isInteger(schemeId) && schemeId > 0;' in script
     assert "editing ? `/hostname-schemes/${schemeId}` : '/hostname-schemes'" in script
-    assert 'Podgląd hostname' in script
-    assert 'data-hostname-preview' in script
-    assert 'data-existing-hostname-preview' in script
     assert 'hostname_scheme_name' not in script
     assert 'existing_hostname_scheme_name' not in script
-    assert 'Slug / identyfikator szablonu' in script
-    assert "name: blueprintName" in script
-    assert 'hostname_next_number' in script
-    assert 'Nazwa deploymentu i nazwa VM będą generowane automatycznie z wybranego wzorca hostname.' in script
-    assert "name: hostnameSchemeId ? '{{ hostname }}' : form.elements.deployment_name.value" in script
-    assert "deploymentVariables.name = '{{ hostname }}'" in script
-    assert "field('Nazwa wdrożenia', 'deployment_name'" in script
-    assert 'existing_hostname_pattern' in script
-    assert 'Role zarządzające szablonem' in script
-    assert 'Jedna rola może zarządzać tylko jednym szablonem.' in script
     assert 'canManageBlueprintByRole' in script
     assert 'Generator hostname' in script
     assert "id: 'hostnames'" in script
@@ -678,11 +664,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "label: 'Generator hostname'" in script
     assert 'function hostnameGeneratorTool(' in script
     assert 'Użyj w Blueprint' in script
-    assert 'options.hostnameSchemeId || deployment.hostname_scheme_id' in script
     assert 'function hostnameSchemePreview(' in script
     assert 'Pattern hostname zapisany i jest dostępny w Blueprintach.' in script
     assert 'hostname staje się nazwą deploymentu i VM' in script
-    assert 'Licznik jest tylko informacyjny i nie jest cofany podczas edycji szablonu.' in script
     assert "registerView({ id: 'settings'" in script
     assert "'Wygląd'" in script
     assert "'Konto i sesja'" in script
@@ -787,7 +771,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'env-' + environment" in script
     assert 'JIT provisioning i RBAC' in script
     assert 'Hasło pozostaje wyłącznie w LDAP' in script
-    assert "executor: data.get('executor')" in script
+    assert "executor: state.executor" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
     assert "'set_tags'" not in script

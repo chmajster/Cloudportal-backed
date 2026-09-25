@@ -179,15 +179,51 @@ def guest_credential_cloud_init(db, credential_id):
     }
 
 
+def runtime_selection_flag(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    if normalized in {'true', '1', 'yes', 'tak', 'on'}:
+        return True
+    if normalized in {'false', '0', 'no', 'nie', 'off', ''}:
+        return False
+    return bool(value)
+
+
+def normalize_legacy_blueprint_template(deployment):
+    """Repair the exact legacy wizard bug that saved clone VM variables as an appliance template.
+
+    The old Proxmox wizard selected the first catalog template for provider=proxmox.
+    Because catalog IDs are sorted alphabetically, proxmox-appliance could win over
+    proxmox-vm even though the wizard collected clone/template_id fields. Genuine
+    appliance Blueprints always carry import_file_ids, so the signature below is
+    intentionally narrow and does not reinterpret valid OVA appliances.
+    """
+    template = deployment.get('template')
+    variables = deployment.get('variables') or {}
+    if (
+        template == 'proxmox-appliance'
+        and isinstance(variables, dict)
+        and 'template_id' in variables
+        and 'import_file_ids' not in variables
+    ):
+        deployment['template'] = 'proxmox-vm'
+    return deployment
+
+
 def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
     ip_allocation = None
-    deployment = deepcopy(blueprint.deployment)
+    deployment = normalize_legacy_blueprint_template(deepcopy(blueprint.deployment))
 
     has_apmid_selection_flag = 'select_apmid_on_execute' in deployment
-    select_apmid_on_execute = bool(deployment.pop('select_apmid_on_execute', False))
-    select_environment_on_execute = bool(deployment.pop('select_environment_on_execute', False))
+    select_apmid_on_execute = runtime_selection_flag(deployment.pop('select_apmid_on_execute', False))
+    select_environment_on_execute = runtime_selection_flag(deployment.pop('select_environment_on_execute', False))
     fixed_apmid = deployment.pop('apmid', None)
     fixed_environment = deployment.pop('environment', None)
     guest_credential_id = deployment.pop('guest_credential_id', None)

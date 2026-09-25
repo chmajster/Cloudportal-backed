@@ -132,6 +132,32 @@
     if (domain) state.dnsDomain = domain.value.trim();
   }
 
+  function ipv4Number(value) {
+    const parts = String(value || '').split('.');
+    if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return null;
+    const octets = parts.map(Number);
+    if (octets.some(value => value < 0 || value > 255)) return null;
+    return (((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3]) >>> 0;
+  }
+
+  function ipv4Interface(value) {
+    const match = String(value || '').match(/^([^/]+)\/(\d{1,2})$/);
+    if (!match) return null;
+    const address = ipv4Number(match[1]);
+    const prefix = Number(match[2]);
+    if (address === null || prefix < 0 || prefix > 32) return null;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    return { address, prefix, mask };
+  }
+
+  function dnsDomainValid(value) {
+    if (!value) return true;
+    const normalized = String(value).toLowerCase().replace(/\.$/, '');
+    if (!normalized || normalized.length > 253) return false;
+    return normalized.split('.').every(label =>
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+  }
+
   function validateNetwork(state, data) {
     const errors = {};
     if (state.ipMode === 'ipam') {
@@ -140,9 +166,21 @@
       }
     }
     if (state.ipMode === 'static') {
+      const address = ipv4Interface(state.ipv4Address);
+      const gateway = ipv4Number(state.ipv4Gateway);
       if (!state.ipv4Address) errors.ipv4Address = 'Podaj IPv4/CIDR.';
+      else if (!address) errors.ipv4Address = 'IPv4 musi używać poprawnego CIDR, np. 192.0.2.10/24.';
       if (!state.ipv4Gateway) errors.ipv4Gateway = 'Podaj gateway.';
+      else if (gateway === null) errors.ipv4Gateway = 'Gateway musi być poprawnym adresem IPv4.';
+      else if (address && (((address.address & address.mask) >>> 0) !== ((gateway & address.mask) >>> 0) || gateway === address.address)) {
+        errors.ipv4Gateway = 'Gateway musi należeć do tej samej podsieci i różnić się od adresu VM.';
+      }
     }
+
+    const dns = String(state.dnsServers || '').split(/[,\n]+/).map(value => value.trim()).filter(Boolean);
+    if (dns.length > 8) errors.dnsServers = 'Możesz podać maksymalnie 8 serwerów DNS.';
+    else if (dns.some(value => ipv4Number(value) === null)) errors.dnsServers = 'Serwery DNS muszą być poprawnymi adresami IPv4.';
+    if (!dnsDomainValid(state.dnsDomain)) errors.dnsDomain = 'Domena DNS ma niepoprawny format.';
     return errors;
   }
 
