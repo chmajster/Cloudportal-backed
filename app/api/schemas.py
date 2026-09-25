@@ -491,7 +491,7 @@ class ApplianceVMVariables(Input):
     def import_volumes(cls, values):
         pattern = re.compile(
             r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}:import/'
-            r'[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\\.qcow2'
+            r'[A-Za-z0-9][A-Za-z0-9_.-]{0,200}[.]qcow2'
         )
         if len(values) != len(set(values)):
             raise ValueError('Appliance import disks must be unique')
