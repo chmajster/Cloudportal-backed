@@ -20,9 +20,20 @@
     return Number.isFinite(step) ? Math.min(STEPS.length - 1, Math.max(0, step)) : 0;
   }
 
-  function blueprintWizardPath({ item = null, step = 0, slug = '', hostnameSchemeId = '' } = {}) {
+  function blueprintWizardPath({
+    item = null,
+    step = 0,
+    slug = '',
+    hostnameSchemeId = '',
+    tenantId = '',
+    projectId = '',
+  } = {}) {
     const stepNumber = normalizedWizardStep(step) + 1;
-    const query = hostnameSchemeId ? '?hostnameSchemeId=' + encodeURIComponent(String(hostnameSchemeId)) : '';
+    const params = new URLSearchParams();
+    if (hostnameSchemeId) params.set('hostnameSchemeId', String(hostnameSchemeId));
+    if (tenantId) params.set('tenantId', String(tenantId));
+    if (projectId) params.set('projectId', String(projectId));
+    const query = params.toString() ? '?' + params.toString() : '';
     if (!item?.id) return '/blueprints/new/step/' + stepNumber + query;
     const readableSlug = String(slug || item.slug || item.name || 'blueprint').trim() || 'blueprint';
     return '/blueprints/edit/' + encodeURIComponent(String(item.id)) + '/' + encodeURIComponent(readableSlug) + '/step/' + stepNumber + query;
@@ -35,6 +46,8 @@
       step: state.step,
       slug: state.slug,
       hostnameSchemeId: options.hostnameSchemeId || '',
+      tenantId: state.tenantId || options.tenantId || '',
+      projectId: state.projectId || options.projectId || '',
     });
     state.routePath = path;
     if (location.hash.slice(1) !== path) {
@@ -48,6 +61,8 @@
       step: options.initialStep || 0,
       slug: options.item?.slug || '',
       hostnameSchemeId: options.hostnameSchemeId || '',
+      tenantId: options.tenantId || '',
+      projectId: options.projectId || '',
     }));
   }
 
