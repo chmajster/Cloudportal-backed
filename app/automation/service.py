@@ -194,11 +194,32 @@ def runtime_selection_flag(value):
     return bool(value)
 
 
+def normalize_legacy_blueprint_template(deployment):
+    """Repair the exact legacy wizard bug that saved clone VM variables as an appliance template.
+
+    The old Proxmox wizard selected the first catalog template for provider=proxmox.
+    Because catalog IDs are sorted alphabetically, proxmox-appliance could win over
+    proxmox-vm even though the wizard collected clone/template_id fields. Genuine
+    appliance Blueprints always carry import_file_ids, so the signature below is
+    intentionally narrow and does not reinterpret valid OVA appliances.
+    """
+    template = deployment.get('template')
+    variables = deployment.get('variables') or {}
+    if (
+        template == 'proxmox-appliance'
+        and isinstance(variables, dict)
+        and 'template_id' in variables
+        and 'import_file_ids' not in variables
+    ):
+        deployment['template'] = 'proxmox-vm'
+    return deployment
+
+
 def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
     ip_allocation = None
-    deployment = deepcopy(blueprint.deployment)
+    deployment = normalize_legacy_blueprint_template(deepcopy(blueprint.deployment))
 
     has_apmid_selection_flag = 'select_apmid_on_execute' in deployment
     select_apmid_on_execute = runtime_selection_flag(deployment.pop('select_apmid_on_execute', False))
