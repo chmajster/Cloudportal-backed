@@ -151,11 +151,20 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function registerView(' in core
     assert 'function registerCommand(' in core
     assert 'function registerExtension(' in core
+    assert 'const routedForms = [];' in core
+    assert 'function registerRoutedForm(' in core
+    assert 'function matchRoutedForm(' in core
+    assert 'function routedFormView()' in core
+    assert "id: 'routed-form'" in core
+    assert 'routePath:' in core
     assert "split('/page/')[0]" in core
     assert 'dismissCloudportalSurfaceForNavigation' in core
     assert 'closeCloudportalSurface' in core
     assert 'function modalSurfaceOpen()' in script
     assert 'dom.modal.showModal = renderSurface' in script
+    assert 'prepareSemanticSurface' in script
+    assert 'pendingSemanticSurface' in script
+    assert 'semanticPath' in script
     assert 'history.pushState(' in script
     assert 'cloudportalPageSurface' in script
     assert "window.addEventListener('popstate'" in script
@@ -186,6 +195,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "return '/blueprints/new/step/' + stepNumber + query" in script
     assert "return '/blueprints/edit/' + encodeURIComponent(String(item.id))" in script
     assert "registerCommand('deployments.create'" in script
+    assert "navigate('/providers/new')" in script
+    assert "navigate('/access/credentials/new')" in script
+    assert "navigate('/access/users/new')" in script
+    assert "navigate('/access/roles/new')" in script
+    assert "navigate('/ipam/pools/new')" in script
+    assert "navigate('/operations/schedules/new')" in script
+    assert "navigate('/operations/webhooks/new')" in script
+    assert "navigate('/projects/new')" in script
+    assert "navigate('/tenants/new')" in script
+    assert "navigate('/jobs/ansible/new')" in script
+    assert "navigate('/blueprints/appliances/import')" in script
     assert "registerCommand('deployments.open'" in script
     assert "api('/blueprints?available=true&limit=200')" in script
     assert "label: 'Produkty'" in script
@@ -264,6 +284,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('inventory.consoleVm', showVmConsole)" in script
     assert "const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm')" in script
     assert "runCommand('inventory.consoleVm', item)" in script
+    assert "/resources/vm/" in script
+    assert "id: 'inventory-vm-details'" in script
+    assert "surface: false" in script
+    assert "/edit/compute" in script
+    assert "/snapshots/new" in script
+    assert "/backups/new" in script
     assert 'offerMissingVmCleanup' in script
     assert "'/missing', { method: 'DELETE' }" in script
     assert 'VM nie istnieje w Proxmox' in script
@@ -282,6 +308,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "navigationParent: 'jobs'" in script
     assert "Skopiowano bezpośredni link do logów." in script
     assert 'JOB_LOG_ROUTE' in script
+    assert "return 'routed-form'" in navigation
+    assert "resolvedId === 'routed-form'" in navigation
     assert 'BLUEPRINT_WIZARD_ROUTE' in navigation
     assert "'blueprint-wizard': '/blueprints/new/step/1'" in navigation
     assert "resolvedId === 'blueprint-wizard'" in navigation
