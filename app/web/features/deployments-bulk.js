@@ -142,6 +142,7 @@ function decorateCard(card, item, onSelectionChange = null) {
   if (!id) return card;
 
   card.dataset.vmSelectionId = id;
+  card.classList.add('has-selection-control');
   const selector = node('input', {
     type: 'checkbox',
     class: 'my-resource-select',
