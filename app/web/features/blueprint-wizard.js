@@ -318,7 +318,10 @@
             root.querySelectorAll('[data-generic-variable]').forEach(input => {
               const template = data.templates.find(value => value.id === state.terraformTemplateId);
               const spec = template?.variables_schema?.properties?.[input.dataset.genericVariable] || {};
-              state.genericVariables[input.dataset.genericVariable] = parts.core.coerceSchemaValue(spec, input.value);
+              state.genericVariables[input.dataset.genericVariable] = parts.core.coerceSchemaValue(
+                spec,
+                input.type === 'checkbox' ? input.checked : input.value
+              );
             });
           }
         } else if (state.step === 3) {
@@ -374,98 +377,8 @@
         }
       }
 
-      function validateWorkflow() {
-        const errors = {};
-        if (!state.advancedWorkflow) {
-          Object.assign(errors, parts.cloudInit.validate(state));
-          return errors;
-        }
-        if (!state.workflow.length) {
-          errors.workflow = 'Workflow musi zawierać co najmniej jeden krok.';
-          return errors;
-        }
-        const ids = state.workflow.map(value => value.id);
-        if (ids.some(value => !value)) errors.workflow = 'Każdy krok workflow musi mieć ID.';
-        if (new Set(ids).size !== ids.length) errors.workflow = 'ID kroków workflow muszą być unikalne.';
-        const known = new Set(ids);
-        for (const step of state.workflow) {
-          if (step.conditions?.__invalid) errors.workflow = 'Conditions muszą być poprawnym obiektem JSON.';
-          if (step.depends_on.some(value => !known.has(value) || value === step.id)) errors.workflow = 'Workflow zawiera nieprawidłową zależność.';
-        }
-        if (!state.workflow.some(value => ['create_vm', 'clone_vm', 'terraform_apply'].includes(value.type))) {
-          errors.workflow = 'Workflow musi zawierać krok tworzący lub stosujący VM.';
-        }
-        Object.assign(errors, parts.cloudInit.validate(state));
-        return errors;
-      }
-
       function validateStep(index) {
-        const errors = {};
-        if (index === 0) {
-          if (!state.tenantId || !state.projectId) errors.project_id = 'Wybierz Tenant i Projekt dla Blueprintu.';
-          if (!state.name) errors.name = 'Podaj nazwę Blueprintu.';
-          if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(state.slug)) errors.slug = 'Slug musi mieć 1–63 znaków i używać liter, cyfr, _, . lub -.';
-        } else if (index === 1) {
-          const provider = data.providers.find(value => String(value.id) === String(state.providerId));
-          if (!provider) errors.provider = 'Wybierz platformę.';
-          if (provider?.type === 'proxmox') {
-            if (!state.node) errors.node = 'Wybierz docelowy node.';
-            if (!state.selectedTemplateVmid) errors.template = 'Wybierz template/VM bazową.';
-            if (!state.providerConnected) errors.provider = state.providerError || 'Nie udało się odczytać zasobów Proxmox.';
-          } else if (!state.terraformTemplateId) {
-            errors.template = 'Wybierz szablon IaC zgodny z providerem.';
-          }
-          if (!provider?.credentials_id) errors.provider = 'Provider nie ma przypisanych credentials.';
-        } else if (index === 2) {
-          if (state.providerType === 'proxmox') {
-            if (!Number.isFinite(Number(state.cpu)) || Number(state.cpu) < 1) errors.cpu = 'CPU musi być większe od 0.';
-            if (!Number.isFinite(Number(state.memory)) || Number(state.memory) < 512) errors.memory = 'RAM musi mieć co najmniej 512 MiB.';
-            if (!Number.isFinite(Number(state.disk)) || Number(state.disk) < 1) errors.disk = 'Dysk musi mieć co najmniej 1 GiB.';
-            if (!state.storage) errors.storage = 'Wybierz storage.';
-            if (!state.network) errors.network = 'Wybierz sieć/bridge.';
-            if (!state.selectEnvironmentOnExecute && !state.environment) errors.environment = 'Wybierz Environment.';
-            if (!state.selectApmidOnExecute && !state.apmid) errors.apmid = 'Podaj lub wybierz APMID.';
-            if (state.selectEnvironmentOnExecute
-                && !['test', 'dev', 'nonprod', 'prod'].some(name => data.vmClassification?.environments?.[name] !== false)) {
-              errors.select_environment_on_execute = 'Brak włączonych Environment do wyboru podczas tworzenia VM.';
-            }
-            if (state.selectApmidOnExecute && !(data.vmClassification?.apmids || []).length) {
-              errors.select_apmid_on_execute = 'Brak skonfigurowanych APMID do wyboru podczas tworzenia VM.';
-            }
-          } else {
-            const template = data.templates.find(value => value.id === state.terraformTemplateId);
-            const required = parts.core.requiredTemplateVariables(template);
-            for (const name of required) {
-              if (name === 'name') continue;
-              const value = state.genericVariables[name];
-              if (value === undefined || value === null || value === '') errors['generic_' + name] = 'Pole jest wymagane.';
-            }
-          }
-        } else if (index === 3) {
-          Object.assign(errors, parts.hostname.validateHostname(state, data));
-        } else if (index === 4) {
-          Object.assign(errors, parts.network.validateNetwork(state, data));
-        } else if (index === 5 && state.ansibleEnabled) {
-          const runs = state.ansibleRuns || [];
-          if (!runs.length) errors.ansible_runs = 'Dodaj co najmniej jeden runbook Ansible.';
-          runs.forEach((run, runIndex) => {
-            const playbook = data.playbooks.find(value => value.id === run.playbook);
-            if (!playbook) errors['ansible_playbook_' + runIndex] = 'Runbook #' + (runIndex + 1) + ': wybierz playbook.';
-            if (!run.credentials_id) errors['ansible_credentials_' + runIndex] = 'Runbook #' + (runIndex + 1) + ': wybierz credentials.';
-            for (const name of playbook?.required_variables || []) {
-              if (name === 'hostname' && state.hostnameEnabled) continue;
-              if (!run.variables?.[name]) {
-                errors['ansible_' + runIndex + '_' + name] = 'Runbook #' + (runIndex + 1) + ': uzupełnij zmienną ' + name + '.';
-              }
-            }
-          });
-        } else if (index === 6) {
-          Object.assign(errors, validateWorkflow());
-        } else if (index === 7) {
-          Object.assign(errors, parts.awx.validate(state));
-        }
-        state.errors = errors;
-        return !Object.keys(errors).length;
+        return parts.validation.validateStep(index, state, data, editingItem);
       }
 
       function stepHeading(title, description) {
@@ -690,7 +603,9 @@
             const type = parts.core.schemaType(spec);
             const value = state.genericVariables[name] ?? spec.default ?? '';
             let wrapper;
-            if (spec.enum) {
+            if (type === 'boolean') {
+              wrapper = checkboxField(FIELD_LABELS[name] || spec.title || name, 'generic_' + name, Boolean(value));
+            } else if (spec.enum) {
               wrapper = selectField(FIELD_LABELS[name] || spec.title || name, 'generic_' + name,
                 spec.enum.map(value => ({ value, label: String(value) })), value,
                 { required: required.has(name) });
@@ -704,9 +619,14 @@
             }
             const input = wrapper.querySelector('input,select,textarea');
             input.dataset.genericVariable = name;
-            input.addEventListener('input', () => {
-              state.genericVariables[name] = parts.core.coerceSchemaValue(spec, input.value);
-            });
+            const updateGenericValue = () => {
+              state.genericVariables[name] = parts.core.coerceSchemaValue(
+                spec,
+                input.type === 'checkbox' ? input.checked : input.value
+              );
+            };
+            input.addEventListener('input', updateGenericValue);
+            input.addEventListener('change', updateGenericValue);
             grid.append(wrapper);
           }
           return node('div', { class: 'blueprint-wizard-step-stack' },
