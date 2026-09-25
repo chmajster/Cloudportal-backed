@@ -1,5 +1,14 @@
 import uuid
 
+from app.automation.service import runtime_selection_flag
+
+
+def test_runtime_selection_flag_normalizes_legacy_json_values():
+    for value in (True, 1, 'true', '1', 'yes', 'tak', 'on'):
+        assert runtime_selection_flag(value) is True
+    for value in (False, 0, None, '', 'false', '0', 'no', 'nie', 'off'):
+        assert runtime_selection_flag(value) is False
+
 
 def resources(client, headers):
     credential = client.post('/api/v1/credentials', headers=headers, json={
