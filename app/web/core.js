@@ -1143,9 +1143,7 @@ async function navigate(view) {
   setMobileMenu(false);
   loading();
   try { await views[route.id](); }
-  catch (error) {
-    dom.content.replaceChildren(node('div', { class: 'panel' }, node('h2', { text: 'Nie udało się załadować widoku' }), node('p', { class: 'form-error', text: error.message }), button('Spróbuj ponownie', () => navigate(route.id), 'primary')));
-  }
+  catch (error) { dom.content.replaceChildren(node('div', { class: 'panel' }, node('h2', { text: 'Nie udało się załadować widoku' }), node('p', { class: 'form-error', text: error.message }), button('Spróbuj ponownie', () => navigate(route.id), 'primary'))); }
   dom.content.focus();
 }
 function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
