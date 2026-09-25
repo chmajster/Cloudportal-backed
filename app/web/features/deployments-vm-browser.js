@@ -314,8 +314,15 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     node('div', { class: 'my-resource-card-head' },
       node('span', { class: 'my-resource-card-icon', 'aria-hidden': 'true' }, appIcon('server')),
       node('div', { class: 'my-resource-card-title' },
-        node('strong', { text: item.name || ('VM ' + vmIdLabel) }),
-        node('small', { class: 'mono muted', text: (item.node || '—') + ' / VMID ' + vmIdLabel })),
+        node('strong', {
+          text: item.name || ('VM ' + vmIdLabel),
+          title: item.name || ('VM ' + vmIdLabel),
+        }),
+        node('small', {
+          class: 'mono muted',
+          text: (item.node || '—') + ' / VMID ' + vmIdLabel,
+          title: (item.node || '—') + ' / VMID ' + vmIdLabel,
+        })),
       badge(statusText, statusKindValue)),
     node('div', { class: 'my-resource-card-meta' },
       node('span', { text: metadata.provider || providerNames.get(Number(item.provider_id)) || ('Platforma #' + item.provider_id) }),

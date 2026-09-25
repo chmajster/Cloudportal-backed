@@ -335,6 +335,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.my-resources-bulk-actions' in stylesheet
     assert '.my-resource-card.selected' in stylesheet
     assert '.my-resource-vm-card .my-resource-card-head' in stylesheet
+    assert '.my-resource-vm-card.has-selection-control .my-resource-card-head' in stylesheet
+    assert '.my-resource-grid-list .my-resource-card-title strong' in stylesheet
+    assert 'grid-template-areas:' in stylesheet
+    assert "card.classList.add('has-selection-control')" in script
+    assert "title: item.name || ('VM ' + vmIdLabel)" in script
     assert 'function navigationGroup(' in core
     assert 'function navigationGroupRank(' in core
     assert 'function navigationRouteRank(' in core
