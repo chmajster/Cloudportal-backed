@@ -51,21 +51,30 @@
     }));
   }
 
-  const safeApi = (path, fallback = [], options = {}) => api(path, options).then(result => result.items || result).catch(() => fallback);
+  function safeApi(path, _fallback = [], options = {}) {
+    return api(path, options).then(result => result.items || result);
+  }
+
+  function optionalApi(path, fallback = [], options = {}) {
+    return api(path, options).then(result => result.items || result).catch(() => fallback);
+  }
+
   async function openBlueprintWizard(options = {}) {
-    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit || !parts.awx) {
+    if (!parts.core || !parts.hostname || !parts.network || !parts.scope || !parts.ui || !parts.cloudInit || !parts.awx || !parts.validation) {
       toast('Moduły wizarda Blueprintu nie zostały załadowane.', 'error');
       return;
     }
 
+    const editingItem = options.item || null;
+    const scopePermission = editingItem ? 'blueprints.update' : 'blueprints.create';
     try {
       const [creationScopes, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
-        safeApi('/blueprints/creation-scopes?limit=200'),
-        safeApi('/project-context', { selected: null, version: 0 }),
+        safeApi('/blueprints/creation-scopes?permission=' + encodeURIComponent(scopePermission) + '&limit=200'),
+        optionalApi('/project-context', { selected: null, version: 0 }),
         allowed('ansible.read') ? safeApi('/ansible/playbooks') : Promise.resolve([]),
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
         allowed('users.read') ? safeApi('/users?limit=200') : Promise.resolve([]),
-        safeApi('/settings/vm-classification', {
+        optionalApi('/settings/vm-classification', {
           environments: { test: true, dev: true, nonprod: true, prod: true },
           apmids: [],
           hostname_defaults: { location: 'wro', role: 'server' },
@@ -73,11 +82,10 @@
       ]);
 
       const state = parts.core.stateDefaults();
-      const editingItem = options.item || null;
       const pageMode = options.page === true;
       state.step = normalizedWizardStep(options.initialStep || 0);
       state.maxStep = editingItem ? STEPS.length - 1 : state.step;
-      const scopeData = parts.scope.prepare(creationScopes, projectContext, state);
+      const scopeData = parts.scope.prepare(creationScopes, projectContext, state, options);
       const data = {
         tenants: scopeData.tenants,
         projects: scopeData.projects,
