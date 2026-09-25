@@ -13,7 +13,7 @@ const handlers = {}, listeners = {}, rendered = [], calls = [];
 const element = (tag, attrs = {}, ...children) => ({tag, attrs, children, querySelector: () => ({addEventListener(){}})});
 const context = {
  console, Promise, Set, JSON, String, Number, Math, URLSearchParams,
- state: {view:'projects'}, document: {addEventListener: (event, cb) => {listeners[event] = cb;}},
+ state: {view:'projects'}, viewIs: id => context.state.view === id, document: {addEventListener: (event, cb) => {listeners[event] = cb;}},
  node: element, selectField: () => element('select'), heading: (text, actions) => element('heading', {text}, actions),
  table: (cols, rows) => element('table', {}, rows.map(row => cols.map(col => col.value(row)))),
  button: (label, click, kind, disabled) => element('button', {label,click,kind,disabled}), toast(){},
