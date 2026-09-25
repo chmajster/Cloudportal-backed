@@ -5,6 +5,14 @@ variable "network" {
   type    = string
   default = "vmbr0"
 }
+variable "network_count" {
+  type    = number
+  default = 1
+  validation {
+    condition     = var.network_count >= 1 && var.network_count <= 8
+    error_message = "network_count must be between 1 and 8."
+  }
+}
 variable "vlan_id" {
   type    = number
   default = null
