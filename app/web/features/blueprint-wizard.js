@@ -847,7 +847,11 @@
 
       function renderHostname() {
         const content = parts.hostname.renderSchemeCards({
-          state, data, rerender: render, saveStateFromInput,
+          state,
+          data,
+          rerender: render,
+          saveStateFromInput,
+          canCreate: blueprintScope.allows('hostnames.create'),
         });
         const toggle = content.querySelector('[name="hostname_enabled"]');
         if (toggle) toggle.addEventListener('change', () => {
@@ -1231,11 +1235,25 @@
         bodyRoot.replaceChildren(progress);
         try {
           progress.querySelector('span').textContent = 'Zapisywanie definicji i workflow…';
-          const created = await api(editingItem ? `/blueprints/${editingItem.id}` : '/blueprints', {
+          const inlineHostnameScheme = state.hostnameSchemeId === '__pending__'
+            ? state.pendingHostnameScheme
+            : null;
+          const requestPath = inlineHostnameScheme
+            ? (editingItem ? `/blueprints/${editingItem.id}/bundle` : '/blueprints/bundle')
+            : (editingItem ? `/blueprints/${editingItem.id}` : '/blueprints');
+          const requestBody = inlineHostnameScheme
+            ? { blueprint: payload, hostname_scheme: inlineHostnameScheme }
+            : payload;
+          const created = await api(requestPath, {
             method: editingItem ? 'PUT' : 'POST',
-            body: payload,
+            body: requestBody,
             headers: parts.core.scopeHeaders(state),
+            idempotent: !editingItem,
           });
+          window.CloudportalBlueprintScope = {
+            tenant_id: String(state.tenantId),
+            project_id: String(state.projectId),
+          };
           if (pageMode) replaceBlueprintWizardRoute(created, state, options);
           progress.replaceChildren(
             node('span', { class: 'blueprint-wizard-success-icon' }, appIcon('check')),
