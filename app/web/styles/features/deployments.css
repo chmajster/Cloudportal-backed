@@ -880,7 +880,15 @@
 }
 
 .my-resource-vm-card .my-resource-card-head {
-  grid-template-columns: 22px 40px minmax(0, 1fr) auto;
+  grid-template-columns: 40px minmax(0, 1fr) max-content;
+}
+
+.my-resource-vm-card.has-selection-control .my-resource-card-head {
+  grid-template-columns: 22px 40px minmax(0, 1fr) max-content;
+}
+
+.my-resource-vm-card .my-resource-card-head > .badge {
+  justify-self: start;
 }
 
 .my-resource-select,
@@ -1086,7 +1094,11 @@
   }
 
   .my-resource-vm-card .my-resource-card-head {
-    grid-template-columns: 22px 38px minmax(0, 1fr) auto;
+    grid-template-columns: 38px minmax(0, 1fr) max-content;
+  }
+
+  .my-resource-vm-card.has-selection-control .my-resource-card-head {
+    grid-template-columns: 22px 38px minmax(0, 1fr) max-content;
   }
 
   .my-resources-empty {
@@ -1261,7 +1273,7 @@
 }
 
 .my-resources-vm-list-header {
-  grid-template-columns: minmax(250px, 1.1fr) minmax(230px, 1fr) minmax(150px, .6fr) minmax(240px, auto);
+  grid-template-columns: minmax(340px, 1.2fr) minmax(300px, 1fr) minmax(150px, .55fr) minmax(220px, auto);
   display: grid;
   align-items: center;
   gap: 18px;
@@ -1278,7 +1290,7 @@
 }
 
 .my-resource-grid-list .my-resource-vm-card {
-  grid-template-columns: minmax(250px, 1.05fr) minmax(260px, 1.2fr) minmax(150px, .55fr) minmax(260px, auto);
+  grid-template-columns: minmax(340px, 1.2fr) minmax(300px, 1fr) minmax(150px, .55fr) minmax(220px, auto);
   grid-template-areas:
     "head meta created actions"
     "provisioning provisioning provisioning provisioning";
@@ -1289,6 +1301,46 @@
 
 .my-resource-grid-list .my-resource-card-head {
   grid-area: head;
+  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-areas:
+    "icon title"
+    "icon status";
+  align-items: center;
+  row-gap: 4px;
+}
+
+.my-resource-grid-list .my-resource-vm-card.has-selection-control .my-resource-card-head {
+  grid-template-columns: 22px 40px minmax(0, 1fr);
+  grid-template-areas:
+    "select icon title"
+    "select icon status";
+}
+
+.my-resource-grid-list .my-resource-select {
+  grid-area: select;
+  align-self: center;
+}
+
+.my-resource-grid-list .my-resource-card-icon {
+  grid-area: icon;
+}
+
+.my-resource-grid-list .my-resource-card-title {
+  grid-area: title;
+}
+
+.my-resource-grid-list .my-resource-card-head > .badge {
+  grid-area: status;
+  justify-self: start;
+  max-width: 100%;
+}
+
+.my-resource-grid-list .my-resource-card-title strong,
+.my-resource-grid-list .my-resource-card-title small {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .my-resource-grid-list .my-resource-card-meta {
