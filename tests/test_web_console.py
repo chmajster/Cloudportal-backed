@@ -52,8 +52,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'shared/page-layout.js',
         'shared/page-surfaces.js',
         'shared/platforms.js',
-        'shared/routed-forms.js',
         'shared/polling.js',
+        'shared/routed-forms.js',
         'shared/status.js',
     ]
     assert {
