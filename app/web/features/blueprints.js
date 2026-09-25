@@ -1463,6 +1463,17 @@ registerRoutedForm({
   await executeBlueprint(item);
 });
 
+registerRoutedForm({
+  id: 'products-blueprint-create',
+  pattern: /^\/products\/(?<id>\d+)(?:\/[^/]+)?\/create$/,
+  parent: 'deployments',
+  permission: 'blueprints.execute',
+  label: 'Produkty',
+}, async match => {
+  const item = await api('/blueprints/' + match.params.id);
+  await executeBlueprint(item);
+});
+
 registerCommand('blueprints.proxmoxTemplateWizard', item => item ? window.BlueprintWizard.open({ item }) : window.BlueprintWizard.open());
 registerCommand('blueprints.proxmoxWithHostnameScheme', schemeId => window.BlueprintWizard.open({ hostnameSchemeId: schemeId }));
 registerCommand('blueprints.execute', item => navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/execute'));
