@@ -1,40 +1,5 @@
 'use strict';
 (() => {
-function blueprintTemplateVariableField(name, spec, value) {
-  const type = schemaType(spec);
-  const label = FIELD_LABELS[name] || spec.title || name;
-  const current = value ?? spec.default ?? '';
-  const help = `Typ: ${type}. Możesz użyć wartości lub placeholdera, np. {{ cpu }}.`;
-  const wrapper = field(label, `deployment_var_${name}`, {
-    tag: type === 'array' ? 'textarea' : 'input',
-    value: Array.isArray(current) ? current.join('\n') : String(current),
-    wide: type === 'array' || ['ssh_public_key', 'subnet_id'].includes(name),
-    help,
-  });
-  wrapper.dataset.blueprintTemplateVariable = name;
-  return wrapper;
-}
-function readBlueprintTemplateVariables(root, template) {
-  const result = {};
-  const properties = template?.variables_schema?.properties || {};
-  for (const [name, spec] of Object.entries(properties)) {
-    const control = root.elements?.[`deployment_var_${name}`] || root.querySelector?.(`[name="deployment_var_${name}"]`);
-    if (!control) continue;
-    const raw = String(control.value ?? '').trim();
-    if (!raw) continue;
-    if (/{{\s*[^}]+\s*}}/.test(raw)) {
-      result[name] = raw;
-      continue;
-    }
-    const type = schemaType(spec);
-    if (type === 'integer') result[name] = Number.parseInt(raw, 10);
-    else if (type === 'number') result[name] = Number(raw);
-    else if (type === 'boolean') result[name] = ['true', '1', 'tak', 'yes'].includes(raw.toLowerCase());
-    else if (type === 'array') result[name] = splitValues(raw);
-    else result[name] = raw;
-  }
-  return result;
-}
 function canManageBlueprintByRole(item) {
   const required = new Set((item?.manager_role_ids || []).map(Number));
   if (!required.size) return true;
@@ -991,7 +956,7 @@ async function blueprintForm(item = null) {
     const saveDeploymentVariables = () => {
       if (!deploymentVariablesReady) return;
       const previousTemplate = templates.find(template => template.id === currentTemplateId);
-      if (previousTemplate) variableState.set(currentTemplateId, readBlueprintTemplateVariables(templateVariables, previousTemplate));
+      if (previousTemplate) variableState.set(currentTemplateId, window.BlueprintFormUtils.readBlueprintTemplateVariables(templateVariables, previousTemplate));
     };
 
     const refreshCredentialChoices = () => {
@@ -1034,7 +999,7 @@ async function blueprintForm(item = null) {
       templateVariables.replaceChildren();
       const values = variableState.get(template.id) || {};
       Object.entries(template.variables_schema?.properties || {}).forEach(([name, spec]) => {
-        templateVariables.append(blueprintTemplateVariableField(name, spec, values[name]));
+        templateVariables.append(window.BlueprintFormUtils.blueprintTemplateVariableField(name, spec, values[name]));
       });
       deploymentVariablesReady = true;
       templateGuestCredentialControl.sync(template.id);
@@ -1251,7 +1216,7 @@ async function blueprintForm(item = null) {
         const template = currentTemplate();
         const hostnameSchemeId = Number(form.elements.deployment_hostname_scheme_id.value || 0);
         const deploymentVariables = {
-          ...(variableState.get(template.id) || readBlueprintTemplateVariables(form, template)),
+          ...(variableState.get(template.id) || window.BlueprintFormUtils.readBlueprintTemplateVariables(form, template)),
         };
         if (hostnameSchemeId && Object.prototype.hasOwnProperty.call(template.variables_schema?.properties || {}, 'name')) {
           deploymentVariables.name = '{{ hostname }}';
