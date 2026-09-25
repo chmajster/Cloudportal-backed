@@ -112,7 +112,7 @@ function managedResourceCard(item, providerNames) {
       node('span', { text: providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider || '—' }),
       item.primary_ip ? node('span', { class: 'mono', text: item.primary_ip }) : null),
     node('div', { class: 'my-resource-card-actions' },
-      button('Szczegóły', () => showObjectDetails(item.name || 'Zasób', details, 'Zasób zarządzany'))));
+      button('Szczegóły', () => navigate('/resources/managed/' + encodeURIComponent(item.id)))));
 }
 
 async function myResourcesView(repairInventory = true) {
