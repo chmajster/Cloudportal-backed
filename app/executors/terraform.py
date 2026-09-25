@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -33,10 +34,17 @@ def workspace_lock(workspace):
 
 
 @contextmanager
-def terraform_plugin_cache_lock(cache_dir):
+def terraform_plugin_cache_lock(cache_dir, context=None):
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (cache_dir / '.init.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if context is not None:
+                    context.check()
+                time.sleep(0.5)
         try:
             yield
         finally:
@@ -390,12 +398,21 @@ class TerraformExecutor(Executor):
                     # Native media contains a password hash; never place the
                     # cleartext password in Terraform env, tfvars, or state.
                     guest_password = None
-                # Code is root-owned and approved; keep an existing provider lock on updates.
+                # Mirror the approved template source into the persistent workspace.
+                # Leaving removed *.tf files behind can silently keep obsolete
+                # resources/providers in later plans.
+                source_tf_names = {path.name for path in source.glob('*.tf')}
+                for stale in workspace.glob('*.tf'):
+                    if stale.name not in source_tf_names:
+                        stale.unlink()
                 for path in source.glob('*.tf'):
                     shutil.copyfile(path, workspace / path.name)
                 lock_source = source / '.terraform.lock.hcl'
-                if lock_source.exists() and not (workspace / '.terraform.lock.hcl').exists():
-                    shutil.copyfile(lock_source, workspace / '.terraform.lock.hcl')
+                workspace_lockfile = workspace / '.terraform.lock.hcl'
+                if lock_source.exists():
+                    shutil.copyfile(lock_source, workspace_lockfile)
+                else:
+                    workspace_lockfile.unlink(missing_ok=True)
                 variables_path = workspace / 'terraform.tfvars.json'
                 variables_path.write_text(json.dumps(runtime_variables))
                 os.chmod(variables_path, 0o600)
@@ -407,7 +424,7 @@ class TerraformExecutor(Executor):
                     if (workspace / '.terraform.lock.hcl').exists():
                         init_command.append('-lockfile=readonly')
                     context.stage('terraform.init')
-                    with terraform_plugin_cache_lock(plugin_cache):
+                    with terraform_plugin_cache_lock(plugin_cache, context):
                         if terraform_init_ready(workspace, init_fingerprint, self.binary):
                             context.log('terraform.init.cached: inicjalizacja została wykonana przez inny worker')
                         else:

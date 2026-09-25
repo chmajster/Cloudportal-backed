@@ -603,6 +603,8 @@ def persist_workflow_runtime(context, runtime):
             'ansible_completed_runs': sorted(
                 int(value) for value in runtime.get('ansible_completed_runs', set())
             ),
+            'ansible_inflight_run': runtime.get('ansible_inflight_run'),
+            'awx_launches': dict(runtime.get('awx_launches') or {}),
         })
         payload['_workflow_runtime'] = saved
         current.payload = payload
@@ -626,16 +628,22 @@ def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addr
         )
     completed = runtime.setdefault('ansible_completed_runs', set())
     addresses = list(addresses or [])
+    inflight = runtime.get('ansible_inflight_run')
+    if inflight is not None and int(inflight) not in completed:
+        raise ExecutionFailed(
+            'Automatic resume refused to repeat an Ansible run with an ambiguous result; '
+            'inspect the host and retry the deployment explicitly'
+        )
     for index, (spec, credential) in enumerate(runs):
         if index in completed:
             context.log(
-                f'workflow.ansible.run.resumed: {index + 1}/{len(runs)}:{spec.playbook}'
+                f'workflow.ansible.run.resumed: {index + 1}/{len(runs)}:{getattr(spec, 'playbook', 'ansible')}'
             )
             continue
         context.ansible = spec
         context.ansible_credential = credential
         context.stage(
-            f'workflow.ansible.run.start:{index + 1}/{len(runs)}:{spec.playbook}'
+            f'workflow.ansible.run.start:{index + 1}/{len(runs)}:{getattr(spec, 'playbook', 'ansible')}'
         )
         addresses = wait_for_ansible_transport(
             context,
@@ -644,10 +652,13 @@ def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addr
             addresses=addresses,
         )
         context.ansible.inventory = Inventory(hosts=addresses)
+        runtime['ansible_inflight_run'] = index
+        persist_workflow_runtime(context, runtime)
         AnsibleExecutor().execute('ansible.execute', context)
         completed.add(index)
+        runtime['ansible_inflight_run'] = None
         context.stage(
-            f'workflow.ansible.run.completed:{index + 1}/{len(runs)}:{spec.playbook}'
+            f'workflow.ansible.run.completed:{index + 1}/{len(runs)}:{getattr(spec, 'playbook', 'ansible')}'
         )
         persist_workflow_runtime(context, runtime)
     runtime['ansible_ran'] = len(completed) >= len(runs)
@@ -672,10 +683,10 @@ BLUEPRINT_SUPPORTED_STEPS = (
 
 
 def workflow_step_timeout(step_type, configured=600):
-    timeout = int(configured or 600)
-    if step_type in {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
-        return max(timeout, settings().execution_timeout)
-    return timeout
+    timeout = max(1, int(configured or 600))
+    # A per-step timeout may be shorter than the job-wide execution timeout, but
+    # can never extend the lifetime of the job beyond the global safety bound.
+    return min(timeout, settings().execution_timeout)
 
 
 def blueprint_workflow_order(steps):
@@ -727,7 +738,31 @@ def blueprint_runtime_facts(context):
     }
 
 
-def register_awx_host(context, runtime, workspace, *, timeout=600):
+def wait_for_awx_job(context, client, job_id, timeout):
+    deadline = time.monotonic() + max(1, float(timeout))
+    last_status = 'unknown'
+    while time.monotonic() < deadline:
+        context.check()
+        try:
+            payload = client.request('GET', f'jobs/{int(job_id)}/').json()
+        except AwxError as exc:
+            raise ExecutionFailed('AWX job status check failed: ' + str(exc)[:350]) from None
+        last_status = str((payload or {}).get('status') or 'unknown').lower()
+        if last_status == 'successful':
+            return payload
+        if last_status in {'failed', 'error', 'canceled', 'cancelled'}:
+            raise ExecutionFailed(
+                f'AWX Job Template execution finished with status {last_status}'
+            )
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining:
+            time.sleep(min(2.0, remaining))
+    raise ExecutionFailed(
+        f'Timed out waiting for AWX Job Template completion (last status: {last_status})'
+    )
+
+
+def register_awx_host(context, runtime, workspace, *, timeout=600, step_id='register_awx'):
     blueprint = (context.job.payload or {}).get('blueprint') or {}
     config = blueprint.get('awx') or {}
     if not config:
@@ -794,10 +829,32 @@ def register_awx_host(context, runtime, workspace, *, timeout=600):
                     raise AwxError(
                         'Selected AWX Job Template does not belong to the selected project'
                     )
-            launch = client.launch_job_template(
-                int(job_template_id),
-                hostname=context.deployment.name,
-                deployment_id=context.deployment.id,
+            launch_key = str(step_id)
+            launches = runtime.setdefault('awx_launches', {})
+            existing_job_id = launches.get(launch_key)
+            if existing_job_id:
+                launch = {'job': int(existing_job_id), 'resumed': True}
+                context.log(
+                    f'workflow.awx.job.resumed: template={int(job_template_id)} job={int(existing_job_id)}'
+                )
+            else:
+                launch = client.launch_job_template(
+                    int(job_template_id),
+                    hostname=context.deployment.name,
+                    deployment_id=context.deployment.id,
+                )
+                launched_job_id = launch.get('job') or launch.get('id')
+                if not launched_job_id:
+                    raise AwxError('AWX launch did not return a job id')
+                launches[launch_key] = int(launched_job_id)
+                # Persist immediately: after AWX accepts a launch, recovery must
+                # poll that job rather than silently launching a duplicate.
+                persist_workflow_runtime(context, runtime)
+            wait_for_awx_job(
+                context,
+                client,
+                int(launch.get('job') or launch.get('id')),
+                timeout,
             )
     except AwxError as exc:
         raise ExecutionFailed('AWX onboarding failed: ' + str(exc)[:350]) from None
@@ -892,7 +949,8 @@ def blueprint_conditions_match(step, context):
             raise ExecutionFailed(f'Unsupported Blueprint workflow condition: {key}')
         actual = facts[key]
         if isinstance(expected, list):
-            if actual not in expected:
+            normalized_actual = str(actual).lower()
+            if normalized_actual not in {str(value).lower() for value in expected}:
                 return False
         elif isinstance(expected, bool):
             if bool(actual) != expected:
@@ -902,8 +960,8 @@ def blueprint_conditions_match(step, context):
     return True
 
 
-def wait_for_ssh(context, workspace, timeout):
-    addresses = wait_for_ip(context, workspace, timeout=timeout)
+def wait_for_ssh(context, workspace, timeout, addresses=None):
+    addresses = list(addresses or wait_for_ip(context, workspace, timeout=timeout))
     access = _guest_access_credential(context)
     private_key = _guest_private_key(access['private_key']) if access else None
     deadline = time.monotonic() + timeout
@@ -1471,6 +1529,13 @@ def create_blueprint_snapshot(context, workspace, step):
         raise ExecutionFailed('Proxmox node missing from deployment variables')
     snapname = ('bp-' + context.job.id[:8] + '-' + str(step.get('id') or 'snapshot'))[:40]
     provider = provider_for(context.credential)
+    try:
+        existing = provider.snapshots(node, vm_id) or []
+    except Exception:
+        existing = []
+    if any(str(item.get('name') or item.get('snapname') or '') == snapname for item in existing):
+        context.log(f'workflow.snapshot.reused: {snapname}')
+        return
     upid = provider.create_snapshot(
         node,
         vm_id,
@@ -1524,6 +1589,8 @@ def run_blueprint_workflow(context, executor):
         'ansible_completed_runs': {
             int(value) for value in (saved_runtime.get('ansible_completed_runs') or [])
         },
+        'ansible_inflight_run': saved_runtime.get('ansible_inflight_run'),
+        'awx_launches': dict(saved_runtime.get('awx_launches') or {}),
         'prepared': [],
         'step_states': {step_id: 'completed' for step_id in completed_steps},
         'plan_ready': saved_plan_ready,
@@ -1626,12 +1693,16 @@ def run_blueprint_workflow(context, executor):
         runtime['plan_sha256'] = None
         delete_plan(context.deployment.id)
         runtime['workspace'] = workspace
+        # TerraformExecutor persists state before returning. Checkpoint the provider
+        # mutation immediately, before guest bootstrap or any other post-apply work,
+        # so a worker crash cannot cause recovery to submit terraform apply again.
+        runtime['applied'] = True
+        persist_workflow_runtime(context, runtime)
         ensure_qemu_guest_bootstrap(
             context,
             workspace,
             timeout=min(settings().execution_timeout, 900),
         )
-        runtime['applied'] = True
         context.stage('inventory.synchronizing')
         inventory = register_managed_inventory(context, workspace)
         with session() as quota_db:
@@ -1813,7 +1884,12 @@ def run_blueprint_workflow(context, executor):
                         context, workspace_for(step_type), timeout=timeout
                     )
                 elif step_type == 'wait_for_ssh':
-                    address = wait_for_ssh(context, workspace_for(step_type), timeout)
+                    address = wait_for_ssh(
+                        context,
+                        workspace_for(step_type),
+                        timeout,
+                        addresses=runtime['addresses'],
+                    )
                     runtime['addresses'] = [address]
                 elif step_type == 'run_ansible_playbook':
                     runtime['addresses'] = execute_configured_ansible(
@@ -1829,6 +1905,7 @@ def run_blueprint_workflow(context, executor):
                         runtime,
                         workspace_for(step_type),
                         timeout=timeout,
+                        step_id=step_id,
                     )
                 elif step_type == 'create_snapshot':
                     create_blueprint_snapshot(context, workspace_for(step_type), step)
@@ -1908,7 +1985,13 @@ def run_blueprint_workflow(context, executor):
             apply_and_sync('workflow completion')
 
     if runtime['applied'] and not runtime['inventory_synced']:
-        register_managed_inventory(context, runtime['workspace'])
+        inventory = register_managed_inventory(context, runtime['workspace'])
+        runtime['inventory_synced'] = True
+        if inventory['vm_id'] is not None:
+            context.log(f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}")
+        else:
+            context.log(f"inventory.resource.registered: {inventory['external_id']}")
+        persist_workflow_runtime(context, runtime)
 
     if configured_ansible_runs(context) and not runtime['ansible_ran']:
         context.log('workflow.compatibility: running configured Ansible after Blueprint workflow')
@@ -2072,7 +2155,13 @@ def _execute_unfenced(job_id):
     with session() as db:
         current = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
         if current.cancel_requested and status == 'successful':
-            status, error = 'cancelled', 'Cancellation requested at completion; inspect deployment state'
+            # The mutation already completed successfully. A late cancellation must
+            # not rewrite provider truth as "cancelled" (especially after destroy),
+            # otherwise deployment/inventory/allocation state diverges from reality.
+            db.add(JobLog(
+                job_id=current.id,
+                message='job.cancel.too_late: operation already completed successfully',
+            ))
         if status == 'successful':
             commit_job_reservation(db, current)
         elif context.quota_provider_submitted:
