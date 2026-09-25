@@ -151,9 +151,12 @@ def inspect_ova(path: Path) -> dict:
         unsafe = [member.name for member in members if not _safe_archive_member(member)]
         if unsafe:
             raise HTTPException(422, 'OVA zawiera niedozwolony typ lub ścieżkę elementu')
+        normalized_names = [member.name.replace('\\', '/').rstrip('/') for member in members]
+        if len(normalized_names) != len(set(normalized_names)):
+            raise HTTPException(422, 'OVA zawiera zduplikowane ścieżki elementów')
 
-        ovf_members = [member for member in members if member.name.lower().endswith('.ovf')]
-        vmdk_members = [member for member in members if member.name.lower().endswith('.vmdk')]
+        ovf_members = [member for member in members if member.isfile() and member.name.lower().endswith('.ovf')]
+        vmdk_members = [member for member in members if member.isfile() and member.name.lower().endswith('.vmdk')]
         if len(ovf_members) != 1:
             raise HTTPException(422, 'OVA musi zawierać dokładnie jeden plik OVF')
         if not (1 <= len(vmdk_members) <= MAX_DISKS):
