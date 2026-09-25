@@ -236,7 +236,7 @@ async function catalogView() {
         { label: 'Status', value: item => badge(item.enabled === false ? 'Wyłączony' : 'Aktywny', item.enabled === false ? 'danger' : 'ok') },
         { label: 'Import', value: item => badge(item.importable ? 'Obsługiwany' : 'Tylko tworzenie', item.importable ? 'ok' : 'info') },
       ], templates.items, item => {
-        const rowActions = [button('Pola', () => showTemplateFields(item))];
+        const rowActions = [button('Pola', () => navigate('/catalog/templates/' + encodeURIComponent(item.id) + '/fields'))];
         if (allowed('settings.update')) {
           rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCatalogItem('templates', item), item.enabled === false ? 'primary' : 'danger'));
         }
@@ -332,6 +332,18 @@ async function catalogView() {
   );
 }
 
+registerRoutedForm({
+  id: 'catalog-template-fields',
+  pattern: /^\/catalog\/templates\/(?<id>[^/]+)\/fields$/,
+  parent: 'catalog',
+  permission: 'terraform.read',
+  label: 'Katalog IaC',
+}, async match => {
+  const templates = (await api('/templates')).items;
+  const item = templates.find(value => String(value.id) === String(match.params.id));
+  if (!item) throw new Error('Nie znaleziono szablonu.');
+  showTemplateFields(item);
+});
 registerRoutedForm({
   id: 'catalog-ansible-create',
   pattern: /^\/catalog\/ansible\/new$/,
