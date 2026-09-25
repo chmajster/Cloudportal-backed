@@ -510,6 +510,7 @@ class ApplianceVMVariables(Input):
             normalized.append(tag)
         return sorted(set(normalized))
 
+
 class AWSVariables(Input):
     name: Slug
     region: Annotated[str, Field(min_length=9, max_length=32)]
