@@ -107,10 +107,9 @@ async function routedFormView() {
   }
   try {
     await match.route.handler(match);
-    if (typeof window.modalSurfaceOpen === 'function'
-        && !window.modalSurfaceOpen()
-        && typeof window.clearSemanticSurface === 'function') {
-      window.clearSemanticSurface();
+    if (typeof window.modalSurfaceOpen === 'function' && !window.modalSurfaceOpen()) {
+      if (typeof window.clearSemanticSurface === 'function') window.clearSemanticSurface();
+      await navigate(match.route.parent);
     }
   } catch (error) {
     if (typeof window.clearSemanticSurface === 'function') window.clearSemanticSurface();
