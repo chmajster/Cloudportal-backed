@@ -522,11 +522,9 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
     const renderTab = async id => {
       activeTab = id;
       if (routedDetails) {
-        history.replaceState(
-          history.state,
-          '',
-          '#/resources/vm/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(id)
-        );
+        const tabPath = '/resources/vm/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(id);
+        state.routePath = tabPath;
+        history.replaceState(history.state, '', '#' + tabPath);
       }
       tabBar.querySelectorAll('.vm-tab').forEach(tab => {
         const active = tab.dataset.tab === id;
