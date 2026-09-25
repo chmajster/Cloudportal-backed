@@ -3,7 +3,7 @@ FROM python:3.12-slim-bookworm
 ARG BUILD_COMMIT=unknown
 ENV CP_BUILD_COMMIT=$BUILD_COMMIT
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl openssl openssh-client sshpass \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl openssl openssh-client sshpass qemu-utils \
     && install -d -m 0755 /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \

@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     retention_released_allocations_days: int = Field(default=90, ge=1, le=3650)
     instance_backup_download_retention_hours: int = Field(default=24, ge=1, le=720)
     instance_backup_max_upload_bytes: int = Field(default=10 * 1024 ** 3, ge=1024 ** 2, le=100 * 1024 ** 3)
+    appliance_max_upload_bytes: int = Field(default=20 * 1024 ** 3, ge=1024 ** 2, le=100 * 1024 ** 3)
 
 
 @lru_cache

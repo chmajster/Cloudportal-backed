@@ -52,7 +52,13 @@ async function blueprintsView() {
   const canDesignBlueprint = allowed('providers.read') && allowed('credentials.read') && allowed('terraform.read');
   const canQuickProxmox = canDesignBlueprint && allowed('hostnames.read') && allowed('ipam.read');
   const actions = [];
-  if (allowed('blueprints.create') && canDesignBlueprint) { actions.push(button('Nowy Blueprint — kreator', () => window.BlueprintWizard.open(), 'primary')); if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open())); }
+  if (allowed('blueprints.create') && canDesignBlueprint) {
+    actions.push(button('Nowy Blueprint — kreator', () => window.BlueprintWizard.open(), 'primary'));
+    if (window.ApplianceBlueprintUI && allowed('terraform.execute')) {
+      actions.push(button('Importuj appliance OVA', () => window.ApplianceBlueprintUI.open().catch(error => toast(error.message, 'error'))));
+    }
+    if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open()));
+  }
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
       { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },

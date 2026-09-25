@@ -51,14 +51,17 @@ async def boundary(request: Request, call_next):
         if request.url.scheme != 'https' and not settings().allow_http and request.url.path != '/api/v1/health':
             response = JSONResponse({'detail': 'HTTPS required'}, status_code=400)
         else:
-            # The instance-backup upload endpoint owns a much larger, streaming
-            # multipart limit. Do not buffer it in the generic 1 MiB JSON guard.
-            streaming_backup_upload = (
+            # Large file endpoints stream multipart payloads themselves. Do not
+            # buffer OVA/instance-backup uploads in the generic 1 MiB JSON guard.
+            streaming_large_upload = (
                 request.method == 'POST'
-                and request.url.path == '/api/v1/instance-backups/upload'
+                and request.url.path in {
+                    '/api/v1/instance-backups/upload',
+                    '/api/v1/appliances/ova-blueprints',
+                }
                 and request.headers.get('content-type', '').lower().startswith('multipart/form-data')
             )
-            if streaming_backup_upload:
+            if streaming_large_upload:
                 from fastapi import HTTPException
                 try:
                     await run_in_threadpool(

@@ -485,6 +485,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('blueprints.proxmoxTemplateWizard'" in script
     assert "registerCommand('blueprints.execute'" in script
     assert "window.BlueprintWizard.open()" in script
+    assert "Importuj appliance OVA" in script
+    assert "Importuj OVA jako Blueprint" in script
+    assert "registerExtension('appliance-blueprints'" in script
+    assert "id: 'appliances'" in script
+    assert "/appliances/ova-blueprints" in script
     assert "registerExtension('blueprint-wizard-core'" in script
     assert "registerExtension('blueprint-wizard-hostname'" in script
     assert "Pattern hostname z Generatora" in script

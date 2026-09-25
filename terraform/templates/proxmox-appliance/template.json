@@ -1,0 +1,7 @@
+{
+  "id": "proxmox-appliance",
+  "name": "Proxmox OVA Appliance",
+  "provider": "proxmox",
+  "version": 1,
+  "schema_model": "app.api.schemas:ApplianceVMVariables"
+}

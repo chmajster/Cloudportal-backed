@@ -472,6 +472,48 @@ class VMVariables(Input):
         return self
 
 
+class ApplianceVMVariables(Input):
+    name: Slug
+    node: Slug
+    storage: Slug
+    network: Slug = 'vmbr0'
+    network_count: int = Field(default=1, ge=1, le=8)
+    vlan_id: int | None = Field(default=None, ge=1, le=4094)
+    cpu: int = Field(default=2, ge=1, le=128)
+    memory: int = Field(default=4096, ge=128, le=1048576)
+    import_file_ids: Annotated[list[str], Field(min_length=1, max_length=8)]
+    disk_bus: Literal['scsi', 'sata', 'virtio'] = 'scsi'
+    started: bool = True
+    qemu_guest_agent: bool = False
+    tags: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
+
+    @field_validator('import_file_ids')
+    @classmethod
+    def import_volumes(cls, values):
+        import re
+        pattern = re.compile(
+            r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}:import/'
+            r'[A-Za-z0-9][A-Za-z0-9_.-]{0,200}[.]qcow2'
+        )
+        if len(values) != len(set(values)):
+            raise ValueError('Appliance import disks must be unique')
+        if any(pattern.fullmatch(str(value)) is None for value in values):
+            raise ValueError('Appliance disks must reference Proxmox import volumes ending in .qcow2')
+        return values
+
+    @field_validator('tags')
+    @classmethod
+    def appliance_tags(cls, values):
+        import re
+        normalized = []
+        for value in values:
+            tag = value.strip().lower()
+            if not re.fullmatch(r'[a-z0-9][a-z0-9_.-]{0,63}', tag):
+                raise ValueError('Proxmox tags may contain lowercase letters, digits, dot, underscore and hyphen')
+            normalized.append(tag)
+        return sorted(set(normalized))
+
+
 class AWSVariables(Input):
     name: Slug
     region: Annotated[str, Field(min_length=9, max_length=32)]

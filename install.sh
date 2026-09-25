@@ -2695,7 +2695,7 @@ case "$os_family" in
   debian)
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y ca-certificates curl unzip python3 python3-venv python3-dev build-essential libpq-dev postgresql redis-server nginx openssl sshpass openssh-client
+    apt-get install -y ca-certificates curl unzip python3 python3-venv python3-dev build-essential libpq-dev postgresql redis-server nginx openssl sshpass openssh-client qemu-utils
     ;;
   rhel)
     if ((rhel_major == 9)); then
@@ -2703,7 +2703,7 @@ case "$os_family" in
     else
       python_packages=(python3 python3-pip python3-devel)
     fi
-    dnf install -y ca-certificates curl unzip "${python_packages[@]}" gcc gcc-c++ make redhat-rpm-config libpq-devel postgresql-server "$key_value_package" nginx openssl sshpass openssh-clients policycoreutils-python-utils
+    dnf install -y ca-certificates curl unzip "${python_packages[@]}" gcc gcc-c++ make redhat-rpm-config libpq-devel postgresql-server "$key_value_package" nginx openssl sshpass openssh-clients qemu-img policycoreutils-python-utils
     [[ -s /var/lib/pgsql/data/PG_VERSION ]] || postgresql-setup --initdb
     ;;
 esac
@@ -2809,6 +2809,7 @@ CP_PUBLIC_HOST=$backend_host
 CP_HTTPS_PORT=$backend_port
 CP_INSTANCE_BACKUP_DOWNLOAD_RETENTION_HOURS=24
 CP_INSTANCE_BACKUP_MAX_UPLOAD_BYTES=10737418240
+CP_APPLIANCE_MAX_UPLOAD_BYTES=21474836480
 EOF
   cat > "$config/redis.conf" <<EOF
 bind 127.0.0.1
@@ -2846,6 +2847,7 @@ for runtime_pair in "CP_INSTALL_MODE=systemd" "CP_PUBLIC_HOST=$backend_host" "CP
 done
 grep -q '^CP_INSTANCE_BACKUP_DOWNLOAD_RETENTION_HOURS=' "$config/backend.env" || printf 'CP_INSTANCE_BACKUP_DOWNLOAD_RETENTION_HOURS=24\n' >> "$config/backend.env"
 grep -q '^CP_INSTANCE_BACKUP_MAX_UPLOAD_BYTES=' "$config/backend.env" || printf 'CP_INSTANCE_BACKUP_MAX_UPLOAD_BYTES=10737418240\n' >> "$config/backend.env"
+grep -q '^CP_APPLIANCE_MAX_UPLOAD_BYTES=' "$config/backend.env" || printf 'CP_APPLIANCE_MAX_UPLOAD_BYTES=21474836480\n' >> "$config/backend.env"
 install_progress 42 updater 'Konfigurowanie niezależnego serwisu aktualizacji.'
 for token_file in "$config/updater.token" "$config/updater-status.token"; do
   if [[ ! -s "$token_file" ]]; then
@@ -3154,6 +3156,20 @@ server {
         proxy_set_header Host \$host;
         proxy_read_timeout 5s;
         proxy_connect_timeout 2s;
+    }
+    location ~ ^/api/v1/(?:appliances/ova-blueprints|instance-backups/upload)$ {
+        limit_except POST { deny all; }
+        client_max_body_size 100g;
+        client_body_timeout 7200s;
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 7200s;
+        proxy_send_timeout 7200s;
+        proxy_connect_timeout 5s;
     }
     location ~ ^/api/v1/console-sessions/[A-Za-z0-9_-]+/websocket$ {
         proxy_pass http://127.0.0.1:8765;
