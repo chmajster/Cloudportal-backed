@@ -266,13 +266,22 @@
       state.awxInventoryName = event.currentTarget.value;
     });
 
+    const runtimeEnvironmentSync = Boolean(state.selectEnvironmentOnExecute);
+    const runtimeApmidSync = Boolean(state.selectApmidOnExecute);
+    if (runtimeEnvironmentSync) state.awxGroupByEnvironment = true;
+    if (runtimeApmidSync) state.awxGroupByApmid = true;
+
     const groupEnv = checkboxField('Twórz/przypisuj grupę env-<environment>', 'awx_group_environment', state.awxGroupByEnvironment);
-    groupEnv.querySelector('input').addEventListener('change', event => {
-      state.awxGroupByEnvironment = event.currentTarget.checked;
+    const groupEnvControl = groupEnv.querySelector('input');
+    groupEnvControl.disabled = runtimeEnvironmentSync;
+    groupEnvControl.addEventListener('change', event => {
+      state.awxGroupByEnvironment = runtimeEnvironmentSync ? true : event.currentTarget.checked;
     });
     const groupApmid = checkboxField('Twórz/przypisuj grupę apmid-<APMID>', 'awx_group_apmid', state.awxGroupByApmid);
-    groupApmid.querySelector('input').addEventListener('change', event => {
-      state.awxGroupByApmid = event.currentTarget.checked;
+    const groupApmidControl = groupApmid.querySelector('input');
+    groupApmidControl.disabled = runtimeApmidSync;
+    groupApmidControl.addEventListener('change', event => {
+      state.awxGroupByApmid = runtimeApmidSync ? true : event.currentTarget.checked;
     });
 
     const jobTemplate = selectField('Job Template po onboardingu', 'awx_job_template_id', [
@@ -341,6 +350,14 @@
       project,
       inventory,
       inventoryName,
+      (runtimeEnvironmentSync || runtimeApmidSync)
+        ? node('div', { class: 'blueprint-wizard-info wide' },
+            node('strong', { text: 'Synchronizacja klasyfikacji z AWX' }),
+            node('span', { text: [
+              runtimeEnvironmentSync ? 'Environment wybrany podczas tworzenia VM trafi do host vars AWX, grupy env-* i extra_vars Job Template.' : '',
+              runtimeApmidSync ? 'APMID wybrany podczas tworzenia VM trafi do host vars AWX, grupy apmid-* i extra_vars Job Template.' : '',
+            ].filter(Boolean).join(' ') }))
+        : null,
       groupEnv,
       groupApmid,
       jobTemplate,
@@ -368,9 +385,13 @@
         ? nameFor(discovery.job_templates, state.awxJobTemplateId)
         : 'Nie uruchamiaj'],
       ['Grupy', [
-        state.awxGroupByEnvironment ? 'environment' : '',
-        state.awxGroupByApmid ? 'APMID' : '',
+        (state.awxGroupByEnvironment || state.selectEnvironmentOnExecute) ? 'environment' : '',
+        (state.awxGroupByApmid || state.selectApmidOnExecute) ? 'APMID' : '',
       ].filter(Boolean).join(', ') || 'Brak'],
+      ['Runtime → AWX', [
+        state.selectEnvironmentOnExecute ? 'Environment' : '',
+        state.selectApmidOnExecute ? 'APMID' : '',
+      ].filter(Boolean).join(', ') || 'Brak dynamicznej klasyfikacji'],
     ];
   }
 

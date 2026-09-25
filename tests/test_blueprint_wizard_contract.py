@@ -490,6 +490,48 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
 
 
 
+def test_runtime_classification_forces_matching_awx_groups():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'Runtime AWX';
+state.slug = 'runtime-awx';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = false;
+state.manualVmName = 'runtime-awx';
+state.selectEnvironmentOnExecute = true;
+state.selectApmidOnExecute = true;
+state.awxEnabled = true;
+state.awxCredentialId = '77';
+state.awxGroupByEnvironment = false;
+state.awxGroupByApmid = false;
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+
+console.log(JSON.stringify(core.buildDeployment(state, data)));
+""")
+
+    assert result['select_environment_on_execute'] is True
+    assert result['select_apmid_on_execute'] is True
+    assert result['awx']['group_by_environment'] is True
+    assert result['awx']['group_by_apmid'] is True
+
+
 def test_wizard_payload_builds_automatic_awx_onboarding_after_cloud_init():
     result = run_core("""
 const state = core.stateDefaults();

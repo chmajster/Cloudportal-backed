@@ -842,6 +842,8 @@ def register_awx_host(context, runtime, workspace, *, timeout=600, step_id='regi
                     int(job_template_id),
                     hostname=context.deployment.name,
                     deployment_id=context.deployment.id,
+                    environment=facts.get('environment'),
+                    apmid=facts.get('apmid'),
                 )
                 launched_job_id = launch.get('job') or launch.get('id')
                 if not launched_job_id:

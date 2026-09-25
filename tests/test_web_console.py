@@ -542,6 +542,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "id: 'appliances'" in script
     assert "/appliances/ova-blueprints" in script
     assert "registerExtension('blueprint-wizard-core'" in script
+    assert 'Synchronizacja klasyfikacji z AWX' in script
+    assert 'Environment wybrany podczas tworzenia VM trafi do host vars AWX' in script
+    assert 'APMID wybrany podczas tworzenia VM trafi do host vars AWX' in script
+    assert "environment=facts.get('environment')" in script
+    assert "apmid=facts.get('apmid')" in script
     assert "registerExtension('blueprint-wizard-hostname'" in script
     assert "Pattern hostname z Generatora" in script
     assert "'hostname_scheme_picker'" in script

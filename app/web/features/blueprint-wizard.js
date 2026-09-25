@@ -763,6 +763,7 @@
             if (event.currentTarget.name === 'select_environment_on_execute') {
               if (state.selectEnvironmentOnExecute) {
                 state.environment = '';
+                state.awxGroupByEnvironment = true;
                 delete state.hostnameValues.env;
                 delete state.hostnameValues.environment;
               } else {
@@ -775,6 +776,7 @@
               }
             }
             if (event.currentTarget.name === 'select_apmid_on_execute') {
+              if (state.selectApmidOnExecute) state.awxGroupByApmid = true;
               state.apmid = state.selectApmidOnExecute
                 ? ''
                 : String(data.vmClassification?.apmids?.[0] || '');
