@@ -195,7 +195,7 @@ async function settingsView() {
   const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
   const checks = health?.checks || {};
   const workers = checks.workers || {};
-  const parallelLimit = Number(executionSettings.max_parallel_jobs || 1);
+  const parallelLimit = Number(executionSettings.max_parallel_jobs || 10);
   const onlineWorkers = Number(workers.online || 0);
   const effectiveParallelism = onlineWorkers > 0 ? Math.min(parallelLimit, onlineWorkers) : 0;
 
@@ -399,7 +399,7 @@ registerRoutedForm({
   label: 'Ustawienia',
 }, async () => {
   const execution = await api('/settings/execution');
-  executionParallelForm(Number(execution.max_parallel_jobs || 1));
+  executionParallelForm(Number(execution.max_parallel_jobs || 10));
 });
 registerRoutedForm({
   id: 'settings-blueprint-approval',
