@@ -57,7 +57,7 @@
         { label: 'Środowisko domyślne', value: row => row.default_environment },
         { label: 'Status', value: row => labels[row.status] },
         { label: 'Systemowy', value: row => row.is_system ? 'Tak — chroniony' : 'Nie' },
-      ], page.items, row => [action('Szczegóły', () => details(row.id))]),
+      ], page.items, row => [action('Szczegóły', () => navigate('/projects/' + encodeURIComponent(row.id)))]),
       controls(page, offset => { listOffset = offset; return projectsView(); }));
   }
 
@@ -70,8 +70,8 @@
     if (permits('projects.select') && globalThis.CPProjectContext) actions.push(action('Wybierz kontekst',
       () => globalThis.CPProjectContext.choose(item, () => current === generation && viewIs('projects'))));
     if (permits('projects.update')) actions.push(action('Edytuj', () => navigate('/projects/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'project'))));
-    if (permits('projects.members.read')) actions.push(action('Członkowie', () => members(id)));
-    if (permits('projects.audit.read')) actions.push(action('Audyt', () => history(id)));
+    if (permits('projects.members.read')) actions.push(action('Członkowie', () => navigate('/projects/' + encodeURIComponent(id) + '/members')));
+    if (permits('projects.audit.read')) actions.push(action('Audyt', () => navigate('/projects/' + encodeURIComponent(id) + '/audit')));
     if (!item.is_system && permits('projects.delete')) actions.push(action('Usuń pusty projekt', () => openModal({
       title: `Usuń projekt: ${item.name}`, danger: true, submitLabel: 'Usuń projekt',
       body: node('p', { text: 'Backend wymaga pustego projektu i zgodnej wersji. Historia audytu zostanie zachowana.' }),
@@ -149,15 +149,15 @@
     const [scope, page] = await Promise.all([api(`/projects/${id}/permissions`), api(`/projects/${id}/members?limit=${pageSize}&offset=${offset}`)]);
     if (current !== generation || !viewIs('projects')) return;
     const manager = scope.permissions.includes('projects.members.manage'), assigner = scope.permissions.includes('projects.roles.assign');
-    const actions = [action('Szczegóły projektu', () => details(id))];
-    if (manager) actions.push(action('Dodaj członka', () => memberForm(id, assigner), 'primary'));
+    const actions = [action('Szczegóły projektu', () => navigate('/projects/' + encodeURIComponent(id)))];
+    if (manager) actions.push(action('Dodaj członka', () => navigate('/projects/' + encodeURIComponent(id) + '/members/new'), 'primary'));
     openModal({ title: 'Członkowie projektu', wide: true, body: node('div', { class: 'stack' },
       node('div', { class: 'action-group' }, actions), table([
         { label: 'Użytkownik', value: row => row.username }, { label: 'ID', value: row => row.user_id },
         { label: 'Status', value: row => labels[row.status] }, { label: 'Role (ID)', value: row => row.role_ids.join(', ') || 'Brak' },
       ], page.items, row => {
         const actions = [];
-        if (assigner) actions.push(action('Role', () => memberForm(id, true, row)));
+        if (assigner) actions.push(action('Role', () => navigate('/projects/' + encodeURIComponent(id) + '/members/' + encodeURIComponent(row.user_id) + '/roles')));
         if (manager) {
           actions.push(action(row.status === 'active' ? 'Wyłącz' : 'Włącz', async () => {
             await api(`/projects/${id}/members/${row.user_id}`, { method: 'PUT', body: { status: row.status === 'active' ? 'disabled' : 'active', expected_version: row.version } });
@@ -167,7 +167,7 @@
             body: node('p', { text: 'Usuwa wyłącznie członkostwo w projekcie. Konto użytkownika i członkostwo tenanta pozostają.' }),
             onSubmit: async () => {
               await api(`/projects/${id}/members/${row.user_id}?expected_version=${row.version}`, { method: 'DELETE' });
-              await members(id); return false;
+              await navigate('/projects/' + encodeURIComponent(id) + '/members'); return false;
             },
           }), 'danger'));
         }
@@ -231,11 +231,62 @@
     const current = ++generation;
     const page = await api(`/projects/${id}/audit?limit=${pageSize}&offset=${offset}`);
     if (current !== generation || !viewIs('projects')) return;
-    openModal({ title: 'Audyt projektu', wide: true, body: node('div', { class: 'stack' }, action('Szczegóły projektu', () => details(id)),
+    openModal({ title: 'Audyt projektu', wide: true, body: node('div', { class: 'stack' }, action('Szczegóły projektu', () => navigate('/projects/' + encodeURIComponent(id))),
       table([{ label: 'Czas', value: row => formatDate(row.timestamp) }, { label: 'Operacja', value: row => row.action },
         { label: 'Użytkownik', value: row => row.user_id ?? 'System' }, { label: 'Obiekt', value: row => row.resource_id },
         { label: 'Wynik', value: row => row.result }], page.items), controls(page, next => history(id, next))) });
   }
+  registerRoutedForm({
+    id: 'projects-details',
+    pattern: /^\/projects\/(?<id>\d+)$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, match => details(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'projects-members',
+    pattern: /^\/projects\/(?<id>\d+)\/members$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, match => members(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'projects-audit',
+    pattern: /^\/projects\/(?<id>\d+)\/audit$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, match => history(Number(match.params.id)));
+  registerRoutedForm({
+    id: 'projects-member-create',
+    pattern: /^\/projects\/(?<id>\d+)\/members\/new$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, async match => {
+    const id = Number(match.params.id);
+    const scope = await api('/projects/' + id + '/permissions');
+    if (!scope.permissions.includes('projects.members.manage')) throw new Error('Brak uprawnienia do dodawania członków projektu.');
+    await memberForm(id, scope.permissions.includes('projects.roles.assign'));
+  });
+  registerRoutedForm({
+    id: 'projects-member-roles',
+    pattern: /^\/projects\/(?<id>\d+)\/members\/(?<userId>\d+)\/roles$/,
+    parent: 'projects',
+    permission: null,
+    label: 'Projekty',
+  }, async match => {
+    const id = Number(match.params.id);
+    const [scope, page] = await Promise.all([
+      api('/projects/' + id + '/permissions'),
+      api('/projects/' + id + '/members?limit=200&offset=0'),
+    ]);
+    if (!scope.permissions.includes('projects.roles.assign')) throw new Error('Brak uprawnienia do przypisywania ról projektowych.');
+    const member = page.items.find(row => Number(row.user_id) === Number(match.params.userId));
+    if (!member) throw new Error('Nie znaleziono członka projektu.');
+    await memberForm(id, true, member);
+  });
+
   registerRoutedForm({
     id: 'projects-create',
     pattern: /^\/projects\/new$/,
