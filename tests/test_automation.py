@@ -1,6 +1,35 @@
 import uuid
 
-from app.automation.service import runtime_selection_flag
+from app.automation.service import normalize_legacy_blueprint_template, runtime_selection_flag
+
+
+def test_legacy_clone_blueprint_is_not_validated_as_ova_appliance():
+    legacy = {
+        'template': 'proxmox-appliance',
+        'variables': {
+            'name': 'srv001',
+            'node': 'pve01',
+            'template_id': 9000,
+            'template_node': 'pve01',
+            'storage': 'local-lvm',
+            'network': 'vmbr0',
+            'disk': 40,
+        },
+    }
+    normalized = normalize_legacy_blueprint_template(legacy)
+    assert normalized['template'] == 'proxmox-vm'
+
+    appliance = {
+        'template': 'proxmox-appliance',
+        'variables': {
+            'name': 'ova01',
+            'node': 'pve01',
+            'storage': 'local-lvm',
+            'import_file_ids': ['local:import/appliance.qcow2'],
+        },
+    }
+    untouched = normalize_legacy_blueprint_template(appliance)
+    assert untouched['template'] == 'proxmox-appliance'
 
 
 def test_runtime_selection_flag_normalizes_legacy_json_values():
