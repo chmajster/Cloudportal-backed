@@ -35,52 +35,6 @@ const routes = [];
 const views = Object.create(null);
 const commands = Object.create(null);
 const extensions = new Set();
-const routedForms = [];
-
-function normalizeRoutedFormPath(value = location.hash.slice(1)) {
-  const raw = String(value || '').trim();
-  const withoutHash = raw.startsWith('#') ? raw.slice(1) : raw;
-  const withoutSurface = withoutHash.split('/page/')[0];
-  const [pathname, query = ''] = withoutSurface.split('?');
-  const normalizedPath = pathname.length > 1 && pathname.endsWith('/')
-    ? pathname.slice(0, -1)
-    : pathname || '/';
-  return { pathname: normalizedPath, query, fullPath: normalizedPath + (query ? '?' + query : '') };
-}
-
-function registerRoutedForm(route, handler) {
-  if (!route?.id || !(route.pattern instanceof RegExp) || !route.parent || typeof handler !== 'function') {
-    throw new Error('Invalid routed form registration');
-  }
-  if (routedForms.some(item => item.id === route.id)) throw new Error('Duplicate routed form: ' + route.id);
-  routedForms.push(Object.freeze({ ...route, handler }));
-}
-
-function matchRoutedForm(value = location.hash.slice(1)) {
-  const normalized = normalizeRoutedFormPath(value);
-  for (const route of routedForms) {
-    route.pattern.lastIndex = 0;
-    const match = route.pattern.exec(normalized.pathname);
-    if (!match) continue;
-    return {
-      route,
-      pathname: normalized.pathname,
-      query: normalized.query,
-      fullPath: normalized.fullPath,
-      params: { ...(match.groups || {}) },
-      searchParams: new URLSearchParams(normalized.query),
-    };
-  }
-  return null;
-}
-
-function routedFormParent() {
-  return matchRoutedForm()?.route?.parent || '';
-}
-
-function viewIs(viewId) {
-  return state.view === viewId || (state.view === 'routed-form' && routedFormParent() === viewId);
-}
 
 function registerView(route, handler) {
   if (!route?.id || typeof handler !== 'function') throw new Error('Invalid UI feature registration');
@@ -88,34 +42,6 @@ function registerView(route, handler) {
   routes.push(Object.freeze({ order: 1000, ...route }));
   routes.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   views[route.id] = handler;
-}
-async function routedFormView() {
-  const match = matchRoutedForm();
-  if (!match) {
-    await navigate('dashboard');
-    return;
-  }
-  if (match.route.permission && !allowed(match.route.permission)) {
-    throw new Error('Brak uprawnienia do otwarcia tego formularza.');
-  }
-  const useSurface = match.route.surface !== false;
-  if (useSurface && typeof window.prepareSemanticSurface === 'function') {
-    window.prepareSemanticSurface({
-      path: match.fullPath,
-      returnView: match.route.parent,
-      label: match.route.label || '',
-    });
-  }
-  try {
-    await match.route.handler(match);
-    if (useSurface && typeof window.modalSurfaceOpen === 'function' && !window.modalSurfaceOpen()) {
-      if (typeof window.clearSemanticSurface === 'function') window.clearSemanticSurface();
-      await navigate(match.route.parent);
-    }
-  } catch (error) {
-    if (typeof window.clearSemanticSurface === 'function') window.clearSemanticSurface();
-    throw error;
-  }
 }
 function registerCommand(name, handler) {
   if (!name || typeof handler !== 'function') throw new Error('Invalid UI command registration');
@@ -1153,7 +1079,11 @@ function navigationRouteVisible(route) {
     && (typeof window.uiNavigationVisible !== 'function' || window.uiNavigationVisible(route));
 }
 function routeNavigationParent(route) {
-  if (route?.id === 'routed-form') return routedFormParent() || route.navigationParent || '';
+  if (route?.id === 'routed-form') {
+    return (typeof window.routedFormParent === 'function' ? window.routedFormParent() : '')
+      || route.navigationParent
+      || '';
+  }
   return route?.navigationParent || '';
 }
 function renderNavigation() {
@@ -1184,7 +1114,9 @@ async function navigate(view) {
     ? window.uiResolveView(requestedView)
     : requestedView;
   if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
-  const requestedRoutedForm = matchRoutedForm(requestedView);
+  const requestedRoutedForm = typeof window.matchRoutedForm === 'function'
+    ? window.matchRoutedForm(requestedView)
+    : null;
   const available = routes.filter(item =>
     allowed(item.permission)
     && (!state.identity.user.must_change_password
@@ -1222,14 +1154,6 @@ async function navigate(view) {
   }
   dom.content.focus();
 }
-registerView({
-  id: 'routed-form',
-  label: 'Formularz',
-  permission: null,
-  order: 998,
-  navigation: false,
-}, routedFormView);
-
 function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
   const rows = Object.entries(value || {}).map(([key, item]) => ({ key, value: item }));
   dom.modalTitle.textContent = title;
