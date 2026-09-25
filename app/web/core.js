@@ -103,6 +103,11 @@ async function routedFormView() {
   }
   try {
     await match.route.handler(match);
+    if (typeof window.modalSurfaceOpen === 'function'
+        && !window.modalSurfaceOpen()
+        && typeof window.clearSemanticSurface === 'function') {
+      window.clearSemanticSurface();
+    }
   } catch (error) {
     if (typeof window.clearSemanticSurface === 'function') window.clearSemanticSurface();
     throw error;
