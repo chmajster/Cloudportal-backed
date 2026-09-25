@@ -364,11 +364,20 @@
             variables: { ...(state.ansibleVariables || {}) },
           }] : []);
       if (runs.length) {
-        deployment.ansible_runs = runs.map(run => ({
-          playbook: run.playbook,
-          credentials_id: Number(run.credentials_id),
-          variables: { ...(run.variables || {}) },
-        }));
+        deployment.ansible_runs = runs.map(run => {
+          const variables = { ...(run.variables || {}) };
+          const playbook = (data.playbooks || []).find(item => item.id === run.playbook);
+          for (const required of (playbook?.required_variables || [])) {
+            if (required === 'hostname' && variables.hostname === undefined && state.hostnameEnabled) {
+              variables.hostname = '{{ hostname }}';
+            }
+          }
+          return {
+            playbook: run.playbook,
+            credentials_id: Number(run.credentials_id),
+            variables,
+          };
+        });
         deployment.ansible = { ...deployment.ansible_runs[0], variables: { ...deployment.ansible_runs[0].variables } };
       }
     }
