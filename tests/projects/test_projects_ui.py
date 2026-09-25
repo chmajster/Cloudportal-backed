@@ -19,6 +19,7 @@ const context = {
  button: (label, click, kind, disabled) => element('button', {label,click,kind,disabled}), toast(){},
  dom: {content: {replaceChildren: (...items) => rendered.push(items)}},
  registerView: (route, cb) => {assert.equal(route.permission, null); handlers[route.id] = cb;},
+ registerRoutedForm: () => {},
  api: async path => {
    calls.push(path);
    if (path.startsWith('/project-context/creation-scopes')) return {items:[], total:0};
