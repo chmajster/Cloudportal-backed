@@ -38,6 +38,77 @@
       node('strong', { text: String(value ?? '—') }));
   }
 
-  parts.ui = { errorText, summaryRow, workflowVisual };
+  function dualListGroup(title, name, rows, selected, description = '') {
+    const picked = new Set((selected || []).map(value => String(value)));
+    const labelFor = row => {
+      const primary = row.name || row.username || ('#' + row.id);
+      return row.email ? primary + ' — ' + row.email : primary;
+    };
+    const sorted = rows.slice().sort((a, b) => labelFor(a).localeCompare(labelFor(b), 'pl'));
+    const availableSelect = node('select', {
+      class: 'blueprint-wizard-dual-select',
+      multiple: true,
+      size: 8,
+      'aria-label': title + ' — dostępne',
+    });
+    const selectedSelect = node('select', {
+      class: 'blueprint-wizard-dual-select',
+      multiple: true,
+      size: 8,
+      'aria-label': title + ' — wybrane',
+      'data-dual-list-name': name,
+    });
+
+    const optionFor = row => node('option', {
+      value: String(row.id),
+      text: labelFor(row),
+      title: labelFor(row),
+    });
+    const refill = () => {
+      const current = new Set([...selectedSelect.options].map(option => option.value));
+      availableSelect.replaceChildren(...sorted.filter(row => !current.has(String(row.id))).map(optionFor));
+      selectedSelect.replaceChildren(...sorted.filter(row => current.has(String(row.id))).map(optionFor));
+    };
+    sorted.forEach(row => (picked.has(String(row.id)) ? selectedSelect : availableSelect).append(optionFor(row)));
+
+    const move = (source, target, all = false) => {
+      const moving = [...source.options].filter(option => all || option.selected).map(option => option.value);
+      if (!moving.length) return;
+      const targetValues = new Set([...target.options].map(option => option.value));
+      moving.forEach(value => targetValues.add(value));
+      const selectedValues = target === selectedSelect
+        ? targetValues
+        : new Set([...selectedSelect.options].map(option => option.value).filter(value => !moving.includes(value)));
+      selectedSelect.replaceChildren(...sorted.filter(row => selectedValues.has(String(row.id))).map(optionFor));
+      refill();
+      selectedSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    availableSelect.addEventListener('dblclick', () => move(availableSelect, selectedSelect));
+    selectedSelect.addEventListener('dblclick', () => move(selectedSelect, availableSelect));
+
+    const controls = node('div', { class: 'blueprint-wizard-dual-controls', 'aria-label': 'Przenoszenie pozycji' },
+      node('button', { type: 'button', class: 'button ghost', title: 'Dodaj zaznaczone', 'aria-label': 'Dodaj zaznaczone', onClick: () => move(availableSelect, selectedSelect) }, '›'),
+      node('button', { type: 'button', class: 'button ghost', title: 'Dodaj wszystkie', 'aria-label': 'Dodaj wszystkie', onClick: () => move(availableSelect, selectedSelect, true) }, '»'),
+      node('button', { type: 'button', class: 'button ghost', title: 'Usuń zaznaczone', 'aria-label': 'Usuń zaznaczone', onClick: () => move(selectedSelect, availableSelect) }, '‹'),
+      node('button', { type: 'button', class: 'button ghost', title: 'Usuń wszystkie', 'aria-label': 'Usuń wszystkie', onClick: () => move(selectedSelect, availableSelect, true) }, '«'));
+
+    const body = node('div', { class: 'blueprint-wizard-dual-list' },
+      node('div', { class: 'blueprint-wizard-dual-column' },
+        node('span', { class: 'blueprint-wizard-dual-title', text: 'Dostępne' }),
+        availableSelect),
+      controls,
+      node('div', { class: 'blueprint-wizard-dual-column' },
+        node('span', { class: 'blueprint-wizard-dual-title', text: 'Wybrane' }),
+        selectedSelect));
+
+    if (!rows.length) body.replaceChildren(node('span', { class: 'muted', text: 'Brak dostępnych pozycji.' }));
+    return node('fieldset', { class: 'blueprint-wizard-dual-fieldset' },
+      node('legend', { text: title }),
+      description ? node('p', { class: 'muted', text: description }) : null,
+      body);
+  }
+
+  parts.ui = { errorText, summaryRow, workflowVisual, dualListGroup };
   registerExtension('blueprint-wizard-ui', () => {});
 })();
