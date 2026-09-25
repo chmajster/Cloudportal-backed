@@ -115,12 +115,55 @@ def test_blueprint_creation_scopes_are_rbac_filtered_and_admin_sees_all(system):
     assert 'blueprints.create' in row['permissions']
     assert 'blueprints.read' in row['permissions']
 
+    readable = client.get(
+        '/api/v1/blueprints/creation-scopes?permission=blueprints.read&limit=200',
+        headers=user_headers,
+    )
+    assert readable.status_code == 200, readable.text
+    assert [row['project_id'] for row in readable.json()['items']] == [alpha['id']]
+
     with session() as db:
         db.get(ProjectMembership, (alpha['id'], user['id'])).status = 'disabled'
         db.commit()
     revoked = client.get('/api/v1/blueprints/creation-scopes?limit=200', headers=user_headers)
     assert revoked.status_code == 200, revoked.text
     assert revoked.json()['items'] == []
+
+
+
+def test_blueprint_slug_is_unique_per_project_not_globally(system):
+    client, headers, _ = system
+    alpha = project(client, headers, 'bp-slug-alpha')
+    beta = project(client, headers, 'bp-slug-beta')
+    credential, provider = infrastructure(client, headers, 'PVE-BP-SLUG')
+    assign(client, headers, alpha, credential, provider)
+    assign(client, headers, beta, credential, provider)
+
+    payload = {
+        'slug': 'ubuntu-server',
+        'name': 'Ubuntu Server',
+        'deployment': {
+            'name': 'ubuntu-server',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                'name': 'ubuntu-server',
+                'node': 'pve',
+                'template_id': 9000,
+                'storage': 'local-lvm',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+
+    first = client.post('/api/v1/blueprints', headers=scope_headers(headers, alpha), json=payload)
+    second = client.post('/api/v1/blueprints', headers=scope_headers(headers, beta), json=payload)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+
+    duplicate = client.post('/api/v1/blueprints', headers=scope_headers(headers, alpha), json=payload)
+    assert duplicate.status_code == 409, duplicate.text
 
 
 def test_scoped_grants_are_not_global_and_assignments_are_explicit(system):
