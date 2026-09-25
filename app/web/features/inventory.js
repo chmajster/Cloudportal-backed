@@ -493,12 +493,16 @@ async function vmAuditContent(item) {
 }
 
 async function showVmDetailsPage(item, initialTab = 'overview', parentView = null) {
-  const returnView = parentView || (state.view === 'my-resources' ? 'my-resources' : 'inventory');
+  const returnView = parentView || (viewIs('my-resources') ? 'my-resources' : 'inventory');
   const returnLabel = 'Moje zasoby';
+  const routedDetails = state.view === 'routed-form'
+    && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
     const status = await api(`${vmBase(item)}/status`);
-    state.view = returnView;
-    location.hash = returnView;
+    if (!routedDetails) {
+      state.view = returnView;
+      location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(returnView) : returnView;
+    }
     dom.pageEyebrow.textContent = `${returnLabel} / ${item.node || 'Proxmox'} / VMID ${item.vm_id}`;
     dom.pageTitle.textContent = status.name || item.name || `VM ${item.vm_id}`;
     dom.navigation.querySelectorAll('.nav-link').forEach(link => link.classList.toggle('active', link.dataset.route === returnView));
@@ -517,6 +521,13 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
 
     const renderTab = async id => {
       activeTab = id;
+      if (routedDetails) {
+        history.replaceState(
+          history.state,
+          '',
+          '#/resources/vm/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(id)
+        );
+      }
       tabBar.querySelectorAll('.vm-tab').forEach(tab => {
         const active = tab.dataset.tab === id;
         tab.classList.toggle('active', active);
@@ -583,7 +594,7 @@ async function vmPower(item, action) {
     const result = await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
     await showProxmoxTask(item, result, labels[action] || 'Operacja zasilania');
   } catch (error) {
-    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+    await handleVmProviderFailure(item, error, viewIs('my-resources') ? 'my-resources' : 'inventory');
   }
 }
 
@@ -789,7 +800,7 @@ async function showVmConsole(item) {
   } catch (error) {
     state.consoleRfb = null;
     if (typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open) closeModal();
-    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+    await handleVmProviderFailure(item, error, viewIs('my-resources') ? 'my-resources' : 'inventory');
   }
 }
 
@@ -820,7 +831,7 @@ async function configureVm(item) {
       return false;
     }});
   } catch (error) {
-    await handleVmProviderFailure(item, error, state.view === 'my-resources' ? 'my-resources' : 'inventory');
+    await handleVmProviderFailure(item, error, viewIs('my-resources') ? 'my-resources' : 'inventory');
   }
 }
 
