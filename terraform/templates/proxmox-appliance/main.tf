@@ -34,9 +34,12 @@ resource "proxmox_virtual_environment_vm" "vm" {
     }
   }
 
-  network_device {
-    bridge  = var.network
-    vlan_id = var.vlan_id
+  dynamic "network_device" {
+    for_each = { for index in range(var.network_count) : index => index }
+    content {
+      bridge  = var.network
+      vlan_id = var.vlan_id
+    }
   }
 
   agent {
