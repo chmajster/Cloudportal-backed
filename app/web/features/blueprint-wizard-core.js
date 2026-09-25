@@ -119,9 +119,25 @@
     const type = schemaType(spec);
     if (type === 'integer') return Number.parseInt(raw, 10);
     if (type === 'number') return Number(raw);
-    if (type === 'boolean') return Boolean(raw);
+    if (type === 'boolean') {
+      if (typeof raw === 'boolean') return raw;
+      return ['true', '1', 'yes', 'tak', 'on'].includes(String(raw ?? '').trim().toLowerCase());
+    }
     if (type === 'array') return String(raw || '').split(/[,\n]+/).map(value => value.trim()).filter(Boolean);
     return String(raw ?? '');
+  }
+
+  function preferredTerraformTemplate(templates, providerType, currentId = '') {
+    const matching = (templates || []).filter(value => value.provider === providerType);
+    if (providerType === 'proxmox') {
+      // The standard Blueprint wizard creates clone-based VMs. OVA/appliance
+      // Blueprints have a separate import flow and must never be selected here
+      // just because "proxmox-appliance" sorts before "proxmox-vm".
+      return matching.find(value => value.id === 'proxmox-vm') || null;
+    }
+    return matching.find(value => String(value.id) === String(currentId || ''))
+      || matching[0]
+      || null;
   }
 
   function defaultGenericVariables(template) {
@@ -192,6 +208,7 @@
       newSchemePattern: '{location}-{env}-{role}-{number}',
       newSchemeNext: 1,
       newSchemePadding: 3,
+      pendingHostnameScheme: null,
       ipMode: 'dhcp',
       ipamPoolId: '',
       ipv4Address: '',
@@ -450,7 +467,9 @@
       executor: state.executor,
       hostname_values: hostnameValues,
     };
-    if (state.hostnameEnabled && state.hostnameSchemeId) deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
+    if (state.hostnameEnabled && state.hostnameSchemeId && state.hostnameSchemeId !== '__pending__') {
+      deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
+    }
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
     if (state.guestCredentialId) deployment.guest_credential_id = Number(state.guestCredentialId);
     if (state.templateGuestCredentialId) {
@@ -562,6 +581,7 @@
     workflowLabel,
     schemaType,
     coerceSchemaValue,
+    preferredTerraformTemplate,
     defaultGenericVariables,
     scopeHeaders,
     requiredTemplateVariables,
