@@ -184,7 +184,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "location.hash.slice(1) || 'deployments'" in core
     assert 'const visibleAvailable = available' in core
     assert '.filter(navigationRouteVisible)' in script
-    assert 'currentRoute?.navigationParent === route.id' in core
+    assert 'routeNavigationParent(currentRoute) === route.id' in core
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
