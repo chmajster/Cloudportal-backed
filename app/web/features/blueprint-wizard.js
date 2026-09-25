@@ -110,6 +110,7 @@
       ]);
 
       const state = parts.core.stateDefaults();
+      const editingItem = options.item || null;
       const scopeData = parts.scope.prepare(creationScopes, projectContext, state);
       const data = {
         tenants: scopeData.tenants,
@@ -1312,14 +1313,14 @@
         bodyRoot.replaceChildren(progress);
         try {
           progress.querySelector('span').textContent = 'Zapisywanie definicji i workflow…';
-          const created = await api('/blueprints', {
-            method: 'POST',
+          const created = await api(editingItem ? `/blueprints/${editingItem.id}` : '/blueprints', {
+            method: editingItem ? 'PUT' : 'POST',
             body: payload,
             headers: parts.core.scopeHeaders(state),
           });
           progress.replaceChildren(
             node('span', { class: 'blueprint-wizard-success-icon' }, appIcon('check')),
-            node('h3', { text: 'Blueprint został utworzony i jest gotowy do użycia.' }),
+            node('h3', { text: editingItem ? 'Blueprint został zaktualizowany i zapisany jako nowa wersja.' : 'Blueprint został utworzony i jest gotowy do użycia.' }),
             node('p', { class: 'muted', text: created.name + ' · v' + created.version }),
             node('div', { class: 'blueprint-wizard-inline-actions' },
               button('Zamknij', () => navigate('blueprints'), 'primary'),
@@ -1355,7 +1356,7 @@
             render();
           }, 'primary'));
         } else {
-          actions.push(button('Utwórz Blueprint', submitBlueprint, 'primary'));
+          actions.push(button(editingItem ? 'Zapisz nową wersję' : 'Utwórz Blueprint', submitBlueprint, 'primary'));
         }
         footerRoot.replaceChildren(...actions);
       }
@@ -1371,8 +1372,8 @@
       }
 
       dom.modal.classList.add('modal-wide');
-      dom.modalTitle.textContent = 'Nowy Blueprint';
-      dom.modalEyebrow.textContent = 'Kreator krok po kroku';
+      dom.modalTitle.textContent = editingItem ? ('Edytuj Blueprint · ' + editingItem.name) : 'Nowy Blueprint';
+      dom.modalEyebrow.textContent = editingItem ? 'Kreator krok po kroku · edycja' : 'Kreator krok po kroku';
       navRoot = node('div', { class: 'blueprint-wizard-nav-host' });
       bodyRoot = node('div', { class: 'blueprint-wizard-body' });
       const shell = node('div', { class: 'blueprint-wizard-shell' }, navRoot, bodyRoot);
@@ -1381,7 +1382,14 @@
       if (!dom.modal.open) dom.modal.showModal();
 
       blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, discoverProvider, render });
-      try { await blueprintScope.loadResources(true); } catch (error) {
+      try {
+        await blueprintScope.loadResources(!editingItem);
+        if (editingItem) {
+          parts.core.hydrateStateFromBlueprint(state, editingItem, data);
+          await discoverProvider(state.providerId);
+          state.maxStep = STEPS.length - 1;
+        }
+      } catch (error) {
         state.providerId = '';
         state.errors = { project_id: error.message };
       }
