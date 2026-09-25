@@ -122,6 +122,64 @@ async function testLdap() {
   }
 }
 
+function executionParallelForm(parallelLimit) {
+  const body = node('div', { class: 'form-grid' },
+    field('Maksymalna liczba równoległych zadań', 'max_parallel_jobs', {
+      type: 'number',
+      min: 1,
+      max: 64,
+      required: true,
+      value: parallelLimit,
+      help: 'Zakres 1–64. Dispatcher nie przekaże nowych zadań ponad ten limit. Rzeczywista równoległość nie przekroczy liczby workerów online.',
+    }),
+    node('p', {
+      class: 'muted wide',
+      text: 'Zmiana działa bez restartu. Zadania już uruchomione lub przekazane do workerów nie są przerywane; nowy limit obowiązuje kolejne uruchomienia.',
+    }));
+  openModal({
+    title: 'Równoległość wykonywania zadań',
+    eyebrow: 'System · kolejka wykonawcza',
+    body,
+    submitLabel: 'Zapisz limit',
+    onSubmit: async data => {
+      await api('/settings/execution', {
+        method: 'PUT',
+        body: { max_parallel_jobs: Number(data.get('max_parallel_jobs')) },
+      });
+      toast('Limit równoległych zadań został zapisany.');
+      navigate('settings');
+    },
+  });
+}
+
+function blueprintApprovalTimeoutForm(blueprintSettings) {
+  const body = field('Timeout approval (h)', 'approval_timeout_hours', {
+    type: 'number',
+    min: 1,
+    max: 720,
+    required: true,
+    value: blueprintSettings.approval_timeout_hours || 48,
+    help: 'Po tym czasie ręczny request approval zostanie automatycznie anulowany.',
+  });
+  openModal({
+    title: 'Timeout approval Blueprintów',
+    eyebrow: 'Globalna polityka domyślna Blueprintów',
+    body,
+    submitLabel: 'Zapisz timeout',
+    onSubmit: async data => {
+      await api('/settings/blueprints', {
+        method: 'PUT',
+        body: {
+          auto_approve_for_executors: blueprintSettings.auto_approve_for_executors,
+          approval_timeout_hours: Number(data.get('approval_timeout_hours')),
+        },
+      });
+      toast('Timeout approval zapisany.');
+      navigate('settings');
+    },
+  });
+}
+
 async function settingsView() {
   const [config, health, updateSettings, blueprintSettings, executionSettings] = await Promise.all([
     api('/settings/ldap'),
@@ -190,35 +248,7 @@ async function settingsView() {
       settingsValue('Efektywny limit', workers.online !== undefined ? String(effectiveParallelism) : '—')),
     node('div', { class: 'settings-card-actions' },
       button('Odśwież stan', () => settingsView()),
-      allowed('settings.update') ? button('Zmień równoległość', () => {
-        const body = node('div', { class: 'form-grid' },
-          field('Maksymalna liczba równoległych zadań', 'max_parallel_jobs', {
-            type: 'number',
-            min: 1,
-            max: 64,
-            required: true,
-            value: parallelLimit,
-            help: 'Zakres 1–64. Dispatcher nie przekaże nowych zadań ponad ten limit. Rzeczywista równoległość nie przekroczy liczby workerów online.',
-          }),
-          node('p', {
-            class: 'muted wide',
-            text: 'Zmiana działa bez restartu. Zadania już uruchomione lub przekazane do workerów nie są przerywane; nowy limit obowiązuje kolejne uruchomienia.',
-          }));
-        openModal({
-          title: 'Równoległość wykonywania zadań',
-          eyebrow: 'System · kolejka wykonawcza',
-          body,
-          submitLabel: 'Zapisz limit',
-          onSubmit: async data => {
-            await api('/settings/execution', {
-              method: 'PUT',
-              body: { max_parallel_jobs: Number(data.get('max_parallel_jobs')) },
-            });
-            toast('Limit równoległych zadań został zapisany.');
-            navigate('settings');
-          },
-        });
-      }, 'primary') : null)
+      allowed('settings.update') ? button('Zmień równoległość', () => navigate('/admin/settings/execution'), 'primary') : null)
   );
 
   const updates = settingsCard(
@@ -274,33 +304,7 @@ async function settingsView() {
             },
             blueprintSettings.auto_approve_for_executors ? 'danger' : 'primary'
           ),
-          button('Zmień timeout', () => {
-            const body = field('Timeout approval (h)', 'approval_timeout_hours', {
-              type: 'number',
-              min: 1,
-              max: 720,
-              required: true,
-              value: blueprintSettings.approval_timeout_hours || 48,
-              help: 'Po tym czasie ręczny request approval zostanie automatycznie anulowany.',
-            });
-            openModal({
-              title: 'Timeout approval Blueprintów',
-              eyebrow: 'Globalna polityka domyślna Blueprintów',
-              body,
-              submitLabel: 'Zapisz timeout',
-              onSubmit: async data => {
-                await api('/settings/blueprints', {
-                  method: 'PUT',
-                  body: {
-                    auto_approve_for_executors: blueprintSettings.auto_approve_for_executors,
-                    approval_timeout_hours: Number(data.get('approval_timeout_hours')),
-                  },
-                });
-                toast('Timeout approval zapisany.');
-                navigate('settings');
-              },
-            });
-          })
+          button('Zmień timeout', () => navigate('/admin/settings/blueprints/approval'))
         )
       : null
   );
@@ -321,7 +325,7 @@ async function settingsView() {
   const ldapActions = [];
   if (allowed('settings.update')) {
     ldapActions.push(button('Testuj połączenie', testLdap));
-    ldapActions.push(button('Konfiguruj LDAP', () => ldapSettingsForm(config), 'primary'));
+    ldapActions.push(button('Konfiguruj LDAP', () => navigate('/admin/settings/ldap'), 'primary'));
   }
 
   const ldapTls = config.url?.startsWith('ldaps://') ? 'LDAPS' : (config.start_tls ? 'StartTLS' : 'Bez TLS');
@@ -380,5 +384,29 @@ async function settingsView() {
   );
 }
 
+registerRoutedForm({
+  id: 'settings-ldap',
+  pattern: /^\/admin\/settings\/ldap$/,
+  parent: 'settings',
+  permission: 'settings.update',
+  label: 'Ustawienia',
+}, async () => ldapSettingsForm(await api('/settings/ldap')));
+registerRoutedForm({
+  id: 'settings-execution',
+  pattern: /^\/admin\/settings\/execution$/,
+  parent: 'settings',
+  permission: 'settings.update',
+  label: 'Ustawienia',
+}, async () => {
+  const execution = await api('/settings/execution');
+  executionParallelForm(Number(execution.max_parallel_jobs || 1));
+});
+registerRoutedForm({
+  id: 'settings-blueprint-approval',
+  pattern: /^\/admin\/settings\/blueprints\/approval$/,
+  parent: 'settings',
+  permission: 'settings.update',
+  label: 'Ustawienia',
+}, async () => blueprintApprovalTimeoutForm(await api('/settings/blueprints')));
 registerView({ id: 'settings', label: 'Ustawienia', icon: 'S', permission: 'settings.read', order: 150 }, settingsView);
 })();
