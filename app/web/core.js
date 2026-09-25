@@ -98,7 +98,8 @@ async function routedFormView() {
   if (match.route.permission && !allowed(match.route.permission)) {
     throw new Error('Brak uprawnienia do otwarcia tego formularza.');
   }
-  if (typeof window.prepareSemanticSurface === 'function') {
+  const useSurface = match.route.surface !== false;
+  if (useSurface && typeof window.prepareSemanticSurface === 'function') {
     window.prepareSemanticSurface({
       path: match.fullPath,
       returnView: match.route.parent,
@@ -107,7 +108,7 @@ async function routedFormView() {
   }
   try {
     await match.route.handler(match);
-    if (typeof window.modalSurfaceOpen === 'function' && !window.modalSurfaceOpen()) {
+    if (useSurface && typeof window.modalSurfaceOpen === 'function' && !window.modalSurfaceOpen()) {
       if (typeof window.clearSemanticSurface === 'function') window.clearSemanticSurface();
       await navigate(match.route.parent);
     }
