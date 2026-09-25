@@ -76,7 +76,9 @@
 
     function refreshManagerRoles(resetSelection = false) {
       const dedicatedElsewhere = new Set(
-        data.blueprints.flatMap(value => value.manager_role_ids || []).map(Number)
+        data.blueprints
+          .filter(value => Number(value.id) !== Number(options.item?.id || 0))
+          .flatMap(value => value.manager_role_ids || []).map(Number)
       );
       data.managerRoles = data.roles.filter(role =>
         !dedicatedElsewhere.has(Number(role.id))
