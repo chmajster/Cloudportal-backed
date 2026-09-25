@@ -38,7 +38,7 @@ async function inventoryView() {
 
 function inventoryVmActions(item) {
   const actions = [];
-  if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('Szczegóły', () => showVmDetailsPage(item), 'primary'));
+  if (allowed('vms.read') && item.lifecycle_status === 'active') actions.push(button('Szczegóły', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/overview'), 'primary'));
   const canRecreate = item.lifecycle_status === 'active'
     && item.management_mode === 'terraform'
     && item.deployment_id
@@ -923,6 +923,15 @@ async function routedVmItem(match) {
 }
 
 registerRoutedForm({
+  id: 'inventory-vm-details',
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/(?<tab>overview|hardware|snapshots|backups|audit)$/,
+  parent: 'my-resources',
+  permission: 'vms.read',
+  label: 'Moje zasoby',
+  surface: false,
+}, async match => showVmDetailsPage(await routedVmItem(match), match.params.tab, 'my-resources'));
+
+registerRoutedForm({
   id: 'inventory-import',
   pattern: /^\/resources\/import$/,
   parent: 'my-resources',
@@ -986,7 +995,7 @@ registerRoutedForm({
   label: 'Moje zasoby',
 }, async match => cloneVm(await routedVmItem(match)));
 
-registerCommand('inventory.openVm', showVmDetailsPage);
+registerCommand('inventory.openVm', (item, initialTab = 'overview') => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(initialTab || 'overview')));
 registerCommand('inventory.consoleVm', item => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'));
 registerCommand('inventory.recreateVm', recreateVm);
 registerView({ id: 'inventory', label: 'Moje zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
