@@ -273,7 +273,9 @@ async function appliancesView() {
       { label: 'Status', value: item => badge(item.is_active ? 'Aktywny' : 'Nieaktywny', item.is_active ? 'ok' : 'warning') },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], appliances, item => [
-      button('Uruchom', () => navigate('deployments'), 'primary'),
+      hasCommand('blueprints.execute')
+        ? button('Utwórz VM', () => runCommand('blueprints.execute', item), 'primary')
+        : button('Produkty', () => navigate('deployments'), 'primary'),
       button('Blueprint', () => navigate('blueprints')),
     ]) : node('div', { class: 'empty-state' },
       node('strong', { text: 'Brak appliance OVA' }),
