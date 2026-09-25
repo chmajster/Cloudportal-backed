@@ -62,7 +62,7 @@ Automatyczne aktualizacje (cron, istniejąca instalacja):
 Konfiguracja:
   --host HOST                 Host/DNS backendu.
   --port PORT                 Port HTTPS, domyślnie 8443.
-  --workers N                 Liczba workerów 1-64.
+  --workers N                 Liczba workerów 1-64; domyślnie 10.
   --enable-backups            Włącz codzienny backup PostgreSQL.
   --disable-backups           Wyłącz timer backupu.
   --backup-retention-days N   Retencja backupów, domyślnie 14 dni.
@@ -122,8 +122,10 @@ initial_argc=$#
 ref='main'
 backend_host=''
 backend_port=''
+default_workers=10
 workers=''
-github_token_file=''
+workers_explicit=0
+github_token_file='
 github_config=''
 cert_file=''
 cert_key=''
@@ -164,7 +166,7 @@ while (($#)); do
     --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days|--auto-update-interval|--recovery-username|--recovery-email|--recovery-project|--recovery-password-file)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing value for $1" >&2; exit 2; }
       case "$1" in
-        --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2;; --ref) ref=$2;;
+        --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2; workers_explicit=1;; --ref) ref=$2;;
         --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2;;
         --auto-update-interval) auto_update_interval=$2; auto_update_interval_explicit=1;;
         --recovery-username) recovery_username=$2;; --recovery-email) recovery_email=$2;; --recovery-project) recovery_project=$2;; --recovery-password-file) recovery_password_file=$2;;
@@ -1164,7 +1166,7 @@ docker_rollback_candidate() {
   fi
 
   if [[ -n "$previous_release" && -f "$previous_release/docker-compose.yml" && -r "$docker_env" ]]; then
-    docker_compose_for "$previous_release" "$docker_env" up -d --remove-orphans --scale "worker=${previous_workers:-1}" || true
+    docker_compose_for "$previous_release" "$docker_env" up -d --remove-orphans --scale "worker=${previous_workers:-$default_workers}" || true
     if ((tls_changed)); then
       docker_compose_for "$previous_release" "$docker_env" restart proxy || true
     fi
@@ -1210,7 +1212,7 @@ docker_status_check() {
     public_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
     expected_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
     public_port=${public_port:-8443}
-    expected_workers=${expected_workers:-1}
+    expected_workers=${expected_workers:-$default_workers}
     ui_info "Endpoint HTTPS: https://${public_host:-localhost}:$public_port"
     ui_info "Oczekiwana liczba workerów: $expected_workers"
   else
@@ -1472,7 +1474,7 @@ docker_repair() {
 
   expected_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
   public_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
-  expected_workers=${expected_workers:-1}
+  expected_workers=${expected_workers:-$default_workers}
   public_port=${public_port:-8443}
   docker_valid_workers "$expected_workers" || {
     ui_fail "Nieprawidłowa wartość CP_WORKER_COUNT: ${expected_workers:-brak}"
@@ -1980,7 +1982,14 @@ docker_install() {
   fi
   backend_host=${backend_host:-${previous_docker_host:-$(hostname -f 2>/dev/null || hostname)}}
   backend_port=${backend_port:-${previous_docker_port:-8443}}
-  workers=${workers:-${previous_docker_workers:-1}}
+  if [[ -z "$workers" ]]; then
+    if ((update_in_progress)) && [[ "${previous_docker_workers:-}" == 1 ]]; then
+      workers=$default_workers
+      ui_info "Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers."
+    else
+      workers=${previous_docker_workers:-$default_workers}
+    fi
+  fi
 
   docker_valid_host "$backend_host" || { ui_fail 'Nieprawidłowy host. Użyj nazwy DNS lub adresu bez schematu URL.'; exit 2; }
   docker_valid_port "$backend_port" || { ui_fail 'Nieprawidłowy port. Dozwolone 1-65535 z wyjątkiem 6389, 8765 i 8766.'; exit 2; }
@@ -2316,7 +2325,14 @@ if [[ -r "$config/backend.env" ]]; then
   previous_backup_schedule=$(sed -n 's/^CP_BACKUP_SCHEDULE_ENABLED=//p' "$config/backend.env")
   previous_backup_retention_days=$(sed -n 's/^CP_BACKUP_RETENTION_DAYS=//p' "$config/backend.env")
 fi
-workers=${workers:-${previous_workers:-1}}
+if [[ -z "$workers" ]]; then
+  if ((update_in_progress)) && [[ "${previous_workers:-}" == 1 ]]; then
+    workers=$default_workers
+    ui_info "Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers."
+  else
+    workers=${previous_workers:-$default_workers}
+  fi
+fi
 backup_schedule=${backup_schedule:-${previous_backup_schedule:-false}}
 backup_retention_days=${backup_retention_days:-${previous_backup_retention_days:-14}}
 valid_host() {
