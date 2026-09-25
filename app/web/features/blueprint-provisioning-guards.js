@@ -116,8 +116,8 @@
     return [...required].sort();
   }
 
-  function missingExecutionPermissions(item = {}) {
-    return requiredExecutionPermissions(item).filter(permission => !allowed(permission));
+  function missingExecutionPermissions(item = {}, permissionCheck = allowed) {
+    return requiredExecutionPermissions(item).filter(permission => !permissionCheck(permission));
   }
 
   function workflowNeedsTags(manualTags = [], deployment = {}) {
@@ -130,8 +130,8 @@
     );
   }
 
-  function executionControl(item, onExecute) {
-    const missing = missingExecutionPermissions(item);
+  function executionControl(item, onExecute, permissionCheck = allowed) {
+    const missing = missingExecutionPermissions(item, permissionCheck);
     if (!item.is_active || !item.visibility?.backend) return null;
     if (!missing.length) return button('Uruchom', onExecute, 'primary');
     return node('span', {
