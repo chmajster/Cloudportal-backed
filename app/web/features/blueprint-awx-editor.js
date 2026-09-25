@@ -3,6 +3,8 @@
 (() => {
 async function create(deployment = {}, credentials = [], workflow = [], onChange = () => {}) {
   const config = deployment?.awx || {};
+  const runtimeEnvironmentSync = deployment?.select_environment_on_execute === true;
+  const runtimeApmidSync = deployment?.select_apmid_on_execute === true;
   const awxStep = (workflow || []).find(step => step.type === 'register_awx') || null;
   const awxCredentials = credentials.filter(value => value.type === 'awx');
   const selection = {
@@ -46,13 +48,18 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
   const groupEnvironmentField = checkboxField(
     'Twórz/przypisuj grupę env-<environment>',
     'awx_group_environment',
-    config.group_by_environment ?? true
+    runtimeEnvironmentSync ? true : (config.group_by_environment ?? true)
   );
   const groupApmidField = checkboxField(
     'Twórz/przypisuj grupę apmid-<APMID>',
     'awx_group_apmid',
-    config.group_by_apmid ?? true
+    runtimeApmidSync ? true : (config.group_by_apmid ?? true)
   );
+  const groupEnvironmentControl = groupEnvironmentField.querySelector('input');
+  const groupApmidControl = groupApmidField.querySelector('input');
+  groupEnvironmentControl.disabled = runtimeEnvironmentSync;
+  groupApmidControl.disabled = runtimeApmidSync;
+
   const jobTemplateField = selectField(
     'Job Template po onboardingu', 'awx_job_template_id', [], selection.jobTemplate,
     { wide: true, placeholder: 'Nie uruchamiaj automatycznie' }
@@ -84,11 +91,20 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     timeoutField,
     removeOnDestroyField
   );
+  const runtimeSyncInfo = (runtimeEnvironmentSync || runtimeApmidSync)
+    ? node('div', { class: 'blueprint-wizard-info wide' },
+        node('strong', { text: 'Synchronizacja klasyfikacji z AWX' }),
+        node('span', { text: [
+          runtimeEnvironmentSync ? 'Runtime Environment będzie przekazany do AWX.' : '',
+          runtimeApmidSync ? 'Runtime APMID będzie przekazany do AWX.' : '',
+        ].filter(Boolean).join(' ') }))
+    : null;
   const section = formSection(
     'AWX / Automation Controller',
     'Skonfiguruj onboarding hosta do AWX. Szybka i klasyczna edycja zapisują tę samą konfigurację co kreator krok po kroku.',
     toggle,
     status,
+    runtimeSyncInfo,
     controls
   );
 
@@ -267,8 +283,8 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
         project_id: projectSelect.value ? Number(projectSelect.value) : null,
         inventory_id: inventorySelect.value ? Number(inventorySelect.value) : null,
         inventory_name: String(inventoryNameField.querySelector('input').value || 'CloudPortal').trim() || 'CloudPortal',
-        group_by_environment: groupEnvironmentField.querySelector('input').checked,
-        group_by_apmid: groupApmidField.querySelector('input').checked,
+        group_by_environment: runtimeEnvironmentSync || groupEnvironmentControl.checked,
+        group_by_apmid: runtimeApmidSync || groupApmidControl.checked,
         job_template_id: jobTemplateSelect.value ? Number(jobTemplateSelect.value) : null,
         remove_on_destroy: removeOnDestroyField.querySelector('input').checked,
       };
