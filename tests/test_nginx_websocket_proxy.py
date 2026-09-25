@@ -32,8 +32,7 @@ def test_large_upload_routes_stream_without_nginx_buffering():
     assert 'proxy_request_buffering off;' in DOCKER_NGINX
     assert 'proxy_read_timeout 7200s;' in DOCKER_NGINX
 
-    escaped_route = r'location ~ ^/api/v1/(?:appliances/ova-blueprints|instance-backups/upload)\$ {'
-    assert escaped_route in INSTALLER
+    assert route in INSTALLER
     assert 'client_max_body_size 100g;' in INSTALLER
     assert 'client_body_timeout 7200s;' in INSTALLER
     assert 'proxy_request_buffering off;' in INSTALLER
