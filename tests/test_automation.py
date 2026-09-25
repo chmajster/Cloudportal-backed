@@ -1,5 +1,43 @@
 import uuid
 
+from app.automation.service import normalize_legacy_blueprint_template, runtime_selection_flag
+
+
+def test_legacy_clone_blueprint_is_not_validated_as_ova_appliance():
+    legacy = {
+        'template': 'proxmox-appliance',
+        'variables': {
+            'name': 'srv001',
+            'node': 'pve01',
+            'template_id': 9000,
+            'template_node': 'pve01',
+            'storage': 'local-lvm',
+            'network': 'vmbr0',
+            'disk': 40,
+        },
+    }
+    normalized = normalize_legacy_blueprint_template(legacy)
+    assert normalized['template'] == 'proxmox-vm'
+
+    appliance = {
+        'template': 'proxmox-appliance',
+        'variables': {
+            'name': 'ova01',
+            'node': 'pve01',
+            'storage': 'local-lvm',
+            'import_file_ids': ['local:import/appliance.qcow2'],
+        },
+    }
+    untouched = normalize_legacy_blueprint_template(appliance)
+    assert untouched['template'] == 'proxmox-appliance'
+
+
+def test_runtime_selection_flag_normalizes_legacy_json_values():
+    for value in (True, 1, 'true', '1', 'yes', 'tak', 'on'):
+        assert runtime_selection_flag(value) is True
+    for value in (False, 0, None, '', 'false', '0', 'no', 'nie', 'off'):
+        assert runtime_selection_flag(value) is False
+
 
 def resources(client, headers):
     credential = client.post('/api/v1/credentials', headers=headers, json={
@@ -89,6 +127,89 @@ def test_hostname_scheme_edit_cannot_reset_sequence(client, headers):
     })
     assert second.status_code == 200
     assert second.json()['hostname'] == 'srl0002'
+
+
+
+def test_blueprint_bundle_creates_hostname_scheme_atomically(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    blueprint = {
+        'slug': 'bundled-hostname',
+        'name': 'Bundled hostname',
+        'deployment': {
+            'name': '{{ hostname }}',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {**deployment_payload['variables'], 'name': '{{ hostname }}'},
+            'hostname_values': {'env': 'prod'},
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+    bundle = {
+        'blueprint': blueprint,
+        'hostname_scheme': {
+            'name': 'Bundled hostname pattern',
+            'pattern': 'srv-{env}-{number}',
+            'next_number': 1,
+            'padding': 3,
+            'is_active': True,
+        },
+    }
+
+    created = client.post('/api/v1/blueprints/bundle', headers=headers, json=bundle)
+    assert created.status_code == 201, created.text
+    scheme_id = created.json()['deployment']['hostname_scheme_id']
+    assert scheme_id
+
+    schemes = client.get('/api/v1/hostname-schemes?limit=200', headers=headers)
+    assert any(row['id'] == scheme_id and row['name'] == 'Bundled hostname pattern'
+               for row in schemes.json()['items'])
+
+    broken = {
+        **bundle,
+        'blueprint': {
+            **blueprint,
+            'slug': 'bundled-hostname-broken',
+            'name': 'Bundled hostname broken',
+            'deployment': {
+                **blueprint['deployment'],
+                'provider_id': 999999,
+            },
+        },
+        'hostname_scheme': {
+            **bundle['hostname_scheme'],
+            'name': 'Must rollback with Blueprint',
+        },
+    }
+    failed = client.post('/api/v1/blueprints/bundle', headers=headers, json=broken)
+    assert failed.status_code == 404, failed.text
+    schemes = client.get('/api/v1/hostname-schemes?limit=200', headers=headers)
+    assert all(row['name'] != 'Must rollback with Blueprint' for row in schemes.json()['items'])
+
+
+def test_blueprint_save_rejects_invalid_static_proxmox_network(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    payload = {
+        'slug': 'invalid-static-network',
+        'name': 'Invalid static network',
+        'deployment': {
+            'name': 'invalid-static-network',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'invalid-static-network',
+                'ipv4_address': '192.0.2.10/24',
+                'ipv4_gateway': '198.51.100.1',
+                'dns_servers': ['not-an-ip'],
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+    response = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert response.status_code == 422, response.text
+    assert 'dns_servers' in response.text or 'same subnet' in response.text
 
 
 
