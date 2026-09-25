@@ -351,6 +351,8 @@ state.workflow.find(step => step.id === 'plan').depends_on = [];
 assert(parts.cloudInit.validate(state).workflow);
 parts.cloudInit.toggleStep(state, false);
 assert(!state.workflow.some(step => step.type === 'cloud_init'));
+assert.equal(state.guestAccountMode, 'cloud_init_managed');
+state.guestAccountMode = 'existing_template';
 const preview = parts.cloudInit.preview(state, [{id:7,username:'operator',password:'DO-NOT-LEAK',private_key:'PRIVATE-DO-NOT-LEAK'}]);
 assert(preview.includes('operator')); assert(preview.includes('qemu-guest-agent'));
 assert(preview.includes('Cloud-init nie utworzy użytkownika'));
