@@ -159,6 +159,14 @@
       async function loadNodeResources() {
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         if (!provider || provider.type !== 'proxmox' || !state.node) return;
+
+        const selectedStorage = String(state.storage || '');
+        const selectedNetwork = String(state.network || '');
+        const selectedSnippetStorage = String(state.cloudInitSnippetStorage || '');
+        state.storages = [];
+        state.snippetStorages = [];
+        state.networks = [];
+
         try {
           const requestOptions = { headers: parts.core.scopeHeaders(state) };
           const [storageResult, networkResult, qemuReadiness] = await Promise.all([
@@ -180,22 +188,38 @@
             return !content || content.includes('images');
           });
           state.snippetStorages = allStorages.filter(value => storageContent(value).includes('snippets'));
-          if (!state.snippetStorages.some(value =>
-            String(value.storage || value.id) === String(state.cloudInitSnippetStorage))) {
+          if (state.snippetStorages.some(value =>
+            String(value.storage || value.id) === selectedSnippetStorage)) {
+            state.cloudInitSnippetStorage = selectedSnippetStorage;
+          } else {
             const preferredSnippet = state.snippetStorages.find(value => String(value.storage || value.id) === 'local')
               || state.snippetStorages[0];
             state.cloudInitSnippetStorage = String(preferredSnippet?.storage || preferredSnippet?.id || '');
           }
           if (!state.snippetStorages.length) state.cloudInitSnippetStorage = '';
+
           state.networks = (networkResult.items || []).filter(value => value.iface);
-          if (!state.storages.some(value => String(value.storage || value.id) === String(state.storage))) {
+          if (state.storages.some(value => String(value.storage || value.id) === selectedStorage)) {
+            state.storage = selectedStorage;
+          } else {
             state.storage = String(state.storages[0]?.storage || state.storages[0]?.id || '');
           }
-          if (!state.networks.some(value => String(value.iface) === String(state.network))) {
-            state.network = state.networks.some(value => value.iface === 'vmbr0') ? 'vmbr0' : String(state.networks[0]?.iface || '');
+          if (state.networks.some(value => String(value.iface) === selectedNetwork)) {
+            state.network = selectedNetwork;
+          } else {
+            state.network = state.networks.some(value => value.iface === 'vmbr0')
+              ? 'vmbr0'
+              : String(state.networks[0]?.iface || '');
           }
         } catch (error) {
           state.providerError = error.message;
+          state.providerConnected = false;
+          state.storages = [];
+          state.snippetStorages = [];
+          state.networks = [];
+          state.storage = '';
+          state.network = '';
+          state.cloudInitSnippetStorage = '';
         }
       }
 
