@@ -83,8 +83,8 @@ function defaultSlug(name) {
 }
 
 async function openOvaImport() {
-  if (!allowed('blueprints.create') || !allowed('terraform.execute') || !allowed('providers.read')) {
-    toast('Brak uprawnień blueprints.create, terraform.execute lub providers.read.', 'error');
+  if (!allowed('blueprints.create') || !allowed('terraform.execute') || !allowed('providers.read') || !allowed('credentials.read')) {
+    toast('Brak uprawnień blueprints.create, terraform.execute, providers.read lub credentials.read.', 'error');
     return;
   }
 
@@ -254,7 +254,7 @@ async function appliancesView() {
   const result = await api('/blueprints?limit=200');
   const appliances = (result.items || []).filter(item => item.deployment?.template === 'proxmox-appliance');
   const actions = [];
-  if (allowed('blueprints.create') && allowed('terraform.execute') && allowed('providers.read')) {
+  if (allowed('blueprints.create') && allowed('terraform.execute') && allowed('providers.read') && allowed('credentials.read')) {
     actions.push(button('Importuj OVA jako Blueprint', () => openOvaImport().catch(error => toast(error.message, 'error')), 'primary'));
   }
   actions.push(button('Blueprinty', () => navigate('blueprints')));
