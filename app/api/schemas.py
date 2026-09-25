@@ -490,6 +490,7 @@ class ApplianceVMVariables(Input):
     @field_validator('import_file_ids')
     @classmethod
     def import_volumes(cls, values):
+        import re
         pattern = re.compile(
             r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}:import/'
             r'[A-Za-z0-9][A-Za-z0-9_.-]{0,200}[.]qcow2'
@@ -503,6 +504,7 @@ class ApplianceVMVariables(Input):
     @field_validator('tags')
     @classmethod
     def appliance_tags(cls, values):
+        import re
         normalized = []
         for value in values:
             tag = value.strip().lower()
