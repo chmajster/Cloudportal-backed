@@ -1091,22 +1091,24 @@
     }
   }
 
-  registerRoutedForm({
-    id: 'blueprint-designer-create',
-    pattern: /^\/blueprints\/designer\/new$/,
-    parent: 'blueprints',
-    permission: 'blueprints.create',
-    label: 'Blueprint Designer',
-    surface: false,
-  }, () => openDesigner());
-  registerRoutedForm({
-    id: 'blueprint-designer-edit',
-    pattern: /^\/blueprints\/(?<id>\d+)(?:\/[^/]+)?\/designer$/,
-    parent: 'blueprints',
-    permission: 'blueprints.update',
-    label: 'Blueprint Designer',
-    surface: false,
-  }, async match => openDesigner(await api('/blueprints/' + match.params.id)));
+  if (typeof registerRoutedForm === 'function') {
+    registerRoutedForm({
+      id: 'blueprint-designer-create',
+      pattern: /^\/blueprints\/designer\/new$/,
+      parent: 'blueprints',
+      permission: 'blueprints.create',
+      label: 'Blueprint Designer',
+      surface: false,
+    }, () => openDesigner());
+    registerRoutedForm({
+      id: 'blueprint-designer-edit',
+      pattern: /^\/blueprints\/(?<id>\d+)(?:\/[^/]+)?\/designer$/,
+      parent: 'blueprints',
+      permission: 'blueprints.update',
+      label: 'Blueprint Designer',
+      surface: false,
+    }, async match => openDesigner(await api('/blueprints/' + match.params.id)));
+  }
 
   window.BlueprintVRADesigner = {
     open: item => item
