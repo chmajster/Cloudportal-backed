@@ -17,21 +17,15 @@
 
   function normalizedWizardStep(value) {
     const step = Number.parseInt(value, 10);
-    if (!Number.isFinite(step)) return 0;
-    return Math.min(STEPS.length - 1, Math.max(0, step));
+    return Number.isFinite(step) ? Math.min(STEPS.length - 1, Math.max(0, step)) : 0;
   }
 
   function blueprintWizardPath({ item = null, step = 0, slug = '', hostnameSchemeId = '' } = {}) {
     const stepNumber = normalizedWizardStep(step) + 1;
-    const query = hostnameSchemeId
-      ? '?hostnameSchemeId=' + encodeURIComponent(String(hostnameSchemeId))
-      : '';
+    const query = hostnameSchemeId ? '?hostnameSchemeId=' + encodeURIComponent(String(hostnameSchemeId)) : '';
     if (!item?.id) return '/blueprints/new/step/' + stepNumber + query;
     const readableSlug = String(slug || item.slug || item.name || 'blueprint').trim() || 'blueprint';
-    return '/blueprints/edit/' + encodeURIComponent(String(item.id))
-      + '/' + encodeURIComponent(readableSlug)
-      + '/step/' + stepNumber
-      + query;
+    return '/blueprints/edit/' + encodeURIComponent(String(item.id)) + '/' + encodeURIComponent(readableSlug) + '/step/' + stepNumber + query;
   }
 
   function replaceBlueprintWizardRoute(item, state, options = {}) {
