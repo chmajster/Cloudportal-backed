@@ -5,10 +5,11 @@ from app.models import Setting
 
 
 SETTING_KEY = 'job_execution'
+DEFAULT_MAX_PARALLEL_JOBS = 10
 
 
 def job_execution_settings(db):
-    default_limit = max(1, min(64, int(settings().worker_count or 1)))
+    default_limit = DEFAULT_MAX_PARALLEL_JOBS
     row = db.get(Setting, SETTING_KEY)
     raw = dict(row.value) if row and isinstance(row.value, dict) else {}
     try:
