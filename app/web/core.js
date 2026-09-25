@@ -1079,11 +1079,7 @@ function navigationRouteVisible(route) {
     && (typeof window.uiNavigationVisible !== 'function' || window.uiNavigationVisible(route));
 }
 function routeNavigationParent(route) {
-  if (route?.id === 'routed-form') {
-    return (typeof window.routedFormParent === 'function' ? window.routedFormParent() : '')
-      || route.navigationParent
-      || '';
-  }
+  if (route?.id === 'routed-form') return (window.routedFormParent?.() || route.navigationParent || '');
   return route?.navigationParent || '';
 }
 function renderNavigation() {
@@ -1114,9 +1110,7 @@ async function navigate(view) {
     ? window.uiResolveView(requestedView)
     : requestedView;
   if (typeof window.dismissCloudportalSurfaceForNavigation === 'function') window.dismissCloudportalSurfaceForNavigation();
-  const requestedRoutedForm = typeof window.matchRoutedForm === 'function'
-    ? window.matchRoutedForm(requestedView)
-    : null;
+  const requestedRoutedForm = window.matchRoutedForm?.(requestedView) || null;
   const available = routes.filter(item =>
     allowed(item.permission)
     && (!state.identity.user.must_change_password
