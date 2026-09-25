@@ -78,6 +78,10 @@ function routedFormParent() {
   return matchRoutedForm()?.route?.parent || '';
 }
 
+function viewIs(viewId) {
+  return state.view === viewId || (state.view === 'routed-form' && routedFormParent() === viewId);
+}
+
 function registerView(route, handler) {
   if (!route?.id || typeof handler !== 'function') throw new Error('Invalid UI feature registration');
   if (views[route.id]) throw new Error('Duplicate UI feature: ' + route.id);
