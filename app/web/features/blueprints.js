@@ -109,7 +109,7 @@ async function blueprintsView() {
     if (window.ApplianceBlueprintUI && allowed('terraform.execute')) {
       actions.push(button('Importuj appliance OVA', () => navigate('/blueprints/appliances/import')));
     }
-    if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open()));
+    if (window.BlueprintVRADesigner) actions.push(button('Designer vRA / YAML', () => navigate('/blueprints/designer/new')));
   }
   dom.content.replaceChildren(heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     table([
@@ -128,7 +128,7 @@ async function blueprintsView() {
       if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
       if (allowed('blueprints.update') && canManage && canDesignBlueprint) {
-        if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item)));
+        if (window.BlueprintVRADesigner) result.push(button('Designer vRA / YAML', () => navigate('/blueprints/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'blueprint') + '/designer')));
         result.push(button('Edytuj', () => window.BlueprintWizard.open({ item })));
       }
       if (allowed('blueprints.delete') && canManage) result.push(button('Usuń', () => confirmAction('Usuń Blueprint', `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`, async () => { await api(`/blueprints/${item.id}`, { method: 'DELETE' }); toast('Blueprint usunięty.'); navigate('blueprints'); }), 'danger'));
