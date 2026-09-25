@@ -950,6 +950,11 @@ class BlueprintInput(Input):
         return self
 
 
+class BlueprintBundleInput(Input):
+    blueprint: BlueprintInput
+    hostname_scheme: HostnameSchemeInput | None = None
+
+
 class BlueprintExecuteInput(Input):
     variables: Annotated[dict[str, Any], Field(max_length=100)] = Field(default_factory=dict)
     hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
