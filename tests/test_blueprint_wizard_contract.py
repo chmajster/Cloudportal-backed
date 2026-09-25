@@ -509,3 +509,95 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert result['workflow'][-1]['depends_on'] == ['guest_ip']
     assert result['workflow'][-1]['retry'] == 3
     assert result['workflow'][-1]['timeout'] == 300
+
+
+def test_wizard_pending_hostname_scheme_is_created_by_bundle_not_embedded_as_nan_id():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'Pending hostname';
+state.slug = 'pending-hostname';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = true;
+state.hostnameSchemeId = '__pending__';
+state.pendingHostnameScheme = {
+  name: 'Pending pattern',
+  pattern: 'srv-{env}-{number}',
+  next_number: 1,
+  padding: 3,
+  is_active: true,
+};
+state.hostnameValues = { env: 'dev' };
+state.environment = 'dev';
+state.apmid = 'LEO';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [{
+    id: '__pending__',
+    name: 'Pending pattern',
+    pattern: 'srv-{env}-{number}',
+    next_number: 1,
+    padding: 3,
+    is_active: true,
+  }],
+};
+const payload = core.buildPayload(state, data);
+console.log(JSON.stringify({
+  hasSchemeId: Object.prototype.hasOwnProperty.call(payload.deployment, 'hostname_scheme_id'),
+  hostnameValues: payload.deployment.hostname_values,
+  falseValue: core.coerceSchemaValue({type: 'boolean'}, 'false'),
+  trueValue: core.coerceSchemaValue({type: 'boolean'}, 'true'),
+}));
+""")
+    assert result['hasSchemeId'] is False
+    assert result['hostnameValues'] == {'env': 'dev'}
+    assert result['falseValue'] is False
+    assert result['trueValue'] is True
+
+
+def test_blueprint_console_uses_project_scope_and_single_wizard_editor():
+    source = (ROOT / 'app' / 'web' / 'features' / 'blueprints.js').read_text()
+    view_start = source.index('async function blueprintsView()')
+    view_end = source.index('async function executeBlueprint', view_start)
+    view = source[view_start:view_end]
+
+    assert '/blueprints/creation-scopes?permission=blueprints.read&limit=200' in view
+    assert "'X-Tenant-ID': String(selected.tenant_id)" in view
+    assert "'X-Project-ID': String(selected.project_id)" in view
+    assert "window.BlueprintWizard.open({" in view
+    assert "button('Szybka edycja'" not in view
+    assert "permission: null" in source[source.rfind("registerView({ id: 'blueprints'"):]
+
+
+def test_blueprint_hostname_pattern_is_deferred_until_transactional_save():
+    source = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-hostname.js').read_text()
+    wizard = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard.js').read_text()
+    assert "state.hostnameSchemeId = '__pending__'" in source
+    assert "api('/hostname-schemes', {" not in source
+    assert "'/blueprints/bundle'" in wizard
+    assert "/blueprints/${editingItem.id}/bundle" in wizard
+
+
+def test_blueprint_wizard_uses_scoped_hostname_permissions_and_immutable_edit_scope():
+    wizard = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard.js').read_text()
+    hostname = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-hostname.js').read_text()
+    scope = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-scope.js').read_text()
+
+    assert "canCreate: blueprintScope.allows('hostnames.create')" in wizard
+    assert "canCreate = false" in hostname
+    assert "allowed('hostnames.create')" not in hostname
+    assert "tenantSelect.disabled = tenants.length === 1 || Boolean(options.item)" in scope
+    assert "projectSelect.disabled = projects.length === 1 || Boolean(options.item)" in scope
