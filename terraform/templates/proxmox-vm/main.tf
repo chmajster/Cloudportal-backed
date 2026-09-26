@@ -25,7 +25,7 @@ resource "proxmox_virtual_environment_file" "cloud_init_seed" {
 }
 
 resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init" {
-  count        = (
+  count = (
     var.cloud_init_seed_path == null
     && var.install_qemu_guest_agent
     && !var.qemu_guest_agent_bootstrap
@@ -96,7 +96,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   dynamic "initialization" {
     for_each = var.cloud_init_seed_path == null ? [1] : []
     content {
-      datastore_id        = var.storage
+      datastore_id = var.storage
       vendor_data_file_id = (
         var.cloud_init_seed_path == null
         && var.install_qemu_guest_agent
