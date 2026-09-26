@@ -260,16 +260,33 @@ def vm_power(provider_id: int, node: NODE, vmid: VMID, data: VMPowerInput, reque
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/snapshots')
 def snapshots(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('snapshots.read')),
               db=Depends(get_db, scope='function')):
-    rows = adapter(db, provider_id).snapshots(node, vmid)
+    provider = adapter(db, provider_id)
+    rows = provider.snapshots(node, vmid)
+    capability = provider.snapshot_capability(node, vmid)
     allowed = 'name snaptime description vmstate parent'.split()
-    return {'items': [{key: value for key, value in row.items() if key in allowed} for row in rows]}
+    return {
+        'items': [{key: value for key, value in row.items() if key in allowed} for row in rows],
+        'capability': capability,
+    }
 
 
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/snapshots', status_code=202)
 def create_snapshot(provider_id: int, node: NODE, vmid: VMID, data: SnapshotInput, request: Request,
                     actor=Depends(require('snapshots.create')), db=Depends(get_db, scope='function')):
+    provider = adapter(db, provider_id)
+    capability = provider.snapshot_capability(node, vmid)
+    if capability.get('supported') is False:
+        raise HTTPException(
+            409,
+            {
+                'code': 'SNAPSHOT_NOT_SUPPORTED',
+                'message': capability.get('message') or 'Snapshot nie jest obsługiwany przez tę VM.',
+                'capability': capability,
+            },
+        )
+
     def execute():
-        task = adapter(db, provider_id).create_snapshot(
+        task = provider.create_snapshot(
             node, vmid, data.snapname, data.description, data.include_ram
         )
         audit(db, request, 'snapshot.created', 'vms', f'{provider_id}:{node}:{vmid}:{data.snapname}')
