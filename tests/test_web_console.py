@@ -250,6 +250,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Wybierz wszystkie" in script
     assert "Wyczyść" in script
     assert "Wymuś stop" in script
+    assert "button('Usuń', () => requestDelete(vms, onComplete), 'danger')" in script
+    assert "function requestDelete(items, onComplete)" in script
+    assert "function canDelete(item)" in script
+    assert "api('/deployments/' + encodeURIComponent(item.deployment_id) + '/destroy'" in script
+    assert "'/actions/delete_vm'" in script
+    assert "confirmation: deleteConfirmationName(item)" in script
     assert "window.vmBulkActions?.toolbar" in script
     assert "window.vmBulkActions?.decorateCard" in script
     assert "VM jest już widoczna w „Moje zasoby”" in script
