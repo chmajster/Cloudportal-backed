@@ -507,6 +507,9 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         blueprint_variables = rendered.pop('blueprint_variables')
         parsed = DeploymentInput.model_validate(rendered)
         require_catalog_item_enabled(db, 'templates', parsed.template)
+        parsed.variables = validate_template_variables(
+            parsed.template, parsed.variables
+        ).model_dump(mode='json')
         provider = find(db, Provider, parsed.provider_id)
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
