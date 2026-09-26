@@ -262,6 +262,44 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job permissions have been revoked')
     _validate_blueprint_authorization(db, job, user, permissions)
 
+    if job.operation == 'terraform.apply' and target is not None:
+        from app.policy_engine.integration import revalidate_blueprint_job
+        policy_result = revalidate_blueprint_job(db, job, user, permissions, target)
+        if policy_result:
+            if policy_result.get('decision') == 'deny':
+                reasons = [
+                    str(item.get('message') or item.get('type') or 'policy violation')
+                    for item in (policy_result.get('violations') or [])
+                ]
+                raise ExecutionFailed(
+                    'Policy authorization has been revoked'
+                    + (': ' + '; '.join(reasons[:3]) if reasons else '')
+                )
+            if policy_result.get('input_policy_drift'):
+                fields = ', '.join(sorted(policy_result['input_policy_drift']))
+                raise ExecutionFailed(
+                    'Policy changed protected provisioning inputs after the job was queued: ' + fields
+                )
+            if policy_result.get('decision') == 'approval_required':
+                payload = dict(job.payload or {})
+                current_approval_ids = {
+                    str(item.get('policy_id') or '')
+                    for item in (policy_result.get('approvals') or [])
+                    if item.get('policy_id')
+                }
+                original_approval_ids = {
+                    str(item.get('policy_id') or '')
+                    for item in (((payload.get('blueprint') or {}).get('policy_approvals')) or [])
+                    if isinstance(item, dict) and item.get('policy_id')
+                }
+                approval = dict(payload.get('_approval') or {})
+                policy_approval = dict(payload.get('_policy_approval') or {})
+                approved = approval.get('status') == 'approved'
+                if policy_approval:
+                    approved = approved and bool(policy_approval.get('complete'))
+                if not approved or not current_approval_ids <= original_approval_ids:
+                    raise ExecutionFailed('Current Policy Engine decision requires a new approval')
+
 
 def ensure_runtime_credential(credential):
     if credential is None:
