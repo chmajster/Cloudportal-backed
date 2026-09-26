@@ -903,6 +903,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Twardy reset', () => vmPower(item, 'reset')" in script
     assert "button('Konsola'" in script
     assert "button('Snapshot'" in script
+    assert "snapshotCapability?.supported !== false" in script
+    assert "async function createVmSnapshot(item)" in script
+    assert "capability.supported === false" in script
+    assert "Backup zamiast snapshotu" in script
     assert "button('Backup'" in script
     assert "button('Odtwórz od zera'" in script
     assert "async function deleteVmFromCard(item, deployment, onRefresh = null)" in script
