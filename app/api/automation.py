@@ -520,6 +520,17 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         parsed.variables = validate_template_variables(
             parsed.template, parsed.variables
         ).model_dump(mode='json')
+        # Persist the Policy Engine's effective classification in the immutable
+        # Blueprint job snapshot as well as in deployment variables. Runtime
+        # facts must never expose the pre-policy APMID/environment after placement
+        # or governance effects changed them.
+        for field in ('apmid', 'environment', 'organization', 'project'):
+            value = parsed.variables.get(field)
+            if value not in (None, ''):
+                blueprint_variables[field] = value
+        scope_key = parsed.variables.get('resource_scope_key')
+        if scope_key not in (None, ''):
+            blueprint_variables['scope_key'] = scope_key
         provider = find(db, Provider, parsed.provider_id)
         template_meta, _ = template_definition(parsed.template)
         if provider.type != template_meta['provider']:
