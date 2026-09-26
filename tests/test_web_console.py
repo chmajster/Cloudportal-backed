@@ -346,6 +346,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Brak gotowych Blueprintów.' in script
     assert '.product-grid' in stylesheet
     assert '.product-card' in stylesheet
+    assert '.product-card-icon img' in stylesheet
+    assert "api('/blueprint-avatars')" in script
+    assert 'item.avatar_id' in script
     assert '.job-log-status' in stylesheet
     assert '.job-live-log' in stylesheet
     assert '.job-log-page' in stylesheet
@@ -533,6 +536,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'/catalog/' + kind + '/'" in script
     assert '/ansible/custom-playbooks' in script
     assert 'Dodaj własny playbook Ansible' in script
+    assert '/settings/blueprint-avatars' in script
+    assert "id: 'blueprint-avatars'" in script
+    assert 'Awatary Blueprintów' in script
+    assert 'data:image/x-icon;base64' in script
+    assert '.blueprint-avatar-manager' in stylesheet
     assert 'Wczytaj plik .yml / .yaml' in script
     assert 'ansible.manage' in script
     assert "button('Podgląd', () => showCatalogPlaybookPreview(item))" in script
@@ -566,6 +574,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Template / VM bazowa" in script
     assert 'Automatyczny hostname' in script
     assert 'Przykładowy hostname' in script
+    assert "selectField('Avatar Blueprintu', 'avatar_id'" in script
+    assert 'Narzędzia → Awatary Blueprintów' in script
+    assert "avatar_id: state.avatarId || null" in script
+    assert "state.avatarId = blueprint.avatar_id" in script
+    assert '.blueprint-wizard-avatar-picker' in stylesheet
+    assert '.blueprint-list-avatar' in stylesheet
     assert "field('Slug', 'slug'" in script
     assert 'name: state.name' in script
     assert 'new_scheme_next' in script
