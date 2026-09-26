@@ -688,7 +688,7 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
                 raise HTTPException(409, 'Approval request has expired')
         except ValueError:
             raise HTTPException(409, 'Approval request expiry is invalid') from None
-    policy_stage = approve_policy_stage(job, actor, request.state.permissions)
+    policy_stage = approve_policy_stage(job, actor, request.state.permissions, db=db)
     if policy_stage is not None and not policy_stage['complete']:
         payload = dict(job.payload or {})
         next_stage = dict(policy_stage.get('next_stage') or {})
