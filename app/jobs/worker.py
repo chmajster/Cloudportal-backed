@@ -33,6 +33,7 @@ from app.executors.terraform import (OpenTofuExecutor, TerraformExecutor, cleanu
 from app.inventory_sync import state_outputs, sync_deployment_inventory
 from app.jobs.approval import approval_policy_for_job
 from app.jobs.lifecycle import has_released_allocations
+from app.jobs.proxmox_destroy import force_stop_before_destroy
 from app.quotas.service import (account_confirmed_absent, commit_job_reservation,
                                 mark_job_reservation_uncertain, prepare_job_reservation,
                                 release_job_reservation)
@@ -1643,6 +1644,7 @@ def run_blueprint_workflow(context, executor):
         try:
             context.stage(f'workflow.rollback.start:{failed_step_id}:{target_id}:{rollback_type}')
             if rollback_type == 'terraform_destroy':
+                force_stop_before_destroy(context, timeout=rollback_timeout)
                 executor.execute('terraform.destroy', context)
                 mark_destroyed_after_rollback()
                 context.rollback_destroyed = True
@@ -2103,6 +2105,8 @@ def _execute_unfenced(job_id):
                 if not context.blueprint_workflow_completed:
                     raise ExecutionFailed('Blueprint workflow did not complete')
             else:
+                if job.operation == 'terraform.destroy':
+                    force_stop_before_destroy(context)
                 workspace = executor.execute(job.operation, context)
                 if job.operation == 'terraform.import':
                     register_adopted_resource(context)
