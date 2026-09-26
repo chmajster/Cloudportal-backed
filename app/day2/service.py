@@ -552,7 +552,14 @@ def _event(db, event, row, extra=None):
 
 
 def create_action(db, request, actor, target, credential, action_id, params, reason, permissions, *, retry_of=None, attempt=1):
+    from app.policy_engine.integration import enforce_day2
+    params, policy_result = enforce_day2(
+        db, request, actor, permissions, target, action_id, params
+    )
     validation = validate_action(db, target, credential, action_id, params, reason, permissions)
+    validation['warnings'] = list(policy_result.get('warnings') or []) + list(validation.get('warnings') or [])
+    if policy_result.get('decision') == 'approval_required':
+        validation['approval_required'] = True
     action = get_action(action_id)
     request_id = str(getattr(request.state, 'request_id', '') or uuid.uuid4())
     row = Day2ActionRequest(
@@ -571,7 +578,16 @@ def create_action(db, request, actor, target, credential, action_id, params, rea
     )
     db.add(row)
     db.flush()
-    job_payload = {'day2_action_request_id': row.id, 'resource_id': target.resource_id}
+    job_payload = {
+        'day2_action_request_id': row.id,
+        'resource_id': target.resource_id,
+        '_policy': {
+            'decision_id': policy_result.get('decision_id'),
+            'matched_policy_ids': policy_result.get('matched_policy_ids') or [],
+            'approvals': policy_result.get('approvals') or [],
+            'obligations': policy_result.get('obligations') or [],
+        },
+    }
     if action.id == 'run_ansible':
         snapshot_payload = snapshot_ansible_payload(
             db,
