@@ -13,8 +13,6 @@
       ['configure_vm', 'Configure VM', 'CPU, RAM, sieć i dysk'],
       ['cloud_init', 'Cloud-init', 'Konfiguracja pierwszego uruchomienia'],
       ['start_vm', 'Start VM', 'Uruchomienie maszyny'],
-      ['set_hostname', 'Set hostname', 'Ustawienie nazwy hosta'],
-      ['set_tags', 'Set tags', 'Ustawienie tagów zasobu'],
     ] },
     { group: 'Gotowość maszyny', items: [
       ['wait_for_vm', 'Wait for VM', 'Oczekiwanie na VM'],
@@ -37,7 +35,7 @@
     group: group.group, label: item[1], description: item[2],
   }])));
   const TERRAFORM_STEP_TYPES = new Set(['terraform_plan', 'terraform_apply', 'terraform_destroy']);
-  const DIRECT_PROXMOX_STEP_TYPES = new Set(['clone_vm', 'configure_vm', 'start_vm', 'set_hostname', 'set_tags']);
+  const DIRECT_PROXMOX_STEP_TYPES = new Set(['clone_vm', 'configure_vm', 'start_vm']);
 
   function defaultStepTimeout(type) {
     if (TERRAFORM_STEP_TYPES.has(type)) return 3600;
@@ -268,7 +266,7 @@
       if (clone.length === 1) {
         const cloneId = clone[0].id;
         const afterClone = new Set([
-          'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
+          'configure_vm', 'cloud_init', 'start_vm',
           'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
           'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
         ]);
@@ -341,7 +339,7 @@
     const proxmoxOnly = new Set([
       'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
       'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
-      'clone_vm', 'configure_vm', 'start_vm', 'set_hostname', 'set_tags',
+      'clone_vm', 'configure_vm', 'start_vm',
     ]);
     if (provider && provider.type !== 'proxmox') {
       const invalid = [...new Set(workflow.filter(step => proxmoxOnly.has(step.type)).map(step => step.type))];
