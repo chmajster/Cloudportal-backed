@@ -637,6 +637,7 @@ const OPERATION_LABELS = {
   'terraform.destroy': 'Terraform: usuń',
   'terraform.import': 'Terraform: import',
   'ansible.execute': 'Ansible: wykonaj',
+  'proxmox.clone_template': 'Proxmox: Klon VM → Template',
 };
 
 function statusLabel(value) {

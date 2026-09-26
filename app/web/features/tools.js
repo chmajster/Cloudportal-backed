@@ -795,6 +795,7 @@ async function toolsView() {
     && allowed('vms.read')
     && allowed('vms.clone')
     && allowed('vms.template')
+    && allowed('jobs.execute')
     && window.ProxmoxTemplateTool?.card
   ) {
     cards.push(window.ProxmoxTemplateTool.card());

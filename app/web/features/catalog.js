@@ -48,11 +48,11 @@ function customPlaybookVariablesText(value) {
   return JSON.stringify(value || {}, null, 2);
 }
 
-async function customPlaybookForm(item = null) {
+async function customPlaybookForm(item = null, seed = null) {
   try {
     const detail = item
       ? await api('/ansible/custom-playbooks/' + encodeURIComponent(item.id))
-      : {
+      : (seed || {
           id: '',
           name: '',
           description: '',
@@ -62,7 +62,7 @@ async function customPlaybookForm(item = null) {
           wait_for_connection: true,
           validate_after: true,
           content: '- name: Własny playbook\n  hosts: all\n  become: true\n  tasks:\n    - name: Przykładowe zadanie\n      ansible.builtin.debug:\n        msg: "Cloudportal custom playbook"\n',
-        };
+        });
 
     const idField = field('ID playbooka', 'id', {
       required: true,
@@ -166,6 +166,164 @@ async function customPlaybookForm(item = null) {
         navigate('catalog');
       },
     });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+function catalogPlaybookRoleLabel(role) {
+  return ({
+    main: 'Główny playbook',
+    wait: 'Oczekiwanie na połączenie',
+    validate: 'Walidacja po wykonaniu',
+  })[role] || role || 'Playbook';
+}
+
+async function copySystemPlaybook(item) {
+  try {
+    const source = await api('/ansible/playbooks/' + encodeURIComponent(item.id) + '/source');
+    const files = source.files || [];
+    const main = files.find(file => file.role === 'main') || files[0];
+    if (!main?.content) throw new Error('Playbook systemowy nie zawiera głównego pliku YAML.');
+
+    const required = new Set(item.required_variables || []);
+    const variables = Object.fromEntries((item.variables || []).map(name => [
+      name,
+      { required: required.has(name), pattern: '.{1,8192}' },
+    ]));
+    const suffix = '-custom';
+    const baseId = String(item.id || 'playbook').slice(0, Math.max(1, 63 - suffix.length));
+
+    closeModal();
+    await customPlaybookForm(null, {
+      id: baseId + suffix,
+      name: (item.name || item.id) + ' — kopia',
+      description: 'Edytowalna kopia systemowego playbooka „' + (item.name || item.id) + '”.',
+      category: item.category || 'Własne',
+      transport: item.transport || 'ssh',
+      variables,
+      wait_for_connection: files.some(file => file.role === 'wait'),
+      validate_after: files.some(file => file.role === 'validate'),
+      content: main.content,
+    });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+function removeSystemPlaybookFromUse(item) {
+  if (item.enabled === false) return toggleCatalogItem('playbooks', item);
+  return confirmAction(
+    'Usuń systemowy playbook z użycia',
+    'Playbook „' + item.name + '” jest dostarczany z aplikacją, więc jego plik pozostanie w instalacji. Zostanie wyłączony w katalogu i nie będzie można uruchamiać go w nowych zadaniach. Można go później przywrócić.',
+    async () => {
+      await api('/catalog/playbooks/' + encodeURIComponent(item.id) + '/enabled', {
+        method: 'PUT',
+        body: { enabled: false },
+      });
+      toast('Systemowy playbook został usunięty z użycia.');
+      navigate('catalog');
+    },
+  );
+}
+
+async function showCatalogPlaybookPreview(item) {
+  try {
+    const source = await api('/ansible/playbooks/' + encodeURIComponent(item.id) + '/source');
+    const files = source.files || [];
+    const body = node('div', { class: 'ansible-playbook-preview-body' });
+
+    const meta = node('div', { class: 'ansible-playbook-preview-meta' },
+      badge(item.custom ? 'Własny' : 'Systemowy', item.custom ? 'warning' : 'info'),
+      badge('v' + (source.version || item.version || 1)),
+      badge(String(source.transport || item.transport || '').toUpperCase()),
+      badge(item.enabled === false ? 'Wyłączony' : 'Aktywny', item.enabled === false ? 'danger' : 'ok'));
+
+    const intro = node('div', { class: 'ansible-playbook-info' },
+      node('div', { class: 'ansible-playbook-info-copy' },
+        node('div', { class: 'ansible-playbook-info-title' },
+          node('strong', { text: item.name || source.name || item.id })),
+        item.description ? node('p', { text: item.description }) : null,
+        node('small', { class: 'mono muted', text: item.id }),
+        node('small', { class: 'muted', text: 'Zmienne: ' + ((item.variables || []).join(', ') || 'brak') })));
+
+    if (!files.length) {
+      body.append(meta, intro, node('div', { class: 'muted', text: 'Brak plików YAML do wyświetlenia.' }));
+    } else {
+      const tabs = node('div', { class: 'ansible-playbook-tabs', role: 'tablist', 'aria-label': 'Pliki playbooka Ansible' });
+      const role = node('div', { class: 'ansible-playbook-role muted' });
+      const code = node('pre', { class: 'ansible-playbook-code mono', tabindex: '0' });
+
+      const selectFile = (file, tab) => {
+        tabs.querySelectorAll('button').forEach(value => {
+          const selected = value === tab;
+          value.classList.toggle('active', selected);
+          value.setAttribute('aria-selected', String(selected));
+        });
+        role.textContent = catalogPlaybookRoleLabel(file.role) + ' · ' + (file.size ? formatBytes(file.size) : '—');
+        code.textContent = file.content || '';
+        code.setAttribute('aria-label', 'Kod playbooka ' + file.name);
+      };
+
+      files.forEach((file, index) => {
+        const tab = node('button', {
+          type: 'button',
+          class: 'ansible-playbook-tab' + (index === 0 ? ' active' : ''),
+          role: 'tab',
+          'aria-selected': String(index === 0),
+          text: file.name,
+        });
+        tab.addEventListener('click', () => selectFile(file, tab));
+        tabs.append(tab);
+      });
+
+      body.append(meta, intro, tabs, role, code);
+      selectFile(files[0], tabs.querySelector('button'));
+    }
+
+    dom.modal.classList.add('modal-wide');
+    dom.modalTitle.textContent = 'Podgląd playbooka Ansible';
+    dom.modalEyebrow.textContent = (item.custom ? 'Własny' : 'Systemowy') + ' · ' + item.id;
+    dom.modalBody.replaceChildren(body);
+
+    const actions = [button('Zamknij', closeModal)];
+
+    if (item.enabled !== false && allowed('jobs.execute') && allowed('ansible.execute') && allowed('credentials.read')) {
+      actions.unshift(button('Uruchom', () => {
+        closeModal();
+        if (!hasCommand('ansible.run')) {
+          toast('Uruchamianie Ansible nie jest dostępne.', 'error');
+          return;
+        }
+        runCommand('ansible.run', item.id);
+      }, 'primary'));
+    }
+
+    if (item.custom && allowed('ansible.manage')) {
+      actions.unshift(button('Edytuj', () => {
+        closeModal();
+        navigate('/catalog/ansible/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'playbook'));
+      }));
+      actions.push(button('Usuń', () => {
+        closeModal();
+        deleteCustomPlaybook(item);
+      }, 'danger'));
+    } else if (!item.custom) {
+      if (allowed('ansible.manage')) {
+        actions.unshift(button('Edytuj kopię', () => copySystemPlaybook(item)));
+      }
+      if (allowed('settings.update')) {
+        actions.push(button(item.enabled === false ? 'Przywróć do użycia' : 'Usuń z użycia', () => {
+          closeModal();
+          removeSystemPlaybookFromUse(item);
+        }, item.enabled === false ? 'primary' : 'danger'));
+      }
+    }
+
+    dom.modalActions.replaceChildren(...actions);
+    if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) {
+      dom.modal.showModal();
+    }
   } catch (error) {
     toast(error.message, 'error');
   }
@@ -305,7 +463,9 @@ async function catalogView() {
         { label: 'Status', value: item => badge(item.enabled === false ? 'Wyłączony' : 'Aktywny', item.enabled === false ? 'danger' : 'ok') },
         { label: 'Zmienne', value: item => item.variables.map(name => FIELD_LABELS[name] || name.replaceAll('_', ' ')).join(', ') || '—' },
       ], playbooks.items, item => {
-        const rowActions = [];
+        const rowActions = [
+          button('Podgląd', () => showCatalogPlaybookPreview(item)),
+        ];
         if (item.enabled !== false && allowed('jobs.execute') && allowed('ansible.execute') && allowed('credentials.read')) {
           rowActions.push(button('Uruchom', () => {
             if (!hasCommand('ansible.run')) {
@@ -319,8 +479,17 @@ async function catalogView() {
           rowActions.push(button('Edytuj', () => navigate('/catalog/ansible/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'playbook'))));
           rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCustomPlaybook(item), item.enabled === false ? 'primary' : 'danger'));
           rowActions.push(button('Usuń', () => deleteCustomPlaybook(item), 'danger'));
-        } else if (!item.custom && allowed('settings.update')) {
-          rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCatalogItem('playbooks', item), item.enabled === false ? 'primary' : 'danger'));
+        } else if (!item.custom) {
+          if (allowed('ansible.manage')) {
+            rowActions.push(button('Edytuj kopię', () => copySystemPlaybook(item)));
+          }
+          if (allowed('settings.update')) {
+            rowActions.push(button(
+              item.enabled === false ? 'Przywróć do użycia' : 'Usuń z użycia',
+              () => removeSystemPlaybookFromUse(item),
+              item.enabled === false ? 'primary' : 'danger'
+            ));
+          }
         }
         return rowActions;
       })));
