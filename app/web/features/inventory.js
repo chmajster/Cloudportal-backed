@@ -453,7 +453,7 @@ function vmOverviewContent(item, status) {
           node('div', {},
             node('h2', { text: 'Klasyfikacja' }),
             node('p', { class: 'muted', text: 'Tagi synchronizowane z Proxmox i metadanymi CloudPortal.' }))),
-        vmTagChips(status.tags))));
+        vmTagChips(status.tags)));
 }
 
 function vmHardwareContent(item, status) {

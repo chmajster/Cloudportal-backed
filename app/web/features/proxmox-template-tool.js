@@ -38,10 +38,22 @@ function nextFreeVmid(vms, templates) {
 
 function sourceVmLabel(item) {
   return [
-    item.name || ('VM ' + item.vmid),
-    (item.node || '—') + '/VMID ' + item.vmid,
+    String(item.vmid),
+    item.name || ('vm-' + item.vmid),
+    item.node || '—',
     statusLabel(item.status || 'unknown'),
-  ].join(' · ');
+  ].join(' - ');
+}
+
+function sourceVmSearchText(item) {
+  return [
+    item.vmid,
+    'vmid ' + item.vmid,
+    item.name,
+    item.node,
+    item.status,
+    statusLabel(item.status || 'unknown'),
+  ].filter(Boolean).join(' ').toLocaleLowerCase('pl-PL');
 }
 
 function cloneTemplateToolCard() {
@@ -151,6 +163,13 @@ async function proxmoxTemplateCloneView() {
     state.providerId,
     { required: true }
   );
+  const sourceSearchField = field('Szukaj VM', 'source_vm_filter', {
+    type: 'search',
+    wide: true,
+    autocomplete: 'off',
+    placeholder: 'Wpisz VMID, hostname, node albo status…',
+    help: 'Przykład: 102, AnsibleTower, chris, zatrzymany.',
+  });
   const sourceField = selectField('Źródłowa VM', 'source_vm', [], '', {
     required: true,
     wide: true,
@@ -168,12 +187,14 @@ async function proxmoxTemplateCloneView() {
   });
 
   const providerSelect = providerField.querySelector('select');
+  const sourceSearchInput = sourceSearchField.querySelector('input');
   const sourceSelect = sourceField.querySelector('select');
   const targetNodeSelect = targetNodeField.querySelector('select');
   const storageSelect = storageField.querySelector('select');
   const targetVmidInput = targetVmidField.querySelector('input');
   const templateNameInput = templateNameField.querySelector('input');
 
+  const sourceMatchCount = badge('0 VM', 'info');
   const stepClone = badge('1. Oczekuje', 'info');
   const stepConvert = badge('2. Oczekuje', 'info');
   const stepVerify = badge('3. Oczekuje', 'info');
@@ -197,6 +218,37 @@ async function proxmoxTemplateCloneView() {
   function selectedSource() {
     const vmid = Number(sourceSelect.value);
     return state.vms.find(item => Number(item.vmid) === vmid) || null;
+  }
+
+  function filteredSourceVms() {
+    const query = String(sourceSearchInput.value || '').trim().toLocaleLowerCase('pl-PL');
+    if (!query) return state.vms;
+    return state.vms.filter(item => sourceVmSearchText(item).includes(query));
+  }
+
+  function renderSourceOptions({ preserveSelection = true } = {}) {
+    const previous = preserveSelection ? String(sourceSelect.value || '') : '';
+    const filtered = filteredSourceVms();
+    replaceSelectOptions(
+      sourceSelect,
+      filtered.map(item => ({ value: item.vmid, label: sourceVmLabel(item) })),
+      filtered.length ? null : 'Brak VM pasujących do wyszukiwania'
+    );
+    sourceSelect.disabled = !filtered.length;
+
+    if (previous && filtered.some(item => String(item.vmid) === previous)) {
+      sourceSelect.value = previous;
+    } else if (filtered.length) {
+      sourceSelect.value = String(filtered[0].vmid);
+    } else {
+      sourceSelect.value = '';
+    }
+
+    sourceMatchCount.textContent = filtered.length === state.vms.length
+      ? filtered.length + ' VM'
+      : filtered.length + ' / ' + state.vms.length + ' VM';
+    sourceMatchCount.className = 'badge ' + (filtered.length ? 'info' : 'warning');
+    return previous !== String(sourceSelect.value || '');
   }
 
   async function loadStorages() {
@@ -250,15 +302,14 @@ async function proxmoxTemplateCloneView() {
       api('/providers/' + encodeURIComponent(state.providerId) + '/templates'),
       api('/providers/' + encodeURIComponent(state.providerId) + '/nodes'),
     ]);
-    state.vms = (vmResult.items || []).filter(item => Number(item.template || 0) !== 1);
+    state.vms = (vmResult.items || [])
+      .filter(item => Number(item.template || 0) !== 1)
+      .sort((left, right) => Number(left.vmid) - Number(right.vmid));
     state.templates = templateResult.items || [];
     state.nodes = nodeResult.items || [];
 
-    replaceSelectOptions(
-      sourceSelect,
-      state.vms.map(item => ({ value: item.vmid, label: sourceVmLabel(item) })),
-      state.vms.length ? null : 'Brak dostępnych VM'
-    );
+    sourceSearchInput.value = '';
+    renderSourceOptions({ preserveSelection: false });
     replaceSelectOptions(
       targetNodeSelect,
       state.nodes.map(item => ({
@@ -267,7 +318,6 @@ async function proxmoxTemplateCloneView() {
       })),
       state.nodes.length ? null : 'Brak node'
     );
-    sourceSelect.disabled = !state.vms.length;
     targetNodeSelect.disabled = !state.nodes.length;
     await syncSourceDefaults();
   }
@@ -389,30 +439,53 @@ async function proxmoxTemplateCloneView() {
   }, 'primary');
 
   providerSelect.addEventListener('change', () => loadProvider().catch(error => toast(error.message, 'error')));
+  sourceSearchInput.addEventListener('input', () => {
+    const selectionChanged = renderSourceOptions();
+    if (selectionChanged) syncSourceDefaults().catch(error => toast(error.message, 'error'));
+  });
   sourceSelect.addEventListener('change', () => syncSourceDefaults().catch(error => toast(error.message, 'error')));
   targetNodeSelect.addEventListener('change', () => loadStorages().catch(error => toast(error.message, 'error')));
 
-  const formPanel = node('section', { class: 'panel' },
-    node('div', { class: 'panel-header' },
+  const sourcePicker = node('section', { class: 'proxmox-template-section proxmox-template-source' },
+    node('div', { class: 'proxmox-template-section-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Krok 1' }),
+        node('h3', { text: 'Wybierz źródłową VM' }),
+        node('p', { class: 'muted', text: 'Wyszukaj VM po numerze, hostname, node lub statusie.' })),
+      sourceMatchCount),
+    node('div', { class: 'proxmox-template-source-grid' },
+      providerField,
+      sourceSearchField,
+      sourceField));
+
+  const targetConfig = node('section', { class: 'proxmox-template-section' },
+    node('div', { class: 'proxmox-template-section-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Krok 2' }),
+        node('h3', { text: 'Parametry nowego template' }),
+        node('p', { class: 'muted', text: 'Powstanie nowy, niezależny full clone. Oryginalna VM pozostanie bez zmian.' }))),
+    node('div', { class: 'form-grid' },
+      targetVmidField,
+      templateNameField,
+      targetNodeField,
+      storageField));
+
+  const formPanel = node('section', { class: 'panel proxmox-template-tool' },
+    node('div', { class: 'panel-header proxmox-template-tool-head' },
       node('div', {},
         node('span', { class: 'tools-eyebrow', text: 'Proxmox' }),
         node('h2', { text: 'Klon VM → Template' }),
         node('p', {
           class: 'muted',
-          text: 'Cloudportal tworzy pełny klon do nowego VMID. Dopiero klon jest konwertowany do template; VM źródłowa nie jest zmieniana.',
+          text: 'Najpierw powstaje pełny klon VM. Dopiero nowy VMID jest konwertowany do template.',
         }))),
-    node('div', { class: 'form-grid' },
-      providerField,
-      sourceField,
-      targetVmidField,
-      templateNameField,
-      targetNodeField,
-      storageField),
-    node('div', { class: 'checks wide' },
+    sourcePicker,
+    targetConfig,
+    node('div', { class: 'checks proxmox-template-safety' },
       info('Typ klona', 'Full clone — niezależny od oryginału'),
       info('Źródłowa VM', 'Pozostaje zwykłą VM'),
       info('Konwersja', 'Dotyczy wyłącznie nowego VMID')),
-    node('div', { class: 'row-actions' }, runButton)
+    node('div', { class: 'proxmox-template-actions' }, runButton)
   );
 
   dom.content.replaceChildren(
