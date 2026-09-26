@@ -91,6 +91,71 @@ def live_disk_total_gib(live):
     return max(0, math.ceil(total))
 
 
+def effective_vm_lifecycle(row, present):
+    if row.lifecycle_status == 'destroyed':
+        return 'destroyed'
+    return 'active' if present else 'missing'
+
+
+def reconcile_provider_vm_presence(db, request, actor, rows):
+    """Persist active/missing state only when a provider inventory read succeeds."""
+    by_provider = {}
+    for row in rows:
+        if row.lifecycle_status == 'destroyed':
+            continue
+        by_provider.setdefault(row.provider_id, []).append(row)
+
+    missing = []
+    restored = []
+    provider_errors = []
+    for provider_id, managed in by_provider.items():
+        try:
+            provider, adapter = provider_adapter(db, provider_id)
+            if provider.type != 'proxmox':
+                continue
+            discovered = {
+                int(vm['vmid']): vm
+                for vm in adapter.discover('vms')
+                if vm.get('vmid') is not None
+            }
+        except Exception as error:
+            provider_errors.append({
+                'provider_id': provider_id,
+                'error': str(getattr(error, 'detail', None) or error),
+            })
+            continue
+
+        for row in managed:
+            present = row.vm_id in discovered
+            expected = effective_vm_lifecycle(row, present)
+            if row.lifecycle_status == expected:
+                continue
+            row.lifecycle_status = expected
+            if present:
+                live = discovered[row.vm_id]
+                row.node = str(live.get('node', row.node))
+                row.name = str(live.get('name', row.name))
+                restored.append(row.id)
+                audit(db, request, 'inventory.vm_restored', 'managed_vms', row.id)
+            else:
+                missing.append(row.id)
+                audit(db, request, 'inventory.vm_missing', 'managed_vms', row.id)
+
+            if row.deployment_id:
+                reconcile_terraform_presence(
+                    db,
+                    Scope(row.tenant_id, row.project_id),
+                    row.deployment_id,
+                    present=present,
+                )
+
+    return {
+        'missing': missing,
+        'restored': restored,
+        'provider_errors': provider_errors,
+    }
+
+
 def adoption_suggestion(row, live):
     disk_spec = str(live.get('scsi0') or live.get('virtio0') or live.get('sata0') or '')
     storage = disk_spec.split(':', 1)[0] if ':' in disk_spec else ''
@@ -135,10 +200,23 @@ def reconcile_inventory(
             'managed_vms' if item['vm_id'] is not None else 'managed_resources',
             item['deployment_id'],
         )
+
+    query = select(ManagedVM)
+    predicate = inventory_vm_predicate(request, actor)
+    if predicate is not None:
+        query = query.where(predicate)
+    managed = db.scalars(query.where(ManagedVM.lifecycle_status != 'destroyed')).all()
+    presence = reconcile_provider_vm_presence(db, request, actor, managed)
+
     return {
         'repaired': result['repaired'],
         'repaired_count': len(result['repaired']),
         'skipped_count': len(result['skipped']),
+        'missing': presence['missing'],
+        'missing_count': len(presence['missing']),
+        'restored': presence['restored'],
+        'restored_count': len(presence['restored']),
+        'provider_errors': presence['provider_errors'],
     }
 
 
@@ -180,7 +258,9 @@ def managed_vms(
             result_by_id = {item['id']: item for item in result}
             for row in managed:
                 item = result_by_id[row.id]
-                item['live'] = live_public(discovered[row.vm_id]) if row.vm_id in discovered else None
+                present = row.vm_id in discovered
+                item['live'] = live_public(discovered[row.vm_id]) if present else None
+                item['lifecycle_status'] = effective_vm_lifecycle(row, present)
     return {'items': result}
 
 
@@ -198,10 +278,12 @@ def managed_vm(
         _, adapter = provider_adapter(db, row.provider_id)
         try:
             result['live'] = live_public(discover_vm(adapter, row.vm_id))
+            result['lifecycle_status'] = effective_vm_lifecycle(row, True)
         except HTTPException as error:
             if error.status_code != 404:
                 raise
             result['live'] = None
+            result['lifecycle_status'] = effective_vm_lifecycle(row, False)
     return result
 
 
@@ -392,6 +474,7 @@ def reconcile_vm(
 def remove_confirmed_missing_vm(
     id: str,
     request: Request,
+    purge: bool = False,
     actor=Depends(require('inventory.delete')),
     db=Depends(get_db, scope='function'),
 ):
@@ -425,16 +508,15 @@ def remove_confirmed_missing_vm(
             )
 
     when = now()
-    row.lifecycle_status = 'destroyed'
-    row.destroyed_at = when
+    resource = None
+    deployment_id = row.deployment_id
+    vm_record_id = row.id
+    vm_id = row.vm_id
 
     if row.deployment_id:
         resource = db.scalar(select(ManagedResource).where(
             ManagedResource.deployment_id == row.deployment_id
         ).with_for_update())
-        if resource is not None:
-            resource.lifecycle_status = 'destroyed'
-            resource.destroyed_at = when
 
         if deployment is not None and deployment.status != 'destroyed':
             deployment.status = 'reconciliation_required'
@@ -446,13 +528,26 @@ def remove_confirmed_missing_vm(
             present=False,
         )
 
-    audit(db, request, 'inventory.vm_missing_removed', 'managed_vms', row.id)
+    if purge:
+        audit(db, request, 'inventory.vm_missing_purged', 'managed_vms', row.id)
+        if resource is not None:
+            db.delete(resource)
+        db.delete(row)
+    else:
+        row.lifecycle_status = 'destroyed'
+        row.destroyed_at = when
+        if resource is not None:
+            resource.lifecycle_status = 'destroyed'
+            resource.destroyed_at = when
+        audit(db, request, 'inventory.vm_missing_removed', 'managed_vms', row.id)
+
     return {
         'deleted': True,
+        'purged': purge,
         'provider_absent': True,
-        'id': row.id,
-        'vm_id': row.vm_id,
-        'deployment_id': row.deployment_id,
+        'id': vm_record_id,
+        'vm_id': vm_id,
+        'deployment_id': deployment_id,
     }
 
 
