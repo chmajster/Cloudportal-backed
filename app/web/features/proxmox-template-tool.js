@@ -81,51 +81,6 @@ function cloneTemplateToolCard() {
   );
 }
 
-async function waitProxmoxTask(providerId, nodeName, upid, onPoll, timeoutMs = 60 * 60 * 1000) {
-  if (!upid) return { status: 'stopped', exitstatus: 'OK' };
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const task = await api(
-      '/providers/' + encodeURIComponent(providerId)
-      + '/tasks/' + encodeURIComponent(nodeName)
-      + '/' + encodeURIComponent(String(upid))
-    );
-    if (typeof onPoll === 'function') onPoll(task);
-    const stopped = String(task.status || '').toLowerCase() === 'stopped' || Boolean(task.exitstatus);
-    if (stopped) {
-      if (String(task.exitstatus || '') !== 'OK') {
-        throw new Error('Task Proxmox zakończył się błędem: ' + (task.exitstatus || 'nieznany błąd'));
-      }
-      return task;
-    }
-    await new Promise(resolve => window.setTimeout(resolve, 2000));
-  }
-  throw new Error('Przekroczono czas oczekiwania na task Proxmox.');
-}
-
-async function waitForTemplate(providerId, nodeName, targetVmid, onPoll, timeoutMs = 20 * 60 * 1000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const status = await api(
-        '/providers/' + encodeURIComponent(providerId)
-        + '/vms/' + encodeURIComponent(nodeName)
-        + '/' + encodeURIComponent(targetVmid)
-        + '/status'
-      );
-      if (Number(status.template || 0) === 1) return status;
-    } catch {
-      // Clone/template may briefly be absent while Proxmox finalizes the task.
-    }
-    if (typeof onPoll === 'function') onPoll();
-    await new Promise(resolve => window.setTimeout(resolve, 3000));
-  }
-  throw new Error(
-    'Klon został utworzony, ale nie potwierdzono konwersji do template w wymaganym czasie. '
-    + 'Sprawdź VMID ' + targetVmid + ' bezpośrednio w Proxmox.'
-  );
-}
-
 async function proxmoxTemplateCloneView() {
   const missingPermissions = REQUIRED_PERMISSIONS.filter(permission => !allowed(permission));
   if (missingPermissions.length) {
