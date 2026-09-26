@@ -217,6 +217,25 @@ def terraform_state_vm_id(workspace):
         return None
 
 
+def terraform_state_resource_attribute(workspace, resource_type, resource_name, attribute):
+    path = Path(workspace) / 'terraform.tfstate'
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, TypeError, ValueError):
+        return None
+    for resource in payload.get('resources') or []:
+        if resource.get('type') != resource_type or resource.get('name') != resource_name:
+            continue
+        for instance in resource.get('instances') or []:
+            attributes = instance.get('attributes') or {}
+            value = attributes.get(attribute)
+            if value not in {None, ''}:
+                return value
+    return None
+
+
 def terraform_plan_command(binary, operation, recreate_address=None):
     command = [binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
     if operation == 'terraform.destroy':
@@ -395,6 +414,20 @@ class TerraformExecutor(Executor):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
                 restore_state(deployment.id, workspace)
+
+                if provider_type == 'proxmox' and not runtime_variables.get('cloud_init_snippet_storage'):
+                    legacy_snippet_storage = terraform_state_resource_attribute(
+                        workspace,
+                        'proxmox_virtual_environment_file',
+                        'qemu_guest_agent_cloud_init',
+                        'datastore_id',
+                    )
+                    if legacy_snippet_storage:
+                        runtime_variables['cloud_init_snippet_storage'] = str(legacy_snippet_storage)
+                        context.log(
+                            'cloud-init.legacy-snippet-storage.recovered: '
+                            + str(legacy_snippet_storage)
+                        )
 
                 if (
                     provider_type == 'proxmox'
