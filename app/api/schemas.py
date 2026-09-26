@@ -763,11 +763,25 @@ class AwxOnboardingInput(Input):
     organization_id: int | None = Field(default=None, gt=0)
     project_id: int | None = Field(default=None, gt=0)
     inventory_id: int | None = Field(default=None, gt=0)
-    inventory_name: Annotated[str, Field(min_length=1, max_length=100)] = 'CloudPortal'
+    inventory_name: Annotated[str, Field(min_length=1, max_length=100)] = '<Projekt>-<APMID>-<ENV>'
     group_by_environment: bool = True
     group_by_apmid: bool = True
     job_template_id: int | None = Field(default=None, gt=0)
     remove_on_destroy: bool = True
+
+    @field_validator('inventory_name')
+    @classmethod
+    def valid_inventory_name_pattern(cls, value):
+        import re
+        normalized = str(value or '').strip()
+        allowed = {'projekt', 'project', 'apmid', 'env', 'environment'}
+        tokens = re.findall(r'<([^<>]+)>', normalized)
+        unknown = sorted({'<' + token + '>' for token in tokens if token.strip().lower() not in allowed})
+        if unknown:
+            raise ValueError('Unsupported AWX inventory pattern token(s): ' + ', '.join(unknown))
+        if '<' in re.sub(r'<[^<>]+>', '', normalized) or '>' in re.sub(r'<[^<>]+>', '', normalized):
+            raise ValueError('AWX inventory pattern contains an invalid token')
+        return normalized
 
 
 class BlueprintDeployment(Input):
