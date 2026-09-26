@@ -35,12 +35,13 @@ from app.inventory_sync import state_outputs, sync_deployment_inventory
 from app.jobs.approval import approval_policy_for_job
 from app.jobs.lifecycle import has_released_allocations
 from app.jobs.proxmox_destroy import force_stop_before_destroy
+from app.jobs.proxmox_clone_template import OPERATION as PROXMOX_CLONE_TEMPLATE_OPERATION, execute as execute_proxmox_clone_template
 from app.quotas.service import (account_confirmed_absent, commit_job_reservation,
                                 mark_job_reservation_uncertain, prepare_job_reservation,
                                 release_job_reservation)
 from app.resource_scope.authorization import Scope
 from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog,
-                        ManagedResource, ManagedVM, Token, User, now)
+                        ManagedResource, ManagedVM, Provider, Token, User, now)
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
 from app.credentials.ssh import public_key_from_private_key
