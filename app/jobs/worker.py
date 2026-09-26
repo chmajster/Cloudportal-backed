@@ -740,7 +740,53 @@ def blueprint_runtime_facts(context):
     }
 
 
-def resolve_awx_inventory_name(context, client, config, facts):
+def resolve_awx_scope(context, client, config, *, require_project=True):
+    """Map immutable CloudPortal scope to AWX Organization/Project."""
+    from app.projects.models import Project
+    from app.tenancy.models import Tenant
+
+    with session() as db:
+        tenant = db.get(Tenant, str(context.deployment.tenant_id))
+        project = db.get(Project, str(context.deployment.project_id))
+        if tenant is None or tenant.deleted_at is not None:
+            raise AwxError('CloudPortal Tenant is unavailable for AWX organization mapping')
+        if project is None or project.deleted_at is not None:
+            raise AwxError('CloudPortal Project is unavailable for AWX project mapping')
+        tenant_name = str(tenant.name or '').strip()
+        project_name = str(project.name or '').strip()
+
+    organization = client.ensure_organization(name=tenant_name)
+    organization_id = int(organization['id'])
+    configured_organization_id = config.get('organization_id')
+    if (
+        configured_organization_id
+        and int(configured_organization_id) != organization_id
+    ):
+        raise AwxError(
+            'Legacy AWX organization selection conflicts with the CloudPortal Tenant mapping'
+        )
+
+    awx_project = None
+    if require_project:
+        awx_project = client.project_for_organization(
+            name=project_name,
+            organization_id=organization_id,
+        )
+        configured_project_id = config.get('project_id')
+        if configured_project_id and int(configured_project_id) != int(awx_project['id']):
+            raise AwxError(
+                'Legacy AWX project selection conflicts with the CloudPortal Project mapping'
+            )
+
+    return {
+        'organization_id': organization_id,
+        'organization_name': str(organization.get('name') or tenant_name),
+        'project_id': int(awx_project['id']) if awx_project else None,
+        'project_name': str((awx_project or {}).get('name') or project_name),
+    }
+
+
+def resolve_awx_inventory_name(context, client, config, facts, awx_scope=None):
     configured = str(
         config.get('inventory_name') or DEFAULT_AWX_INVENTORY_PATTERN
     ).strip() or DEFAULT_AWX_INVENTORY_PATTERN
@@ -752,20 +798,11 @@ def resolve_awx_inventory_name(context, client, config, facts):
 
     project_name = None
     if re.search(r'<(?:Projekt|Project)>', configured, re.IGNORECASE):
-        project_id = config.get('project_id')
-        if project_id:
-            payload = client.request('GET', f'projects/{int(project_id)}/').json()
-            if not isinstance(payload, dict) or not payload.get('id'):
-                raise AwxError('Selected AWX project is unavailable for inventory pattern rendering')
-            project_name = str(payload.get('name') or '').strip()
-        else:
-            from app.projects.models import Project
-            with session() as db:
-                project = db.get(Project, str(context.deployment.project_id))
-                if project is not None and project.deleted_at is None:
-                    project_name = str(project.name or '').strip()
+        if awx_scope is None:
+            awx_scope = resolve_awx_scope(context, client, config)
+        project_name = str(awx_scope.get('project_name') or '').strip()
         if not project_name:
-            raise AwxError('AWX inventory pattern requires a project name')
+            raise AwxError('AWX inventory pattern requires the mapped CloudPortal project name')
 
     return render_awx_inventory_name(
         configured,
@@ -839,7 +876,10 @@ def register_awx_host(context, runtime, workspace, *, timeout=600, step_id='regi
     )
     context.check()
     try:
-        inventory_name = resolve_awx_inventory_name(context, client, config, facts)
+        awx_scope = resolve_awx_scope(context, client, config)
+        inventory_name = resolve_awx_inventory_name(
+            context, client, config, facts, awx_scope=awx_scope
+        )
         result = client.register_host(
             hostname=context.deployment.name,
             ansible_host=address,
@@ -848,25 +888,25 @@ def register_awx_host(context, runtime, workspace, *, timeout=600, step_id='regi
             apmid=facts.get('apmid'),
             inventory_id=config.get('inventory_id'),
             inventory_name=inventory_name,
-            organization_id=config.get('organization_id'),
+            organization_id=awx_scope['organization_id'],
             group_by_environment=bool(config.get('group_by_environment', True)),
             group_by_apmid=bool(config.get('group_by_apmid', True)),
         )
         job_template_id = config.get('job_template_id')
-        project_id = config.get('project_id')
+        project_id = awx_scope['project_id']
         launch = None
         if job_template_id:
-            if project_id:
-                job_template = client.request(
-                    'GET', f'job_templates/{int(job_template_id)}/'
-                ).json()
-                if (
-                    not isinstance(job_template, dict)
-                    or int(job_template.get('project') or 0) != int(project_id)
-                ):
-                    raise AwxError(
-                        'Selected AWX Job Template does not belong to the selected project'
-                    )
+            job_template = client.request(
+                'GET', f'job_templates/{int(job_template_id)}/'
+            ).json()
+            if (
+                not isinstance(job_template, dict)
+                or int(job_template.get('project') or 0) != int(project_id)
+            ):
+                raise AwxError(
+                    'Selected AWX Job Template does not belong to the AWX Project '
+                    'mapped from the CloudPortal Project'
+                )
             launch_key = str(step_id)
             launches = runtime.setdefault('awx_launches', {})
             existing_job_id = launches.get(launch_key)
@@ -954,12 +994,15 @@ def cleanup_awx_after_destroy(context):
             timeout=30,
         )
         facts = blueprint_runtime_facts(context)
-        inventory_name = resolve_awx_inventory_name(context, client, config, facts)
+        awx_scope = resolve_awx_scope(context, client, config, require_project=False)
+        inventory_name = resolve_awx_inventory_name(
+            context, client, config, facts, awx_scope=awx_scope
+        )
         result = client.remove_host(
             hostname=context.deployment.name,
             inventory_id=config.get('inventory_id'),
             inventory_name=inventory_name,
-            organization_id=config.get('organization_id'),
+            organization_id=awx_scope['organization_id'],
         )
     except AwxError:
         context.log(
