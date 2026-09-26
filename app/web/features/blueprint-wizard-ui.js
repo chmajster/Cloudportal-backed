@@ -38,6 +38,38 @@
       node('strong', { text: String(value ?? '—') }));
   }
 
+  function avatarPicker(state, avatars = []) {
+    const avatarField = selectField('Avatar Blueprintu', 'avatar_id', [
+      { value: '', label: 'Domyślny — ikona Blueprintu' },
+      ...avatars.map(item => ({ value: item.id, label: item.name + ' · ' + item.id })),
+    ], state.avatarId, {
+      wide: true,
+      help: 'Awatary są zarządzane w Narzędzia → Awatary Blueprintów.',
+    });
+    const avatarVisual = node('div', { class: 'blueprint-wizard-avatar-visual', 'aria-hidden': 'true' });
+    const avatarCopy = node('div', { class: 'blueprint-wizard-avatar-copy' });
+    const avatarPreview = node('div', { class: 'blueprint-wizard-avatar-picker wide' }, avatarVisual, avatarCopy);
+    const avatarSelect = avatarField.querySelector('select');
+
+    const renderAvatar = () => {
+      const selectedAvatar = avatars.find(item => String(item.id) === String(avatarSelect.value || ''));
+      avatarVisual.replaceChildren(selectedAvatar?.data_uri
+        ? node('img', { src: selectedAvatar.data_uri, alt: '', loading: 'lazy', decoding: 'async' })
+        : appIcon('box'));
+      avatarCopy.replaceChildren(
+        node('strong', { text: selectedAvatar?.name || 'Domyślny avatar' }),
+        node('small', { class: 'muted', text: selectedAvatar
+          ? 'ID: ' + selectedAvatar.id
+          : 'Jeśli nie wybierzesz awatara, produkt użyje standardowej ikony Blueprintu.' }));
+    };
+    avatarSelect.addEventListener('change', () => {
+      state.avatarId = avatarSelect.value || '';
+      renderAvatar();
+    });
+    renderAvatar();
+    return [avatarField, avatarPreview];
+  }
+
   function dualListGroup(title, name, rows, selected, description = '') {
     const picked = new Set((selected || []).map(value => String(value)));
     const labelFor = row => {
@@ -109,6 +141,6 @@
       body);
   }
 
-  parts.ui = { errorText, summaryRow, workflowVisual, dualListGroup };
+  parts.ui = { errorText, summaryRow, workflowVisual, avatarPicker, dualListGroup };
   registerExtension('blueprint-wizard-ui', () => {});
 })();
