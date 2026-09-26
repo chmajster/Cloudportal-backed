@@ -7,11 +7,13 @@ from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
                              IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput,
-                             VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput)
+                             VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput, BlueprintAvatarOutput)
 from app.api.schemas import (AssignRoles, LDAPSettingsInput, RoleInput, TokenInput, UserCreate, UserUpdate,
-                             VMClassificationSettingsInput, BlueprintExecutionSettingsInput)
+                             VMClassificationSettingsInput, BlueprintExecutionSettingsInput, BlueprintAvatarInput)
 from app.auth.routes import user_public
 from app.blueprint_settings import blueprint_execution_settings, save_blueprint_execution_settings
+from app.blueprint_avatars import (delete_blueprint_avatar, list_blueprint_avatars,
+                                   save_blueprint_avatar)
 from app.jobs.settings import job_execution_settings, save_job_execution_settings
 from app.auth.ldap import ldap_settings, save_ldap_settings, test_ldap_connection
 from app.vm_classification import save_vm_classification_settings, vm_classification_settings
@@ -164,6 +166,35 @@ def update_vm_classification_settings(data: VMClassificationSettingsInput, reque
                                       actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
     result = save_vm_classification_settings(db, data)
     audit(db, request, 'settings.vm_classification_updated', 'settings', 'vm_classification')
+    return result
+
+
+@router.get('/settings/blueprint-avatars', response_model=Items[BlueprintAvatarOutput])
+def get_blueprint_avatars(actor=Depends(require('settings.read')), db=Depends(get_db, scope='function')):
+    return {'items': list_blueprint_avatars(db)}
+
+
+@router.post('/settings/blueprint-avatars', status_code=201, response_model=BlueprintAvatarOutput)
+def create_blueprint_avatar(data: BlueprintAvatarInput, request: Request,
+                            actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    item = save_blueprint_avatar(db, data)
+    audit(db, request, 'settings.blueprint_avatar_created', 'settings', item['id'])
+    return item
+
+
+@router.put('/settings/blueprint-avatars/{avatar_id}', response_model=BlueprintAvatarOutput)
+def update_blueprint_avatar(avatar_id: str, data: BlueprintAvatarInput, request: Request,
+                            actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    item = save_blueprint_avatar(db, data, avatar_id=avatar_id)
+    audit(db, request, 'settings.blueprint_avatar_updated', 'settings', avatar_id)
+    return item
+
+
+@router.delete('/settings/blueprint-avatars/{avatar_id}', response_model=DeletedOutput)
+def remove_blueprint_avatar(avatar_id: str, request: Request,
+                            actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    result = delete_blueprint_avatar(db, avatar_id)
+    audit(db, request, 'settings.blueprint_avatar_deleted', 'settings', avatar_id)
     return result
 
 
