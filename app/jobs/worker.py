@@ -773,7 +773,6 @@ BLUEPRINT_DECLARATIVE_STEPS = {'cloud_init'}
 BLUEPRINT_DIRECT_PROXMOX_STEPS = {
     'clone_vm', 'configure_vm', 'start_vm', 'set_hostname', 'set_tags',
 }
-BLUEPRINT_PRECOMPILED_STEPS = {'generate_hostname', 'allocate_ip'}
 BLUEPRINT_POST_APPLY_STEPS = {
     'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
     'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
@@ -781,7 +780,6 @@ BLUEPRINT_POST_APPLY_STEPS = {
 BLUEPRINT_SUPPORTED_STEPS = (
     BLUEPRINT_DECLARATIVE_STEPS
     | BLUEPRINT_DIRECT_PROXMOX_STEPS
-    | BLUEPRINT_PRECOMPILED_STEPS
     | BLUEPRINT_POST_APPLY_STEPS
     | {'release_ip', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'condition', 'approval', 'delay', 'notification'}
 )
@@ -2006,12 +2004,7 @@ def run_blueprint_workflow(context, executor):
             context.step_deadline = time.monotonic() + timeout
             try:
                 context.stage(f'workflow.step.start:{step_id}:{step_type}')
-                if step_type in BLUEPRINT_PRECOMPILED_STEPS:
-                    context.log(
-                        f'workflow.step.precompiled: {step_id}:{step_type}; '
-                        'value was resolved before the job was queued'
-                    )
-                elif step_type in BLUEPRINT_DECLARATIVE_STEPS:
+                if step_type in BLUEPRINT_DECLARATIVE_STEPS:
                     if runtime['applied']:
                         raise ExecutionFailed('Declarative VM step cannot run after terraform_apply')
                     runtime['prepared'].append(step_id + ':' + step_type)
