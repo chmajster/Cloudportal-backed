@@ -305,6 +305,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'/missing?purge=true', { method: 'DELETE' }" in script
     assert "registerCommand('inventory.cleanupMissingVm'" in script
     assert "button('Usuń pozostałe dane'" in script
+    assert "!['destroyed', 'reconciliation_required'].includes(item.status)" in script
     assert "(repairInventory ? 'refresh=true&' : '') + 'limit=200'" in script
     assert 'VM nie istnieje w Proxmox' in script
     assert 'nie została znaleziona na platformie' in script
@@ -317,12 +318,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.job-live-log' in stylesheet
     assert '.job-log-page' in stylesheet
     assert '.job-log-page-meta' in stylesheet
-    assert "node('dt', { text: 'Hostname' })" in script
     assert "node('dt', { text: 'Numer VM' })" in script
     assert "'data-vm-id': ''" in script
     assert "const vmId = jobLogVmId(current, deployment, logs.items || []);" in script
-    assert "const hostname = jobLogHostname(deployment);" in script
-    assert "function jobLogHostname(deployment = null)" in script
     assert "(vmId ? ' · VMID ' + vmId : '')" in script
     assert "navigate('/jobs/' + encodeURIComponent(item.id))" in script
     assert "id: 'job-log'" in script

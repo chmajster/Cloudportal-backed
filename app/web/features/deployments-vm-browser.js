@@ -119,7 +119,7 @@ async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] })
   deployments
     .filter(item => item.provider === 'proxmox'
       && Boolean(item.workflow?.blueprint)
-      && item.status !== 'destroyed'
+      && !['destroyed', 'reconciliation_required'].includes(item.status)
       && !managedDeploymentIds.has(item.id))
     .forEach(item => result.push(provisionalBlueprintVm(item)));
 
