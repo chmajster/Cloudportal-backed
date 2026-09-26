@@ -22,9 +22,36 @@ def sync_deployment_inventory(db, deployment, outputs):
         raise RuntimeError('Managed resource identity is missing from Terraform state')
 
     primary_ip = outputs.get('primary_ip', {}).get('value')
-    node = str((deployment.variables or {}).get('node') or '')
+    variables = dict(deployment.variables or {})
+    node = str(variables.get('node') or '')
     normalized_vm_id = None
-    metadata = {}
+    raw_tags = variables.get('tags') or []
+    tags = list(raw_tags) if isinstance(raw_tags, list) else [
+        item for item in str(raw_tags).replace(',', ';').split(';') if item
+    ]
+    apmid = variables.get('apmid')
+    environment = variables.get('environment')
+    if not apmid:
+        apmid = next(
+            (str(tag)[6:].upper() for tag in tags if str(tag).lower().startswith('apmid-')),
+            None,
+        )
+    if not environment:
+        environment = next(
+            (str(tag)[4:].lower() for tag in tags if str(tag).lower().startswith('env-')),
+            None,
+        )
+    metadata = {
+        key: value for key, value in {
+            'apmid': apmid,
+            'environment': environment,
+            'organization': variables.get('organization'),
+            'project': variables.get('project'),
+            'resource_scope_key': variables.get('resource_scope_key'),
+            'tags': tags,
+        }.items()
+        if value not in (None, '', [])
+    }
     managed_vm = None
 
     if deployment.provider == 'proxmox':
@@ -33,7 +60,7 @@ def sync_deployment_inventory(db, deployment, outputs):
         if not node:
             raise RuntimeError('Proxmox node missing from deployment variables')
         normalized_vm_id = int(vm_id)
-        metadata = {'node': node, 'vm_id': normalized_vm_id}
+        metadata.update({'node': node, 'vm_id': normalized_vm_id})
 
         by_identity = db.scalar(select(ManagedVM).where(
             ManagedVM.provider_id == deployment.provider_id,
