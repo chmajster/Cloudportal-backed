@@ -499,10 +499,15 @@ def test_plan_approval_pauses_and_resumes_exact_plan(client, headers, monkeypatc
         stored = db.get(TerraformPlan, launched.json()['id'])
         assert stored is not None
         assert stored.encrypted_plan != approved_plan
-        runtime = (db.get(Job, job_id).payload or {})['_workflow_runtime']
+        payload = db.get(Job, job_id).payload or {}
+        runtime = payload['_workflow_runtime']
+        workflow_approval = payload['_workflow_approval']
         assert runtime['completed_steps'] == ['plan']
         assert runtime['plan_ready'] is True
         assert runtime['plan_sha256'] == stored.plan_sha256
+        assert workflow_approval['status'] == 'pending'
+        assert workflow_approval['step_id'] == 'approval'
+        assert workflow_approval['plan_sha256'] == stored.plan_sha256
 
     workspace = tmp_path / 'workspaces' / launched.json()['workspace']
     (workspace / 'execution.tfplan').unlink(missing_ok=True)
@@ -567,6 +572,57 @@ def test_retry_re_evaluates_current_approval_policy(client, headers):
         assert approval['status'] == 'pending'
         assert 'approved_by' not in approval
         assert approval['expires_at']
+
+
+def test_retry_after_provider_checkpoint_resumes_without_recreate(client, headers):
+    credential, provider = infrastructure(client, headers)
+    created = client.post(
+        '/api/v1/blueprints',
+        headers=headers,
+        json=blueprint_payload(credential, provider),
+    )
+    assert created.status_code == 201, created.text
+    launched = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=idem(headers),
+        json={},
+    )
+    assert launched.status_code == 202, launched.text
+    job_id = launched.json()['job']['id']
+
+    with session() as db:
+        job = db.get(Job, job_id)
+        payload = dict(job.payload or {})
+        payload['_recreate'] = True
+        payload['_workflow_runtime'] = {
+            'completed_steps': ['clone', 'apply'],
+            'provider_applied': True,
+            'inventory_synced': True,
+            'ansible_ran': False,
+            'ansible_completed_runs': [],
+            'ansible_inflight_run': None,
+            'awx_launches': {},
+            'plan_ready': False,
+            'plan_sha256': None,
+        }
+        job.payload = payload
+        job.status = 'failed'
+        deployment = db.get(Deployment, launched.json()['id'])
+        deployment.active_job_id = None
+        deployment.status = 'failed'
+        db.commit()
+
+    retried = client.post('/api/v1/jobs/' + job_id + '/retry', headers=idem(headers))
+    assert retried.status_code == 202, retried.text
+    assert retried.json()['status'] == 'queued'
+
+    with session() as db:
+        retry = db.get(Job, retried.json()['id'])
+        payload = retry.payload or {}
+        assert payload['_resume_after_provider_apply'] is True
+        assert '_recreate' not in payload
+        assert payload['_workflow_runtime']['provider_applied'] is True
+        assert payload['_workflow_runtime']['completed_steps'] == ['clone', 'apply']
 
 
 def test_waiting_approval_expires_and_removes_plan(client, headers, monkeypatch, tmp_path):
