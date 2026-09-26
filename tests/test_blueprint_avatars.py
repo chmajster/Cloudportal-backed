@@ -75,7 +75,7 @@ def test_blueprint_avatar_catalog_crud_and_public_read(client, headers):
     updated = client.put('/api/v1/settings/blueprint-avatars/ubuntu', headers=headers, json={
         'id': 'ubuntu',
         'name': 'Ubuntu Server',
-        'data_uri': ICO_DATA_URI.removeprefix('data:'),
+        'data_uri': ICO_DATA_URI.replace('data:image/', ''),
     })
     assert updated.status_code == 200, updated.text
     assert updated.json()['name'] == 'Ubuntu Server'
