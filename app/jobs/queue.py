@@ -174,7 +174,7 @@ def reconcile_deployment_job_statuses(db):
             )
         elif job.status != 'successful':
             deployment.status = job.status
-        elif job.operation == 'terraform.destroy':
+        elif job.operation in {'terraform.destroy', 'proxmox.destroy'}:
             deployment.status = 'destroyed'
             if deployment.destroyed_at is None:
                 deployment.destroyed_at = now()
