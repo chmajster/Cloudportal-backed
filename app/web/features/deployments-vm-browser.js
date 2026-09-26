@@ -290,6 +290,15 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
   if (canConsole) {
     actions.push(button('Konsola', () => runCommand('inventory.consoleVm', item), 'ghost'));
   }
+  if (item.lifecycle_status === 'missing'
+      && allowed('inventory.delete')
+      && hasCommand('inventory.cleanupMissingVm')) {
+    actions.push(button('Usuń pozostałe dane', () => runCommand(
+      'inventory.cleanupMissingVm',
+      item,
+      'my-resources'
+    ), 'danger'));
+  }
   const canRecreate = !provisioningVisible
     && item.management_mode === 'terraform'
     && item.deployment_id
@@ -540,7 +549,9 @@ function createVmBrowser({
         node('span', { text: 'Data utworzenia' }),
         node('span', { class: 'my-resources-vm-list-header-actions', text: 'Akcje' }))
       : null;
-    const bulkItems = filtered.map(entry => entry.item).filter(item => !item.provisioning_placeholder);
+    const bulkItems = filtered
+      .map(entry => entry.item)
+      .filter(item => !item.provisioning_placeholder && item.lifecycle_status === 'active');
     vmBulkControls = bulkItems.length ? (window.vmBulkActions?.toolbar(
       bulkItems,
       grid,
