@@ -638,7 +638,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "selectField('Projekt', 'target_project_id'" in script
     assert "multiCheckboxField(\n        'APMID',\n        'scope_apmids'" in script
     assert "multiCheckboxField(\n        'Środowiska / ENV',\n        'scope_environments'" in script
-    assert "'X-Tenant-ID': targetTenantId" in script
+    assert "'X-Tenant-ID': requestTenantId" in script
     assert "'X-Project-ID': requestProjectId" in script
     assert 'Zaawansowane selektory scope — JSON' in script
     assert "environment=facts.get('environment')" in Path('app/jobs/worker.py').read_text()
