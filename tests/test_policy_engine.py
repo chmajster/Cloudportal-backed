@@ -7,6 +7,7 @@ from app.jobs.approval import approve_policy_stage, gate_job_for_approval
 
 from app.policy_engine.engine import evaluate
 from app.policy_engine.integration import compose_scope_key
+from app.policy_engine import integration as policy_integration
 
 
 def policy(policy_id, *, priority=5000, status='enforced', enforcement='hard',
@@ -382,6 +383,54 @@ def _approval_actor(user_id, role_name):
             roles=[SimpleNamespace(id=user_id, name=role_name)],
         ),
     )
+
+
+def test_direct_proxmox_job_is_revalidated_by_policy(monkeypatch):
+    monkeypatch.setattr(
+        policy_integration,
+        '_scope_from_ids',
+        lambda db, tenant_id, project_id, **kwargs: {
+            'tenant_id': tenant_id,
+            'project_id': project_id,
+            'organization': 'Org',
+            'project': 'Project',
+            'key': 'Org-Project-LEO-DEV',
+        },
+    )
+    monkeypatch.setattr(
+        policy_integration,
+        '_user_actor',
+        lambda user, permissions, db, scope: {'id': user.id, 'permissions': sorted(permissions)},
+    )
+    seen = []
+    def evaluate_context(db, ctx, persist=True):
+        seen.append(ctx)
+        return {'decision': 'allow', 'effective_context': ctx, 'violations': [], 'approvals': []}
+    monkeypatch.setattr(policy_integration, 'evaluate_context', evaluate_context)
+
+    job = SimpleNamespace(
+        operation='proxmox.provision',
+        payload={'blueprint': {'id': 1, 'slug': 'direct', 'version': 1}},
+        tenant_id='tenant-1',
+        project_id='project-1',
+        source='CloudPortal',
+    )
+    deployment = SimpleNamespace(
+        id='deployment-1',
+        provider_id=1,
+        provider='proxmox',
+        template='proxmox-vm',
+        variables={'tags': ['apmid-leo', 'env-dev'], 'node': 'pve01'},
+    )
+    user = SimpleNamespace(id=7)
+
+    result = policy_integration.revalidate_blueprint_job(
+        None, job, user, {'blueprints.execute'}, deployment
+    )
+
+    assert result['decision'] == 'allow'
+    assert seen[0]['request']['phase'] == 'worker_revalidate'
+    assert seen[0]['request']['action'] == 'vm.create'
 
 
 def test_policy_approval_cannot_be_auto_approved_and_supports_stages():
