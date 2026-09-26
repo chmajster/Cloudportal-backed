@@ -716,3 +716,122 @@
     width: 100%;
   }
 }
+
+
+/* Blueprint avatar catalog */
+.tool-avatar-preview,
+.blueprint-avatar-preview {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+.tool-avatar-preview {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+.tool-avatar-preview img,
+.blueprint-avatar-preview img,
+.blueprint-avatar-form-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+.blueprint-avatar-preview.empty {
+  color: var(--muted);
+}
+.blueprint-avatar-preview.empty svg {
+  width: 22px;
+  height: 22px;
+}
+
+.blueprint-avatar-manager {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+.blueprint-avatar-list {
+  display: grid;
+  gap: 9px;
+}
+.blueprint-avatar-list-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+.blueprint-avatar-list-row:hover {
+  border-color: var(--accent-border);
+}
+.blueprint-avatar-list-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.blueprint-avatar-list-copy strong,
+.blueprint-avatar-list-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.blueprint-avatar-list-copy strong { font-size: .82rem; }
+.blueprint-avatar-list-copy small { font-size: .68rem; }
+.blueprint-avatar-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.blueprint-avatar-form-preview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 82px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+.blueprint-avatar-form-preview-box {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.blueprint-avatar-form-preview > div:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.blueprint-avatar-form-preview strong {
+  font-size: .8rem;
+}
+.blueprint-avatar-form-preview span {
+  font-size: .7rem;
+}
+
+@media (max-width: 720px) {
+  .blueprint-avatar-manager { padding: 17px; }
+  .blueprint-avatar-list-row {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+  .blueprint-avatar-list-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
