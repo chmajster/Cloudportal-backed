@@ -387,7 +387,7 @@ def test_blueprint_quick_toggle(client, headers):
 
     disabled = client.put(
         f"/api/v1/blueprints/{blueprint['id']}/enabled",
-        headers=headers,
+        headers={**headers, 'If-Match': str(blueprint['version'])},
         json={'enabled': False},
     )
     assert disabled.status_code == 200, disabled.text
@@ -395,7 +395,7 @@ def test_blueprint_quick_toggle(client, headers):
 
     enabled = client.put(
         f"/api/v1/blueprints/{blueprint['id']}/enabled",
-        headers=headers,
+        headers={**headers, 'If-Match': str(disabled.json()['version'])},
         json={'enabled': True},
     )
     assert enabled.status_code == 200, enabled.text
@@ -1219,13 +1219,13 @@ def test_blueprint_rejects_proxmox_only_steps_for_aws(client, headers):
     assert 'wait_for_vm' in response.text
 
 
-def test_existing_legacy_blueprint_can_be_saved_without_explicit_apply(client, headers):
+def test_blueprint_edit_rejects_missing_explicit_apply(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     created = client.post('/api/v1/blueprints', headers=headers, json={
-        'slug': 'legacy-editable',
-        'name': 'Legacy Editable',
+        'slug': 'strict-editable',
+        'name': 'Strict Editable',
         'deployment': {
-            'name': 'legacy-editable',
+            'name': 'strict-editable',
             'provider_id': provider['id'],
             'credentials_id': credential['id'],
             'variables': deployment_payload['variables'],
@@ -1234,33 +1234,40 @@ def test_existing_legacy_blueprint_can_be_saved_without_explicit_apply(client, h
     })
     assert created.status_code == 201, created.text
 
-    update = client.put('/api/v1/blueprints/' + str(created.json()['id']), headers=headers, json={
-        'slug': 'legacy-editable',
-        'name': 'Legacy Editable',
-        'deployment': {
-            'name': 'legacy-editable',
-            'provider_id': provider['id'],
-            'credentials_id': credential['id'],
-            'variables': deployment_payload['variables'],
+    update = client.put(
+        '/api/v1/blueprints/' + str(created.json()['id']),
+        headers={**headers, 'If-Match': str(created.json()['version'])},
+        json={
+            'slug': 'strict-editable',
+            'name': 'Strict Editable',
+            'deployment': {
+                'name': 'strict-editable',
+                'provider_id': provider['id'],
+                'credentials_id': credential['id'],
+                'variables': deployment_payload['variables'],
+            },
+            'workflow': [{'id': 'cloud', 'type': 'cloud_init'}],
         },
-        'workflow': [{'id': 'clone', 'type': 'clone_vm'}],
-    })
-    assert update.status_code == 200, update.text
-    assert update.json()['workflow'] == [{'id': 'clone', 'type': 'clone_vm', 'depends_on': [], 'conditions': {}, 'retry': 0, 'timeout': 600, 'rollback': None}]
+    )
+    assert update.status_code == 422
+    assert 'explicit terraform_apply' in update.text
 
-    new_legacy = client.post('/api/v1/blueprints', headers=headers, json={
-        'slug': 'legacy-new-blocked',
-        'name': 'Legacy New Blocked',
-        'deployment': {
-            'name': 'legacy-new-blocked',
-            'provider_id': provider['id'],
-            'credentials_id': credential['id'],
-            'variables': deployment_payload['variables'],
+    missing_precondition = client.put(
+        '/api/v1/blueprints/' + str(created.json()['id']),
+        headers=headers,
+        json={
+            'slug': 'strict-editable',
+            'name': 'Strict Editable',
+            'deployment': {
+                'name': 'strict-editable',
+                'provider_id': provider['id'],
+                'credentials_id': credential['id'],
+                'variables': deployment_payload['variables'],
+            },
+            'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
         },
-        'workflow': [{'id': 'clone', 'type': 'clone_vm'}],
-    })
-    assert new_legacy.status_code == 422
-    assert 'explicit terraform_apply' in new_legacy.text
+    )
+    assert missing_precondition.status_code == 428
 
 
 def test_blueprint_approval_step_must_be_between_plan_and_apply(client, headers):
