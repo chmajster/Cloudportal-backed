@@ -320,7 +320,8 @@ def test_dhcp_native_credentials_never_create_bootstrap_account(executor_case):
         assert 'TF_VAR_ssh_password' not in env
         assert 'guest-password-secret' not in json.dumps(env)
         assert seed_config(variables['cloud_init_seed_path'])['users'][0]['name'] == 'finaluser'
-    assert context.deployment.variables == original
+    assert {key: context.deployment.variables[key] for key in original} == original
+    assert context.deployment.variables['vm_id'] == 9001
     assert 'guest-password-secret' not in json.dumps(context.job.payload)
     assert 'guest-password-secret' not in '\n'.join(logs)
     assert not (workspace / module.QEMU_BOOTSTRAP_MARKER).exists()
