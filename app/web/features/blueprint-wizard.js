@@ -128,6 +128,9 @@
         if (!provider) return;
         state.providerType = provider.type;
         state.providerCredentialId = String(provider.credentials_id || '');
+        if (provider.type !== 'proxmox' && state.executor === 'proxmox') {
+          state.executor = 'terraform';
+        }
         state.providerConnected = false;
         state.providerError = '';
         const matchingTemplates = data.templates.filter(value => value.provider === provider.type);
@@ -432,9 +435,10 @@
           node('summary', { text: 'Opcje zaawansowane' }),
           node('div', { class: 'advanced-options-body form-grid' },
             slug,
-            selectField('Silnik IaC', 'executor', [
+            selectField('Sposób tworzenia VM', 'executor', [
               { value: 'terraform', label: 'Terraform' },
               { value: 'opentofu', label: 'OpenTofu' },
+              { value: 'proxmox', label: 'Proxmox API — bez Terraform' },
             ], state.executor)));
 
         const scopeFields = blueprintScope.renderFields();
@@ -524,6 +528,21 @@
           state.providerError ? node('small', { text: state.providerError }) : null));
 
         if (provider.type === 'proxmox') {
+          const executorField = selectField('Sposób tworzenia VM', 'proxmox_executor', [
+            { value: 'proxmox', label: 'Proxmox API — bez Terraform, rzeczywisty status zadania' },
+            { value: 'terraform', label: 'Terraform' },
+            { value: 'opentofu', label: 'OpenTofu' },
+          ], state.executor, {
+            wide: true,
+            help: 'Tryb Proxmox API wykonuje pełny clone bezpośrednio w Proxmox i śledzi UPID/log taska. Gdy Proxmox raportuje procent kopiowania, CloudPortal pokazuje rzeczywisty postęp.',
+          });
+          executorField.querySelector('select').addEventListener('change', event => {
+            state.executor = event.currentTarget.value;
+            state.advancedWorkflow = false;
+            state.workflow = [];
+            render();
+          });
+
           const nodeField = selectField('Docelowy node', 'node', state.nodes.map(value => ({
             value: value.node,
             label: value.node + (value.status ? ' · ' + statusLabel(value.status) : ''),
@@ -564,6 +583,12 @@
             templates.append(card);
           });
           wrapper.append(
+            node('div', { class: 'blueprint-wizard-section-heading' },
+              node('strong', { text: 'Provisioning' }),
+              node('span', { class: 'muted', text: state.executor === 'proxmox'
+                ? 'VM będzie tworzona bezpośrednio przez Proxmox API.'
+                : 'VM będzie tworzona przez ' + (state.executor === 'opentofu' ? 'OpenTofu' : 'Terraform') + '.' })),
+            executorField,
             node('div', { class: 'blueprint-wizard-section-heading' },
               node('strong', { text: 'Node docelowy' })),
             nodeField,
