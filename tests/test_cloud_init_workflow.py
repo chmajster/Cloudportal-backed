@@ -57,6 +57,19 @@ def test_cloud_init_rejects_unsafe_workflow(mutation):
         validate_cloud_init_workflow(steps)
 
 
+def test_cloud_init_must_precede_start_vm():
+    steps = [
+        {'id': 'clone', 'type': 'clone_vm', 'depends_on': []},
+        {'id': 'start', 'type': 'start_vm', 'depends_on': ['clone']},
+        {'id': 'cloud_init', 'type': 'cloud_init', 'depends_on': ['clone']},
+    ]
+    with pytest.raises(ValueError, match='start_vm'):
+        validate_cloud_init_workflow(steps)
+
+    steps[1]['depends_on'] = ['cloud_init']
+    assert validate_cloud_init_workflow(steps) is True
+
+
 def test_cloud_init_precedes_the_approved_plan_not_just_apply():
     steps = workflow()
     steps.insert(1, {'id': 'plan', 'type': 'terraform_plan', 'depends_on': []})
