@@ -341,7 +341,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Usuń pozostałe dane'" in script
     assert 'Automatyczna synchronizacja nie odtworzy tego wpisu ze starego Terraform state.' in script
     assert "!['destroyed', 'reconciliation_required'].includes(item.status)" in script
-    assert "(repairInventory ? 'refresh=true&' : '') + 'limit=200'" in script
+    assert "(refreshLive ? 'refresh=true&' : '') + 'limit=200'" in script
     assert 'VM nie istnieje w Proxmox' in script
     assert 'nie została znaleziona na platformie' in script
     assert "item.lifecycle_status !== 'destroyed'" in script
