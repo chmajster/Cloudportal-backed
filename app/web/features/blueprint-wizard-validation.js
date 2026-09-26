@@ -169,6 +169,9 @@ function validateStep(index, state, data, editingItem) {
   if (index === 0) {
     if (!state.tenantId || !state.projectId) errors.project_id = 'Wybierz Tenant i Projekt dla Blueprintu.';
     if (!state.name) errors.name = 'Podaj nazwę Blueprintu.';
+    if (state.avatarId && !(data.avatars || []).some(item => String(item.id) === String(state.avatarId))) {
+      errors.avatar_id = 'Wybrany avatar Blueprintu nie jest już dostępny.';
+    }
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(state.slug)) errors.slug = 'Slug musi mieć 1–63 znaków i używać liter, cyfr, _, . lub -.';
   } else if (index === 1) {
     const provider = data.providers.find(value => String(value.id) === String(state.providerId));
