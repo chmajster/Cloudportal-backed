@@ -1,6 +1,7 @@
 import re
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from pydantic import ValidationError
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition, validate_template_variables
@@ -45,6 +46,36 @@ def scheme_public(row):
 
 def portal_source(value):
     return {'CloudPortal': 'cloudportal', 'Cloudportal-backed': 'backend', 'API': 'api'}.get(value, 'api')
+
+
+def validate_persisted_blueprint_contract(row):
+    payload = {
+        'slug': row.slug,
+        'name': row.name,
+        'description': row.description,
+        'avatar_id': row.avatar_id,
+        'is_active': row.is_active,
+        'visibility': row.visibility,
+        'allowed_role_ids': row.allowed_role_ids,
+        'allowed_user_ids': row.allowed_user_ids,
+        'manager_role_ids': [role.id for role in row.manager_roles],
+        'variables_schema': row.variables_schema,
+        'deployment': row.deployment,
+        'workflow': row.workflow,
+        'requires_approval': row.requires_approval,
+        'auto_approve_for_executors': row.auto_approve_for_executors,
+        'approval_timeout_hours': row.approval_timeout_hours,
+        'recovery_policy': row.recovery_policy,
+    }
+    try:
+        BlueprintInput.model_validate(payload)
+    except ValidationError as exc:
+        first = exc.errors(include_url=False)[0] if exc.errors() else {}
+        message = str(first.get('msg') or 'Blueprint definition is invalid')
+        raise HTTPException(
+            409,
+            'Blueprint is incompatible with the current workflow contract: ' + message,
+        ) from None
 
 
 def require_blueprint_version(row, if_match):
@@ -376,6 +407,7 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
 def blueprint(id: int, request: Request, source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
               actor=Depends(require('blueprints.read')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
+    validate_persisted_blueprint_contract(row)
     source = portal_source(source_header)
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
     if source != 'backend' and not can_manage and not available_to(row, actor, source):
