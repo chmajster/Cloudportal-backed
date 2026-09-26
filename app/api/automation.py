@@ -511,6 +511,9 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             parsed.template, parsed.variables
         ).model_dump(mode='json')
         provider = find(db, Provider, parsed.provider_id)
+        template_meta, _ = template_definition(parsed.template)
+        if provider.type != template_meta['provider']:
+            raise HTTPException(422, 'Policy-selected provider does not match the Terraform template')
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
         primary_ansible = parsed.ansible or (ansible_runs[0] if ansible_runs else None)
