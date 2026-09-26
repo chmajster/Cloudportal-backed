@@ -19,7 +19,8 @@ def _task_key(upid):
 
 
 def track_proxmox_task(*, provider_id, node, upid, action, created_by,
-                       vm_id=None, target_node=None, target_vm_id=None, name=None):
+                       vm_id=None, target_node=None, target_vm_id=None, name=None,
+                       convert_to_template=False):
     if not upid:
         return False
     payload = {
@@ -32,6 +33,7 @@ def track_proxmox_task(*, provider_id, node, upid, action, created_by,
         'target_node': str(target_node) if target_node else None,
         'target_vm_id': int(target_vm_id) if target_vm_id is not None else None,
         'name': str(name) if name else None,
+        'convert_to_template': bool(convert_to_template),
     }
     try:
         redis_client().setex(_task_key(upid), TASK_TTL_SECONDS, json.dumps(payload))
@@ -109,6 +111,45 @@ def _apply_success(db, adapter, item):
         db.delete(row)
 
 
+def _queue_clone_template_follow_up(adapter, item):
+    if item.get('action') != 'clone' or not item.get('convert_to_template'):
+        return None
+    target_node = str(item.get('target_node') or item.get('node') or '')
+    target_vm_id = item.get('target_vm_id')
+    if not target_node or target_vm_id is None:
+        raise RuntimeError('Clone-to-template follow-up is missing target identity')
+
+    task = adapter.convert_to_template(target_node, int(target_vm_id))
+    if not task:
+        return {
+            'provider_id': int(item['provider_id']),
+            'node': target_node,
+            'upid': None,
+            'action': 'template',
+            'created_by': int(item['created_by']),
+            'vm_id': int(target_vm_id),
+            'target_node': None,
+            'target_vm_id': None,
+            'name': item.get('name'),
+            'convert_to_template': False,
+        }
+
+    tracked = track_proxmox_task(
+        provider_id=int(item['provider_id']),
+        node=target_node,
+        upid=task,
+        action='template',
+        created_by=int(item['created_by']),
+        vm_id=int(target_vm_id),
+        name=item.get('name'),
+    )
+    if not tracked:
+        raise RuntimeError(
+            'Template conversion started but its Proxmox task could not be tracked'
+        )
+    return None
+
+
 def reconcile_proxmox_tasks_once(limit=100):
     try:
         redis = redis_client()
@@ -146,6 +187,9 @@ def reconcile_proxmox_tasks_once(limit=100):
                         continue
                     if str(status.get('exitstatus') or '') == 'OK':
                         _apply_success(db, adapter, item)
+                        immediate_template = _queue_clone_template_follow_up(adapter, item)
+                        if immediate_template is not None:
+                            _apply_success(db, adapter, immediate_template)
                     db.flush()
                 completed_keys.append(key)
                 completed += 1
