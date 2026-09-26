@@ -42,7 +42,7 @@ def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
     spec = _require_mapping(document.get('spec', {}), 'spec')
     access = _require_mapping(spec.get('access', {}), 'spec.access')
     governance = _require_mapping(spec.get('governance', {}), 'spec.governance')
-    _reject_unknown_keys(metadata, {'name', 'slug', 'displayName', 'description', 'annotations'}, 'metadata')
+    _reject_unknown_keys(metadata, {'name', 'slug', 'displayName', 'description', 'avatar', 'annotations'}, 'metadata')
     _reject_unknown_keys(
         spec,
         {'active', 'visibility', 'access', 'variables', 'deployment', 'workflow', 'governance'},
@@ -59,6 +59,7 @@ def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
         'slug': metadata.get('slug') or metadata.get('name'),
         'name': metadata.get('displayName') or metadata.get('name'),
         'description': metadata.get('description', ''),
+        'avatar_id': metadata.get('avatar'),
         'is_active': spec.get('active', True),
         'visibility': spec.get('visibility', {}),
         'allowed_role_ids': access.get('allowedRoleIds', []),
@@ -110,6 +111,8 @@ def blueprint_yaml_document(blueprint: BlueprintInput | dict[str, Any], *, versi
     }
     if data.get('description'):
         metadata['description'] = data['description']
+    if data.get('avatar_id'):
+        metadata['avatar'] = data['avatar_id']
     if version is not None:
         metadata['annotations'] = {'cloudportal.io/version': str(version)}
 
