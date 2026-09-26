@@ -131,6 +131,12 @@ async function myResourcesView(repairInventory = true) {
       if (Number(repaired.repaired_count || 0) > 0) {
         toast('Odbudowano inventory dla ' + repaired.repaired_count + ' wdrożeń.');
       }
+      if (Number(repaired.missing_count || 0) > 0) {
+        toast('Oznaczono ' + repaired.missing_count + ' VM jako brakujące w Proxmox.', 'warning');
+      }
+      if (Number(repaired.restored_count || 0) > 0) {
+        toast('Przywrócono status active dla ' + repaired.restored_count + ' VM obecnych ponownie w Proxmox.');
+      }
     } catch (error) {
       toast('Nie udało się automatycznie zsynchronizować inventory: ' + error.message, 'warning');
     }
@@ -139,7 +145,7 @@ async function myResourcesView(repairInventory = true) {
   const optionalItems = path => api(path).then(result => result.items || []).catch(() => []);
   const [deploymentResult, vmResult, resourceResult, providerResult, jobResult, users, projects, tenants] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
-    canReadInventory ? api('/inventory/vms?limit=200') : Promise.resolve({ items: [] }),
+    canReadInventory ? api('/inventory/vms?refresh=true&limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
     allowed('jobs.read') ? api('/jobs?limit=200') : Promise.resolve({ items: [] }),
