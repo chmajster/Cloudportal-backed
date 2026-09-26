@@ -176,23 +176,8 @@ def test_regex_policy_rejects_backtracking_patterns():
         validate_condition_tree({
             'field': 'resource.name',
             'operator': 'regex',
-            'value': '(a+)+    rule = policy(
-        'access-leo-dev',
-        policy_type='access',
-        scope={
-            'actions': ['vm.create'],
-            'resource_types': ['vm'],
-            'apmids': ['LEO'],
-            'environments': ['dev'],
-        },
-        effects=[{'type': 'allow', 'mode': 'whitelist'}],
-    )
-
-    assert evaluate([rule], context(apmid='LEO', environment='dev')).decision == 'allow'
-
-    denied = evaluate([rule], context(apmid='LEO', environment='prod'))
-    assert denied.decision == 'deny'
-    assert any(item['type'] == 'access_whitelist' for item in denied.violations)
+            'value': '(a+)+',
+        })
 
 
 def test_second_binding_can_allow_all_environments_for_one_apmid():
