@@ -640,6 +640,11 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
 
 @router.post('/deployments', status_code=202, response_model=CreatedDeploymentOutput)
 def create_deployment(data: DeploymentInput, request: Request, actor=Depends(require('deployments.create')), db=Depends(get_db, scope='function')):
+    if data.executor == 'proxmox':
+        raise HTTPException(
+            422,
+            'Direct Proxmox provisioning must be launched from a Blueprint so the provider workflow is immutable and auditable',
+        )
     check_job_permissions(request, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
     ensure_credential_usable(find(db, Credential, p.credentials_id))
