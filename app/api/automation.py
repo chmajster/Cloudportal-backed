@@ -47,6 +47,24 @@ def portal_source(value):
     return {'CloudPortal': 'cloudportal', 'Cloudportal-backed': 'backend', 'API': 'api'}.get(value, 'api')
 
 
+def require_blueprint_version(row, if_match):
+    if if_match is None:
+        raise HTTPException(428, 'If-Match with the current Blueprint version is required')
+    raw = str(if_match).strip()
+    if raw.startswith('W/'):
+        raw = raw[2:].strip()
+    raw = raw.strip('"')
+    try:
+        expected = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'If-Match must contain the numeric Blueprint version') from None
+    if expected != int(row.version):
+        raise HTTPException(
+            409,
+            f'Blueprint version conflict: expected {expected}, current {row.version}',
+        )
+
+
 @router.get('/blueprint-avatars', response_model=Items[BlueprintAvatarOutput])
 def blueprint_avatars(actor=Depends(authenticate), db=Depends(get_db, scope='function')):
     return {'items': list_blueprint_avatars(db)}
@@ -206,12 +224,10 @@ def validate_blueprint_references(db, data, blueprint_id=None):
             raise HTTPException(422, 'Direct Proxmox provisioning requires a Proxmox provider and proxmox-vm template')
         if workflow_types & {'terraform_plan', 'terraform_apply'}:
             raise HTTPException(422, 'Direct Proxmox provisioning cannot contain Terraform plan/apply steps')
-        if 'create_vm' in workflow_types:
-            raise HTTPException(422, 'Direct Proxmox create_vm is not implemented; use clone_vm')
-        if 'clone_vm' not in workflow_types:
-            raise HTTPException(422, 'Direct Proxmox provisioning requires clone_vm')
-    elif blueprint_id is None and 'terraform_apply' not in workflow_types:
-        raise HTTPException(422, 'New Terraform/OpenTofu Blueprints must contain an explicit terraform_apply step')
+        if sum(1 for step in data.workflow if step.type == 'clone_vm') != 1:
+            raise HTTPException(422, 'Direct Proxmox provisioning requires exactly one clone_vm step')
+    elif sum(1 for step in data.workflow if step.type == 'terraform_apply') != 1:
+        raise HTTPException(422, 'Terraform/OpenTofu Blueprints require exactly one explicit terraform_apply step')
 
     proxmox_only_steps = {
         'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
@@ -429,9 +445,19 @@ def create_blueprint_bundle(bundle: BlueprintBundleInput, request: Request,
 
 
 @router.put('/blueprints/{id}', response_model=BlueprintOutput)
-def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
-    row = find(db, Blueprint, id)
+def update_blueprint(
+    id: int,
+    data: BlueprintInput,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias='If-Match')] = None,
+    actor=Depends(require('blueprints.update')),
+    db=Depends(get_db, scope='function'),
+):
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(row, actor)
+    require_blueprint_version(row, if_match)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
@@ -443,10 +469,19 @@ def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depe
 
 
 @router.put('/blueprints/{id}/bundle', response_model=BlueprintOutput)
-def update_blueprint_bundle(id: int, bundle: BlueprintBundleInput, request: Request,
-                            actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
-    row = find(db, Blueprint, id)
+def update_blueprint_bundle(
+    id: int,
+    bundle: BlueprintBundleInput,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias='If-Match')] = None,
+    actor=Depends(require('blueprints.update')),
+    db=Depends(get_db, scope='function'),
+):
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(row, actor)
+    require_blueprint_version(row, if_match)
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
@@ -459,10 +494,19 @@ def update_blueprint_bundle(id: int, bundle: BlueprintBundleInput, request: Requ
 
 
 @router.put('/blueprints/{id}/enabled', response_model=BlueprintOutput)
-def set_blueprint_enabled(id: int, data: CatalogItemStateInput, request: Request,
-                          actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
-    row = find(db, Blueprint, id)
+def set_blueprint_enabled(
+    id: int,
+    data: CatalogItemStateInput,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias='If-Match')] = None,
+    actor=Depends(require('blueprints.update')),
+    db=Depends(get_db, scope='function'),
+):
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(row, actor)
+    require_blueprint_version(row, if_match)
     row.is_active = data.enabled
     row.version += 1
     audit(db, request, 'blueprint.enabled' if data.enabled else 'blueprint.disabled', 'blueprints', id)
