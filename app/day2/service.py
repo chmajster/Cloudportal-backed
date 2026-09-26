@@ -1,6 +1,6 @@
 import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -557,6 +557,16 @@ def _event(db, event, row, extra=None):
     queue_webhook_event(db, event, row.id, redact(payload))
 
 
+def _policy_stage_window(stage, default_hours=48):
+    try:
+        hours = int((stage or {}).get('timeout_hours') or default_hours)
+    except (TypeError, ValueError):
+        hours = default_hours
+    hours = max(1, min(720, hours))
+    requested_at = now()
+    return requested_at, requested_at + timedelta(hours=hours)
+
+
 def create_action(db, request, actor, target, credential, action_id, params, reason, permissions, *, retry_of=None, attempt=1):
     from app.policy_engine.integration import enforce_day2
     params, policy_result = enforce_day2(
@@ -599,11 +609,14 @@ def create_action(db, request, actor, target, credential, action_id, params, rea
         },
     }
     if policy_stages:
+        stage_requested_at, stage_expires_at = _policy_stage_window(policy_stages[0])
         job_payload['_policy_approval'] = {
             'current_stage': 0,
             'complete': False,
             'stages': policy_stages,
             'approvals': [],
+            'stage_requested_at': stage_requested_at.isoformat(),
+            'stage_expires_at': stage_expires_at.isoformat(),
         }
     if action.id == 'run_ansible':
         snapshot_payload = snapshot_ansible_payload(
@@ -661,8 +674,35 @@ def approve_action(db, request, actor, row, permissions):
         raise failure('RESOURCE_NOT_FOUND', message='Action job no longer exists', status_code=404)
 
     from app.jobs.approval import approve_policy_stage
+    payload = dict(job.payload or {})
+    policy_state = dict(payload.get('_policy_approval') or {})
+    if policy_state and not policy_state.get('complete'):
+        expires_at = policy_state.get('stage_expires_at')
+        if expires_at:
+            try:
+                if datetime.fromisoformat(str(expires_at)) <= now():
+                    raise failure(
+                        'INVALID_STATE',
+                        message='Policy approval stage has expired',
+                        status_code=409,
+                    )
+            except ValueError:
+                raise failure(
+                    'INVALID_STATE',
+                    message='Policy approval stage expiry is invalid',
+                    status_code=409,
+                ) from None
+
     policy_stage = approve_policy_stage(job, actor, permissions, db=db)
     if policy_stage is not None and not policy_stage['complete']:
+        payload = dict(job.payload or {})
+        policy_state = dict(payload.get('_policy_approval') or {})
+        next_stage = dict(policy_stage.get('next_stage') or {})
+        stage_requested_at, stage_expires_at = _policy_stage_window(next_stage)
+        policy_state['stage_requested_at'] = stage_requested_at.isoformat()
+        policy_state['stage_expires_at'] = stage_expires_at.isoformat()
+        payload['_policy_approval'] = policy_state
+        job.payload = payload
         db.add(JobLog(job_id=job.id, message=(
             'day2.policy_approval.stage_approved: '
             f"user={actor.user_id}; next_stage={(policy_stage.get('next_stage') or {}).get('name')}"
@@ -672,6 +712,14 @@ def approve_action(db, request, actor, row, permissions):
             'next_stage': (policy_stage.get('next_stage') or {}).get('name')
         })
         return row
+
+    if policy_stage is not None:
+        payload = dict(job.payload or {})
+        policy_state = dict(payload.get('_policy_approval') or {})
+        policy_state['stage_requested_at'] = None
+        policy_state['stage_expires_at'] = None
+        payload['_policy_approval'] = policy_state
+        job.payload = payload
 
     target, credential, _ = load_target(db, row.resource_id)
     validate_action(db, target, credential, row.action, row.parameters or {}, row.reason, permissions | {get_action(row.action).permission})
