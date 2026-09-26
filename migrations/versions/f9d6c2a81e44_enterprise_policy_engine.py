@@ -104,6 +104,7 @@ def upgrade():
         sa.Column('resource_id', sa.String(length=160), nullable=True),
         sa.Column('decision', sa.String(length=24), nullable=False),
         sa.Column('matched_policy_ids', sa.JSON(), nullable=False),
+        sa.Column('matched_policy_versions', sa.JSON(), nullable=False),
         sa.Column('effects', sa.JSON(), nullable=False),
         sa.Column('trace', sa.JSON(), nullable=False),
         sa.Column('context_summary', sa.JSON(), nullable=False),
