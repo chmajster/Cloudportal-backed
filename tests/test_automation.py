@@ -673,8 +673,7 @@ def test_blueprint_runtime_environment_updates_tags_and_hostname(client, headers
             },
         },
         'workflow': [
-            {'id': 'hostname', 'type': 'generate_hostname'},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['hostname']},
+            {'id': 'apply', 'type': 'terraform_apply'},
         ],
     })
     assert created.status_code == 201, created.text
@@ -816,9 +815,7 @@ def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, head
             },
         },
         'workflow': [
-            {'id': 'hostname', 'type': 'generate_hostname'},
-            {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname']},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
+            {'id': 'apply', 'type': 'terraform_apply'},
         ],
     }
     created = client.post('/api/v1/blueprints', headers=headers, json=payload)
@@ -897,11 +894,8 @@ def test_blueprint_reuses_saved_hostname_tags_and_cloud_init(client, headers):
             },
         },
         'workflow': [
-            {'id': 'hostname', 'type': 'generate_hostname'},
-            {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname']},
-            {'id': 'cloud_init', 'type': 'cloud_init', 'depends_on': ['clone']},
-            {'id': 'tags', 'type': 'set_tags', 'depends_on': ['cloud_init']},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['tags']},
+            {'id': 'cloud_init', 'type': 'cloud_init'},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud_init']},
         ],
     })
     assert created.status_code == 201, created.text
@@ -944,9 +938,7 @@ def test_blueprint_hostname_defaults_must_match_pattern(client, headers):
             'variables': deployment_payload['variables'],
         },
         'workflow': [
-            {'id': 'hostname', 'type': 'generate_hostname'},
-            {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname']},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
+            {'id': 'apply', 'type': 'terraform_apply'},
         ],
     })
     assert response.status_code == 422
@@ -1095,28 +1087,28 @@ def test_blueprint_execution_does_not_block_on_proxmox_ssh_preflight(client, hea
     assert execution.json()['variables']['install_qemu_guest_agent'] is True
 
 
-def test_blueprint_rejects_runtime_controls_on_legacy_markers(client, headers):
+def test_blueprint_rejects_runtime_controls_on_terraform_cloud_init(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     response = client.post('/api/v1/blueprints', headers=headers, json={
-        'slug': 'legacy-marker-condition',
-        'name': 'Legacy marker condition',
+        'slug': 'cloud-init-condition',
+        'name': 'Cloud-init condition',
         'deployment': {
-            'name': 'legacy-marker-condition',
+            'name': 'cloud-init-condition',
             'provider_id': provider['id'],
             'credentials_id': credential['id'],
             'variables': deployment_payload['variables'],
         },
         'workflow': [
             {
-                'id': 'clone',
-                'type': 'clone_vm',
+                'id': 'cloud',
+                'type': 'cloud_init',
                 'conditions': {'environment': 'prod'},
             },
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud']},
         ],
     })
     assert response.status_code == 422
-    assert 'cannot use conditions, retry or rollback' in response.text
+    assert 'cloud_init is declarative' in response.text
 
 
 def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, headers):
@@ -1137,7 +1129,7 @@ def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, 
         'workflow': [{'id': 'vm', 'type': 'wait_for_vm'}],
     })
     assert missing_apply.status_code == 422
-    assert 'terraform_apply or a legacy provisioning marker' in missing_apply.text
+    assert 'exactly one explicit terraform_apply' in missing_apply.text
 
     duplicate_apply = client.post('/api/v1/blueprints', headers=headers, json={
         **base,
