@@ -790,6 +790,16 @@ async function toolsView() {
     }
   }
 
+  if (
+    allowed('providers.read')
+    && allowed('vms.read')
+    && allowed('vms.clone')
+    && allowed('vms.template')
+    && window.ProxmoxTemplateTool?.card
+  ) {
+    cards.push(window.ProxmoxTemplateTool.card());
+  }
+
   if (allowed('ansible.read')) cards.push(ansibleHostEntryTool());
   if (allowed('instance_backups.read')) cards.push(instanceBackupTool());
 
