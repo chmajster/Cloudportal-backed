@@ -33,7 +33,7 @@ from app.terraform.state import delete_plan
 
 router = APIRouter(tags=['infrastructure'])
 DEPLOYMENT_FIELDS = 'id tenant_id project_id name provider_id provider template credentials_id workspace state_location variables workflow status created_by created_at updated_at destroyed_at active_job_id executor'
-JOB_FIELDS = 'id tenant_id project_id deployment_id operation status created_by request_id source created_at updated_at cancel_requested error retry_of attempt'
+JOB_FIELDS = 'id tenant_id project_id deployment_id operation status created_by request_id source created_at updated_at dispatched_at cancel_requested error retry_of attempt'
 
 
 def deployment_public(d):
