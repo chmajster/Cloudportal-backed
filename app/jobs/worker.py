@@ -2650,6 +2650,13 @@ def _execute_unfenced(job_id):
         else:
             release_job_reservation(db, current)
         current.status, current.error = status, error
+        runtime_checkpoint = dict((current.payload or {}).get('_workflow_runtime') or {})
+        uncertain_terraform_result = (
+            status in {'failed', 'cancelled'}
+            and context.quota_provider_submitted
+            and current.operation in {'terraform.apply', 'terraform.destroy', 'terraform.import'}
+            and runtime_checkpoint.get('provider_applied') is not True
+        )
         owns_deployment = False
         if current.deployment_id:
             deployment = db.get(Deployment, current.deployment_id)
@@ -2671,6 +2678,15 @@ def _execute_unfenced(job_id):
                         deployment.status = previous_status
                 elif context.rollback_destroyed:
                     deployment.status = 'destroyed'
+                elif uncertain_terraform_result:
+                    deployment.status = 'reconciliation_required'
+                    db.add(JobLog(
+                        job_id=current.id,
+                        message=(
+                            'terraform.reconciliation_required: provider mutation may have been '
+                            'partially applied; run reconciliation before retry'
+                        ),
+                    ))
                 else:
                     deployment.status = 'destroyed' if status == 'successful' and current.operation in {'terraform.destroy', 'proxmox.destroy'} else status
                 if current.operation == 'terraform.import' and status == 'successful':
