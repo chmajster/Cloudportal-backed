@@ -865,6 +865,10 @@ async function createDeployment() {
   } catch (error) { toast(error.message, 'error'); }
 }
 
+function jobDispatchedToWorker(item) {
+  return item?.status === 'queued' && Boolean(item?.dispatched_at);
+}
+
 async function jobsView() {
   jobLogPollNonce += 1;
   if (jobsPollTimer) {
@@ -880,16 +884,24 @@ async function jobsView() {
   dom.content.replaceChildren(heading('Historia i bieżący stan wykonania. Logi są redagowane po stronie backendu.', actions),
     table([
       { label: 'ID', class: 'mono', value: item => short(item.id, 18) }, { label: 'Operacja', value: item => operationLabel(item.operation) },
-      { label: 'Status', value: item => badge(item.provider_waiting ? 'Oczekuje na Proxmox' : statusLabel(item.status), item.provider_waiting ? 'warning' : statusKind(item.status)) },
+      { label: 'Status', value: item => badge(
+        item.provider_waiting
+          ? 'Oczekuje na Proxmox'
+          : jobDispatchedToWorker(item) ? 'W kolejce workera' : statusLabel(item.status),
+        item.provider_waiting || jobDispatchedToWorker(item) ? 'warning' : statusKind(item.status)
+      ) },
       { label: 'Etap', value: item => window.JobStageUI.cell(item) },
       { label: 'Synchronizacja', value: item => item.provider_waiting
         ? node('span', { class: 'muted', text: 'Próba ' + item.provider_retry_attempts + ' · kolejna ' + formatDate(item.provider_next_retry_at) })
-        : '—' },
+        : jobDispatchedToWorker(item)
+          ? node('span', { class: 'muted', text: 'Worker · przekazano ' + formatDate(item.dispatched_at) })
+          : '—' },
       { label: 'Źródło', value: item => item.source }, { label: 'Wdrożenie', class: 'mono', value: item => short(item.deployment_id, 14) },
       { label: 'Utworzono', value: item => formatDate(item.created_at) }, { label: 'Błąd', value: item => node('span', { class: item.error ? 'form-error' : 'muted', text: item.error || '—' }) },
     ], jobs, item => {
       const actions = [button('Logi', () => navigate('/jobs/' + encodeURIComponent(item.id)))];
-      if (allowed('jobs.force') && item.status === 'queued' && !item.cancel_requested && !item.provider_waiting) {
+      if (allowed('jobs.force') && item.status === 'queued' && !item.dispatched_at
+          && !item.cancel_requested && !item.provider_waiting) {
         actions.push(button('Wymuś start', () => confirmAction(
           'Wymuś uruchomienie zadania',
           'Zadanie zostanie przekazane do kolejki wykonawczej z pominięciem limitu maksymalnej liczby równoległych zadań. Pozostałe zabezpieczenia oraz dostępność workerów nadal obowiązują.',
@@ -1266,18 +1278,26 @@ async function jobLogView() {
 
       statusHost.replaceChildren(
         node('div', { class: 'action-group' },
-          badge(statusLabel(current.status), statusKind(current.status)),
+          badge(
+            jobDispatchedToWorker(current) ? 'W kolejce workera' : statusLabel(current.status),
+            jobDispatchedToWorker(current) ? 'warning' : statusKind(current.status)
+          ),
           current.provider_waiting ? badge('Oczekuje na Proxmox', 'warning') : null,
           node('span', {
             class: 'muted',
-            text: current.error || (terminal(current.status) ? 'Zadanie zakończone.' : 'Log jest odświeżany automatycznie.'),
+            text: current.error || (
+              jobDispatchedToWorker(current)
+                ? 'Zadanie zostało już przekazane do kolejki workera i oczekuje na wolny proces wykonawczy.'
+                : terminal(current.status) ? 'Zadanie zakończone.' : 'Log jest odświeżany automatycznie.'
+            ),
           }))
       );
       renderLogs(logs.items || []);
 
       const actions = [];
 
-      if (allowed('jobs.force') && current.status === 'queued' && !current.cancel_requested && !current.provider_waiting) {
+      if (allowed('jobs.force') && current.status === 'queued' && !current.dispatched_at
+          && !current.cancel_requested && !current.provider_waiting) {
         actions.push(button('Wymuś start', () => confirmAction(
           'Wymuś uruchomienie zadania',
           'Zadanie zostanie przekazane do kolejki wykonawczej z pominięciem limitu maksymalnej liczby równoległych zadań. Pozostałe zabezpieczenia oraz dostępność workerów nadal obowiązują.',
