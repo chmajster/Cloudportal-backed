@@ -476,9 +476,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Secrets JSON' not in script
     assert 'Zastąp zapisane sekrety' in script
     assert "['suspend', 'Resume']" not in script
-    assert "'suspend', 'Wstrzymaj'" in script
-    assert "'resume', 'Wznów'" in script
-    assert "'reset', 'Twardy reset'" in script
+    assert "button('Wstrzymaj', () => vmPower(item, 'suspend')" in script
+    assert "button('Wznów', () => vmPower(item, 'resume')" in script
+    assert "button('Twardy reset', () => vmPower(item, 'reset')" in script
     assert "'awx_credential_id'" in script
     assert "'awx_organization_id'" not in script
     assert "'awx_project_id'" not in script
