@@ -501,21 +501,15 @@ def test_blueprint_workflow_does_not_mark_completed_when_post_apply_step_fails(m
     assert context.blueprint_workflow_completed is False
 
 
-def test_declarative_step_after_apply_fails_at_runtime(monkeypatch):
+def test_removed_pseudo_direct_step_fails_at_runtime():
     steps = [
         {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
         {'id': 'tags', 'type': 'set_tags', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
-    executor = FakeExecutor()
-    monkeypatch.setattr(
-        worker,
-        'register_managed_inventory',
-        lambda context, workspace: {'external_id': '106', 'vm_id': 106, 'node': 'pve01'},
-    )
 
-    with pytest.raises(ExecutionFailed, match='cannot run after terraform_apply'):
-        worker.run_blueprint_workflow(context, executor)
+    with pytest.raises(ExecutionFailed, match='Unsupported Blueprint workflow steps'):
+        worker.run_blueprint_workflow(context, FakeExecutor())
 
 
 def test_notification_rollback_runs_when_step_fails(monkeypatch):
