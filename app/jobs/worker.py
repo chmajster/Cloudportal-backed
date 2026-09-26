@@ -745,7 +745,9 @@ def resolve_awx_inventory_name(context, client, config, facts):
         config.get('inventory_name') or DEFAULT_AWX_INVENTORY_PATTERN
     ).strip() or DEFAULT_AWX_INVENTORY_PATTERN
 
-    if not re.search(r'<[^<>]+>', configured):
+    # The name/pattern is irrelevant when the Blueprint points at an existing
+    # inventory. Do not require runtime pattern values in that mode.
+    if config.get('inventory_id') or not re.search(r'<[^<>]+>', configured):
         return configured
 
     project_name = None
