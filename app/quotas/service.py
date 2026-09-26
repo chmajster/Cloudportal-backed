@@ -24,7 +24,7 @@ from app.quotas.models import (
 
 DIMENSIONS = ('vm_count', 'vcpu', 'memory_mb', 'disk_gib')
 ACTIVE_RESERVATION_STATES = ('reserved', 'uncertain')
-MUTATING_TERRAFORM = {'terraform.apply', 'terraform.import', 'terraform.destroy'}
+MUTATING_TERRAFORM = {'terraform.apply', 'terraform.import', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'}
 
 
 @dataclass(frozen=True, slots=True)
@@ -572,7 +572,7 @@ def _ensure_limit_accountable(db, scope: Scope, dimension: str, *, tenant_wide: 
 def _job_quota(db, job: Job, deployment: Deployment):
     scope = Scope(job.tenant_id, job.project_id)
     current = allocation_dimensions(db, scope, 'deployment', deployment.id)
-    if job.operation == 'terraform.apply':
+    if job.operation in {'terraform.apply', 'proxmox.provision'}:
         unresolved = active_limit_dimensions(db, scope) & deployment_unresolved_dimensions(deployment)
         if unresolved:
             fail(
@@ -598,7 +598,7 @@ def _job_quota(db, job: Job, deployment: Deployment):
                 'QUOTA_DIMENSION_UNRESOLVED',
                 'Import baseline does not provide normalized capacity for: ' + ', '.join(sorted(unresolved)),
             )
-    elif job.operation == 'terraform.destroy':
+    elif job.operation in {'terraform.destroy', 'proxmox.destroy'}:
         target = {}
     else:
         return None
