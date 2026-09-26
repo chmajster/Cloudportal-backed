@@ -302,7 +302,9 @@ async function proxmoxTemplateCloneView() {
       api('/providers/' + encodeURIComponent(state.providerId) + '/templates'),
       api('/providers/' + encodeURIComponent(state.providerId) + '/nodes'),
     ]);
-    state.vms = (vmResult.items || []).filter(item => Number(item.template || 0) !== 1);
+    state.vms = (vmResult.items || [])
+      .filter(item => Number(item.template || 0) !== 1)
+      .sort((left, right) => Number(left.vmid) - Number(right.vmid));
     state.templates = templateResult.items || [];
     state.nodes = nodeResult.items || [];
 
