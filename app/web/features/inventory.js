@@ -156,7 +156,7 @@ async function offerMissingVmCleanup(item, returnView = 'inventory') {
     submitLabel: 'Usuń pozostałe dane VM',
     body: node('div', { class: 'stack' },
       node('p', { text: label + ' nie została znaleziona na platformie Proxmox i ma status „Brak”.' }),
-      node('p', { class: 'muted', text: 'Cloudportal ponownie potwierdzi brak VM w Proxmox, a następnie usunie rekord VM i powiązany techniczny wpis inventory. Historia wdrożenia, jobów i audytu pozostanie zachowana.' })),
+      node('p', { class: 'muted', text: 'Cloudportal ponownie potwierdzi brak VM w Proxmox, oznaczy powiązane wdrożenie jako zakończone/usunięte i usunie rekord VM oraz techniczny wpis inventory. Automatyczna synchronizacja nie odtworzy tego wpisu ze starego Terraform state. Historia wdrożenia, jobów i audytu pozostanie zachowana.' })),
     onSubmit: async () => {
       await api('/inventory/vms/' + encodeURIComponent(item.id) + '/missing?purge=true', { method: 'DELETE' });
       toast('Usunięto pozostałe dane brakującej VM z Cloudportalu.');
