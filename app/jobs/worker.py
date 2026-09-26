@@ -277,8 +277,6 @@ def validate_authorization(db, job):
         workflow_types = {str(step.get('type')) for step in (blueprint.get('steps') or [])}
         if 'create_snapshot' in workflow_types:
             needed.add('snapshots.create')
-        if 'release_ip' in workflow_types:
-            needed.add('ipam.release')
         if 'terraform_destroy' in workflow_types:
             needed.add('deployments.destroy')
     if job.operation in {'terraform.destroy', 'proxmox.destroy'}:
@@ -781,7 +779,7 @@ BLUEPRINT_SUPPORTED_STEPS = (
     BLUEPRINT_DECLARATIVE_STEPS
     | BLUEPRINT_DIRECT_PROXMOX_STEPS
     | BLUEPRINT_POST_APPLY_STEPS
-    | {'release_ip', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'condition', 'approval', 'delay', 'notification'}
+    | {'terraform_plan', 'terraform_apply', 'terraform_destroy', 'condition', 'approval', 'delay', 'notification'}
 )
 
 
@@ -1618,30 +1616,6 @@ def wait_for_ansible_transport(context, workspace, timeout=600, addresses=None):
     raise ExecutionFailed('Unsupported Ansible transport credential')
 
 
-def release_blueprint_ip(context):
-    with session() as db:
-        active_vm = db.scalar(select(ManagedVM.id).where(
-            ManagedVM.deployment_id == context.deployment.id,
-            ManagedVM.lifecycle_status == 'active',
-        ).limit(1))
-        active_resource = db.scalar(select(ManagedResource.id).where(
-            ManagedResource.deployment_id == context.deployment.id,
-            ManagedResource.lifecycle_status == 'active',
-        ).limit(1))
-        if active_vm or active_resource:
-            raise ExecutionFailed('Refusing to release IP while deployment still has an active VM/resource')
-        allocation = db.scalar(select(IPAllocation).where(
-            IPAllocation.resource_id == context.deployment.id,
-            IPAllocation.status != 'released',
-        ).with_for_update())
-        if allocation is None:
-            context.log('workflow.release_ip: no active allocation')
-            return
-        allocation.status = 'released'
-        allocation.released_at = now()
-        db.commit()
-
-
 def wait_for_proxmox_task(context, provider, node, upid, timeout=600):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -2074,8 +2048,6 @@ def run_blueprint_workflow(context, executor):
                     )
                 elif step_type == 'create_snapshot':
                     create_blueprint_snapshot(context, workspace_for(step_type), step)
-                elif step_type == 'release_ip':
-                    release_blueprint_ip(context)
                 elif step_type == 'health_check':
                     health_check_vm(context, workspace_for(step_type))
                 elif step_type == 'condition':
@@ -2395,8 +2367,6 @@ def run_proxmox_blueprint_workflow(context):
                     raise ExecutionFailed(
                         'Direct Proxmox provisioning uses job-level approval, not an approval workflow step'
                     )
-                elif step_type == 'release_ip':
-                    raise ExecutionFailed('release_ip is not allowed during VM provisioning')
                 else:
                     raise ExecutionFailed(f'Unsupported direct Proxmox workflow step: {step_type}')
 
