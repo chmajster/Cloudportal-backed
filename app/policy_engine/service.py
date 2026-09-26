@@ -96,6 +96,7 @@ def decision_public(row) -> dict:
         "resource_id": row.resource_id,
         "decision": row.decision,
         "matched_policy_ids": row.matched_policy_ids or [],
+        "matched_policy_versions": row.matched_policy_versions or [],
         "effects": row.effects or [],
         "trace": row.trace or [],
         "context_summary": row.context_summary or {},
@@ -374,7 +375,7 @@ def _redact(value: Any, depth=0):
     return str(value)[:1024]
 
 
-def _decision_row(db, context: dict, result, *, dry_run=False):
+def _decision_row(db, context: dict, result, matched_policy_versions=None, *, dry_run=False):
     scope = context.get("scope") or {}
     actor = context.get("actor") or {}
     request = context.get("request") or {}
@@ -388,6 +389,7 @@ def _decision_row(db, context: dict, result, *, dry_run=False):
         resource_id=str(resource.get("id"))[:160] if resource.get("id") is not None else None,
         decision=result.decision,
         matched_policy_ids=result.matched_policy_ids,
+        matched_policy_versions=list(matched_policy_versions or []),
         effects=result.applied_effects,
         trace=result.trace,
         context_summary=_redact(context),
@@ -411,17 +413,34 @@ def evaluate_context(db, context: dict, *, persist=False, durable_denies=False):
             or_(PolicyException.valid_until.is_(None), PolicyException.valid_until > instant),
         )).all()
     result = evaluate(policies, context, exceptions)
+    versions_by_id = {
+        str(row.id): int(row.version)
+        for row in policies
+    }
+    matched_policy_versions = [
+        {
+            "policy_id": str(policy_id),
+            "version": versions_by_id[str(policy_id)],
+        }
+        for policy_id in result.matched_policy_ids
+        if str(policy_id) in versions_by_id
+    ]
     public = result.public()
+    public["matched_policy_versions"] = matched_policy_versions
     if persist:
         if durable_denies and result.decision == "deny":
             # Denied HTTP requests are rolled back by the request transaction.
             # Roll back any staged request mutations first, then persist only
             # the security decision so denied operations remain auditable.
             db.rollback()
-            decision = _decision_row(db, context, result)
+            decision = _decision_row(
+                db, context, result, matched_policy_versions
+            )
             db.commit()
         else:
-            decision = _decision_row(db, context, result)
+            decision = _decision_row(
+                db, context, result, matched_policy_versions
+            )
         public["decision_id"] = decision.id
     return public
 
