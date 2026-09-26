@@ -94,7 +94,7 @@ def info(actor=Depends(require('portal.connect'))):
         'api_version': 'v1',
         'providers': sorted({item['provider'] for item in list_templates()}),
         'credential_types': ['proxmox', 'vmware', 'ssh', 'winrm', 'aws', 'azure', 'openstack', 'other'],
-        'executors': ['terraform', 'ansible', 'opentofu'],
+        'executors': ['terraform', 'ansible', 'opentofu', 'proxmox'],
         'openapi': '/openapi.json',
     }
 
