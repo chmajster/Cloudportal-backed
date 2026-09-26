@@ -153,13 +153,13 @@ async function offerMissingVmCleanup(item, returnView = 'inventory') {
     title: 'VM nie istnieje w Proxmox',
     eyebrow: location,
     danger: true,
-    submitLabel: 'Usuń nieaktualny wpis',
+    submitLabel: 'Usuń pozostałe dane VM',
     body: node('div', { class: 'stack' },
-      node('p', { text: label + ' nie została znaleziona na platformie Proxmox.' }),
-      node('p', { class: 'muted', text: 'Usunięcie dotyczy aktywnego wpisu w Cloudportal. Historia, audyt i informacje o wdrożeniu pozostaną zachowane.' })),
+      node('p', { text: label + ' nie została znaleziona na platformie Proxmox i ma status „Brak”.' }),
+      node('p', { class: 'muted', text: 'Cloudportal ponownie potwierdzi brak VM w Proxmox, a następnie usunie rekord VM i powiązany techniczny wpis inventory. Historia wdrożenia, jobów i audytu pozostanie zachowana.' })),
     onSubmit: async () => {
-      await api('/inventory/vms/' + encodeURIComponent(item.id) + '/missing', { method: 'DELETE' });
-      toast('Usunięto nieaktualną VM z aktywnych zasobów Cloudportal.');
+      await api('/inventory/vms/' + encodeURIComponent(item.id) + '/missing?purge=true', { method: 'DELETE' });
+      toast('Usunięto pozostałe dane brakującej VM z Cloudportalu.');
       await navigate(returnView);
     },
   });
@@ -1039,5 +1039,6 @@ registerRoutedForm({
 registerCommand('inventory.openVm', (item, initialTab = 'overview') => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(initialTab || 'overview')));
 registerCommand('inventory.consoleVm', item => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'));
 registerCommand('inventory.recreateVm', recreateVm);
+registerCommand('inventory.cleanupMissingVm', (item, returnView = 'my-resources') => offerMissingVmCleanup(item, returnView));
 registerView({ id: 'inventory', label: 'Moje zasoby', icon: 'V', permission: 'inventory.read', order: 100 }, inventoryView);
 })();
