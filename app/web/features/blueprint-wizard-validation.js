@@ -124,26 +124,37 @@ function validateWorkflow(state, editingItem) {
 
   const directProxmox = state.executor === 'proxmox';
   if (directProxmox) {
-    const terraformSteps = steps.filter(step => ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(step.type));
+    const terraformSteps = steps.filter(step => ['terraform_plan', 'terraform_apply'].includes(step.type));
     if (terraformSteps.length) {
-      fail('Tryb Proxmox API nie może zawierać kroków Terraform plan/apply/destroy.');
+      fail('Tryb Proxmox API nie może zawierać kroków Terraform plan/apply.');
     }
-    const createSteps = steps.filter(step => ['clone_vm', 'create_vm'].includes(step.type));
-    if (createSteps.length !== 1) {
-      fail('Tryb Proxmox API wymaga dokładnie jednego kroku clone_vm lub create_vm.');
+    const cloneSteps = steps.filter(step => step.type === 'clone_vm');
+    const createSteps = steps.filter(step => step.type === 'create_vm');
+    if (createSteps.length) {
+      fail('Tryb Proxmox API nie obsługuje create_vm; użyj clone_vm.');
+    }
+    if (cloneSteps.length !== 1) {
+      fail('Tryb Proxmox API wymaga dokładnie jednego kroku clone_vm.');
     }
     if (approvalSteps.length) {
       fail('Tryb Proxmox API używa akceptacji całego joba; usuń jawny krok approval.');
     }
-    if (createSteps.length === 1) {
-      const createId = createSteps[0].id;
-      const runtimeTypes = new Set([
+    if (cloneSteps.length === 1) {
+      const createId = cloneSteps[0].id;
+      const afterCreateTypes = new Set([
+        'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
         'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
         'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
       ]);
       for (const step of steps) {
-        if (runtimeTypes.has(step.type) && !ancestors(step.id).has(createId)) {
-          fail(step.type + ' musi zależeć od bezpośredniego utworzenia VM w Proxmox.');
+        if (afterCreateTypes.has(step.type) && !ancestors(step.id).has(createId)) {
+          fail(step.type + ' musi zależeć od clone_vm w trybie Proxmox API.');
+        }
+      }
+      const cloud = steps.find(step => step.type === 'cloud_init');
+      for (const start of steps.filter(step => step.type === 'start_vm')) {
+        if (cloud && !ancestors(start.id).has(cloud.id)) {
+          fail('start_vm musi zależeć od cloud_init w trybie Proxmox API.');
         }
       }
     }
