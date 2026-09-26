@@ -192,6 +192,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function renderSidebarProfile()' in core
     assert "registerCommand('users.create'" in script
     assert "registerCommand('tokens.create'" in script
+    assert "button('Dokumentacja OpenAPI'" in script
+    assert "window.open('/docs', '_blank', 'noopener,noreferrer')" in script
     assert "registerCommand('providers.create'" in script
     assert "registerCommand('blueprints.create'" in script
     assert "id: 'blueprint-wizard'" in script
