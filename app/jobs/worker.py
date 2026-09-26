@@ -1901,6 +1901,10 @@ def run_blueprint_workflow(context, executor):
                     key for key, value in runtime['step_states'].items()
                     if value == 'completed'
                 ),
+                'step_states': {
+                    str(key): str(value)
+                    for key, value in runtime['step_states'].items()
+                },
                 'plan_ready': bool(runtime['plan_ready']),
                 'plan_sha256': plan_sha256,
                 'provider_applied': bool(runtime['applied']),
