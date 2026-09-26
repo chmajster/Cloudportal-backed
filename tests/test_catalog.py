@@ -5,7 +5,7 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert {'proxmox-vm', 'aws-ec2', 'azure-linux-vm', 'openstack-vm', 'vmware-vsphere-vm'} <= set(items)
     assert items['aws-ec2']['provider'] == 'aws'
     assert 'security_group_ids' in items['aws-ec2']['variables_schema']['properties']
-    assert items['proxmox-vm']['version'] == 6
+    assert items['proxmox-vm']['version'] == 7
     proxmox_properties = items['proxmox-vm']['variables_schema']['properties']
     assert {'tags', 'dns_servers', 'dns_domain', 'install_qemu_guest_agent', 'cloud_init_snippet_storage'} <= set(proxmox_properties)
 
@@ -30,7 +30,7 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert 'output "primary_ip"' in terraform_source
     assert 'value = local.configured_primary_ip' in terraform_source
     assert 'ipv4_addresses' not in terraform_source
-    # Version 6 adds API-uploaded NoCloud media without removing the legacy path.
+    # Version 7 retains API-uploaded NoCloud media and the legacy-compatible path.
     assert 'resource "proxmox_virtual_environment_file" "cloud_init_seed"' in terraform_source
     assert 'content_type = "iso"' in terraform_source
     assert 'proxmox_virtual_environment_file.cloud_init_seed[0].id' in terraform_source
