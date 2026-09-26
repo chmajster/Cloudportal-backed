@@ -167,6 +167,19 @@ def test_vm_rbac_separates_read_from_power(client, headers, monkeypatch):
     assert client.post(base + '/power', headers=viewer, json={'action': 'start'}).status_code == 403
 
 
+
+def test_vm_rrddata_uses_proxmox_rrd_endpoint(monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+    observed = []
+    monkeypatch.setattr(provider, '_get', lambda path: observed.append(path) or [])
+
+    assert provider.vm_rrddata('pve01', 101, 'week') == []
+    assert observed == ['/nodes/pve01/qemu/101/rrddata?timeframe=week&cf=AVERAGE']
+
+
+
 def test_guest_addresses_prefer_primary_proxmox_nic(monkeypatch):
     from app.providers.proxmox import ProxmoxProvider
 
