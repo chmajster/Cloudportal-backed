@@ -348,7 +348,7 @@ def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client
 
     allowed = client.put(
         '/api/v1/blueprints/' + str(blueprint['id']),
-        headers=manager_headers,
+        headers={**manager_headers, 'If-Match': str(blueprint['version'])},
         json={**payload, 'description': 'authorized edit'},
     )
     assert allowed.status_code == 200, allowed.text
