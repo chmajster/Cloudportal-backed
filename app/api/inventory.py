@@ -355,85 +355,88 @@ def managed_vm_history(
                 actor_user_id=deployment.created_by,
             )
 
-        jobs = db.scalars(
-            select(Job)
-            .where(Job.deployment_id == row.deployment_id)
-            .order_by(Job.created_at.asc())
+        if 'jobs.read' in request.state.permissions:
+            jobs = db.scalars(
+                select(Job)
+                .where(Job.deployment_id == row.deployment_id)
+                .order_by(Job.created_at.asc())
+                .limit(200)
+            ).all()
+            for job in jobs:
+                stage = str((job.payload or {}).get('_current_stage') or '').strip()
+                detail = job.error or (f'Etap: {stage}' if stage else None)
+                add(
+                    job.created_at,
+                    'job',
+                    job.operation,
+                    status=job.status,
+                    detail=detail,
+                    job_id=job.id,
+                    request_id=job.request_id,
+                    actor_user_id=job.created_by,
+                )
+                logs = db.scalars(
+                    select(JobLog)
+                    .where(JobLog.job_id == job.id)
+                    .order_by(JobLog.timestamp.asc())
+                    .limit(500)
+                ).all()
+                for log in logs:
+                    message = history_log_message(log.message)
+                    if message:
+                        add(
+                            log.timestamp,
+                            'provisioning',
+                            message,
+                            status=job.status,
+                            job_id=job.id,
+                            request_id=job.request_id,
+                            actor_user_id=job.created_by,
+                        )
+
+    if 'day2.view' in request.state.permissions:
+        day2_rows = db.scalars(
+            select(Day2ActionRequest)
+            .where(Day2ActionRequest.resource_id == row.id)
+            .order_by(Day2ActionRequest.requested_at.asc())
             .limit(200)
         ).all()
-        for job in jobs:
-            stage = str((job.payload or {}).get('_current_stage') or '').strip()
-            detail = job.error or (f'Etap: {stage}' if stage else None)
+        for action in day2_rows:
             add(
-                job.created_at,
-                'job',
-                job.operation,
-                status=job.status,
-                detail=detail,
-                job_id=job.id,
-                request_id=job.request_id,
-                actor_user_id=job.created_by,
+                action.requested_at,
+                'day2',
+                f'Day-2: {action.action}',
+                status=action.status,
+                detail=action.error_message or action.reason,
+                job_id=action.job_id,
+                request_id=action.request_id,
+                actor_user_id=action.requested_by,
             )
-            logs = db.scalars(
-                select(JobLog)
-                .where(JobLog.job_id == job.id)
-                .order_by(JobLog.timestamp.asc())
-                .limit(500)
-            ).all()
-            for log in logs:
-                message = history_log_message(log.message)
-                if message:
-                    add(
-                        log.timestamp,
-                        'provisioning',
-                        message,
-                        status=job.status,
-                        job_id=job.id,
-                        request_id=job.request_id,
-                        actor_user_id=job.created_by,
-                    )
 
-    day2_rows = db.scalars(
-        select(Day2ActionRequest)
-        .where(Day2ActionRequest.resource_id == row.id)
-        .order_by(Day2ActionRequest.requested_at.asc())
-        .limit(200)
-    ).all()
-    for action in day2_rows:
-        add(
-            action.requested_at,
-            'day2',
-            f'Day-2: {action.action}',
-            status=action.status,
-            detail=action.error_message or action.reason,
-            job_id=action.job_id,
-            request_id=action.request_id,
-            actor_user_id=action.requested_by,
-        )
-
-    target = f'{row.provider_id}:{row.node}:{row.vm_id}'
-    audit_filters = [
-        Audit.resource_id == row.id,
-        Audit.resource_id.like(target + '%'),
-    ]
-    if row.deployment_id:
-        audit_filters.append(Audit.resource_id == row.deployment_id)
-    audit_rows = db.scalars(
-        select(Audit)
-        .where(or_(*audit_filters))
-        .order_by(Audit.timestamp.asc())
-        .limit(500)
-    ).all()
-    for entry in audit_rows:
-        add(
-            entry.timestamp,
-            'audit',
-            entry.action,
-            status=entry.result,
-            detail=entry.resource,
-            request_id=entry.request_id,
-            actor_user_id=entry.user_id,
-        )
+    if 'audit.read' in request.state.permissions:
+        target = f'{row.provider_id}:{row.node}:{row.vm_id}'
+        audit_filters = [
+            Audit.resource_id == row.id,
+            Audit.resource_id.like(target + '%'),
+        ]
+        if row.deployment_id:
+            audit_filters.append(Audit.resource_id == row.deployment_id)
+        audit_rows = db.scalars(
+            select(Audit)
+            .where(or_(*audit_filters))
+            .order_by(Audit.timestamp.asc())
+            .limit(500)
+        ).all()
+        for entry in audit_rows:
+            add(
+                entry.timestamp,
+                'audit',
+                entry.action,
+                status=entry.result,
+                detail=entry.resource,
+                request_id=entry.request_id,
+                actor_user_id=entry.user_id,
+            )
 
     entries.sort(key=lambda item: item['timestamp'], reverse=True)
     return {'items': entries[:limit]}
