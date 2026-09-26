@@ -52,9 +52,9 @@ resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init" {
 }
 
 resource "proxmox_virtual_environment_vm" "vm" {
-  name      = var.name
-  node_name = var.node
-  vm_id     = var.vm_id
+  name            = var.name
+  node_name       = var.node
+  vm_id           = var.vm_id
   started         = true
   stop_on_destroy = true
   tags            = sort(var.tags)
