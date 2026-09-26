@@ -94,8 +94,6 @@
 
   function workflowLabel(type) {
     return ({
-      generate_hostname: 'Hostname',
-      allocate_ip: 'IPAM',
       clone_vm: 'Clone VM',
       configure_vm: 'Konfiguracja VM',
       cloud_init: 'Cloud-init',
@@ -346,9 +344,9 @@
     }));
     state.advancedWorkflow = true;
 
-    const ansibleRuns = Array.isArray(deployment.ansible_runs) && deployment.ansible_runs.length
+    const ansibleRuns = Array.isArray(deployment.ansible_runs)
       ? deployment.ansible_runs
-      : (deployment.ansible ? [deployment.ansible] : []);
+      : [];
     state.ansibleRuns = ansibleRuns.map(run => ({
       playbook: run.playbook,
       credentials_id: Number(run.credentials_id),
@@ -536,7 +534,6 @@
             variables,
           };
         });
-        deployment.ansible = { ...deployment.ansible_runs[0], variables: { ...deployment.ansible_runs[0].variables } };
       }
     }
     return deployment;
