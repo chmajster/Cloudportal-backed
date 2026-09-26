@@ -979,8 +979,10 @@
       }
 
       body.append(textField('Deployment name', deployment.name || '', value => mutate(() => { deployment.name = value; }), { placeholder: '{{ hostname }}' }));
-      body.append(selectField('Executor', deployment.executor || 'terraform', [
-        { value: 'terraform', label: 'Terraform' }, { value: 'opentofu', label: 'OpenTofu' },
+      body.append(selectField('Provisioning', deployment.executor || 'terraform', [
+        { value: 'terraform', label: 'Terraform' },
+        { value: 'opentofu', label: 'OpenTofu' },
+        { value: 'proxmox', label: 'Proxmox API — bez Terraform' },
       ], value => mutate(() => { deployment.executor = value; })));
       body.append(textField('Variables (JSON)', JSON.stringify(deployment.variables || {}, null, 2), value => {
         try { const parsed = parseJson(value, 'Variables', {}); mutate(() => { deployment.variables = parsed; }); }
