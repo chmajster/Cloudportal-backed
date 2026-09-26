@@ -38,7 +38,7 @@ function isDeploymentManaged(item) {
 
 function canDelete(item) {
   if (!resourceId(item) || item.lifecycle_status !== 'active') return false;
-  if (isDeploymentManaged(item)) {
+  if (isTerraformManaged(item)) {
     return allowed('deployments.destroy')
       && allowed('jobs.execute')
       && allowed('terraform.execute');
@@ -234,8 +234,8 @@ function deleteConfirmationName(item) {
 
 async function submitDeleteItem(item, idempotencyKeys) {
   const id = resourceId(item);
-  if (isTerraformManaged(item)) {
-    const key = 'terraform-destroy:' + item.deployment_id;
+  if (isDeploymentManaged(item)) {
+    const key = (isProxmoxManaged(item) ? 'proxmox-destroy:' : 'terraform-destroy:') + item.deployment_id;
     if (!idempotencyKeys.has(key)) idempotencyKeys.set(key, crypto.randomUUID());
     const result = await api('/deployments/' + encodeURIComponent(item.deployment_id) + '/destroy', {
       method: 'POST',
