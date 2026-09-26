@@ -70,32 +70,23 @@ def reserve_proxmox_vm_id(deployment_id: str, credential, context=None) -> int:
     """
     with session() as db:
         with db.begin():
+            deployment = db.get(Deployment, deployment_id)
+            if deployment is None:
+                raise RuntimeError('Deployment disappeared before VMID reservation')
+
             if db.bind.dialect.name == 'postgresql':
                 db.execute(
                     text('SELECT pg_advisory_xact_lock(:lock_key)'),
-                    {'lock_key': _provider_lock_key(credential.provider_id if hasattr(credential, 'provider_id') else 0)},
+                    {'lock_key': _provider_lock_key(deployment.provider_id)},
                 )
 
             deployment = db.scalar(
                 select(Deployment).where(Deployment.id == deployment_id).with_for_update()
             )
-            if deployment is None:
-                raise RuntimeError('Deployment disappeared before VMID reservation')
-
             variables = dict(deployment.variables or {})
             existing = variables.get('vm_id')
             if existing not in {None, ''}:
                 return int(existing)
-
-            # Provider id belongs to the deployment, not the credential. Use it
-            # for the actual reservation scope after the deployment row is locked.
-            if db.bind.dialect.name == 'postgresql':
-                # Re-lock on the real provider key. The earlier key is harmless
-                # and only exists for backwards-compatible credential fixtures.
-                db.execute(
-                    text('SELECT pg_advisory_xact_lock(:lock_key)'),
-                    {'lock_key': _provider_lock_key(deployment.provider_id)},
-                )
 
             live_ids = ProxmoxProvider(credential).used_vm_ids()
             reserved_ids = _reserved_ids(db, deployment.provider_id, deployment.id)
