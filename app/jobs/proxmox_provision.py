@@ -280,16 +280,20 @@ def _disk_size_gib(raw):
 
 
 def _primary_disk(current):
+    def usable(key):
+        raw = str(current.get(key) or '')
+        return bool(raw) and 'media=cdrom' not in raw.lower()
+
     boot = str(current.get('boot') or '')
     order = re.search(r'order=([^;\s]+(?:;[^\s]+)*)', boot)
     if order:
         for key in order.group(1).split(';'):
-            if re.fullmatch(r'(?:scsi|virtio|sata|ide)\d+', key) and current.get(key):
+            if re.fullmatch(r'(?:scsi|virtio|sata|ide)\d+', key) and usable(key):
                 return key
     for prefix in ('scsi', 'virtio', 'sata', 'ide'):
         for index in range(32):
             key = f'{prefix}{index}'
-            if current.get(key):
+            if usable(key):
                 return key
     return None
 
