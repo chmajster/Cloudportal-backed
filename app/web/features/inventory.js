@@ -477,19 +477,202 @@ async function vmBackupsContent(item) {
   return shell;
 }
 
+function vmMonitorNumeric(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function vmMonitorPercent(value) {
+  return `${Math.round(vmMonitorNumeric(value) * 100)}%`;
+}
+
+function vmMonitorRate(value) {
+  return `${formatBytes(vmMonitorNumeric(value))}/s`;
+}
+
+function vmMonitorChart(title, rows, valueFor, formatter, ceiling = null) {
+  const valid = rows.filter(row => Number.isFinite(Number(valueFor(row))));
+  if (!valid.length) {
+    return node('section', { class: 'vm-monitor-chart' },
+      node('div', { class: 'vm-monitor-chart-head' }, node('strong', { text: title })),
+      node('div', { class: 'empty compact', text: 'Brak danych RRD dla wybranego zakresu.' }));
+  }
+
+  const step = Math.max(1, Math.ceil(valid.length / 72));
+  const samples = valid.filter((_, index) => index % step === 0);
+  const last = valid[valid.length - 1];
+  if (samples[samples.length - 1] !== last) samples.push(last);
+
+  const values = samples.map(row => Math.max(0, vmMonitorNumeric(valueFor(row))));
+  const maxValue = ceiling && Number(ceiling) > 0
+    ? Number(ceiling)
+    : Math.max(1, ...values);
+  const latestValue = values[values.length - 1];
+  const bars = node('div', { class: 'vm-monitor-bars', role: 'img', 'aria-label': title });
+
+  samples.forEach((row, index) => {
+    const value = values[index];
+    const height = value > 0 ? Math.max(2, Math.min(100, (value / maxValue) * 100)) : 0;
+    const when = row.time
+      ? new Date(Number(row.time) * 1000).toLocaleString('pl-PL')
+      : 'brak czasu';
+    bars.append(node('span', {
+      class: 'vm-monitor-bar',
+      style: `height:${height}%`,
+      title: `${when}: ${formatter(value, row)}`,
+    }));
+  });
+
+  return node('section', { class: 'vm-monitor-chart' },
+    node('div', { class: 'vm-monitor-chart-head' },
+      node('strong', { text: title }),
+      node('span', { text: formatter(latestValue, last) })),
+    bars,
+    node('div', { class: 'vm-monitor-chart-axis' },
+      node('span', { text: samples[0]?.time ? new Date(Number(samples[0].time) * 1000).toLocaleString('pl-PL') : '—' }),
+      node('span', { text: last?.time ? new Date(Number(last.time) * 1000).toLocaleString('pl-PL') : '—' })));
+}
+
+function vmMonitorCurrent(item, current) {
+  const cpu = vmMonitorNumeric(current.cpu);
+  const ramUsed = vmMonitorNumeric(current.mem);
+  const ramMax = vmMonitorNumeric(current.maxmem);
+  return node('div', { class: 'vm-monitor-current-grid' },
+    node('section', { class: 'vm-stat-card' },
+      node('span', { text: 'Stan' }),
+      badge(statusLabel(current.status || item.live?.status || 'unknown'), statusKind(current.status || item.live?.status)),
+      node('small', { text: current.qmpstatus || item.node || '—' })),
+    node('section', { class: 'vm-stat-card' },
+      node('span', { text: 'CPU' }),
+      node('strong', { text: vmMonitorPercent(cpu) }),
+      node('small', { text: `${current.cpus ?? '—'} vCPU` })),
+    node('section', { class: 'vm-stat-card' },
+      node('span', { text: 'RAM' }),
+      node('strong', { text: ramMax ? `${formatBytes(ramUsed)} / ${formatBytes(ramMax)}` : formatBytes(ramUsed) }),
+      node('small', { text: ramMax ? `${Math.round((ramUsed / ramMax) * 100)}% użycia` : 'brak limitu' })),
+    node('section', { class: 'vm-stat-card' },
+      node('span', { text: 'Net IN' }),
+      node('strong', { text: formatBytes(vmMonitorNumeric(current.netin)) }),
+      node('small', { text: 'licznik od startu VM' })),
+    node('section', { class: 'vm-stat-card' },
+      node('span', { text: 'Net OUT' }),
+      node('strong', { text: formatBytes(vmMonitorNumeric(current.netout)) }),
+      node('small', { text: 'licznik od startu VM' })),
+    node('section', { class: 'vm-stat-card' },
+      node('span', { text: 'Disk read' }),
+      node('strong', { text: formatBytes(vmMonitorNumeric(current.diskread)) }),
+      node('small', { text: 'licznik od startu VM' })),
+    node('section', { class: 'vm-stat-card' },
+      node('span', { text: 'Disk write' }),
+      node('strong', { text: formatBytes(vmMonitorNumeric(current.diskwrite)) }),
+      node('small', { text: `uptime ${formatDuration(current.uptime)}` })));
+}
+
+async function vmMonitorContent(item) {
+  const timeframeField = selectField('Zakres danych', 'vm_monitor_timeframe', [
+    { value: 'hour', label: 'Ostatnia godzina' },
+    { value: 'day', label: 'Ostatnie 24 godziny' },
+    { value: 'week', label: 'Ostatnie 7 dni' },
+    { value: 'month', label: 'Ostatni miesiąc' },
+    { value: 'year', label: 'Ostatni rok' },
+  ], 'hour');
+  const timeframe = timeframeField.querySelector('select');
+  const content = node('div', { class: 'vm-detail-stack' });
+  const shell = node('div', { class: 'vm-detail-stack' });
+
+  const load = async () => {
+    content.replaceChildren(node('div', { class: 'loading compact' }, node('div', { class: 'spinner' })));
+    try {
+      const data = await api(`${vmBase(item)}/monitor?timeframe=${encodeURIComponent(timeframe.value)}`);
+      const current = data.current || {};
+      const rows = data.series || [];
+      const ramCeiling = vmMonitorNumeric(current.maxmem)
+        || Math.max(0, ...rows.map(row => vmMonitorNumeric(row.maxmem)));
+      content.replaceChildren(
+        vmMonitorCurrent(item, current),
+        node('section', { class: 'panel' },
+          node('div', { class: 'panel-header' },
+            node('div', {},
+              node('h2', { text: 'Metryki historyczne' }),
+              node('p', { class: 'muted', text: 'Źródło: Proxmox API / RRD. Wykresy pokazują próbki zwrócone przez Proxmox.' })),
+            badge(`${rows.length} próbek`, rows.length ? 'ok' : 'warning')),
+          node('div', { class: 'vm-monitor-grid' },
+            vmMonitorChart('CPU', rows, row => row.cpu, value => vmMonitorPercent(value), 1),
+            vmMonitorChart('RAM', rows, row => row.mem, value => formatBytes(value), ramCeiling || null),
+            vmMonitorChart('Network IN', rows, row => row.netin, value => vmMonitorRate(value)),
+            vmMonitorChart('Network OUT', rows, row => row.netout, value => vmMonitorRate(value)),
+            vmMonitorChart('Disk read', rows, row => row.diskread, value => vmMonitorRate(value)),
+            vmMonitorChart('Disk write', rows, row => row.diskwrite, value => vmMonitorRate(value)))),
+      );
+    } catch (error) {
+      content.replaceChildren(node('div', { class: 'panel' }, node('p', { class: 'form-error', text: error.message })));
+    }
+  };
+
+  const refresh = button('Odśwież', load, 'primary');
+  timeframe.addEventListener('change', load);
+  shell.append(
+    node('section', { class: 'panel vm-monitor-toolbar-panel' },
+      node('div', { class: 'panel-header' },
+        node('div', {},
+          node('h2', { text: 'Monitor Proxmox' }),
+          node('p', { class: 'muted', text: `${item.node || '—'} / VMID ${item.vm_id}` })),
+        refresh),
+      node('div', { class: 'vm-monitor-toolbar' }, timeframeField)),
+    content,
+  );
+  await load();
+  return shell;
+}
+
+function vmHistoryKindLabel(kind) {
+  return ({
+    lifecycle: 'Lifecycle',
+    deployment: 'Deployment',
+    job: 'Job',
+    provisioning: 'Provisioning',
+    day2: 'Day-2',
+    audit: 'Audit',
+  })[kind] || kind || 'Inne';
+}
+
+function vmHistoryKindTone(kind) {
+  if (kind === 'provisioning' || kind === 'job') return 'info';
+  if (kind === 'day2') return 'warning';
+  if (kind === 'lifecycle' || kind === 'deployment') return 'ok';
+  return 'neutral';
+}
+
+function vmHistoryStatusTone(status) {
+  const value = String(status || '').toLowerCase();
+  if (['successful', 'success', 'succeeded', 'succeeded_with_warning', 'completed', 'active'].includes(value)) return 'ok';
+  if (['failed', 'failure', 'cancelled', 'destroyed', 'missing'].includes(value)) return 'danger';
+  if (['running', 'queued', 'cancelling', 'requested', 'waiting_approval'].includes(value)) return 'warning';
+  return 'info';
+}
+
 async function vmAuditContent(item) {
-  if (!allowed('audit.read')) return node('div', { class: 'empty', text: 'Brak uprawnienia audit.read.' });
-  const target = `${item.provider_id}:${item.node}:${item.vm_id}`;
-  const entries = (await api('/audit?limit=200')).items || [];
-  const rows = entries.filter(entry => String(entry.resource_id || '').startsWith(target));
+  const rows = (await api(`/inventory/vms/${encodeURIComponent(item.id)}/history?limit=500`)).items || [];
   return node('section', { class: 'panel' },
-    node('div', { class: 'panel-header' }, node('h2', { text: 'Historia operacji' }), badge(String(rows.length), 'info')),
-    table([
+    node('div', { class: 'panel-header' },
+      node('div', {},
+        node('h2', { text: 'Historia VM' }),
+        node('p', { class: 'muted', text: 'Lifecycle, provisioning, joby, operacje Day-2 i audyt dostępny dla bieżących uprawnień.' })),
+      badge(String(rows.length), 'info')),
+    rows.length ? table([
       { label: 'Czas', value: row => formatDate(row.timestamp) },
-      { label: 'Akcja', value: row => row.action || '—' },
-      { label: 'Użytkownik', value: row => row.actor_username || row.actor_user_id || '—' },
-      { label: 'Request ID', class: 'mono', value: row => short(row.request_id, 18) },
-    ], rows));
+      { label: 'Typ', value: row => badge(vmHistoryKindLabel(row.kind), vmHistoryKindTone(row.kind)) },
+      { label: 'Zdarzenie', value: row => node('strong', { text: row.title || '—' }) },
+      { label: 'Status', value: row => row.status ? badge(statusLabel(row.status), vmHistoryStatusTone(row.status)) : '—' },
+      { label: 'Szczegóły', value: row => row.detail || '—' },
+      { label: 'Użytkownik', value: row => row.actor_user_id || '—' },
+      { label: 'ID', value: row => node('span', { class: 'mono', text: [
+        row.job_id ? `job ${short(row.job_id, 12)}` : null,
+        row.request_id ? `req ${short(row.request_id, 12)}` : null,
+      ].filter(Boolean).join(' · ') || '—' }) },
+    ], rows, row => row.job_id && allowed('jobs.read')
+      ? [button('Logi', () => navigate('/jobs/' + encodeURIComponent(row.job_id)), 'ghost')]
+      : []) : node('div', { class: 'empty', text: 'Brak zapisanej historii dla tej VM.' }));
 }
 
 async function showVmDetailsPage(item, initialTab = 'overview', parentView = null) {
@@ -510,10 +693,11 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
     const tabContent = node('div', { class: 'vm-tab-content' });
     const tabs = [
       ['overview', 'Przegląd'],
+      ['monitor', 'Monitor'],
       ['hardware', 'Hardware'],
       ['snapshots', 'Snapshoty', 'snapshots.read'],
       ['backups', 'Backupy', 'backups.read'],
-      ['audit', 'Historia', 'audit.read'],
+      ['audit', 'Historia'],
     ].filter(([, , permission]) => allowed(permission));
 
     let activeTab = tabs.some(([id]) => id === initialTab) ? initialTab : 'overview';
@@ -535,10 +719,12 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
       try {
         let result;
         if (id === 'overview') result = vmOverviewContent(item, status);
+        else if (id === 'monitor') result = await vmMonitorContent(item);
         else if (id === 'hardware') result = vmHardwareContent(item, status);
         else if (id === 'snapshots') result = await vmSnapshotsContent(item);
         else if (id === 'backups') result = await vmBackupsContent(item);
-        else result = await vmAuditContent(item);
+        else if (id === 'audit') result = await vmAuditContent(item);
+        else result = vmOverviewContent(item, status);
         tabContent.replaceChildren(result);
       } catch (error) {
         if (await offerMissingVmCleanup(item, returnView)) return;
