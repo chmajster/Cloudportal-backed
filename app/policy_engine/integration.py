@@ -41,6 +41,18 @@ def _tags(values):
     return []
 
 
+def _classification_from_tags(tags):
+    apmid = None
+    environment = None
+    for tag in tags:
+        text = str(tag or "").strip().lower()
+        if text.startswith("apmid-") and len(text) > 6 and apmid is None:
+            apmid = text[6:].upper()
+        elif text.startswith("env-") and text[4:] in {"dev", "test", "nonprod", "prod"} and environment is None:
+            environment = text[4:]
+    return apmid, environment
+
+
 def _scope(request, fallback=None):
     scope = getattr(request.state, "resource_scope", None)
     if scope is not None:
@@ -80,6 +92,23 @@ def _write_aliases(rendered, effective_resource):
         variables[target] = value
     if "tags" in effective_resource:
         variables["tags"] = list(effective_resource.get("tags") or [])
+
+    # Placement effects must change the actual Terraform input, not only the
+    # decision trace. These names match the canonical Proxmox template and are
+    # intentionally generic enough for future provider adapters.
+    placement_aliases = {
+        "storage": ("storage", "datastore", "datastore_id"),
+        "network": ("network", "bridge", "network_id"),
+        "node": ("node", "host", "target_node"),
+        "cluster": ("cluster", "cluster_id"),
+    }
+    for field, keys in placement_aliases.items():
+        value = effective_resource.get(field)
+        if value is None:
+            continue
+        target = next((key for key in keys if key in variables), keys[0])
+        variables[target] = value
+
     rendered["variables"] = variables
     if effective_resource.get("provider_id") is not None:
         rendered["provider_id"] = effective_resource["provider_id"]
@@ -90,6 +119,8 @@ def _write_aliases(rendered, effective_resource):
 def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rendered, *, apmid=None, environment=None):
     rendered = copy.deepcopy(rendered)
     variables = dict(rendered.get("variables") or {})
+    classification_tags = _tags(variables)
+    tagged_apmid, tagged_environment = _classification_from_tags(classification_tags)
     context = {
         "actor": _actor(actor, permissions),
         "scope": _scope(request, blueprint),
@@ -107,15 +138,15 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
         },
         "resource": {
             "type": "vm",
-            "apmid": apmid or variables.get("apmid"),
-            "environment": environment or variables.get("environment"),
+            "apmid": apmid or variables.get("apmid") or tagged_apmid,
+            "environment": environment or variables.get("environment") or tagged_environment,
             "provider_id": rendered.get("provider_id"),
             "provider_type": rendered.get("provider"),
             "template": rendered.get("template"),
             "cpu": _number_from(variables, ("cores", "cpu", "vcpu", "cpu_cores")),
             "memory_mb": _number_from(variables, ("memory", "memory_mb", "ram_mb")),
             "disk_gb": _number_from(variables, ("disk_size_gb", "disk_gb", "disk_size")),
-            "tags": _tags(variables),
+            "tags": classification_tags,
             "variables": copy.deepcopy(variables),
         },
     }
@@ -143,6 +174,7 @@ def _resource_metadata(db, target):
 def enforce_day2(db, request, actor, permissions, target, action_id, params):
     params = copy.deepcopy(dict(params or {}))
     row, metadata, tags = _resource_metadata(db, target)
+    tagged_apmid, tagged_environment = _classification_from_tags(tags)
     context = {
         "actor": _actor(actor, permissions),
         "scope": _scope(request, row),
@@ -160,8 +192,8 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
             "provider_type": getattr(target, "provider_type", None),
             "node": getattr(target, "node", None),
             "management_mode": getattr(target, "management_mode", None),
-            "apmid": metadata.get("apmid"),
-            "environment": metadata.get("environment"),
+            "apmid": metadata.get("apmid") or tagged_apmid,
+            "environment": metadata.get("environment") or tagged_environment,
             "tags": tags,
             "metadata": metadata,
         },
