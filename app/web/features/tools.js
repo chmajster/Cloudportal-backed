@@ -784,8 +784,8 @@ function blueprintAvatarForm(item = null) {
     required: true,
     wide: true,
     value: item?.data_uri || '',
-    placeholder: 'data:image/x-icon;base64,AAACAA...',
-    help: 'Wklej pełny data URI: data:image/x-icon;base64,... Maksymalny rozmiar po dekodowaniu: 128 KiB.',
+    placeholder: 'x-icon;base64,AAACAA... lub data:image/x-icon;base64,AAACAA...',
+    help: 'Akceptowane: x-icon;base64,... oraz data:image/x-icon;base64,... Maksymalny rozmiar po dekodowaniu: 128 KiB.',
   });
   const dataInput = dataField.querySelector('textarea');
   dataInput.rows = 8;
@@ -804,15 +804,17 @@ function blueprintAvatarForm(item = null) {
 
   const refreshPreview = () => {
     const value = String(dataInput.value || '').trim();
-    const validPrefix = /^(?:data:)?image\/(?:x-icon|vnd\.microsoft\.icon);base64,/i.test(value);
+    const validPrefix = /^(?:(?:data:)?image\/(?:x-icon|vnd\.microsoft\.icon)|x-icon);base64,/i.test(value);
     if (!validPrefix) {
       previewImage.hidden = true;
       previewImage.removeAttribute('src');
-      previewStatus.textContent = 'Niepoprawny prefix. Użyj data:image/x-icon;base64,...';
+      previewStatus.textContent = 'Niepoprawny prefix. Użyj x-icon;base64,... lub data:image/x-icon;base64,...';
       return;
     }
     previewImage.hidden = false;
-    previewImage.src = value.startsWith('data:') ? value : 'data:' + value;
+    previewImage.src = value.toLowerCase().startsWith('x-icon;base64,')
+      ? 'data:image/' + value
+      : (value.startsWith('data:') ? value : 'data:' + value);
     previewStatus.textContent = 'Podgląd z danych base64.';
   };
   dataInput.addEventListener('input', refreshPreview);
@@ -856,7 +858,7 @@ async function blueprintAvatarsView() {
   if (!avatars.length) {
     list.append(node('div', { class: 'apmid-empty' },
       node('strong', { text: 'Brak awatarów Blueprintów' }),
-      node('span', { class: 'muted', text: 'Dodaj pierwszy plik ICO w formacie data:image/x-icon;base64,...' })));
+      node('span', { class: 'muted', text: 'Dodaj pierwszy plik ICO jako x-icon;base64,... lub data:image/x-icon;base64,...' })));
   } else {
     avatars.forEach(item => {
       const actions = [];
