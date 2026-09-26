@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import copy
+import re
 
 from fastapi import HTTPException
 
 from app.models import ManagedResource
 from app.policy_engine.service import evaluate_context
+from app.projects.models import Project
+from app.tenancy.models import Tenant
 
 
 def _actor(actor, permissions):
@@ -53,16 +56,73 @@ def _classification_from_tags(tags):
     return apmid, environment
 
 
-def _scope(request, fallback=None):
+def _scope_component(value, *, uppercase=False):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[\\/:|]+", "-", text)
+    text = re.sub(r"\s+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    return text.upper() if uppercase else text
+
+
+def compose_scope_key(organization, project, apmid, environment):
+    """Canonical human-readable VM scope: Organization-Project-APMID-ENV."""
+    parts = [
+        _scope_component(organization),
+        _scope_component(project),
+        _scope_component(apmid, uppercase=True),
+        _scope_component(environment, uppercase=True),
+    ]
+    return "-".join(parts) if all(parts) else None
+
+
+def _scope_from_ids(db, tenant_id, project_id, *, apmid=None, environment=None):
+    tenant_id = str(tenant_id or "")
+    project_id = str(project_id or "")
+    tenant = db.get(Tenant, tenant_id) if tenant_id else None
+    project = db.get(Project, project_id) if project_id else None
+
+    organization_name = str(getattr(tenant, "name", "") or tenant_id)
+    organization_slug = str(getattr(tenant, "slug", "") or "")
+    project_name = str(getattr(project, "name", "") or project_id)
+    project_slug = str(getattr(project, "slug", "") or "")
+    normalized_apmid = _scope_component(apmid, uppercase=True) or None
+    normalized_environment = str(environment or "").strip().lower() or None
+
+    return {
+        "tenant_id": tenant_id,
+        "project_id": project_id,
+        "organization": organization_name,
+        "organization_slug": organization_slug,
+        "project": project_name,
+        "project_slug": project_slug,
+        "apmid": normalized_apmid,
+        "environment": normalized_environment,
+        "key": compose_scope_key(
+            organization_name,
+            project_name,
+            normalized_apmid,
+            normalized_environment,
+        ),
+    }
+
+
+def _scope(db, request, fallback=None, *, apmid=None, environment=None):
     scope = getattr(request.state, "resource_scope", None)
     if scope is not None:
-        return {"tenant_id": str(scope.tenant_id), "project_id": str(scope.project_id)}
+        return _scope_from_ids(
+            db, scope.tenant_id, scope.project_id,
+            apmid=apmid, environment=environment,
+        )
     if fallback is not None:
-        return {
-            "tenant_id": str(getattr(fallback, "tenant_id", "") or ""),
-            "project_id": str(getattr(fallback, "project_id", "") or ""),
-        }
-    return {}
+        return _scope_from_ids(
+            db,
+            getattr(fallback, "tenant_id", ""),
+            getattr(fallback, "project_id", ""),
+            apmid=apmid, environment=environment,
+        )
+    return _scope_from_ids(db, "", "", apmid=apmid, environment=environment)
 
 
 def _deny(result):
@@ -93,6 +153,18 @@ def _write_aliases(rendered, effective_resource):
     if "tags" in effective_resource:
         variables["tags"] = list(effective_resource.get("tags") or [])
 
+    persisted_scope_fields = {
+        "apmid": "apmid",
+        "environment": "environment",
+        "organization": "organization",
+        "project": "project",
+        "scope_key": "resource_scope_key",
+    }
+    for resource_field, variable_name in persisted_scope_fields.items():
+        value = effective_resource.get(resource_field)
+        if value not in (None, ""):
+            variables[variable_name] = value
+
     # Placement effects must change the actual Terraform input, not only the
     # decision trace. These names match the canonical Proxmox template and are
     # intentionally generic enough for future provider adapters.
@@ -121,9 +193,15 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
     variables = dict(rendered.get("variables") or {})
     classification_tags = _tags(variables)
     tagged_apmid, tagged_environment = _classification_from_tags(classification_tags)
+    apmid_value = apmid or variables.get("apmid") or tagged_apmid
+    environment_value = environment or variables.get("environment") or tagged_environment
+    scope_context = _scope(
+        db, request, blueprint,
+        apmid=apmid_value, environment=environment_value,
+    )
     context = {
         "actor": _actor(actor, permissions),
-        "scope": _scope(request, blueprint),
+        "scope": scope_context,
         "request": {
             "action": "vm.create",
             "source": getattr(request.state, "source", "API"),
@@ -138,8 +216,11 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
         },
         "resource": {
             "type": "vm",
-            "apmid": apmid or variables.get("apmid") or tagged_apmid,
-            "environment": environment or variables.get("environment") or tagged_environment,
+            "apmid": apmid_value,
+            "environment": environment_value,
+            "organization": scope_context.get("organization"),
+            "project": scope_context.get("project"),
+            "scope_key": scope_context.get("key"),
             "provider_id": rendered.get("provider_id"),
             "provider_type": rendered.get("provider"),
             "template": rendered.get("template"),
@@ -175,9 +256,15 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
     params = copy.deepcopy(dict(params or {}))
     row, metadata, tags = _resource_metadata(db, target)
     tagged_apmid, tagged_environment = _classification_from_tags(tags)
+    apmid_value = metadata.get("apmid") or tagged_apmid
+    environment_value = metadata.get("environment") or tagged_environment
+    scope_context = _scope(
+        db, request, row,
+        apmid=apmid_value, environment=environment_value,
+    )
     context = {
         "actor": _actor(actor, permissions),
-        "scope": _scope(request, row),
+        "scope": scope_context,
         "request": {
             "action": "day2." + str(action_id),
             "source": getattr(request.state, "source", "API"),
@@ -192,8 +279,11 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
             "provider_type": getattr(target, "provider_type", None),
             "node": getattr(target, "node", None),
             "management_mode": getattr(target, "management_mode", None),
-            "apmid": metadata.get("apmid") or tagged_apmid,
-            "environment": metadata.get("environment") or tagged_environment,
+            "apmid": apmid_value,
+            "environment": environment_value,
+            "organization": metadata.get("organization") or scope_context.get("organization"),
+            "project": metadata.get("project") or scope_context.get("project"),
+            "scope_key": metadata.get("resource_scope_key") or scope_context.get("key"),
             "tags": tags,
             "metadata": metadata,
         },
@@ -218,12 +308,24 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
     variables = dict(getattr(deployment, "variables", {}) or {})
     tags = _tags(variables)
     tagged_apmid, tagged_environment = _classification_from_tags(tags)
+    apmid_value = variables.get("apmid") or tagged_apmid
+    environment_value = variables.get("environment") or tagged_environment
+    scope_context = _scope_from_ids(
+        db,
+        getattr(job, "tenant_id", ""),
+        getattr(job, "project_id", ""),
+        apmid=apmid_value,
+        environment=environment_value,
+    )
     roles = list(getattr(user, "roles", []) or [])
     resource = {
         "type": "vm",
         "id": str(getattr(deployment, "id", "") or ""),
-        "apmid": tagged_apmid,
-        "environment": tagged_environment,
+        "apmid": apmid_value,
+        "environment": environment_value,
+        "organization": variables.get("organization") or scope_context.get("organization"),
+        "project": variables.get("project") or scope_context.get("project"),
+        "scope_key": variables.get("resource_scope_key") or scope_context.get("key"),
         "provider_id": getattr(deployment, "provider_id", None),
         "provider_type": getattr(deployment, "provider", None),
         "template": getattr(deployment, "template", None),
@@ -246,10 +348,7 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
             "groups": [],
             "permissions": sorted(set(permissions or ())),
         },
-        "scope": {
-            "tenant_id": str(getattr(job, "tenant_id", "") or ""),
-            "project_id": str(getattr(job, "project_id", "") or ""),
-        },
+        "scope": scope_context,
         "request": {
             "action": "vm.create",
             "source": getattr(job, "source", "Worker"),
