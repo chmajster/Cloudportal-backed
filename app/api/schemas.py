@@ -662,6 +662,7 @@ class DeploymentInput(Input):
     credentials_id: int = Field(gt=0)
     variables: dict[str, Any]
     executor: Literal['terraform', 'opentofu', 'proxmox'] = 'terraform'
+    ansible: AnsibleInput | None = None
 
     @model_validator(mode='after')
     def derived_inventory(self):
@@ -796,7 +797,6 @@ class BlueprintDeployment(Input):
     template: Slug = 'proxmox-vm'
     variables: dict[str, Any]
     executor: Literal['terraform', 'opentofu', 'proxmox'] = 'terraform'
-    ansible: AnsibleInput | None = None
     ansible_runs: Annotated[list[AnsibleInput], Field(max_length=20)] = Field(default_factory=list)
     awx: AwxOnboardingInput | None = None
     hostname_scheme_id: int | None = Field(default=None, gt=0)
