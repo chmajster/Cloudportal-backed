@@ -683,6 +683,7 @@ def test_terraform_reuses_init_and_shared_provider_cache(client, headers, monkey
             (cwd / '.terraform' / 'providers').mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr('app.executors.terraform.run_process', fake_process)
+    monkeypatch.setattr('app.executors.terraform.reserve_proxmox_vm_id', lambda *_args, **_kwargs: 7001)
     context = SimpleNamespace(
         deployment=dep,
         credential=credential,
