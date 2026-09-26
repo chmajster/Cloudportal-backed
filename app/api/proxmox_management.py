@@ -333,8 +333,12 @@ def convert_to_template(provider_id: int, node: NODE, vmid: VMID, request: Reque
 def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, request: Request,
              actor=Depends(require('vms.clone')), db=Depends(get_db, scope='function')):
     require_governed_legacy_mutation(db, request.state.resource_scope, DIMENSIONS, 'VM clone')
+    if data.new_vm_id == int(vmid):
+        raise HTTPException(422, 'Clone target VMID must differ from source VMID')
     if data.convert_to_template and 'vms.template' not in request.state.permissions:
         raise HTTPException(403, 'vms.template required for automatic clone-to-template conversion')
+    if data.convert_to_template and not data.full:
+        raise HTTPException(422, 'Automatic clone-to-template conversion requires a full clone')
 
     def execute():
         task = adapter(db, provider_id).clone_vm(
