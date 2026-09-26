@@ -198,6 +198,8 @@
     }
 
     const discovery = state.awxDiscovery || {};
+    const organizations = discovery.organizations || [];
+    const projects = discovery.projects || [];
     const inventories = discovery.inventories || [];
     const jobTemplates = discovery.job_templates || [];
     const mapped = state.awxMappedScope || {};
