@@ -34,6 +34,86 @@ const myResourcesVmUi = (() => {
   }
 })();
 
+const DAY2_ACTIVITY_LABELS = Object.freeze({
+  power_on: 'włączanie VM',
+  shutdown: 'wyłączanie VM',
+  power_off: 'wymuszone wyłączanie VM',
+  reboot: 'restartowanie VM',
+  reset: 'twardy restart VM',
+  suspend: 'wstrzymywanie VM',
+  resume: 'wznawianie VM',
+  create_snapshot: 'tworzenie snapshotu',
+  delete_snapshot: 'usuwanie snapshotu',
+  restore_snapshot: 'przywracanie snapshotu',
+  resize_compute: 'zmiana CPU / RAM',
+  add_disk: 'dodawanie dysku',
+  resize_disk: 'powiększanie dysku',
+  detach_disk: 'odłączanie dysku',
+  delete_disk: 'usuwanie dysku',
+  add_nic: 'dodawanie interfejsu sieciowego',
+  edit_nic: 'edycja interfejsu sieciowego',
+  detach_nic: 'odłączanie interfejsu sieciowego',
+  update_cloud_init: 'aktualizacja cloud-init',
+  update_credentials: 'aktualizacja danych dostępowych',
+  run_ansible: 'uruchamianie Ansible',
+  install_package: 'instalowanie pakietu',
+  remove_package: 'usuwanie pakietu',
+  update_packages: 'aktualizacja pakietów',
+  patch_system: 'patchowanie systemu',
+  update_tags: 'aktualizacja tagów',
+  add_tag: 'dodawanie tagu',
+  remove_tag: 'usuwanie tagu',
+  update_metadata: 'aktualizacja metadanych',
+  migrate_vm: 'migracja VM',
+  move_storage: 'przenoszenie dysku',
+  clone_vm: 'klonowanie VM',
+  rebuild_vm: 'przebudowa VM',
+  delete_vm: 'usuwanie VM',
+  refresh_state: 'odświeżanie stanu VM',
+});
+
+function day2ActivityState(action) {
+  if (!action?.action) return null;
+  const activity = DAY2_ACTIVITY_LABELS[action.action]
+    || String(action.action).replaceAll('_', ' ');
+  const status = String(action.status || '').toUpperCase();
+  if (status === 'WAITING_APPROVAL') {
+    return { label: 'Oczekuje na zatwierdzenie: ' + activity, kind: 'warning' };
+  }
+  if (status === 'QUEUED' || status === 'REQUESTED') {
+    return { label: 'W kolejce: ' + activity, kind: 'warning' };
+  }
+  if (status === 'CANCEL_REQUESTED') {
+    return { label: 'Anulowanie: ' + activity, kind: 'warning' };
+  }
+  if (status === 'RUNNING') {
+    return { label: 'W toku: ' + activity, kind: 'warning' };
+  }
+  return null;
+}
+
+function vmLiveState(value) {
+  const normalized = String(value || 'unknown').toLowerCase();
+  const labels = {
+    running: 'Włączona',
+    stopped: 'Wyłączona',
+    paused: 'Wstrzymana',
+    suspended: 'Wstrzymana',
+  };
+  const kinds = {
+    running: 'ok',
+    stopped: '',
+    paused: 'warning',
+    suspended: 'warning',
+  };
+  return {
+    label: labels[normalized] || statusLabel(normalized),
+    kind: Object.prototype.hasOwnProperty.call(kinds, normalized)
+      ? kinds[normalized]
+      : statusKind(normalized),
+  };
+}
+
 function saveMyResourcesVmUi() {
   try {
     localStorage.setItem(MY_RESOURCES_VM_UI_KEY, JSON.stringify({
@@ -238,6 +318,7 @@ function vmMatchesFilters(entry) {
     item.name, item.vm_id, item.node, item.deployment_id,
     meta.apmid, meta.environment, meta.owner, meta.project, meta.tenant,
     meta.provider, meta.status, item.management_mode,
+    item.active_action?.action, day2ActivityState(item.active_action)?.label,
     item.provisioning_job?.operation, item.provisioning_job?.current_stage, item.provisioning_job?.error,
   ].map(value => String(value || '').toLocaleLowerCase('pl')).join(' ');
   return haystack.includes(query);
@@ -271,6 +352,8 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     destroyJob && !['successful', 'failed', 'cancelled'].includes(provisioningJob.status)
   );
   const liveStatus = item.live?.status || item.lifecycle_status || 'unknown';
+  const day2Activity = !provisioningVisible ? day2ActivityState(item.active_action) : null;
+  const liveState = vmLiveState(liveStatus);
   const active = item.lifecycle_status === 'active'
     && !item.provisioning_placeholder
     && !destroyInProgress;
@@ -353,10 +436,10 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     ? (lifecycleFailed
         ? activityTitle + ': błąd'
         : lifecycleSuccessful ? activityTitle + ': zakończone' : activityTitle)
-    : statusLabel(liveStatus);
+    : (day2Activity?.label || liveState.label);
   const statusKindValue = provisioningVisible
     ? (lifecycleFailed ? 'danger' : lifecycleSuccessful ? 'ok' : 'warning')
-    : statusKind(liveStatus);
+    : (day2Activity?.kind || liveState.kind);
   const vmIdLabel = item.vm_id === null || item.vm_id === undefined || item.vm_id === ''
     ? 'oczekuje'
     : item.vm_id;
