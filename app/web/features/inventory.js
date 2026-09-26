@@ -48,7 +48,7 @@ function inventoryVmActions(item) {
     && allowed('terraform.execute');
   if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
   if (allowed('inventory.delete') && item.live === null && item.lifecycle_status !== 'destroyed') {
-    actions.push(button('Usuń brakującą', () => offerMissingVmCleanup(item, 'inventory'), 'danger'));
+    actions.push(button('Usuń pozostałe dane', () => offerMissingVmCleanup(item, 'inventory'), 'danger'));
   }
   if (allowed('inventory.update')) actions.push(button('Odśwież stan', async () => {
     await api(`/inventory/vms/${item.id}/reconcile`, { method: 'POST' });
