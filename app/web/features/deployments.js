@@ -145,7 +145,9 @@ async function myResourcesView(repairInventory = true) {
   const optionalItems = path => api(path).then(result => result.items || []).catch(() => []);
   const [deploymentResult, vmResult, resourceResult, providerResult, jobResult, users, projects, tenants] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
-    canReadInventory ? api('/inventory/vms?refresh=true&limit=200') : Promise.resolve({ items: [] }),
+    canReadInventory
+      ? api('/inventory/vms?' + (repairInventory ? 'refresh=true&' : '') + 'limit=200')
+      : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
     allowed('jobs.read') ? api('/jobs?limit=200') : Promise.resolve({ items: [] }),
