@@ -26,7 +26,9 @@ function validateWorkflow(state, editingItem) {
   const allowedConditionKeys = new Set(['provider', 'executor', 'has_ansible', 'hostname', 'environment', 'apmid']);
 
   for (const step of steps) {
-    if (step.type === 'create_vm') fail('create_vm nie jest obsługiwanym krokiem workflow.');
+    if (!parts.core.WORKFLOW_TYPES.includes(step.type)) {
+      fail('Nieobsługiwany typ kroku workflow: ' + step.type + '.');
+    }
     if (step.conditions?.__invalid) fail('Conditions muszą być poprawnym obiektem JSON.');
     if ((step.depends_on || []).some(value => !known.has(value) || value === step.id)) {
       fail('Workflow zawiera brakującą zależność albo zależność do samego siebie.');
