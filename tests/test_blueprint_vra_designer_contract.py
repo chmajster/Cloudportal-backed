@@ -62,7 +62,7 @@ const data = {
   templates: [{ id: 'aws-ec2', provider: 'aws', enabled: true }],
 };
 const blueprint = {
-  deployment: { provider_id: 8, credentials_id: 6, template: 'aws-ec2', ansible: { playbook: 'bootstrap' } },
+  deployment: { provider_id: 8, credentials_id: 6, template: 'aws-ec2', ansible_runs: [{ playbook: 'bootstrap', credentials_id: 6, variables: {} }] },
   workflow: [
     { id: 'apply', type: 'terraform_apply' },
     { id: 'ip', type: 'wait_for_ip' },
