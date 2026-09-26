@@ -871,6 +871,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "item.management_mode === 'terraform'" in script
     assert "allowed('deployments.destroy')" in script
     assert 'function vmDetailActions(' in script
+    assert 'function vmActionGroup(' in script
+    assert 'function vmSummaryCard(' in script
+    assert 'function vmTagChips(' in script
+    assert "vmActionGroup('Zasilanie'" in script
+    assert "vmActionGroup('Operacje'" in script
+    assert "vmActionGroup('Infrastruktura'" in script
+    assert "vmActionGroup('Strefa ryzyka'" in script
+    assert "node('h2', { text: 'Szczegóły maszyny' })" in script
+    assert "node('h2', { text: 'Klasyfikacja' })" in script
     assert 'function vmSnapshotsContent(' in script
     assert 'function vmBackupsContent(' in script
     assert 'function vmMonitorContent(' in script
@@ -1061,8 +1070,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.global-search-dialog' in stylesheet
     assert '.global-search-result' in stylesheet
     assert '.vm-detail-header' in stylesheet
+    assert '.vm-hero' in stylesheet
+    assert '.vm-command-center' in stylesheet
+    assert '.vm-action-group' in stylesheet
     assert '.vm-tabs' in stylesheet
     assert '.vm-overview-grid' in stylesheet
+    assert '.vm-summary-card' in stylesheet
+    assert '.vm-overview-lower-grid' in stylesheet
+    assert '.vm-facts-grid' in stylesheet
+    assert '.vm-tag-chip' in stylesheet
     assert '.vm-monitor-grid' in stylesheet
     assert '.vm-monitor-bars' in stylesheet
     assert '.tools-hero' in stylesheet
