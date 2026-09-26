@@ -4,8 +4,9 @@ import copy
 import re
 
 from fastapi import HTTPException
+from sqlalchemy import select
 
-from app.models import ManagedResource
+from app.models import ManagedResource, Provider
 from app.policy_engine.service import evaluate_context
 from app.projects.models import Project
 from app.tenancy.models import Tenant
@@ -137,7 +138,7 @@ def _deny(result):
     })
 
 
-def _write_aliases(rendered, effective_resource, effective_scope=None):
+def _write_aliases(db, rendered, effective_resource, effective_scope=None):
     variables = dict(rendered.get("variables") or {})
     effective_scope = effective_scope or {}
     canonical_scope_key = compose_scope_key(
@@ -193,6 +194,13 @@ def _write_aliases(rendered, effective_resource, effective_scope=None):
     rendered["variables"] = variables
     if effective_resource.get("provider_id") is not None:
         rendered["provider_id"] = effective_resource["provider_id"]
+        try:
+            selected_provider = db.get(Provider, int(effective_resource["provider_id"]))
+        except (TypeError, ValueError):
+            selected_provider = None
+        if selected_provider is not None:
+            rendered["credentials_id"] = selected_provider.credentials_id
+            rendered["provider"] = selected_provider.type
     if effective_resource.get("template"):
         rendered["template"] = effective_resource["template"]
 
@@ -240,7 +248,7 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
             "variables": copy.deepcopy(variables),
         },
     }
-    result = evaluate_context(db, context, persist=True)
+    result = evaluate_context(db, context, persist=True, durable_denies=True)
     _deny(result)
 
     effective = result.get("effective_context") or context
@@ -248,12 +256,16 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
     if isinstance(payload, dict):
         rendered = copy.deepcopy(payload)
     effective_resource = effective.get("resource") or {}
-    _write_aliases(rendered, effective_resource, effective.get("scope") or {})
+    _write_aliases(db, rendered, effective_resource, effective.get("scope") or {})
     return rendered, result
 
 
 def _resource_metadata(db, target):
     row = db.get(ManagedResource, str(getattr(target, "resource_id", "")))
+    if row is None and getattr(target, "deployment_id", None):
+        row = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == str(target.deployment_id)
+        ))
     metadata = dict(getattr(row, "metadata_json", {}) or {}) if row is not None else {}
     tags = metadata.get("tags") or []
     if isinstance(tags, str):
@@ -297,7 +309,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
             "metadata": metadata,
         },
     }
-    result = evaluate_context(db, context, persist=True)
+    result = evaluate_context(db, context, persist=True, durable_denies=True)
     _deny(result)
     effective = result.get("effective_context") or context
     effective_params = ((effective.get("request") or {}).get("parameters"))
@@ -375,7 +387,8 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
     effective_resource = (result.get("effective_context") or {}).get("resource") or {}
     protected = (
         "cpu", "memory_mb", "disk_gb", "storage", "network", "node",
-        "cluster", "provider_id", "template",
+        "cluster", "provider_id", "template", "tags", "variables",
+        "apmid", "environment", "organization", "project", "scope_key",
     )
     drift = {
         field: {"queued": resource.get(field), "policy_now": effective_resource.get(field)}
@@ -384,3 +397,53 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
     }
     result["input_policy_drift"] = drift
     return result
+
+
+def revalidate_day2_job(db, job, action_request, user, permissions, target):
+    """Re-evaluate current Day-2 policy immediately before provider dispatch."""
+    row, metadata, tags = _resource_metadata(db, target)
+    tagged_apmid, tagged_environment = _classification_from_tags(tags)
+    apmid_value = metadata.get("apmid") or tagged_apmid
+    environment_value = metadata.get("environment") or tagged_environment
+    scope_context = _scope_from_ids(
+        db,
+        getattr(job, "tenant_id", ""),
+        getattr(job, "project_id", ""),
+        apmid=apmid_value,
+        environment=environment_value,
+    )
+    roles = list(getattr(user, "roles", []) or [])
+    context = {
+        "actor": {
+            "id": getattr(user, "id", None),
+            "username": getattr(user, "username", ""),
+            "role_ids": [getattr(role, "id", None) for role in roles],
+            "roles": [getattr(role, "name", "") for role in roles],
+            "groups": [],
+            "permissions": sorted(set(permissions or ())),
+        },
+        "scope": scope_context,
+        "request": {
+            "action": "day2." + str(getattr(action_request, "action", "")),
+            "source": getattr(job, "source", "Worker"),
+            "phase": "worker_revalidate",
+            "parameters": copy.deepcopy(getattr(action_request, "parameters", {}) or {}),
+        },
+        "resource": {
+            "id": str(getattr(target, "resource_id", "") or ""),
+            "type": str(getattr(target, "resource_type", "resource") or "resource"),
+            "name": str(getattr(target, "name", "") or ""),
+            "provider_id": getattr(target, "provider_id", None),
+            "provider_type": getattr(target, "provider_type", None),
+            "node": getattr(target, "node", None),
+            "management_mode": getattr(target, "management_mode", None),
+            "apmid": apmid_value,
+            "environment": environment_value,
+            "organization": scope_context.get("organization") or metadata.get("organization"),
+            "project": scope_context.get("project") or metadata.get("project"),
+            "scope_key": scope_context.get("key") or metadata.get("resource_scope_key"),
+            "tags": tags,
+            "metadata": metadata,
+        },
+    }
+    return evaluate_context(db, context, persist=True)
