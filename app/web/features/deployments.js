@@ -81,9 +81,7 @@ async function deploymentsView() {
   const enabledTemplates = new Set(
     (templateResult.items || []).filter(item => item.enabled !== false).map(item => item.id)
   );
-  const avatarById = new Map(
-    (avatarResult.items || []).map(item => [String(item.id), item])
-  );
+  const avatarById = new Map((avatarResult.items || []).map(item => [String(item.id), item]));
   const products = (blueprintResult.items || []).filter(item =>
     item.is_active
     && item.deployment?.template

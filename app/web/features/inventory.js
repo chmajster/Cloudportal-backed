@@ -214,7 +214,7 @@ function recreateVm(item) {
   );
 }
 
-function vmDetailActions(item, status = {}) {
+function vmDetailActions(item, status = {}, snapshotCapability = null) {
   const base = vmBase(item);
   const runtime = vmRuntimeState(status, item);
   const groups = {
@@ -246,8 +246,11 @@ function vmDetailActions(item, status = {}) {
   if (allowed('vms.console')) {
     groups.tools.push(button('Konsola', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'), 'primary'));
   }
-  if (allowed('snapshots.create')) {
+  if (allowed('snapshots.create') && snapshotCapability?.supported !== false) {
     groups.tools.push(button('Snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new')));
+  }
+  if (allowed('backups.create') && snapshotCapability?.supported === false) {
+    groups.tools.push(button('Backup zamiast snapshotu', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
   }
   if (allowed('backups.create')) {
     groups.tools.push(button('Backup', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
@@ -299,13 +302,17 @@ function vmActionGroup(title, description, actions, tone = '') {
 }
 
 function vmUsagePercent(used, total) {
-  const valid = Number.isFinite(Number(used)) && Number.isFinite(Number(total)) && Number(total) > 0;
-  return valid ? Math.max(0, Math.min(100, Number(used) / Number(total) * 100)) : null;
+  if (used === null || used === undefined || total === null || total === undefined) return null;
+  const numericUsed = Number(used);
+  const numericTotal = Number(total);
+  const valid = Number.isFinite(numericUsed) && Number.isFinite(numericTotal) && numericTotal > 0;
+  return valid ? Math.max(0, Math.min(100, numericUsed / numericTotal * 100)) : null;
 }
 
 function vmSummaryCard(label, value, detail, percent = null) {
-  const safePercent = Number.isFinite(Number(percent)) ? Math.max(0, Math.min(100, Number(percent))) : null;
-  return node('section', { class: 'vm-summary-card' },
+  const hasPercent = percent !== null && percent !== undefined && Number.isFinite(Number(percent));
+  const safePercent = hasPercent ? Math.max(0, Math.min(100, Number(percent))) : null;
+  return node('section', { class: 'vm-summary-card' + (safePercent === null ? '' : ' has-progress') },
     node('span', { class: 'vm-summary-label', text: label }),
     node('strong', { class: 'vm-summary-value', text: value }),
     safePercent === null ? null : node('div', { class: 'vm-summary-progress', 'aria-hidden': 'true' },
@@ -354,9 +361,11 @@ function vmRuntimeStateKind(value) {
 
 function vmOverviewContent(item, status) {
   const primaryIp = status.primary_ip || item.primary_ip || '—';
-  const cpuUsage = Number.isFinite(Number(status.cpu)) ? Math.max(0, Math.min(100, Number(status.cpu) * 100)) : null;
+  const cpuUsage = status.cpu === null || status.cpu === undefined || !Number.isFinite(Number(status.cpu))
+    ? null
+    : Math.max(0, Math.min(100, Number(status.cpu) * 100));
   const ramUsage = vmUsagePercent(status.mem, status.maxmem);
-  const diskUsage = vmUsagePercent(status.disk, status.maxdisk);
+  const diskUsage = Number(status.disk) > 0 ? vmUsagePercent(status.disk, status.maxdisk) : null;
   const cpuCount = status.cpus ?? status.maxcpu ?? '—';
   const ramValue = status.maxmem ? formatBytes(status.maxmem) : '—';
   const diskValue = status.maxdisk ? formatBytes(status.maxdisk) : '—';
@@ -367,10 +376,10 @@ function vmOverviewContent(item, status) {
         cpuUsage === null ? 'Brak telemetryki użycia CPU' : `Użycie ${Math.round(cpuUsage)}%`,
         cpuUsage),
       vmSummaryCard('RAM', ramValue,
-        status.mem ? `${formatBytes(status.mem)} używane` : 'Brak telemetryki użycia RAM',
+        ramUsage === null ? 'Brak telemetryki użycia RAM' : `${formatBytes(status.mem)} używane`,
         ramUsage),
       vmSummaryCard('Dysk', diskValue,
-        status.disk ? `${formatBytes(status.disk)} używane` : 'Brak telemetryki wykorzystania dysku',
+        diskUsage === null ? 'Brak telemetryki wykorzystania dysku' : `${formatBytes(status.disk)} używane`,
         diskUsage),
       vmSummaryCard('Adres IP', primaryIp,
         primaryIp === '—' ? 'Brak adresu z inventory/QEMU Agent' : 'Adres podstawowy VM'),
@@ -431,10 +440,26 @@ function vmHardwareContent(item, status) {
 async function vmSnapshotsContent(item) {
   if (!allowed('snapshots.read')) return node('div', { class: 'empty', text: 'Brak uprawnienia snapshots.read.' });
   const base = vmBase(item);
-  const snapshots = (await api(`${base}/snapshots`)).items || [];
+  const snapshotResult = await api(`${base}/snapshots`);
+  const snapshots = snapshotResult.items || [];
+  const capability = snapshotResult.capability || {};
+  const snapshotSupported = capability.supported !== false;
+  const headerActions = [];
+  if (allowed('snapshots.create') && snapshotSupported) {
+    headerActions.push(button('Nowy snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new'), 'primary'));
+  }
+  if (!snapshotSupported && allowed('backups.create')) {
+    headerActions.push(button('Utwórz backup zamiast snapshotu', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new'), 'primary'));
+  }
+  const unavailableNotice = !snapshotSupported
+    ? node('div', { class: 'empty vm-snapshot-unavailable' },
+      node('strong', { text: 'Snapshot niedostępny dla bieżącej konfiguracji VM' }),
+      node('p', { text: capability.message || 'Proxmox nie udostępnia funkcji snapshot dla tej VM.' }))
+    : null;
   return node('section', { class: 'panel' },
     node('div', { class: 'panel-header' }, node('h2', { text: 'Snapshoty' }),
-      allowed('snapshots.create') ? button('Nowy snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new'), 'primary') : ''),
+      node('div', { class: 'action-group' }, ...headerActions)),
+    unavailableNotice,
     table([
       { label: 'Snapshot', value: snap => node('strong', { text: snap.name }) },
       { label: 'Opis', value: snap => snap.description || '—' },
@@ -709,7 +734,13 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
   const routedDetails = state.view === 'routed-form'
     && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
-    const status = await api(`${vmBase(item)}/status`);
+    const [status, snapshotInfo] = await Promise.all([
+      api(`${vmBase(item)}/status`),
+      allowed('snapshots.read')
+        ? api(`${vmBase(item)}/snapshots`).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    const snapshotCapability = snapshotInfo?.capability || null;
     if (!routedDetails) {
       state.view = returnView;
       location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(returnView) : returnView;
@@ -771,7 +802,7 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
 
     const runtimeState = vmRuntimeState(status, item);
     const primaryIp = status.primary_ip || item.primary_ip || '—';
-    const actionGroups = vmDetailActions(item, status);
+    const actionGroups = vmDetailActions(item, status, snapshotCapability);
     const header = node('section', { class: 'vm-detail-header' },
       node('div', { class: 'vm-breadcrumbs' },
         node('button', { type: 'button', class: 'button link', onClick: () => navigate(returnView) }, returnLabel),
@@ -848,7 +879,19 @@ function deleteVm(item) {
   });
 }
 
-function createVmSnapshot(item) {
+async function createVmSnapshot(item) {
+  if (allowed('snapshots.read')) {
+    const snapshotResult = await api(`${vmBase(item)}/snapshots`);
+    const capability = snapshotResult.capability || {};
+    if (capability.supported === false) {
+      const message = capability.message || 'Snapshot nie jest obsługiwany przez tę VM.';
+      toast(message, 'error');
+      if (allowed('backups.create')) {
+        await navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new');
+      }
+      return;
+    }
+  }
   const fields = node('div', { class: 'form-grid' },
     field('Nazwa snapshotu', 'snapname', { required: true }),
     field('Opis', 'description', { wide: true }),

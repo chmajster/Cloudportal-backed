@@ -254,16 +254,19 @@ def approval_required(db, target, action, permissions, config, state=None):
     return required
 
 
-def _provider_supports(adapter, action_id, target):
+def _provider_unavailable_reason(adapter, action_id, target, capabilities=None):
     if action_id in PLATFORM_ACTIONS:
-        return True
+        return None
     if action_id in AUTOMATION_ACTIONS:
-        return target.resource_type == 'vm'
-    capabilities = adapter.capabilities(target)
-    return action_id in set(capabilities.get('actions') or [])
+        return None if target.resource_type == 'vm' else 'Provider does not support this action'
+    capabilities = capabilities if capabilities is not None else adapter.capabilities(target)
+    if action_id in set(capabilities.get('actions') or []):
+        return None
+    reasons = capabilities.get('action_unavailable_reasons') or {}
+    return reasons.get(action_id) or 'Provider does not support this action'
 
 
-def _availability_reason(db, target, action, adapter, permissions, config, state, power_state=None):
+def _availability_reason(db, target, action, adapter, permissions, config, state, power_state=None, capabilities=None):
     if target.deployment_id:
         deployment = db.get(Deployment, target.deployment_id)
         if deployment is not None and deployment.status == 'reconciliation_required':
@@ -274,8 +277,9 @@ def _availability_reason(db, target, action, adapter, permissions, config, state
         return 'Missing permission: ' + action.permission
     if target.resource_type not in action.resource_types:
         return 'Action does not support this resource type'
-    if not _provider_supports(adapter, action.id, target):
-        return 'Provider does not support this action'
+    provider_reason = _provider_unavailable_reason(adapter, action.id, target, capabilities)
+    if provider_reason:
+        return provider_reason
     if action.id == 'power_off' and not config.get('allow_force_power_off', True):
         return 'Forced power off is disabled by policy'
     if action.id == 'delete_vm' and not config.get('allow_delete', True):
@@ -310,7 +314,9 @@ def action_catalog(db, target, credential, permissions):
     for action in all_actions():
         if action.permission not in permissions:
             continue
-        reason = _availability_reason(db, target, action, adapter, permissions, config, state, power_state)
+        reason = _availability_reason(
+            db, target, action, adapter, permissions, config, state, power_state, capabilities
+        )
         item = action.public()
         item.update({
             'supported': reason is None,

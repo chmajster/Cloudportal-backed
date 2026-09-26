@@ -61,6 +61,13 @@ def test_proxmox_vm_lifecycle_routes(client, headers, monkeypatch):
     monkeypatch.setattr(ProxmoxProvider, 'snapshots', lambda self, node, vmid: [
         {'name': 'baseline', 'description': 'safe', 'snaptime': 1, 'secret': 'never-return'}
     ])
+    monkeypatch.setattr(ProxmoxProvider, 'snapshot_capability', lambda self, node, vmid: {
+        'supported': True,
+        'check_available': True,
+        'reason': None,
+        'message': 'Snapshot jest obsługiwany przez bieżącą konfigurację VM.',
+        'nodes': [],
+    })
     monkeypatch.setattr(ProxmoxProvider, 'create_snapshot', lambda self, node, vmid, name, description='', include_ram=False: calls.append(('snapshot', name, include_ram)) or 'UPID:snapshot')
     monkeypatch.setattr(ProxmoxProvider, 'delete_snapshot', lambda self, node, vmid, name: calls.append(('snapshot-delete', name)) or 'UPID:snapshot-delete')
     monkeypatch.setattr(ProxmoxProvider, 'rollback_snapshot', lambda self, node, vmid, name: calls.append(('snapshot-rollback', name)) or 'UPID:snapshot-rollback')
@@ -93,6 +100,7 @@ def test_proxmox_vm_lifecycle_routes(client, headers, monkeypatch):
 
     snapshots = client.get(base + '/snapshots', headers=headers)
     assert snapshots.status_code == 200 and snapshots.json()['items'][0]['name'] == 'baseline'
+    assert snapshots.json()['capability']['supported'] is True
     assert 'secret' not in snapshots.text
 
     created = client.post(base + '/snapshots', headers=idem(headers), json={
@@ -145,11 +153,80 @@ def test_destructive_vm_operations_require_idempotency_key(client, headers, monk
 
     provider = resources(client, headers)
     monkeypatch.setattr(ProxmoxProvider, 'create_snapshot', lambda *args, **kwargs: 'UPID:test')
+    monkeypatch.setattr(ProxmoxProvider, 'snapshot_capability', lambda *args, **kwargs: {'supported': True})
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
 
     response = client.post(base + '/snapshots', headers=headers, json={'snapname': 'baseline'})
     assert response.status_code == 400
     assert 'Idempotency-Key' in response.text
+
+
+def test_snapshot_capability_uses_native_proxmox_feature_endpoint(monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+    observed = []
+
+    def get(path):
+        observed.append(path)
+        return {'hasFeature': 0, 'nodes': ['pve01']}
+
+    monkeypatch.setattr(provider, '_get', get)
+    capability = provider.snapshot_capability('pve01', 101)
+
+    assert observed == ['/nodes/pve01/qemu/101/feature?feature=snapshot']
+    assert capability['supported'] is False
+    assert capability['reason'] == 'snapshot_feature_unavailable'
+    assert capability['nodes'] == ['pve01']
+    assert 'storage' in capability['message'].lower()
+
+
+def test_snapshot_create_fails_before_proxmox_task_when_feature_is_unavailable(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = resources(client, headers)
+    monkeypatch.setattr(ProxmoxProvider, 'snapshot_capability', lambda *args, **kwargs: {
+        'supported': False,
+        'check_available': True,
+        'reason': 'snapshot_feature_unavailable',
+        'message': 'Snapshot unavailable because storage does not support snapshots.',
+        'nodes': [],
+    })
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        '_post',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('must not submit snapshot task')),
+    )
+
+    base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
+    response = client.post(base + '/snapshots', headers=idem(headers), json={'snapname': 'blocked'})
+
+    assert response.status_code == 409, response.text
+    assert response.json()['detail']['code'] == 'SNAPSHOT_NOT_SUPPORTED'
+    assert response.json()['detail']['capability']['supported'] is False
+
+
+def test_snapshot_preflight_is_shared_by_all_provider_callers(monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+    monkeypatch.setattr(provider, 'snapshot_capability', lambda *_args: {
+        'supported': False,
+        'check_available': True,
+        'reason': 'snapshot_feature_unavailable',
+        'message': 'Storage does not support snapshots.',
+    })
+    monkeypatch.setattr(
+        provider,
+        '_post',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('must not submit snapshot task')),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        provider.create_snapshot('pve01', 101, 'blocked')
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail['code'] == 'SNAPSHOT_NOT_SUPPORTED'
 
 
 def test_vm_rbac_separates_read_from_power(client, headers, monkeypatch):

@@ -258,7 +258,7 @@ def executor_case(tmp_path, monkeypatch):
     monkeypatch.setattr(module, 'decrypt_secret', lambda _: {'token_id': 'token', 'token_secret': 'token-secret'})
     monkeypatch.setattr(module, 'distributed_deployment_lock', lambda _: nullcontext())
     monkeypatch.setattr(module, 'restore_state', lambda *_: None)
-    monkeypatch.setattr(module, 'reserve_proxmox_vm_id', lambda *_args, **_kwargs: 9001)
+    monkeypatch.setattr(module, 'reserve_proxmox_vm_id', lambda *args, **kwargs: 9001)
     monkeypatch.setattr(module, 'prepare_qemu_bootstrap', lambda *_: pytest.fail('guest SSH bootstrap must not be used'))
 
     def guest_variables(_deployment, *, blueprint):
@@ -320,7 +320,8 @@ def test_dhcp_native_credentials_never_create_bootstrap_account(executor_case):
         assert 'TF_VAR_ssh_password' not in env
         assert 'guest-password-secret' not in json.dumps(env)
         assert seed_config(variables['cloud_init_seed_path'])['users'][0]['name'] == 'finaluser'
-    assert context.deployment.variables == original
+    assert {key: context.deployment.variables[key] for key in original} == original
+    assert context.deployment.variables['vm_id'] == 9001
     assert 'guest-password-secret' not in json.dumps(context.job.payload)
     assert 'guest-password-secret' not in '\n'.join(logs)
     assert not (workspace / module.QEMU_BOOTSTRAP_MARKER).exists()

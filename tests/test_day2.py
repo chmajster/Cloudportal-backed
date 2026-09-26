@@ -3,6 +3,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 import uuid
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select, func
 from conftest import new_user
 from app.database import session
@@ -23,7 +24,9 @@ class FakeAdapter:
     def __init__(self):
         self.calls = []
         self.fail_wait = False
+        self.capability_calls = 0
     def capabilities(self, target):
+        self.capability_calls += 1
         return {'actions': [row.id for row in all_actions()]}
     def snapshot_state(self, target):
         return {'power_state': 'stopped', 'name': target.name, 'node': target.node, 'cpu_cores': 2}
@@ -63,6 +66,15 @@ def submit(resource, headers=None, action='power_on', params=None):
     client, admin, vm, _ = resource
     return client.post(f'/api/v1/resources/{vm}/actions/{action}', headers=headers or key(admin),
                        json={'parameters': params or {}, 'reason': 'test operation'})
+
+
+def test_action_catalog_reuses_provider_capabilities(resource):
+    client, headers, vm, fake = resource
+
+    response = client.get(f'/api/v1/resources/{vm}/actions', headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert fake.capability_calls == 1
 
 
 def test_create_execute_replay_and_release_lock(resource):
@@ -150,6 +162,32 @@ def test_bulk_conflict_rolls_back_failed_child(resource):
     with session() as db:
         assert db.scalar(select(func.count()).select_from(Day2ActionRequest)) == 1
         assert db.scalar(select(func.count()).select_from(Job).where(Job.operation.like('day2.%'))) == 1
+
+
+def test_bulk_isolates_scoped_http_error_per_resource(resource, monkeypatch):
+    client, headers, vm, _ = resource
+
+    def governed_rejection(*_args, **_kwargs):
+        raise HTTPException(409, {'code': 'PROJECT_QUOTA_EXCEEDED', 'message': 'Quota exceeded for vm_count'})
+
+    monkeypatch.setattr('app.api.day2.create_action', governed_rejection)
+    bulk = client.post(
+        '/api/v1/day2-actions/bulk',
+        headers=key(headers),
+        json={'action': 'power_on', 'resource_ids': [vm]},
+    )
+    assert bulk.status_code == 202, bulk.text
+    body = bulk.json()
+    assert body['children'] == []
+    assert body['status'] == 'PARTIAL'
+    assert body['errors'] == [{
+        'resource_id': vm,
+        'code': 'PROJECT_QUOTA_EXCEEDED',
+        'message': 'Quota exceeded for vm_count',
+    }]
+    with session() as db:
+        assert db.scalar(select(func.count()).select_from(Day2ActionRequest)) == 0
+        assert db.scalar(select(func.count()).select_from(Job).where(Job.operation.like('day2.%'))) == 0
 
 
 def test_approval_and_cancel_state_machine(resource):
@@ -264,6 +302,27 @@ def test_adapter_disks_nics_cloudinit_and_preserved_network_fields():
     value = adapter._network_value({'bridge':'vmbr2'}, config['net0'])
     assert value == 'e1000=AA:BB:CC:DD:EE:FF,bridge=vmbr2,tag=20,firewall=1,link_down=1'
     assert adapter._cloud_init_values({'ssh_public_keys':['a','b']})['sshkeys'] == 'a\nb'
+
+
+def test_adapter_hides_create_snapshot_when_proxmox_feature_is_unavailable():
+    adapter = object.__new__(ProxmoxDay2Adapter)
+    adapter.provider = SimpleNamespace(
+        vm_config=lambda *_args: {'hotplug': 'cpu,memory'},
+        snapshot_capability=lambda *_args: {
+            'supported': False,
+            'check_available': True,
+            'reason': 'snapshot_feature_unavailable',
+            'message': 'Snapshot is unavailable on current storage.',
+            'nodes': [],
+        },
+    )
+    target = Day2Target('id', 1, 'proxmox', 'vm', 'vm', None, 'EXTERNAL', node='pve', vm_id=1)
+
+    capabilities = adapter.capabilities(target)
+
+    assert 'create_snapshot' not in capabilities['actions']
+    assert capabilities['snapshots'] is False
+    assert capabilities['action_unavailable_reasons']['create_snapshot'] == 'Snapshot is unavailable on current storage.'
 
 
 def test_adapter_unknown_task_result_is_not_success():

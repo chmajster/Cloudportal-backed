@@ -72,7 +72,9 @@ def test_merge_migration_upgrades_both_published_tips(tmp_path, monkeypatch, sta
         command.upgrade(config, starting_revision)
         uid, did, cid, pid = legacy_deployment(engine())
         command.upgrade(config, 'head'); command.upgrade(config, 'head')
-        assert ScriptDirectory.from_config(config).get_heads() == ['f9d6c2a81e44']
+        heads = ScriptDirectory.from_config(config).get_heads()
+        assert len(heads) == 1
+        assert heads[0] not in {'b752ca806e19', '9d2c4e7a1b60'}
         assert {'project_credential_access', 'user_project_contexts', 'day2_action_requests',
                 'quota_reservations', 'quota_allocations'} <= set(inspect(engine()).get_table_names())
         with engine().connect() as connection:

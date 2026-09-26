@@ -278,7 +278,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "activityTitle + ': zakończone'" in script
     assert "const settlingInventory = (vms || []).some" in script
     assert "}, vms);" in script
-    assert "node('strong', { text: 'Provisioning' })" in script
+    assert "const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';" in script
+    assert "node('strong', { text: activityTitle })" in script
     assert "Provisioning został ponowiony." in script
     assert "Usuń nieudany provisioning" in script
     assert "item.provisioning_job?.current_stage" in script
@@ -340,7 +341,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Usuń pozostałe dane'" in script
     assert 'Automatyczna synchronizacja nie odtworzy tego wpisu ze starego Terraform state.' in script
     assert "!['destroyed', 'reconciliation_required'].includes(item.status)" in script
-    assert "(repairInventory ? 'refresh=true&' : '') + 'limit=200'" in script
+    assert "(refreshLive ? 'refresh=true&' : '') + 'limit=200'" in script
     assert 'VM nie istnieje w Proxmox' in script
     assert 'nie została znaleziona na platformie' in script
     assert "item.lifecycle_status !== 'destroyed'" in script
@@ -475,9 +476,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Secrets JSON' not in script
     assert 'Zastąp zapisane sekrety' in script
     assert "['suspend', 'Resume']" not in script
-    assert "'suspend', 'Wstrzymaj'" in script
-    assert "'resume', 'Wznów'" in script
-    assert "'reset', 'Twardy reset'" in script
+    assert "button('Wstrzymaj', () => vmPower(item, 'suspend')" in script
+    assert "button('Wznów', () => vmPower(item, 'resume')" in script
+    assert "button('Twardy reset', () => vmPower(item, 'reset')" in script
     assert "'awx_credential_id'" in script
     assert "'awx_organization_id'" not in script
     assert "'awx_project_id'" not in script
@@ -885,8 +886,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function showVmDetailsPage(' in script
     assert 'function vmRuntimeState(' in script
     assert "running: 'Uruchomiona'" in script
-    assert "node('span', { text: 'IP' })" in script
-    assert "info('Adres IP', primaryIp)" in script
+    assert "vmSummaryCard('Adres IP', primaryIp" in script
+    assert "vmFact('Adres IP', primaryIp, true)" in script
     assert 'let jobLogPollNonce = 0' in script
     assert 'let myResourcesPollTimer = null' in script
     assert "window.setTimeout(poll, 1500)" in script
@@ -896,14 +897,22 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Po zakończeniu Terraform backend automatycznie doda VM" in script
     assert "parentView = null" in script
     assert "const returnLabel = 'Moje zasoby'" in script
-    assert "'start', 'Uruchom'" in script
-    assert "'shutdown', 'Wyłącz'" in script
-    assert "'reboot', 'Restart'" in script
-    assert "'reset', 'Twardy reset'" in script
+    assert "button('Uruchom', () => vmPower(item, 'start')" in script
+    assert "button('Wyłącz', () => vmPower(item, 'shutdown')" in script
+    assert "button('Restart', () => vmPower(item, 'reboot')" in script
+    assert "button('Twardy reset', () => vmPower(item, 'reset')" in script
     assert "button('Konsola'" in script
     assert "button('Snapshot'" in script
+    assert "snapshotCapability?.supported !== false" in script
+    assert "async function createVmSnapshot(item)" in script
+    assert "capability.supported === false" in script
+    assert "Backup zamiast snapshotu" in script
     assert "button('Backup'" in script
     assert "button('Odtwórz od zera'" in script
+    assert "async function deleteVmFromCard(item, deployment, onRefresh = null)" in script
+    assert "button('Usuń', () => deleteVmFromCard(item, deployment, onRefresh), 'danger')" in script
+    assert "'/actions/delete_vm'" in script
+    assert "'/deployments/' + encodeURIComponent(deployment.id) + '/destroy'" in script
     assert "function recreateVm(item)" in script
     assert "registerCommand('inventory.recreateVm', recreateVm)" in script
     assert "runCommand('inventory.recreateVm', item)" in script

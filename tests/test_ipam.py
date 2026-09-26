@@ -113,6 +113,7 @@ def test_ipam_pool_update_cannot_invalidate_active_allocation(client, headers):
 
 
 def test_blueprint_ipam_injects_static_ip_and_releases_after_destroy(client, headers, monkeypatch, tmp_path):
+    monkeypatch.setattr('app.jobs.worker.force_stop_before_destroy', lambda *args, **kwargs: False)
     credential, provider = infrastructure(client, headers)
     pool = client.post('/api/v1/ipam/pools', headers=headers, json={
         'name': 'blueprint-net',

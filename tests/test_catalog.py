@@ -30,7 +30,7 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     assert 'output "primary_ip"' in terraform_source
     assert 'value = local.configured_primary_ip' in terraform_source
     assert 'ipv4_addresses' not in terraform_source
-    # Version 7 retains API-uploaded NoCloud media and the legacy-compatible path.
+    # Version 7 includes the current Proxmox VM template contract, including native NoCloud media.
     assert 'resource "proxmox_virtual_environment_file" "cloud_init_seed"' in terraform_source
     assert 'content_type = "iso"' in terraform_source
     assert 'proxmox_virtual_environment_file.cloud_init_seed[0].id' in terraform_source

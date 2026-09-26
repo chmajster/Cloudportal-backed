@@ -46,6 +46,23 @@ def _require_action(request, action_id):
         raise failure('PERMISSION_DENIED', status_code=403, details={'permission': permission})
 
 
+def _bulk_child_error(resource_id, error):
+    if isinstance(error, Day2Failure):
+        return {'resource_id': resource_id, 'code': error.code, 'message': error.message}
+    detail = getattr(error, 'detail', None)
+    status_code = int(getattr(error, 'status_code', 500) or 500)
+    if isinstance(detail, dict):
+        code = str(detail.get('code') or f'HTTP_{status_code}')
+        message = str(detail.get('message') or code)
+    elif isinstance(detail, str) and detail:
+        code = f'HTTP_{status_code}'
+        message = detail
+    else:
+        code = f'HTTP_{status_code}'
+        message = 'Resource action was rejected'
+    return {'resource_id': resource_id, 'code': code, 'message': message}
+
+
 def _owned_action(db, id, actor, request):
     row = db.get(Day2ActionRequest, id)
     if row is None:
@@ -335,8 +352,8 @@ def bulk_day2_actions(data: Day2BulkInput, request: Request, actor=Depends(requi
                         )
                         waiting = waiting or validation['approval_required']
                         children.append({'resource_id': resource_id, 'action_request_id': child.id, 'job_id': child.job_id, 'status': child.status})
-                except Day2Failure as error:
-                    errors.append({'resource_id': resource_id, 'code': error.code, 'message': error.message})
+                except (Day2Failure, HTTPException) as error:
+                    errors.append(_bulk_child_error(resource_id, error))
             bulk.status = 'WAITING_APPROVAL' if waiting else ('PARTIAL' if errors else 'QUEUED')
             bulk.result = {'children': children, 'errors': errors}
             audit(db, request, 'day2.bulk.requested', 'bulk_day2_actions', bulk.id)
