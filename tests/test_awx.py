@@ -397,6 +397,20 @@ def test_awx_scope_mapping_reuses_existing_tenant_organization():
     assert client.created == []
 
 
+def test_awx_scope_mapping_reuses_case_insensitive_names():
+    client = FakeScopeMappingAwxClient(
+        organizations=[{'id': 7, 'name': 'ACME'}],
+        projects=[{'id': 21, 'name': 'PAYMENTS', 'organization': 7}],
+    )
+
+    organization = client.ensure_organization(name='Acme')
+    project = client.project_for_organization(name='Payments', organization_id=7)
+
+    assert organization['id'] == 7
+    assert project['id'] == 21
+    assert client.created == []
+
+
 def test_awx_scope_mapping_resolves_project_only_inside_mapped_organization():
     client = FakeScopeMappingAwxClient(
         projects=[
