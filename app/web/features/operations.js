@@ -338,6 +338,16 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
       });
       const tenantSelect = tenantField.querySelector('select');
       const projectSelect = projectField.querySelector('select');
+      if (item?.tenant_id) {
+        tenantSelect.disabled = true;
+        tenantField.append(node('span', { class: 'field-help',
+          text: 'Podczas edycji organizacja istniejącej polityki pozostaje bez zmian.' }));
+      }
+      if (item?.project_id) {
+        projectSelect.disabled = true;
+        projectField.append(node('span', { class: 'field-help',
+          text: 'Podczas edycji projekt istniejącej polityki pozostaje bez zmian.' }));
+      }
 
       const configuredApmids = Array.isArray(classification?.apmids) ? classification.apmids : [];
       const scopeApmids = Array.isArray(defaultScope.apmids) ? defaultScope.apmids : [];
@@ -465,16 +475,6 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
         tenantSelect.required = selectedLevel !== 'global';
         projectSelect.required = selectedLevel === 'project';
 
-        if (item?.tenant_id) {
-          tenantSelect.disabled = true;
-          tenantField.append(node('span', { class: 'field-help',
-            text: 'Podczas edycji organizacja istniejącej polityki pozostaje bez zmian.' }));
-        }
-        if (item?.project_id) {
-          projectSelect.disabled = true;
-          projectField.append(node('span', { class: 'field-help',
-            text: 'Podczas edycji projekt istniejącej polityki pozostaje bez zmian.' }));
-        }
         refreshPreview();
       }
 
