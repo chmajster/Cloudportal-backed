@@ -182,6 +182,19 @@ def ensure_not_terraform_managed(row, action):
         )
 
 
+def ensure_not_deployment_managed_delete(row):
+    if (
+        row is not None
+        and row.lifecycle_status == 'active'
+        and row.deployment_id
+        and row.management_mode in {'terraform', 'proxmox'}
+    ):
+        raise HTTPException(
+            409,
+            'Active deployment-managed VM cannot be deleted directly; use the deployment destroy workflow',
+        )
+
+
 @router.get('/providers/{provider_id}/vms/{node}/{vmid}/status')
 def vm_status(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('vms.read')),
               db=Depends(get_db, scope='function')):
@@ -526,7 +539,7 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
               purge: Annotated[bool, Query()] = False,
               destroy_unreferenced_disks: Annotated[bool, Query()] = False,
               actor=Depends(require('vms.delete')), db=Depends(get_db, scope='function')):
-    ensure_not_terraform_managed(managed_vm_record(db, provider_id, vmid), 'deleted directly')
+    ensure_not_deployment_managed_delete(managed_vm_record(db, provider_id, vmid))
     require_governed_legacy_mutation(db, request.state.resource_scope, DIMENSIONS, 'VM delete')
     payload = {'purge': purge, 'destroy_unreferenced_disks': destroy_unreferenced_disks}
     def execute():
