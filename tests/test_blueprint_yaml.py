@@ -47,6 +47,15 @@ def test_yaml_round_trip_uses_cloudportal_blueprint_document():
     assert parsed.workflow[1].depends_on == ['apply']
 
 
+def test_yaml_round_trip_preserves_blueprint_avatar():
+    payload = {**BASE_BLUEPRINT, 'avatar_id': 'ubuntu'}
+    text = dump_blueprint_yaml(payload)
+
+    assert 'avatar: ubuntu' in text
+    parsed = parse_blueprint_yaml(text)
+    assert parsed.avatar_id == 'ubuntu'
+
+
 def test_yaml_parser_accepts_native_api_payload():
     import yaml
 
