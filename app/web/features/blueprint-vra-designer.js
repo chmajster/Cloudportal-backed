@@ -332,8 +332,16 @@
       if (deployment.template !== 'proxmox-vm') errors.push('Direct Proxmox wymaga template proxmox-vm.');
       if (workflow.filter(step => step.type === 'clone_vm').length !== 1) errors.push('Direct Proxmox wymaga dokładnie jednego clone_vm.');
       if (workflow.some(step => ['terraform_plan', 'terraform_apply'].includes(step.type))) errors.push('Direct Proxmox nie może zawierać Terraform plan/apply.');
-    } else if (workflow.filter(step => step.type === 'terraform_apply').length !== 1) {
-      errors.push('Terraform/OpenTofu wymaga dokładnie jednego jawnego terraform_apply.');
+    } else {
+      if (workflow.filter(step => step.type === 'terraform_apply').length !== 1) {
+        errors.push('Terraform/OpenTofu wymaga dokładnie jednego jawnego terraform_apply.');
+      }
+      const invalidDirect = [...new Set(workflow
+        .filter(step => DIRECT_PROXMOX_STEP_TYPES.has(step.type))
+        .map(step => step.type))];
+      if (invalidDirect.length) {
+        errors.push('Terraform/OpenTofu nie może zawierać kroków Direct Proxmox: ' + invalidDirect.join(', ') + '.');
+      }
     }
 
     const proxmoxOnly = new Set([
