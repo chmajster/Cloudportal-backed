@@ -258,6 +258,7 @@ def executor_case(tmp_path, monkeypatch):
     monkeypatch.setattr(module, 'decrypt_secret', lambda _: {'token_id': 'token', 'token_secret': 'token-secret'})
     monkeypatch.setattr(module, 'distributed_deployment_lock', lambda _: nullcontext())
     monkeypatch.setattr(module, 'restore_state', lambda *_: None)
+    monkeypatch.setattr(module, 'reserve_proxmox_vm_id', lambda *_args, **_kwargs: 9001)
     monkeypatch.setattr(module, 'prepare_qemu_bootstrap', lambda *_: pytest.fail('guest SSH bootstrap must not be used'))
 
     def guest_variables(_deployment, *, blueprint):
