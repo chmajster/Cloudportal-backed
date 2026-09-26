@@ -49,6 +49,42 @@ POLICY_TYPES = (
 STATUSES = frozenset({"draft", "dry_run", "enforced", "disabled", "archived"})
 ENFORCEMENTS = frozenset({"hard", "soft", "advisory"})
 
+MAX_REGEX_PATTERN_LENGTH = 256
+MAX_REGEX_SUBJECT_LENGTH = 4096
+_REGEX_UNSAFE_TOKENS = ("(?=", "(?!", "(?<=", "(?<!", "(?P=", "(?>")
+_APPROVER_TYPES = frozenset({
+    "any", "any_approver", "user", "role", "group", "permission",
+    "project_admin", "tenant_admin", "apmid_owner",
+})
+
+
+def validate_safe_regex(pattern: Any) -> str:
+    text = str(pattern or "")
+    if not text:
+        raise ValueError("Regex pattern cannot be empty")
+    if len(text) > MAX_REGEX_PATTERN_LENGTH:
+        raise ValueError("Regex pattern is too long")
+    if any(token in text for token in _REGEX_UNSAFE_TOKENS):
+        raise ValueError("Regex lookarounds/backtracking control are not supported")
+    if re.search(r"\\[1-9]", text):
+        raise ValueError("Regex backreferences are not supported")
+    # Quantified groups are the main source of catastrophic nested
+    # backtracking, e.g. (a+)+ or (a|aa)+. Keep the policy matcher on a
+    # deliberately conservative subset instead of accepting unsafe patterns.
+    if re.search(r"\)(?:[+*?]|\{\d+(?:,\d*)?\})", text):
+        raise ValueError("Quantified regex groups are not supported")
+    for match in re.finditer(r"\{(\d+)(?:,(\d*))?\}", text):
+        lower = int(match.group(1))
+        upper_text = match.group(2)
+        upper = lower if upper_text is None else (int(upper_text) if upper_text else 1001)
+        if lower > 1000 or upper > 1000:
+            raise ValueError("Regex repetition limit cannot exceed 1000")
+    try:
+        re.compile(text)
+    except re.error:
+        raise ValueError("Invalid regex pattern") from None
+    return text
+
 
 @dataclass(frozen=True, slots=True)
 class Evaluation:
@@ -206,10 +242,14 @@ def compare(operator: str, actual: Any, expected: Any, context: Mapping[str, Any
     if operator == "ends_with":
         return str(actual).endswith(str(expected))
     if operator == "regex":
-        try:
-            return re.search(str(expected), str(actual)) is not None
-        except re.error:
+        subject = str(actual)
+        if len(subject) > MAX_REGEX_SUBJECT_LENGTH:
             return False
+        try:
+            pattern = validate_safe_regex(expected)
+        except ValueError:
+            return False
+        return re.search(pattern, subject) is not None
     if operator in {"gt", "gte", "lt", "lte"}:
         try:
             left, right = _number(actual), _number(expected)
@@ -309,6 +349,8 @@ _SCOPE_FIELDS = {
     "provider_ids": "resource.provider_id",
     "provider_types": "resource.provider_type",
 }
+
+SCOPE_DIMENSIONS = frozenset(set(_SCOPE_FIELDS) | {"tags", "conditions"})
 
 
 def _matches_dimension(actual: Any, allowed: Any) -> bool:
@@ -699,6 +741,75 @@ def validate_condition_tree(condition: Any):
         raise ValueError("Leaf condition requires field")
     if operator not in OPERATORS:
         raise ValueError(f"Unsupported operator: {operator}")
+    if operator == "regex":
+        validate_safe_regex(condition.get("value"))
+
+
+def _validate_approver(spec: Any):
+    if spec in (None, "", {}, []):
+        return
+    if isinstance(spec, str):
+        if not spec.strip():
+            raise ValueError("Approval role cannot be empty")
+        return
+    if isinstance(spec, list):
+        if not spec:
+            raise ValueError("Approval approver list cannot be empty")
+        for item in spec:
+            _validate_approver(item)
+        return
+    if not isinstance(spec, Mapping):
+        raise ValueError("Approval approver must be a string, object or list")
+
+    kind = str(spec.get("type") or "permission").lower()
+    if kind not in _APPROVER_TYPES:
+        raise ValueError(f"Unsupported approval approver type: {kind}")
+    if kind == "user" and not (
+        spec.get("user_id") is not None
+        or spec.get("id") is not None
+        or str(spec.get("username") or "").strip()
+    ):
+        raise ValueError("User approver requires user_id, id or username")
+    if kind in {"role", "group"} and not (
+        spec.get("role_id") is not None
+        or spec.get("id") is not None
+        or str(spec.get("role") or spec.get("group") or spec.get("name") or "").strip()
+    ):
+        raise ValueError(f"{kind} approver requires an id or name")
+    if kind == "permission" and not str(spec.get("permission") or "").strip():
+        raise ValueError("Permission approver requires permission")
+
+
+def _validate_approval_effect(effect: Mapping[str, Any]):
+    if "approver" in effect:
+        _validate_approver(effect.get("approver"))
+    if "timeout_hours" in effect and effect.get("timeout_hours") is not None:
+        try:
+            timeout = int(effect["timeout_hours"])
+        except (TypeError, ValueError):
+            raise ValueError("require_approval timeout_hours must be an integer") from None
+        if not 1 <= timeout <= 720:
+            raise ValueError("require_approval timeout_hours must be between 1 and 720")
+
+    if "stages" not in effect:
+        return
+    stages = effect.get("stages")
+    if not isinstance(stages, list) or not stages:
+        raise ValueError("require_approval stages must be a non-empty list")
+    if len(stages) > 20:
+        raise ValueError("require_approval supports at most 20 stages")
+    for stage in stages:
+        if not isinstance(stage, Mapping):
+            raise ValueError("Each require_approval stage must be an object")
+        if "approver" in stage:
+            _validate_approver(stage.get("approver"))
+        if "timeout_hours" in stage and stage.get("timeout_hours") is not None:
+            try:
+                timeout = int(stage["timeout_hours"])
+            except (TypeError, ValueError):
+                raise ValueError("Approval stage timeout_hours must be an integer") from None
+            if not 1 <= timeout <= 720:
+                raise ValueError("Approval stage timeout_hours must be between 1 and 720")
 
 
 def validate_effects(effects: Any):
@@ -712,6 +823,8 @@ def validate_effects(effects: Any):
             raise ValueError(f"Unsupported effect type: {kind}")
         if kind in {"set_default", "force_value", "limit_value"} and not effect.get("field"):
             raise ValueError(f"{kind} requires field")
+        if kind == "require_approval":
+            _validate_approval_effect(effect)
         if kind == "limit_value":
             if not any(key in effect for key in ("min", "max", "allowed")):
                 raise ValueError("limit_value requires min, max or allowed")
