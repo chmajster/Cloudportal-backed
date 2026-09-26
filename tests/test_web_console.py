@@ -873,8 +873,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function vmDetailActions(' in script
     assert 'function vmSnapshotsContent(' in script
     assert 'function vmBackupsContent(' in script
+    assert 'function vmMonitorContent(' in script
     assert 'function vmAuditContent(' in script
     assert "['overview', 'Przegląd']" in script
+    assert "['monitor', 'Monitor']" in script
+    assert "/monitor?timeframe=" in script
+    assert "/inventory/vms/${encodeURIComponent(item.id)}/history?limit=500" in script
+    assert 'Lifecycle, provisioning, joby, operacje Day-2' in script
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
@@ -1058,6 +1063,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.vm-detail-header' in stylesheet
     assert '.vm-tabs' in stylesheet
     assert '.vm-overview-grid' in stylesheet
+    assert '.vm-monitor-grid' in stylesheet
+    assert '.vm-monitor-bars' in stylesheet
     assert '.tools-hero' in stylesheet
     assert '.tools-grid' in stylesheet
     assert '.tool-card' in stylesheet

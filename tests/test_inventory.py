@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import select
 
 from app.database import session
-from app.models import Deployment, ManagedResource, ManagedVM, Provider, User
+from app.models import Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, User
 from app.terraform.state import persist_state
 
 
@@ -84,6 +84,72 @@ def test_import_reconcile_and_unmanage_external_vm(client, headers, monkeypatch)
 
     removed = client.delete(f"/api/v1/inventory/vms/{row['id']}", headers=headers)
     assert removed.status_code == 200 and removed.json()['deleted']
+
+
+
+def test_vm_history_includes_provisioning_job_stages(client, headers):
+    p = provider(client, headers)
+
+    with session() as db:
+        provider_row = db.get(Provider, p['id'])
+        user_id = db.scalar(select(User.id).order_by(User.id))
+        deployment = Deployment(
+            name='history-vm',
+            provider_id=p['id'],
+            provider='proxmox',
+            template='proxmox-vm',
+            credentials_id=provider_row.credentials_id,
+            variables={'node': 'pve01'},
+            workflow={},
+            status='successful',
+            created_by=user_id,
+        )
+        db.add(deployment)
+        db.flush()
+
+        vm = ManagedVM(
+            provider_id=p['id'],
+            deployment_id=deployment.id,
+            node='pve01',
+            vm_id=889,
+            name='history-vm',
+            management_mode='terraform',
+            lifecycle_status='active',
+            created_by=user_id,
+        )
+        db.add(vm)
+        db.flush()
+
+        job = Job(
+            deployment_id=deployment.id,
+            operation='terraform.apply',
+            payload={'_current_stage': 'terraform_apply'},
+            status='successful',
+            created_by=user_id,
+            request_id=str(uuid.uuid4()),
+        )
+        db.add(job)
+        db.flush()
+        db.add_all([
+            JobLog(job_id=job.id, message='terraform.init'),
+            JobLog(job_id=job.id, message='workflow.step.completed:apply:terraform_apply'),
+            JobLog(job_id=job.id, message='provider raw secret output must not be exposed'),
+        ])
+        db.commit()
+        vm_id = vm.id
+
+    response = client.get(f'/api/v1/inventory/vms/{vm_id}/history?limit=500', headers=headers)
+    assert response.status_code == 200, response.text
+    rows = response.json()['items']
+    titles = [row['title'] for row in rows]
+
+    assert 'VM dodana do inventory' in titles
+    assert 'Utworzono deployment' in titles
+    assert 'terraform.apply' in titles
+    assert 'terraform.init' in titles
+    assert 'workflow.step.completed:apply:terraform_apply' in titles
+    assert all('raw secret output' not in title for title in titles)
+
 
 
 def test_inventory_list_can_refresh_live_state(client, headers, monkeypatch):

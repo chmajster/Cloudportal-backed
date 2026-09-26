@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.api.common import Limit, Offset, find, idempotent
 from app.access import (ensure_inventory_resource_access, ensure_inventory_vm_access,
@@ -13,9 +13,10 @@ from app.api.schemas import Input, Slug
 from app.catalog import template_import_target, template_public, validate_template_variables
 from app.catalog_control import require_catalog_item_enabled
 from app.database import get_db
+from app.day2.models import Day2ActionRequest
 from app.inventory_sync import repair_inventory_from_states
 from app.jobs.lifecycle import release_pre_execution_allocations
-from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider, now
+from app.models import Audit, Credential, Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, now
 from app.providers.registry import provider_for
 from app.security.core import audit
 from app.resource_scope.http import require
@@ -51,6 +52,23 @@ def public(row):
 
 def resource_public(row):
     return {field: getattr(row, field) for field in RESOURCE_FIELDS.split()}
+
+
+HISTORY_LOG_PREFIXES = (
+    'job.', 'workflow.', 'terraform.', 'inventory.', 'cloud_init', 'cloud-init',
+    'wait_for_', 'ansible.', 'awx.', 'provider.', 'proxmox.', 'hostname.',
+    'ipam.', 'guest_', 'snapshot.', 'backup.',
+)
+
+
+def history_log_message(message):
+    value = str(message or '').strip()
+    if not value:
+        return None
+    normalized = value.lower()
+    if not normalized.startswith(HISTORY_LOG_PREFIXES):
+        return None
+    return value[:500]
 
 
 def provider_adapter(db, provider_id):
@@ -286,6 +304,142 @@ def managed_vm(
             result['live'] = None
             result['lifecycle_status'] = effective_vm_lifecycle(row, False)
     return result
+
+
+@router.get('/vms/{id}/history')
+def managed_vm_history(
+    id: str,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    actor=Depends(require('inventory.read')),
+    db=Depends(get_db, scope='function'),
+):
+    row = ensure_inventory_vm_access(db, request, actor, find(db, ManagedVM, id))
+    entries = []
+
+    def add(timestamp, kind, title, *, status=None, detail=None, job_id=None,
+            request_id=None, actor_user_id=None):
+        if timestamp is None:
+            return
+        entries.append({
+            'timestamp': timestamp,
+            'kind': kind,
+            'title': str(title or '')[:500],
+            'status': str(status)[:64] if status is not None else None,
+            'detail': str(detail)[:1000] if detail else None,
+            'job_id': str(job_id) if job_id else None,
+            'request_id': str(request_id) if request_id else None,
+            'actor_user_id': actor_user_id,
+        })
+
+    add(
+        row.created_at,
+        'lifecycle',
+        'VM dodana do inventory',
+        status=row.lifecycle_status,
+        detail=f'{row.name or "VM"} / VMID {row.vm_id} / {row.management_mode}',
+        actor_user_id=row.created_by,
+    )
+    if row.destroyed_at:
+        add(row.destroyed_at, 'lifecycle', 'VM oznaczona jako usunięta', status='destroyed')
+
+    if row.deployment_id:
+        deployment = db.get(Deployment, row.deployment_id)
+        if deployment is not None:
+            add(
+                deployment.created_at,
+                'deployment',
+                'Utworzono deployment',
+                status=deployment.status,
+                detail=f'{deployment.name} / {deployment.template}',
+                actor_user_id=deployment.created_by,
+            )
+
+        if 'jobs.read' in request.state.permissions:
+            jobs = db.scalars(
+                select(Job)
+                .where(Job.deployment_id == row.deployment_id)
+                .order_by(Job.created_at.asc())
+                .limit(200)
+            ).all()
+            for job in jobs:
+                stage = str((job.payload or {}).get('_current_stage') or '').strip()
+                detail = job.error or (f'Etap: {stage}' if stage else None)
+                add(
+                    job.created_at,
+                    'job',
+                    job.operation,
+                    status=job.status,
+                    detail=detail,
+                    job_id=job.id,
+                    request_id=job.request_id,
+                    actor_user_id=job.created_by,
+                )
+                logs = db.scalars(
+                    select(JobLog)
+                    .where(JobLog.job_id == job.id)
+                    .order_by(JobLog.timestamp.asc())
+                    .limit(500)
+                ).all()
+                for log in logs:
+                    message = history_log_message(log.message)
+                    if message:
+                        add(
+                            log.timestamp,
+                            'provisioning',
+                            message,
+                            status=job.status,
+                            job_id=job.id,
+                            request_id=job.request_id,
+                            actor_user_id=job.created_by,
+                        )
+
+    if 'day2.view' in request.state.permissions:
+        day2_rows = db.scalars(
+            select(Day2ActionRequest)
+            .where(Day2ActionRequest.resource_id == row.id)
+            .order_by(Day2ActionRequest.requested_at.asc())
+            .limit(200)
+        ).all()
+        for action in day2_rows:
+            add(
+                action.requested_at,
+                'day2',
+                f'Day-2: {action.action}',
+                status=action.status,
+                detail=action.error_message or action.reason,
+                job_id=action.job_id,
+                request_id=action.request_id,
+                actor_user_id=action.requested_by,
+            )
+
+    if 'audit.read' in request.state.permissions:
+        target = f'{row.provider_id}:{row.node}:{row.vm_id}'
+        audit_filters = [
+            Audit.resource_id == row.id,
+            Audit.resource_id.like(target + '%'),
+        ]
+        if row.deployment_id:
+            audit_filters.append(Audit.resource_id == row.deployment_id)
+        audit_rows = db.scalars(
+            select(Audit)
+            .where(or_(*audit_filters))
+            .order_by(Audit.timestamp.asc())
+            .limit(500)
+        ).all()
+        for entry in audit_rows:
+            add(
+                entry.timestamp,
+                'audit',
+                entry.action,
+                status=entry.result,
+                detail=entry.resource,
+                request_id=entry.request_id,
+                actor_user_id=entry.user_id,
+            )
+
+    entries.sort(key=lambda item: item['timestamp'], reverse=True)
+    return {'items': entries[:limit]}
 
 
 @router.post('/vms/import', status_code=201)

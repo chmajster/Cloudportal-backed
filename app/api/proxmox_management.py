@@ -215,6 +215,38 @@ def vm_status(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('v
     return result
 
 
+@router.get('/providers/{provider_id}/vms/{node}/{vmid}/monitor')
+def vm_monitor(
+    provider_id: int,
+    node: NODE,
+    vmid: VMID,
+    timeframe: Annotated[Literal['hour', 'day', 'week', 'month', 'year'], Query()] = 'hour',
+    actor=Depends(require('vms.read')),
+    db=Depends(get_db, scope='function'),
+):
+    provider = adapter(db, provider_id)
+    current_raw = provider.vm_status(node, vmid) or {}
+    current_allowed = (
+        'vmid name status qmpstatus cpu cpus mem maxmem disk maxdisk uptime pid '
+        'lock template tags netin netout diskread diskwrite'
+    ).split()
+    current = {key: value for key, value in current_raw.items() if key in current_allowed}
+
+    rows = provider.vm_rrddata(node, vmid, timeframe=timeframe) or []
+    metric_fields = 'time cpu maxcpu mem maxmem disk maxdisk diskread diskwrite netin netout'.split()
+    series = [
+        {key: value for key, value in row.items() if key in metric_fields and value is not None}
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    return {
+        'source': 'proxmox',
+        'timeframe': timeframe,
+        'current': current,
+        'series': series,
+    }
+
+
 @router.post('/providers/{provider_id}/vms/{node}/{vmid}/power')
 def vm_power(provider_id: int, node: NODE, vmid: VMID, data: VMPowerInput, request: Request,
              actor=Depends(require('vms.power')), db=Depends(get_db, scope='function')):

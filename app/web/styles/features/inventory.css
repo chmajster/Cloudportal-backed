@@ -64,17 +64,32 @@ dialog.modal-console { width: min(96vw, 1400px); max-width: 1400px; }
 
 .vm-backup-toolbar { max-width: 520px; margin-bottom: 16px; }
 .vm-inline-content { min-height: 100px; }
+
+.vm-monitor-toolbar-panel .panel-header { align-items: flex-end; }
+.vm-monitor-toolbar { max-width: 340px; }
+.vm-monitor-current-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; }
+.vm-monitor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.vm-monitor-chart { min-width: 0; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.vm-monitor-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.vm-monitor-chart-head strong { font-size: .82rem; }
+.vm-monitor-chart-head span { color: var(--muted); font-size: .75rem; font-weight: 700; }
+.vm-monitor-bars { height: 150px; display: flex; align-items: flex-end; gap: 2px; padding: 8px 6px 0; overflow: hidden; border-bottom: 1px solid var(--line); background: linear-gradient(to top, var(--surface-3), transparent); }
+.vm-monitor-bar { flex: 1 1 0; min-width: 2px; max-width: 12px; border-radius: 3px 3px 0 0; background: var(--accent); opacity: .82; transition: height .18s ease, opacity .18s ease; }
+.vm-monitor-bar:hover { opacity: 1; }
+.vm-monitor-chart-axis { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: .65rem; }
+.vm-monitor-chart-axis span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .loading.compact { min-height: 120px; }
 
 @media (max-width: 1280px) {
-  .vm-overview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .vm-overview-grid, .vm-monitor-current-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 820px) {
   .vm-title-row { align-items: stretch; flex-direction: column; }
   .vm-detail-actions { justify-content: flex-start; max-width: none; }
-  .vm-overview-grid, .vm-usage-grid { grid-template-columns: 1fr 1fr; }
+  .vm-overview-grid, .vm-usage-grid, .vm-monitor-current-grid, .vm-monitor-grid { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 520px) {
-  .vm-overview-grid, .vm-usage-grid { grid-template-columns: 1fr; }
+  .vm-overview-grid, .vm-usage-grid, .vm-monitor-current-grid, .vm-monitor-grid { grid-template-columns: 1fr; }
   .vm-title-row { padding: 14px; }
 }
