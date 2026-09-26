@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select, text
 from app.config import settings
 from app.database import session
-from app.models import Credential, Deployment, Idempotency, Job, ManagedVM, User, now
+from app.models import Credential, Deployment, Idempotency, Job, JobLog, ManagedVM, User, now
 from app.quotas.models import QuotaAllocation, QuotaReservation
 from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
