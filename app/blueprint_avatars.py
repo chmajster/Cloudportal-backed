@@ -41,8 +41,23 @@ def normalize_blueprint_avatar_data_uri(value: str) -> str:
         raise HTTPException(413, 'Blueprint avatar exceeds 128 KiB')
     if len(raw) < 6 or raw[:4] != b'\x00\x00\x01\x00':
         raise HTTPException(422, 'Blueprint avatar must contain a valid ICO image')
-    if int.from_bytes(raw[4:6], 'little') < 1:
-        raise HTTPException(422, 'Blueprint avatar ICO contains no images')
+    image_count = int.from_bytes(raw[4:6], 'little')
+    if image_count < 1 or image_count > 256:
+        raise HTTPException(422, 'Blueprint avatar ICO contains an invalid image count')
+
+    directory_end = 6 + image_count * 16
+    if len(raw) < directory_end:
+        raise HTTPException(422, 'Blueprint avatar ICO directory is truncated')
+    for index in range(image_count):
+        entry = 6 + index * 16
+        image_size = int.from_bytes(raw[entry + 8:entry + 12], 'little')
+        image_offset = int.from_bytes(raw[entry + 12:entry + 16], 'little')
+        if (
+            image_size < 1
+            or image_offset < directory_end
+            or image_offset + image_size > len(raw)
+        ):
+            raise HTTPException(422, 'Blueprint avatar ICO contains an invalid image entry')
 
     encoded = base64.b64encode(raw).decode('ascii')
     return 'data:image/x-icon;base64,' + encoded
