@@ -35,8 +35,10 @@ def _context_from_input(request: Request, data: EvaluationInput):
     scope = getattr(request.state, "resource_scope", None)
     context_scope = dict(context.get("scope") or {})
     if scope is not None:
-        context_scope.setdefault("tenant_id", str(scope.tenant_id))
-        context_scope.setdefault("project_id", str(scope.project_id))
+        # The authenticated resource scope is authoritative. Never allow the
+        # simulator payload to pivot into another tenant/project.
+        context_scope["tenant_id"] = str(scope.tenant_id)
+        context_scope["project_id"] = str(scope.project_id)
     context["scope"] = context_scope
     return context
 
@@ -176,6 +178,17 @@ def create_exception(policy_id: str, data: PolicyExceptionInput, request: Reques
         db, actor, request.state.resource_scope, request.state.permissions, policy_id, data
     )
     audit(db, request, "policy.exception.created", "policy_exceptions", row.id)
+    return service.exception_public(row)
+
+
+@router.post("/policies/{policy_id}/exceptions/{exception_id}/approve")
+def approve_exception(policy_id: str, exception_id: str, request: Request,
+                      actor=Depends(require("policies.exception.manage")),
+                      db=Depends(get_db, scope="function")):
+    row = service.approve_exception(
+        db, actor, request.state.resource_scope, request.state.permissions, policy_id, exception_id
+    )
+    audit(db, request, "policy.exception.approved", "policy_exceptions", row.id)
     return service.exception_public(row)
 
 
