@@ -583,13 +583,18 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
             .filter(Boolean);
 
           const scope = jsonObject(data.get('scope_advanced'), 'Scope');
-          [
-            'organization_ids', 'organizations', 'organization_slugs',
-            'project_ids', 'projects', 'project_slugs',
-            'apmids', 'environments', 'scope_keys', 'actions', 'resource_types',
-          ].forEach(key => delete scope[key]);
+          ['apmids', 'environments', 'scope_keys', 'actions', 'resource_types']
+            .forEach(key => delete scope[key]);
 
           const level = String(data.get('scope_level') || selectedLevel);
+          const levelChanged = Boolean(item && level !== item.scope_level);
+          if (level !== 'global' || levelChanged) {
+            [
+              'organization_ids', 'organizations', 'organization_slugs',
+              'project_ids', 'projects', 'project_slugs',
+            ].forEach(key => delete scope[key]);
+          }
+
           let targetTenantId = selectedTenantId;
           let targetProjectId = selectedProjectId;
 
@@ -636,17 +641,33 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
           };
           if (item) payload.expected_version = item.version;
 
+          let requestTenantId = targetTenantId;
           let requestProjectId = targetProjectId;
-          if (level === 'tenant' && targetTenantId) {
+
+          if (item?.project_id) {
+            // Existing project-scoped policy must be loaded and authorized in
+            // its original project even when the new level becomes tenant/global.
+            requestTenantId = String(item.tenant_id);
+            requestProjectId = String(item.project_id);
+          } else if (item?.tenant_id) {
+            // Tenant-scoped policy is visible from every project in the same
+            // tenant. Prefer the selected target project when promoting it to
+            // project scope, otherwise use any manageable project in that tenant.
+            requestTenantId = String(item.tenant_id);
+            if (level !== 'project') {
+              requestProjectId = String(projectsForTenant(requestTenantId)[0]?.id || '');
+            }
+          } else if (level === 'tenant' && targetTenantId) {
             requestProjectId = String(projectsForTenant(targetTenantId)[0]?.id || '');
           }
+
           const requestOptions = {
             method: item ? 'PUT' : 'POST',
             body: payload,
           };
-          if (level !== 'global' && targetTenantId && requestProjectId) {
+          if (requestTenantId && requestProjectId && (item || level !== 'global')) {
             requestOptions.headers = {
-              'X-Tenant-ID': targetTenantId,
+              'X-Tenant-ID': requestTenantId,
               'X-Project-ID': requestProjectId,
             };
           }
