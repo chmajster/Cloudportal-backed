@@ -52,7 +52,16 @@ def _job_workflow_progress(j):
     if not steps:
         return None, 0
 
-    step_ids = [str(step.get('id') or '') for step in steps]
+    rollback_targets = {
+        str(step.get('rollback'))
+        for step in steps
+        if step.get('rollback')
+    }
+    active_steps = [
+        step for step in steps
+        if str(step.get('id') or '') not in rollback_targets
+    ]
+    step_ids = [str(step.get('id') or '') for step in active_steps]
     stage = str(payload.get('_current_stage') or '').strip()
     current_step_id = None
     for prefix in ('workflow.step.start:', 'workflow.step.completed:'):
@@ -62,24 +71,20 @@ def _job_workflow_progress(j):
 
     runtime = dict(payload.get('_workflow_runtime') or {})
     completed = {str(value) for value in (runtime.get('completed_steps') or [])}
-    rollback_targets = {
-        str(step.get('rollback'))
-        for step in steps
-        if step.get('rollback')
-    }
 
     if current_step_id not in step_ids:
         pending = [
             step_id for step_id in step_ids
-            if step_id and step_id not in completed and step_id not in rollback_targets
+            if step_id and step_id not in completed
         ]
         current_step_id = pending[0] if pending else None
 
+    total = len(step_ids)
     if current_step_id in step_ids:
-        return step_ids.index(current_step_id) + 1, len(steps)
+        return step_ids.index(current_step_id) + 1, total
     if str(j.status or '').lower() == 'successful':
-        return len(steps), len(steps)
-    return None, len(steps)
+        return total, total
+    return None, total
 
 
 def job_public(j):
