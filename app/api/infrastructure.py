@@ -89,6 +89,17 @@ def job_public(j):
     workflow_step_index, workflow_step_total = _job_workflow_progress(j)
     result['workflow_step_index'] = workflow_step_index
     result['workflow_step_total'] = workflow_step_total
+    progress = (j.payload or {}).get('_progress') or {}
+    raw_percent = progress.get('percent')
+    try:
+        result['progress_percent'] = (
+            max(0.0, min(100.0, float(raw_percent)))
+            if raw_percent is not None else None
+        )
+    except (TypeError, ValueError):
+        result['progress_percent'] = None
+    result['progress_message'] = str(progress.get('message') or '')[:255] or None
+    result['progress_phase'] = str(progress.get('phase') or '')[:64] or None
     wait = (j.payload or {}).get('_provider_wait') or {}
     result['provider_waiting'] = bool(wait)
     result['provider_retry_attempts'] = int(wait.get('attempts') or 0)
@@ -546,6 +557,16 @@ def playbook_source(id: str, actor=Depends(require('ansible.read')), db=Depends(
 def check_job_permissions(request, operation):
     if operation == 'proxmox.clone_template':
         required = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+    elif operation == 'proxmox.provision':
+        required = {
+            'jobs.execute', 'deployments.create',
+            'vms.read', 'vms.clone', 'vms.update', 'vms.power',
+        }
+    elif operation == 'proxmox.destroy':
+        required = {
+            'jobs.execute', 'deployments.destroy',
+            'vms.read', 'vms.delete', 'vms.power',
+        }
     else:
         required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
         if operation == 'terraform.destroy':
@@ -568,10 +589,11 @@ def validate_ansible(db, data):
 
 def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
     check_job_permissions(request, operation)
+    provisioning_operation = operation in {'terraform.apply', 'proxmox.provision'}
     blueprint = ((payload or {}).get('blueprint') or {}) if isinstance(payload, dict) else {}
-    if not blueprint and deployment and operation == 'terraform.apply':
+    if not blueprint and deployment and provisioning_operation:
         blueprint = ((deployment.workflow or {}).get('blueprint') or {})
-    if blueprint and operation == 'terraform.apply' and 'blueprints.execute' not in request.state.permissions:
+    if blueprint and provisioning_operation and 'blueprints.execute' not in request.state.permissions:
         raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
     if (
         deployment
@@ -579,7 +601,7 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
             (deployment.workflow or {}).get('ansible')
             or (deployment.workflow or {}).get('ansible_runs')
         )
-        and operation == 'terraform.apply'
+        and provisioning_operation
         and 'ansible.execute' not in request.state.permissions
     ):
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
@@ -590,13 +612,13 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         )
     if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
         raise HTTPException(409, 'Deployment is busy or destroyed')
-    if deployment and operation == 'terraform.apply' and has_released_allocations(db, deployment.id):
+    if deployment and provisioning_operation and has_released_allocations(db, deployment.id):
         raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
     if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
         raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
     job_payload = snapshot_ansible_payload(
         db,
-        payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}),
+        payload or (deployment.workflow if deployment and provisioning_operation else {}),
     )
     if deployment:
         job_payload['previous_status'] = deployment.status
@@ -666,6 +688,8 @@ def recreate_deployment(id: str, request: Request, actor=Depends(require('deploy
         deployment = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
         if deployment is None:
             raise HTTPException(404, 'Deployment not found')
+        if deployment.executor == 'proxmox':
+            raise HTTPException(409, 'Direct Proxmox deployments do not use Terraform recreate; delete and execute the Blueprint again')
         payload = recreate_job_payload(deployment)
         job = new_job(db, request, actor, 'terraform.apply', deployment, payload)
         audit(db, request, 'deployment.recreate_requested', 'deployments', deployment.id)
@@ -681,7 +705,8 @@ def destroy_deployment(id: str, request: Request, actor=Depends(require('deploym
         d = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
         if not d:
             raise HTTPException(404, 'Deployment not found')
-        return job_public(new_job(db, request, actor, 'terraform.destroy', d))
+        operation = 'proxmox.destroy' if d.executor == 'proxmox' else 'terraform.destroy'
+        return job_public(new_job(db, request, actor, operation, d))
     return idempotent(db, request, actor, {'id': id}, create, required=True)
 
 
@@ -761,8 +786,8 @@ def accept_awx_onboarding(
         raise HTTPException(404, 'Job not found')
     if original.status != 'failed':
         raise HTTPException(409, 'Only a failed AWX onboarding job can be accepted manually')
-    if original.operation != 'terraform.apply' or not original.deployment_id:
-        raise HTTPException(409, 'Manual AWX onboarding acceptance requires a Blueprint terraform.apply job')
+    if original.operation not in {'terraform.apply', 'proxmox.provision'} or not original.deployment_id:
+        raise HTTPException(409, 'Manual AWX onboarding acceptance requires a Blueprint provisioning job')
 
     check_job_permissions(request, original.operation)
     deployment = db.scalar(
