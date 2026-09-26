@@ -82,6 +82,43 @@ def test_blueprint_conditions_use_runtime_facts():
     )
 
 
+def test_skipped_ansible_step_never_runs_configured_playbooks(monkeypatch):
+    steps = [
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {
+            'id': 'ansible',
+            'type': 'run_ansible_playbook',
+            'depends_on': ['apply'],
+            'conditions': {'environment': 'prod'},
+            'retry': 0,
+            'timeout': 30,
+        },
+    ]
+    context = FakeContext(steps)
+    context.ansible_runs = [
+        (SimpleNamespace(playbook='bootstrap-linux', inventory=None), SimpleNamespace(id=11)),
+    ]
+    executor = FakeExecutor()
+    calls = []
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda _context, _workspace: {'external_id': '120', 'vm_id': 120, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker.AnsibleExecutor,
+        'execute',
+        lambda _executor, operation, _context: calls.append(operation),
+    )
+
+    worker.run_blueprint_workflow(context, executor)
+
+    assert executor.operations == ['terraform.apply']
+    assert calls == []
+    assert any('workflow.step.skipped: ansible:run_ansible_playbook' in value for value in context.logs)
+
+
 
 def test_blueprint_workflow_materializes_declarative_cloud_init_at_apply(monkeypatch):
     steps = [
