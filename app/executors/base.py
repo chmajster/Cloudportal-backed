@@ -41,6 +41,11 @@ def run_process(argv, cwd, env, context, secrets=()):
     context.check()
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                stdin=subprocess.DEVNULL, start_new_session=True, shell=False, umask=0o077)
+    executable = os.path.basename(str(argv[0]))
+    if executable in {'terraform', 'tofu'}:
+        # Each Terraform/OpenTofu invocation owns an independent OS session and
+        # process group. Cancellation targets only this process tree.
+        context.log(f'{executable}.process.started: pid={process.pid} process_group={process.pid}')
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     pending = b''
@@ -68,6 +73,8 @@ def run_process(argv, cwd, env, context, secrets=()):
         if pending and not discard and log_bytes < 1024 * 1024:
             context.log(redact(pending.decode('utf-8', errors='replace'), secrets)[:8192])
         code = process.wait(timeout=5)
+        if executable in {'terraform', 'tofu'}:
+            context.log(f'{executable}.process.finished: pid={process.pid} code={code}')
         if code != 0:
             raise ExecutionFailed(f'{os.path.basename(argv[0])} exited with code {code}')
     finally:

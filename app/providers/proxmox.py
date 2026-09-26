@@ -609,6 +609,16 @@ class ProxmoxProvider(InfrastructureProvider):
         data = self._get('/version')
         return {'ok': True, 'provider': 'proxmox', 'version': data.get('version')}
 
+    def used_vm_ids(self):
+        rows = self._get('/cluster/resources?type=vm')
+        result = set()
+        for row in rows:
+            try:
+                result.add(int(row.get('vmid')))
+            except (TypeError, ValueError):
+                continue
+        return result
+
     def discover(self, resource, node=None):
         if resource == 'nodes':
             return self._get('/nodes')

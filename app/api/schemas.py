@@ -368,6 +368,7 @@ class ProviderInput(Input):
 class VMVariables(Input):
     name: Slug
     node: Slug
+    vm_id: int | None = Field(default=None, ge=100, le=999999999)
     template_id: int = Field(ge=100, le=999999999)
     template_node: Slug | None = None
     cpu: int = Field(default=2, ge=1, le=128)
@@ -475,6 +476,7 @@ class VMVariables(Input):
 class ApplianceVMVariables(Input):
     name: Slug
     node: Slug
+    vm_id: int | None = Field(default=None, ge=100, le=999999999)
     storage: Slug
     network: Slug = 'vmbr0'
     network_count: int = Field(default=1, ge=1, le=8)

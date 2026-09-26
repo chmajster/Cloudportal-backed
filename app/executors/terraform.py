@@ -16,6 +16,7 @@ from app.executors.base import Executor, ExecutionFailed, execution_environment,
 from app.executors.cloud_init import blueprint_snapshot, native_cloud_init_requested, prepare_native_seed
 from app.models import Credential, now
 from app.security.core import decrypt_secret
+from app.terraform.identity import bind_proxmox_vm_id, reserve_proxmox_vm_id
 from app.terraform.state import distributed_deployment_lock, persist_state, restore_state
 
 
@@ -204,6 +205,18 @@ def proxmox_ssh_preflight(credential, env):
     )
 
 
+def terraform_state_vm_id(workspace):
+    path = Path(workspace) / 'terraform.tfstate'
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+        value = ((payload.get('outputs') or {}).get('vm_id') or {}).get('value')
+        return int(value) if value is not None else None
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def terraform_plan_command(binary, operation, recreate_address=None):
     command = [binary, 'plan', '-input=false', '-no-color', '-lock-timeout=30s', '-out=execution.tfplan']
     if operation == 'terraform.destroy':
@@ -382,6 +395,33 @@ class TerraformExecutor(Executor):
             with workspace_lock(workspace):
                 context.stage('terraform.state.restore')
                 restore_state(deployment.id, workspace)
+
+                if (
+                    provider_type == 'proxmox'
+                    and deployment.template in {'proxmox-vm', 'proxmox-appliance'}
+                    and operation in {'terraform.plan', 'terraform.apply'}
+                ):
+                    existing_vm_id = terraform_state_vm_id(workspace)
+                    try:
+                        if existing_vm_id is not None:
+                            reserved_vm_id = bind_proxmox_vm_id(deployment.id, existing_vm_id)
+                            context.log(f'proxmox.vmid.bound_from_state: {reserved_vm_id}')
+                        else:
+                            reserved_vm_id = reserve_proxmox_vm_id(
+                                deployment.id,
+                                credential,
+                                context=context,
+                            )
+                    except Exception:
+                        raise ExecutionFailed(
+                            'Could not reserve a unique Proxmox VMID before Terraform execution'
+                        ) from None
+                    runtime_variables['vm_id'] = reserved_vm_id
+                    deployment.variables = {
+                        **(deployment.variables or {}),
+                        'vm_id': reserved_vm_id,
+                    }
+
                 if native_seed:
                     if any(path.exists() for path in qemu_bootstrap_paths(workspace)):
                         raise ExecutionFailed(

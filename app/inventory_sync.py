@@ -43,12 +43,33 @@ def sync_deployment_inventory(db, deployment, outputs):
             ManagedVM.deployment_id == deployment.id
         ))
 
-        if by_identity and (by_identity.tenant_id, by_identity.project_id) != (deployment.tenant_id, deployment.project_id):
-            raise RuntimeError('VM identity belongs to another project')
+        reusable_destroyed_identity = False
         if by_identity and by_identity.deployment_id not in {None, deployment.id}:
+            previous_deployment = db.get(Deployment, by_identity.deployment_id)
+            reusable_destroyed_identity = (
+                by_identity.lifecycle_status == 'destroyed'
+                and (previous_deployment is None or previous_deployment.status == 'destroyed')
+            )
+
+        if by_identity and not reusable_destroyed_identity and (
+            by_identity.tenant_id,
+            by_identity.project_id,
+        ) != (deployment.tenant_id, deployment.project_id):
+            raise RuntimeError('VM identity belongs to another project')
+        if by_identity and by_identity.deployment_id not in {None, deployment.id} and not reusable_destroyed_identity:
             raise RuntimeError('VM identity is already linked to another deployment')
         if by_identity and by_deployment and by_identity.id != by_deployment.id:
             raise RuntimeError('Deployment inventory points to a different VM identity')
+
+        if reusable_destroyed_identity:
+            # Proxmox VMIDs are reusable after the old VM is confirmed destroyed.
+            # Re-bind the inventory row to the new deployment rather than treating
+            # historical ownership as a live identity collision.
+            by_identity.tenant_id = deployment.tenant_id
+            by_identity.project_id = deployment.project_id
+            by_identity.deployment_id = deployment.id
+            by_identity.created_by = deployment.created_by
+
         managed_vm = by_identity or by_deployment
 
     resource = db.scalar(select(ManagedResource).where(

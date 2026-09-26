@@ -21,7 +21,10 @@ from app.deployments.recreate import recreate_resource_address
 from app.jobs.worker import execute
 from app.jobs.queue import (reconcile_cancelled_jobs, reconcile_deployment_job_statuses,
                             reconcile_persisted_inventory, reconcile_stale_jobs)
+from app.terraform.identity import reserve_proxmox_vm_id
 from app.terraform.state import persist_state
+from app.inventory_sync import sync_deployment_inventory
+from app.providers.proxmox import ProxmoxProvider
 
 
 def terraform_state_workspace(tmp_path, vm_id=101):
@@ -47,6 +50,116 @@ def deployment(client,headers):
     response=client.post('/api/v1/deployments',headers={**headers,'Idempotency-Key':str(uuid.uuid4())},json=payload)
     assert response.status_code==202,response.text
     return response.json()
+
+
+def test_parallel_proxmox_deployments_reserve_distinct_vmids(client, headers, monkeypatch):
+    credential, provider, payload = resources(client, headers)
+    first = client.post(
+        '/api/v1/deployments',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json=payload,
+    ).json()
+    second_payload = {
+        **payload,
+        'name': 'test-second',
+        'variables': {**payload['variables'], 'name': 'vm02'},
+    }
+    second = client.post(
+        '/api/v1/deployments',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json=second_payload,
+    ).json()
+
+    monkeypatch.setattr(ProxmoxProvider, 'used_vm_ids', lambda self: {100, 101})
+
+    with session() as db:
+        credential_row = db.get(Credential, credential['id'])
+        first_id = reserve_proxmox_vm_id(first['id'], credential_row)
+        second_id = reserve_proxmox_vm_id(second['id'], credential_row)
+
+    assert first_id == 102
+    assert second_id == 103
+    with session() as db:
+        assert db.get(Deployment, first['id']).variables['vm_id'] == 102
+        assert db.get(Deployment, second['id']).variables['vm_id'] == 103
+
+
+def test_destroyed_inventory_identity_can_be_reused_by_new_deployment(client, headers):
+    credential, provider, payload = resources(client, headers)
+    first = client.post(
+        '/api/v1/deployments',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json=payload,
+    ).json()
+    second = client.post(
+        '/api/v1/deployments',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+        json={**payload, 'name': 'replacement', 'variables': {**payload['variables'], 'name': 'replacement'}},
+    ).json()
+
+    with session() as db:
+        old = db.get(Deployment, first['id'])
+        old.status = 'destroyed'
+        old.active_job_id = None
+        old.destroyed_at = now()
+        db.add(ManagedVM(
+            provider_id=provider['id'],
+            deployment_id=old.id,
+            node='pve',
+            vm_id=113,
+            name='old-vm',
+            management_mode='terraform',
+            lifecycle_status='destroyed',
+            created_by=old.created_by,
+            tenant_id=old.tenant_id,
+            project_id=old.project_id,
+            destroyed_at=now(),
+        ))
+        replacement = db.get(Deployment, second['id'])
+        result = sync_deployment_inventory(
+            db,
+            replacement,
+            {'vm_id': {'value': 113}, 'primary_ip': {'value': None}},
+        )
+        db.commit()
+        assert result['vm_id'] == 113
+
+    with session() as db:
+        row = db.scalar(select(ManagedVM).where(
+            ManagedVM.provider_id == provider['id'],
+            ManagedVM.vm_id == 113,
+        ))
+        assert row.deployment_id == second['id']
+        assert row.lifecycle_status == 'active'
+        assert row.destroyed_at is None
+
+
+def test_terraform_invocations_use_independent_process_groups(tmp_path):
+    import os
+
+    executable = tmp_path / 'terraform'
+    executable.write_text('#!/bin/sh\nexit 0\n')
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+
+    class Context:
+        def __init__(self):
+            self.lines = []
+
+        def check(self):
+            pass
+
+        def log(self, line):
+            self.lines.append(line)
+
+    context = Context()
+    run_process([str(executable), 'version'], tmp_path, {'PATH': '/usr/bin:/bin'}, context)
+    run_process([str(executable), 'version'], tmp_path, {'PATH': '/usr/bin:/bin'}, context)
+
+    starts = [line for line in context.lines if line.startswith('terraform.process.started:')]
+    assert len(starts) == 2
+    pids = [int(line.split('pid=', 1)[1].split()[0]) for line in starts]
+    assert pids[0] != pids[1]
+    assert all('process_group=' in line for line in starts)
 
 
 def test_encryption_masking_and_destination_change(client,headers):
