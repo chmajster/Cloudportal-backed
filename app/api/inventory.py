@@ -14,12 +14,13 @@ from app.catalog import template_import_target, template_public, validate_templa
 from app.catalog_control import require_catalog_item_enabled
 from app.database import get_db
 from app.inventory_sync import repair_inventory_from_states
+from app.jobs.lifecycle import release_pre_execution_allocations
 from app.models import Credential, Deployment, ManagedResource, ManagedVM, Provider, now
 from app.providers.registry import provider_for
 from app.security.core import audit
 from app.resource_scope.http import require
 from app.resource_scope.authorization import Scope
-from app.quotas.service import reconcile_terraform_presence
+from app.quotas.service import account_confirmed_absent, reconcile_terraform_presence
 
 
 router = APIRouter(prefix='/inventory', tags=['inventory'])
@@ -518,15 +519,30 @@ def remove_confirmed_missing_vm(
             ManagedResource.deployment_id == row.deployment_id
         ).with_for_update())
 
-        if deployment is not None and deployment.status != 'destroyed':
-            deployment.status = 'reconciliation_required'
-
+        scope = Scope(row.tenant_id, row.project_id)
         reconcile_terraform_presence(
             db,
-            Scope(row.tenant_id, row.project_id),
+            scope,
             row.deployment_id,
             present=False,
         )
+
+        if deployment is not None:
+            # Provider-side absence is stronger evidence than stale Terraform
+            # state. Finalize the deployment as destroyed so the automatic
+            # inventory repair loop cannot recreate this VM from old state.
+            deployment.status = 'destroyed'
+            deployment.destroyed_at = deployment.destroyed_at or when
+            deployment.active_job_id = None
+            release_pre_execution_allocations(db, deployment.id)
+            account_confirmed_absent(
+                db,
+                scope,
+                'deployment',
+                deployment.id,
+                f'inventory-missing-purge:{row.id}',
+                actor.user_id,
+            )
 
     if purge:
         audit(db, request, 'inventory.vm_missing_purged', 'managed_vms', row.id)
