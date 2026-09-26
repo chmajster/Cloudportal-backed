@@ -350,6 +350,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.product-grid' in stylesheet
     assert '.product-card' in stylesheet
     assert '.product-card-icon img' in stylesheet
+    assert '.product-view-toggle' in stylesheet
+    assert '.product-list-product' in stylesheet
+    assert "const PRODUCT_VIEW_STORAGE_KEY = 'cloudportal.products.view'" in script
+    assert "button('Kafelki', () => setView('grid'))" in script
+    assert "button('Lista', () => setView('list'))" in script
+    assert "body.append(productList(blueprints, avatarById))" in script
+    assert "localStorage.setItem(PRODUCT_VIEW_STORAGE_KEY, view)" in script
     assert "api('/blueprint-avatars')" in script
     assert 'item.avatar_id' in script
     assert '.job-log-status' in stylesheet
