@@ -200,8 +200,16 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     if provider.credentials_id != data.deployment.credentials_id:
         raise HTTPException(422, 'Blueprint credential does not belong to its provider')
     workflow_types = {str(step.type) for step in data.workflow}
-    if blueprint_id is None and 'terraform_apply' not in workflow_types:
-        raise HTTPException(422, 'New Blueprints must contain an explicit terraform_apply step')
+    direct_proxmox = data.deployment.executor == 'proxmox'
+    if direct_proxmox:
+        if provider.type != 'proxmox' or data.deployment.template != 'proxmox-vm':
+            raise HTTPException(422, 'Direct Proxmox provisioning requires a Proxmox provider and proxmox-vm template')
+        if workflow_types & {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
+            raise HTTPException(422, 'Direct Proxmox provisioning cannot contain Terraform workflow steps')
+        if len(workflow_types & {'clone_vm', 'create_vm'}) != 1:
+            raise HTTPException(422, 'Direct Proxmox provisioning requires clone_vm or create_vm')
+    elif blueprint_id is None and 'terraform_apply' not in workflow_types:
+        raise HTTPException(422, 'New Terraform/OpenTofu Blueprints must contain an explicit terraform_apply step')
 
     proxmox_only_steps = {
         'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
@@ -547,8 +555,14 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                 created_by=actor.user_id, executor=parsed.executor)
         db.add(deployment)
         db.flush()
-        deployment.state_location = f'database://terraform-states/{deployment.id}'
-        job = new_job(db, request, actor, 'terraform.apply', deployment,
+        direct_proxmox = parsed.executor == 'proxmox'
+        deployment.state_location = (
+            f'provider://proxmox/{deployment.id}'
+            if direct_proxmox
+            else f'database://terraform-states/{deployment.id}'
+        )
+        operation = 'proxmox.provision' if direct_proxmox else 'terraform.apply'
+        job = new_job(db, request, actor, operation, deployment,
                       {'ansible': primary_ansible.model_dump() if primary_ansible else None,
                        'ansible_runs': [run.model_dump() for run in configured_ansible],
                        'blueprint': deployment.workflow['blueprint']})
