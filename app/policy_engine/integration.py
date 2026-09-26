@@ -137,8 +137,17 @@ def _deny(result):
     })
 
 
-def _write_aliases(rendered, effective_resource):
+def _write_aliases(rendered, effective_resource, effective_scope=None):
     variables = dict(rendered.get("variables") or {})
+    effective_scope = effective_scope or {}
+    canonical_scope_key = compose_scope_key(
+        effective_resource.get("organization") or effective_scope.get("organization"),
+        effective_resource.get("project") or effective_scope.get("project"),
+        effective_resource.get("apmid"),
+        effective_resource.get("environment"),
+    )
+    if canonical_scope_key:
+        effective_resource["scope_key"] = canonical_scope_key
     alias_groups = {
         "cpu": ("cores", "cpu", "vcpu", "cpu_cores"),
         "memory_mb": ("memory", "memory_mb", "ram_mb"),
@@ -239,7 +248,7 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
     if isinstance(payload, dict):
         rendered = copy.deepcopy(payload)
     effective_resource = effective.get("resource") or {}
-    _write_aliases(rendered, effective_resource)
+    _write_aliases(rendered, effective_resource, effective.get("scope") or {})
     return rendered, result
 
 
@@ -281,9 +290,9 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
             "management_mode": getattr(target, "management_mode", None),
             "apmid": apmid_value,
             "environment": environment_value,
-            "organization": metadata.get("organization") or scope_context.get("organization"),
-            "project": metadata.get("project") or scope_context.get("project"),
-            "scope_key": metadata.get("resource_scope_key") or scope_context.get("key"),
+            "organization": scope_context.get("organization") or metadata.get("organization"),
+            "project": scope_context.get("project") or metadata.get("project"),
+            "scope_key": scope_context.get("key") or metadata.get("resource_scope_key"),
             "tags": tags,
             "metadata": metadata,
         },
@@ -323,9 +332,9 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
         "id": str(getattr(deployment, "id", "") or ""),
         "apmid": apmid_value,
         "environment": environment_value,
-        "organization": variables.get("organization") or scope_context.get("organization"),
-        "project": variables.get("project") or scope_context.get("project"),
-        "scope_key": variables.get("resource_scope_key") or scope_context.get("key"),
+        "organization": scope_context.get("organization") or variables.get("organization"),
+        "project": scope_context.get("project") or variables.get("project"),
+        "scope_key": scope_context.get("key") or variables.get("resource_scope_key"),
         "provider_id": getattr(deployment, "provider_id", None),
         "provider_type": getattr(deployment, "provider", None),
         "template": getattr(deployment, "template", None),
