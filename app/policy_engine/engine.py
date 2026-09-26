@@ -396,7 +396,7 @@ def _limit_violation(effect: Mapping[str, Any], context: Mapping[str, Any]):
 
 def _apply_effect(effect: Mapping[str, Any], context: dict, *, policy_id: str, advisory: bool,
                   warnings: list[str], violations: list[dict], approvals: list[dict],
-                  obligations: list[dict], applied: list[dict]):
+                  obligations: list[dict], applied: list[dict], locked_fields: set[str]):
     kind = str(effect.get("type") or "")
     item = {"policy_id": policy_id, **copy.deepcopy(dict(effect))}
     if kind == "allow":
@@ -423,8 +423,14 @@ def _apply_effect(effect: Mapping[str, Any], context: dict, *, policy_id: str, a
         return
     if kind in {"set_default", "force_value"}:
         field = str(effect.get("field") or "")
-        changed = set_path(context, field, effect.get("value"), only_missing=kind == "set_default")
-        item["changed"] = changed
+        if kind == "force_value" and field in locked_fields:
+            item["changed"] = False
+            item["ignored"] = "higher_priority_value_already_selected"
+        else:
+            changed = set_path(context, field, effect.get("value"), only_missing=kind == "set_default")
+            item["changed"] = changed
+            if kind == "force_value" and changed:
+                locked_fields.add(field)
         applied.append(item)
         return
     if kind == "limit_value":
@@ -456,7 +462,14 @@ def _apply_effect(effect: Mapping[str, Any], context: dict, *, policy_id: str, a
             "select_storage": "resource.storage",
             "select_network": "resource.network",
         }
-        set_path(context, str(effect.get("field") or default_fields[kind]), effect.get("value"))
+        field = str(effect.get("field") or default_fields[kind])
+        if field in locked_fields:
+            item["changed"] = False
+            item["ignored"] = "higher_priority_value_already_selected"
+        else:
+            item["changed"] = set_path(context, field, effect.get("value"))
+            if item["changed"]:
+                locked_fields.add(field)
         applied.append(item)
         return
 
@@ -529,6 +542,7 @@ def evaluate(policies: Iterable[Any], context: Mapping[str, Any], exceptions: It
     obligations: list[dict] = []
     dry_run_impacts: list[dict] = []
     matched_whitelist_ids: set[str] = set()
+    locked_fields: set[str] = set()
 
     for policy in candidates:
         policy_id = str(_policy_value(policy, "id", ""))
@@ -545,11 +559,12 @@ def evaluate(policies: Iterable[Any], context: Mapping[str, Any], exceptions: It
             dry_approvals: list[dict] = []
             dry_obligations: list[dict] = []
             dry_applied: list[dict] = []
+            dry_locked_fields = set(locked_fields)
             for effect in _policy_value(policy, "effects", []) or []:
                 _apply_effect(
                     effect, sandbox, policy_id=policy_id, advisory=enforcement == "advisory",
                     warnings=dry_warnings, violations=dry_violations, approvals=dry_approvals,
-                    obligations=dry_obligations, applied=dry_applied,
+                    obligations=dry_obligations, applied=dry_applied, locked_fields=dry_locked_fields,
                 )
             dry_run_impacts.append({
                 "policy_id": policy_id,
@@ -569,7 +584,7 @@ def evaluate(policies: Iterable[Any], context: Mapping[str, Any], exceptions: It
             _apply_effect(
                 effect, effective, policy_id=policy_id, advisory=advisory,
                 warnings=warnings, violations=violations, approvals=approvals,
-                obligations=obligations, applied=applied,
+                obligations=obligations, applied=applied, locked_fields=locked_fields,
             )
         trace.append({
             "policy_id": policy_id,
