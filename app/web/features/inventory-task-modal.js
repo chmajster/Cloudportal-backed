@@ -130,12 +130,17 @@ async function show(item, result, title) {
           : node('strong', { class: 'task-result-error-symbol', text: '!' }));
         resultState.className = 'task-result-state ' + (success ? 'is-success' : 'is-danger');
         resultTitle.textContent = success ? 'Operacja zakończona' : 'Operacja zakończona błędem';
+        const exitStatus = task.exitstatus || 'błąd operacji';
+        const snapshotUnsupported = /snapshot feature is not available/i.test(String(exitStatus));
+        const failureMessage = snapshotUnsupported
+          ? 'Proxmox nie obsługuje snapshotu dla bieżącej konfiguracji VM. Wszystkie dyski muszą znajdować się na storage obsługującym snapshoty. Przenieś niezgodny dysk albo użyj backupu.'
+          : 'Proxmox zwrócił wynik: ' + exitStatus + '.';
         resultDescription.textContent = success
           ? taskTypeLabel(task.type, title) + ' została zakończona pomyślnie.'
-          : 'Proxmox zwrócił wynik: ' + (task.exitstatus || 'błąd operacji') + '.';
+          : failureMessage;
 
         if (success) toast(`${title}: zakończono.`);
-        else toast(`${title}: ${task.exitstatus || 'błąd operacji'}.`, 'error');
+        else toast(snapshotUnsupported ? failureMessage : `${title}: ${exitStatus}.`, 'error');
         state.taskPollTimer = null;
         return;
       }
