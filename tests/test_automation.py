@@ -1261,6 +1261,33 @@ def test_blueprint_edit_rejects_missing_explicit_apply(client, headers):
     )
     assert missing_precondition.status_code == 428
 
+    valid_payload = {
+        'slug': 'strict-editable',
+        'name': 'Strict Editable v2',
+        'deployment': {
+            'name': 'strict-editable',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+    updated = client.put(
+        '/api/v1/blueprints/' + str(created.json()['id']),
+        headers={**headers, 'If-Match': str(created.json()['version'])},
+        json=valid_payload,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['version'] == created.json()['version'] + 1
+
+    stale = client.put(
+        '/api/v1/blueprints/' + str(created.json()['id']),
+        headers={**headers, 'If-Match': str(created.json()['version'])},
+        json=valid_payload,
+    )
+    assert stale.status_code == 409
+    assert 'version conflict' in stale.text.lower()
+
 
 def test_blueprint_approval_step_must_be_between_plan_and_apply(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
