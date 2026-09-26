@@ -91,12 +91,20 @@ async function waitProxmoxTask(providerId, nodeName, upid, onPoll, timeoutMs = 6
   throw new Error('Przekroczono czas oczekiwania na task Proxmox.');
 }
 
-async function waitForTemplate(providerId, targetVmid, onPoll, timeoutMs = 20 * 60 * 1000) {
+async function waitForTemplate(providerId, nodeName, targetVmid, onPoll, timeoutMs = 20 * 60 * 1000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await api('/providers/' + encodeURIComponent(providerId) + '/templates');
-    const template = (result.items || []).find(item => Number(item.vmid) === Number(targetVmid));
-    if (template) return template;
+    try {
+      const status = await api(
+        '/providers/' + encodeURIComponent(providerId)
+        + '/vms/' + encodeURIComponent(nodeName)
+        + '/' + encodeURIComponent(targetVmid)
+        + '/status'
+      );
+      if (Number(status.template || 0) === 1) return status;
+    } catch {
+      // Clone/template may briefly be absent while Proxmox finalizes the task.
+    }
     if (typeof onPoll === 'function') onPoll();
     await new Promise(resolve => window.setTimeout(resolve, 3000));
   }
@@ -347,24 +355,29 @@ async function proxmoxTemplateCloneView() {
       }
 
       detail.textContent = 'Klon jest gotowy. Backend konwertuje VMID ' + targetVmid + ' do template…';
-      await waitForTemplate(state.providerId, targetVmid, () => {
+      await waitForTemplate(state.providerId, targetNode, targetVmid, () => {
         detail.textContent = 'Oczekiwanie na pojawienie się template VMID ' + targetVmid + ' w Proxmox…';
       });
       setBadge(stepConvert, '2. Template gotowy', 'ok');
 
-      const refreshed = await api('/providers/' + encodeURIComponent(state.providerId) + '/vms');
-      const originalExists = (refreshed.items || []).some(item => Number(item.vmid) === Number(source.vmid));
-      if (!originalExists) throw new Error(
-        'Template został utworzony, ale nie udało się potwierdzić obecności źródłowej VMID ' + source.vmid + '.'
+      const originalStatus = await api(
+        '/providers/' + encodeURIComponent(state.providerId)
+        + '/vms/' + encodeURIComponent(source.node)
+        + '/' + encodeURIComponent(source.vmid)
+        + '/status'
       );
-      setBadge(stepVerify, '3. Oryginał dostępny', 'ok');
-      detail.textContent = 'Gotowe. Template VMID ' + targetVmid
-        + ' utworzony z pełnego klona. Oryginalna VMID ' + source.vmid + ' nadal istnieje i nie została przekonwertowana.';
-      toast('Template utworzony z klona. Oryginalna VM pozostała dostępna.');
+      if (Number(originalStatus.template || 0) === 1) throw new Error(
+        'Template został utworzony, ale źródłowy VMID ' + source.vmid + ' nie jest już zwykłą VM.'
+      );
+
       await loadProvider();
       setBadge(stepClone, '1. Klon gotowy', 'ok');
       setBadge(stepConvert, '2. Template gotowy', 'ok');
       setBadge(stepVerify, '3. Oryginał dostępny', 'ok');
+      detail.textContent = 'Gotowe. Template VMID ' + targetVmid
+        + ' utworzony z pełnego klona. Oryginalna VMID ' + source.vmid
+        + ' nadal istnieje i nie została przekonwertowana.';
+      toast('Template utworzony z klona. Oryginalna VM pozostała dostępna.');
     } catch (error) {
       if (cloneFinished) setBadge(stepConvert, '2. Wymaga sprawdzenia', 'danger');
       else setBadge(stepClone, '1. Błąd', 'danger');
