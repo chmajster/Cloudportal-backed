@@ -293,6 +293,27 @@ def test_adapter_disks_nics_cloudinit_and_preserved_network_fields():
     assert adapter._cloud_init_values({'ssh_public_keys':['a','b']})['sshkeys'] == 'a\nb'
 
 
+def test_adapter_hides_create_snapshot_when_proxmox_feature_is_unavailable():
+    adapter = object.__new__(ProxmoxDay2Adapter)
+    adapter.provider = SimpleNamespace(
+        vm_config=lambda *_args: {'hotplug': 'cpu,memory'},
+        snapshot_capability=lambda *_args: {
+            'supported': False,
+            'check_available': True,
+            'reason': 'snapshot_feature_unavailable',
+            'message': 'Snapshot is unavailable on current storage.',
+            'nodes': [],
+        },
+    )
+    target = Day2Target('id', 1, 'proxmox', 'vm', 'vm', None, 'EXTERNAL', node='pve', vm_id=1)
+
+    capabilities = adapter.capabilities(target)
+
+    assert 'create_snapshot' not in capabilities['actions']
+    assert capabilities['snapshots'] is False
+    assert capabilities['action_unavailable_reasons']['create_snapshot'] == 'Snapshot is unavailable on current storage.'
+
+
 def test_adapter_unknown_task_result_is_not_success():
     adapter = object.__new__(ProxmoxDay2Adapter)
     adapter.provider = SimpleNamespace(task_status=lambda *args: {'status':'stopped'})
