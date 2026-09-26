@@ -172,6 +172,40 @@ async function handleVmProviderFailure(item, error, returnView = 'inventory') {
   return false;
 }
 
+function proxmoxTaskTypeLabel(value, fallback = 'Operacja Proxmox') {
+  const labels = {
+    qmstart: 'Uruchomienie VM',
+    qmstop: 'Wymuszone zatrzymanie VM',
+    qmshutdown: 'Bezpieczne wyłączenie VM',
+    qmreboot: 'Restart VM',
+    qmreset: 'Twardy reset VM',
+    qmsuspend: 'Wstrzymanie VM',
+    qmresume: 'Wznowienie VM',
+    qmclone: 'Klonowanie VM',
+    qmmigrate: 'Migracja VM',
+    qmtemplate: 'Konwersja VM do template',
+    vncproxy: 'Sesja konsoli',
+    vzdump: 'Backup VM',
+  };
+  return labels[String(value || '').toLowerCase()] || fallback;
+}
+
+function proxmoxTaskTime(value) {
+  if (!value) return '—';
+  return new Date(Number(value) * 1000).toLocaleString('pl-PL');
+}
+
+function proxmoxTaskDuration(start, end) {
+  const started = Number(start || 0);
+  const finished = Number(end || 0);
+  if (!started || !finished || finished < started) return '—';
+  const seconds = Math.max(0, Math.round(finished - started));
+  if (seconds < 60) return seconds + ' s';
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes + ' min ' + String(remainder).padStart(2, '0') + ' s';
+}
+
 async function showProxmoxTask(item, result, title) {
   if (!result?.task) {
     toast(`${title}: operacja została przyjęta.`);
@@ -180,52 +214,121 @@ async function showProxmoxTask(item, result, title) {
 
   stopTaskPolling();
   const nonce = state.taskPollNonce;
-  const statusValue = node('strong', { text: 'Uruchamianie…' });
-  const exitValue = node('strong', { text: '—' });
-  const typeValue = node('strong', { text: '—' });
-  const startedValue = node('strong', { text: '—' });
-  const progress = node('div', { class: 'task-progress' },
-    node('div', { class: 'spinner', 'aria-hidden': 'true' }),
-    node('span', { text: 'Oczekiwanie na status zadania Proxmox…' }));
 
-  dom.modal.classList.remove('modal-console');
+  const statusValue = node('strong', { text: 'Uruchamianie…' });
+  const exitValue = node('strong', { text: 'W trakcie' });
+  const typeValue = node('strong', { text: title || 'Operacja Proxmox' });
+  const startedValue = node('strong', { text: '—' });
+  const finishedValue = node('strong', { text: '—' });
+  const durationValue = node('strong', { text: '—' });
+  const rawTypeValue = node('code', { class: 'mono', text: '—' });
+
+  const resultIcon = node('div', { class: 'task-result-icon is-running', 'aria-hidden': 'true' },
+    node('div', { class: 'spinner' }));
+  const resultTitle = node('strong', { class: 'task-result-title', text: 'Operacja w toku' });
+  const resultDescription = node('p', {
+    class: 'task-result-description',
+    text: 'Cloudportal oczekuje na zakończenie zadania w Proxmox.',
+  });
+  const resultState = node('div', { class: 'task-result-state' },
+    resultIcon,
+    node('div', { class: 'task-result-copy' }, resultTitle, resultDescription));
+
+  const technicalDetails = node('details', { class: 'task-id-details task-technical-details' },
+    node('summary', { text: 'Szczegóły techniczne' }),
+    node('div', { class: 'task-technical-grid' },
+      node('div', { class: 'task-technical-row' },
+        node('span', { text: 'Typ Proxmox' }),
+        rawTypeValue),
+      node('div', { class: 'task-technical-row' },
+        node('span', { text: 'UPID' }),
+        node('code', { class: 'mono task-upid', text: String(result.task) }))));
+
+  dom.modal.classList.remove('modal-console', 'modal-wide');
   dom.modalTitle.textContent = title;
-  dom.modalEyebrow.textContent = item.name || `${item.node} / VMID ${item.vm_id}`;
+  dom.modalEyebrow.textContent = [
+    item.name || 'VM',
+    item.node || '—',
+    'VMID ' + item.vm_id,
+  ].join(' · ');
+
   dom.modalBody.replaceChildren(
-    progress,
-    node('div', { class: 'checks task-checks' },
-      node('div', { class: 'check' }, node('span', { text: 'Status' }), statusValue),
-      node('div', { class: 'check' }, node('span', { text: 'Wynik' }), exitValue),
-      node('div', { class: 'check' }, node('span', { text: 'Typ operacji' }), typeValue),
-      node('div', { class: 'check' }, node('span', { text: 'Start' }), startedValue)),
-    node('details', { class: 'task-id-details' },
-      node('summary', { text: 'Identyfikator zadania' }),
-      node('div', { class: 'secret-box mono', text: String(result.task) })));
-  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-  if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) dom.modal.showModal();
+    node('div', { class: 'task-result-shell' },
+      resultState,
+      node('section', { class: 'task-summary-grid' },
+        node('div', { class: 'task-summary-card' },
+          node('span', { text: 'Status' }),
+          statusValue),
+        node('div', { class: 'task-summary-card' },
+          node('span', { text: 'Wynik' }),
+          exitValue),
+        node('div', { class: 'task-summary-card' },
+          node('span', { text: 'Operacja' }),
+          typeValue),
+        node('div', { class: 'task-summary-card' },
+          node('span', { text: 'Rozpoczęcie' }),
+          startedValue),
+        node('div', { class: 'task-summary-card' },
+          node('span', { text: 'Zakończenie' }),
+          finishedValue),
+        node('div', { class: 'task-summary-card' },
+          node('span', { text: 'Czas trwania' }),
+          durationValue)),
+      technicalDetails));
+
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal, 'primary'));
+  if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) {
+    dom.modal.showModal();
+  }
 
   const poll = async () => {
-    if (nonce !== state.taskPollNonce || !(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) return;
+    if (nonce !== state.taskPollNonce
+      || !(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) return;
+
     try {
-      const task = await api(`/providers/${item.provider_id}/tasks/${encodeURIComponent(item.node)}/${encodeURIComponent(String(result.task))}`);
+      const task = await api(
+        `/providers/${item.provider_id}/tasks/${encodeURIComponent(item.node)}/${encodeURIComponent(String(result.task))}`
+      );
       const stopped = task.status === 'stopped' || Boolean(task.exitstatus);
+      const success = stopped && (!task.exitstatus || task.exitstatus === 'OK');
+
       statusValue.textContent = stopped ? 'Zakończone' : statusLabel(task.status || 'running');
       exitValue.textContent = task.exitstatus || (stopped ? '—' : 'W trakcie');
-      typeValue.textContent = task.type || '—';
-      startedValue.textContent = task.starttime ? new Date(task.starttime * 1000).toLocaleString('pl-PL') : '—';
+      typeValue.textContent = proxmoxTaskTypeLabel(task.type, title || 'Operacja Proxmox');
+      rawTypeValue.textContent = task.type || '—';
+      startedValue.textContent = proxmoxTaskTime(task.starttime);
+      finishedValue.textContent = proxmoxTaskTime(task.endtime);
+      durationValue.textContent = proxmoxTaskDuration(task.starttime, task.endtime);
 
       if (stopped) {
-        const success = !task.exitstatus || task.exitstatus === 'OK';
-        progress.replaceChildren(
-          badge(success ? 'Zakończono pomyślnie' : 'Operacja zakończona błędem', success ? 'ok' : 'danger'));
+        resultIcon.className = 'task-result-icon ' + (success ? 'is-success' : 'is-danger');
+        resultIcon.replaceChildren(
+          success
+            ? appIcon('check')
+            : node('strong', { class: 'task-result-error-symbol', text: '!' })
+        );
+        resultState.className = 'task-result-state ' + (success ? 'is-success' : 'is-danger');
+        resultTitle.textContent = success ? 'Operacja zakończona' : 'Operacja zakończona błędem';
+        resultDescription.textContent = success
+          ? proxmoxTaskTypeLabel(task.type, title) + ' została zakończona pomyślnie.'
+          : 'Proxmox zwrócił wynik: ' + (task.exitstatus || 'błąd operacji') + '.';
+
         if (success) toast(`${title}: zakończono.`);
         else toast(`${title}: ${task.exitstatus || 'błąd operacji'}.`, 'error');
+
         state.taskPollTimer = null;
         return;
       }
+
+      resultState.className = 'task-result-state';
+      resultTitle.textContent = 'Operacja w toku';
+      resultDescription.textContent = proxmoxTaskTypeLabel(task.type, title)
+        + ' jest wykonywana przez Proxmox.';
       state.taskPollTimer = window.setTimeout(poll, 1500);
     } catch (error) {
-      progress.replaceChildren(node('span', { class: 'form-error', text: 'Nie udało się odświeżyć statusu: ' + error.message }));
+      resultState.className = 'task-result-state is-warning';
+      resultTitle.textContent = 'Nie udało się odświeżyć statusu';
+      resultDescription.textContent = error.message;
       state.taskPollTimer = window.setTimeout(poll, 4000);
     }
   };
