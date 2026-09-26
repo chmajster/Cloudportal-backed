@@ -265,6 +265,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "api('/jobs/' + encodeURIComponent(id))" in script
     assert "function provisionalBlueprintVm(" in script
     assert "provisioning_placeholder: true" in script
+    assert "function normalizedLifecycleJob(deployment, job)" in script
+    assert "deploymentStatus === 'successful' || deploymentStatus === 'imported'" in script
+    assert "activityTitle + ': zakończone'" in script
+    assert "const settlingInventory = (vms || []).some" in script
+    assert "}, vms);" in script
     assert "node('strong', { text: 'Provisioning' })" in script
     assert "Provisioning został ponowiony." in script
     assert "Usuń nieudany provisioning" in script

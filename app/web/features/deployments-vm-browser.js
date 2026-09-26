@@ -46,6 +46,26 @@ function saveMyResourcesVmUi() {
   }
 }
 
+const TERMINAL_JOB_STATUSES = new Set(['successful', 'failed', 'cancelled']);
+
+function normalizedLifecycleJob(deployment, job) {
+  if (!deployment || !job || deployment.active_job_id) return job;
+
+  const jobStatus = String(job.status || '').toLowerCase();
+  if (TERMINAL_JOB_STATUSES.has(jobStatus)) return job;
+
+  const deploymentStatus = String(deployment.status || '').toLowerCase();
+  if (deploymentStatus === 'successful' || deploymentStatus === 'imported') {
+    return { ...job, status: 'successful', error: null };
+  }
+  if (deploymentStatus === 'failed') return { ...job, status: 'failed' };
+  if (deploymentStatus === 'cancelled') return { ...job, status: 'cancelled' };
+  if (deploymentStatus === 'destroyed' && job.operation === 'terraform.destroy') {
+    return { ...job, status: 'successful', error: null };
+  }
+  return job;
+}
+
 async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] }) {
   const rawVms = [...vms];
   const allJobs = [...jobs];
@@ -80,8 +100,13 @@ async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] })
   const provisioningJobForDeployment = deployment => {
     if (!deployment) return null;
     const active = deployment.active_job_id ? jobById.get(deployment.active_job_id) : null;
-    if (active && ['terraform.apply', 'terraform.destroy'].includes(active.operation)) return active;
-    return latestLifecycleJobByDeployment.get(deployment.id) || null;
+    if (active && ['terraform.apply', 'terraform.destroy'].includes(active.operation)) {
+      return active;
+    }
+    return normalizedLifecycleJob(
+      deployment,
+      latestLifecycleJobByDeployment.get(deployment.id) || null
+    );
   };
 
   function provisionalBlueprintVm(deployment) {
@@ -234,9 +259,12 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     item.provisioning_placeholder
     || (provisioningJob && provisioningJob.status !== 'successful')
   );
-  const lifecycleFailed = Boolean(
-    provisioningJob && ['failed', 'cancelled'].includes(provisioningJob.status)
-  );
+  const lifecycleStatus = String(
+    provisioningJob?.status || deployment?.status || ''
+  ).toLowerCase();
+  const lifecycleFailed = ['failed', 'cancelled'].includes(lifecycleStatus);
+  const lifecycleSuccessful = ['successful', 'imported'].includes(lifecycleStatus)
+    || (lifecycleStatus === 'destroyed' && destroyJob);
   const provisioningFailed = lifecycleFailed && !destroyJob;
   const destroyFailed = lifecycleFailed && destroyJob;
   const destroyInProgress = Boolean(
@@ -322,10 +350,12 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     : null;
   const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';
   const statusText = provisioningVisible
-    ? (lifecycleFailed ? activityTitle + ': błąd' : activityTitle)
+    ? (lifecycleFailed
+        ? activityTitle + ': błąd'
+        : lifecycleSuccessful ? activityTitle + ': zakończone' : activityTitle)
     : statusLabel(liveStatus);
   const statusKindValue = provisioningVisible
-    ? (lifecycleFailed ? 'danger' : 'warning')
+    ? (lifecycleFailed ? 'danger' : lifecycleSuccessful ? 'ok' : 'warning')
     : statusKind(liveStatus);
   const vmIdLabel = item.vm_id === null || item.vm_id === undefined || item.vm_id === ''
     ? 'oczekuje'
@@ -363,8 +393,10 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     provisioningVisible ? node('div', { class: 'my-resource-provisioning-state' },
       node('div', { class: 'my-resource-provisioning-head' },
         node('strong', { text: activityTitle }),
-        badge(statusLabel(provisioningJob?.status || deployment?.status || 'queued'),
-          lifecycleFailed ? 'danger' : 'warning')),
+        badge(
+          statusLabel(provisioningJob?.status || deployment?.status || 'queued'),
+          lifecycleFailed ? 'danger' : lifecycleSuccessful ? 'ok' : 'warning'
+        )),
       node('div', { class: 'my-resource-provisioning-stage' },
         node('span', { class: 'muted', text: 'Etap' }),
         stage),

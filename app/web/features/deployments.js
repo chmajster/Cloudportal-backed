@@ -182,7 +182,7 @@ async function myResourcesView(repairInventory = true) {
   if (preservedScrollY > 0) requestAnimationFrame(() => window.scrollTo({ top: preservedScrollY, behavior: 'auto' }));
   myResourcesPollTimer = window.DeploymentProvisioningPoll.schedule(deployments, () => {
     if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) myResourcesView(false).catch(error => toast(error.message, 'error'));
-  });
+  }, vms);
 }
 function deploymentActions(item, returnTo = 'my-resources') {
   const actions = [button('Szczegóły', () => navigate('/resources/deployments/' + encodeURIComponent(item.id)))];
