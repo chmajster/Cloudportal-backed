@@ -1,5 +1,9 @@
 variable "name" { type = string }
 variable "node" { type = string }
+variable "vm_id" {
+  type    = number
+  default = null
+}
 variable "storage" { type = string }
 variable "network" {
   type    = string
