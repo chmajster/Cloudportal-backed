@@ -29,6 +29,47 @@ def provider(client, headers):
     return response.json()
 
 
+def test_inventory_exposes_active_day2_action_for_vm_status(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    p = provider(client, headers)
+    monkeypatch.setattr(ProxmoxProvider, 'discover', lambda self, resource, node=None: [{
+        'vmid': 887,
+        'name': 'power-transition',
+        'node': 'pve01',
+        'status': 'running',
+        'type': 'qemu',
+        'template': 0,
+    }] if resource == 'vms' else [])
+
+    imported = client.post('/api/v1/inventory/vms/import', headers=key(headers), json={
+        'provider_id': p['id'],
+        'vm_id': 887,
+    })
+    assert imported.status_code == 201, imported.text
+    vm_id = imported.json()['id']
+
+    with session() as db:
+        user_id = db.scalar(select(User.id).order_by(User.id))
+        db.add(Day2ActionRequest(
+            resource_id=vm_id,
+            action='shutdown',
+            parameters={},
+            reason='test',
+            requested_by=user_id,
+            approval_state='not_required',
+            status='RUNNING',
+            request_id=str(uuid.uuid4()),
+        ))
+        db.commit()
+
+    rows = client.get('/api/v1/inventory/vms?limit=200', headers=headers)
+    assert rows.status_code == 200, rows.text
+    vm = next(item for item in rows.json()['items'] if item['id'] == vm_id)
+    assert vm['active_action']['action'] == 'shutdown'
+    assert vm['active_action']['status'] == 'RUNNING'
+
+
 def test_import_reconcile_and_unmanage_external_vm(client, headers, monkeypatch):
     from app.providers.proxmox import ProxmoxProvider
 
