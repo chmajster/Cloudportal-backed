@@ -731,8 +731,15 @@
       const scroller = el('div', { class: 'vra-canvas-scroll' });
       const viewport = el('div', {
         class: 'vra-graph-viewport ' + (state.grid ? 'grid' : ''),
-        style: `width:${extents.width}px;height:${extents.height}px;transform:scale(${state.zoom});transform-origin:0 0;`,
       });
+      // Do not use a style="" attribute here. The UI intentionally runs with
+      // CSP style-src 'self', so inline style attributes are rejected by the
+      // browser. CSSOM property assignments keep the strict CSP while allowing
+      // runtime canvas geometry.
+      viewport.style.width = extents.width + 'px';
+      viewport.style.height = extents.height + 'px';
+      viewport.style.transform = 'scale(' + state.zoom + ')';
+      viewport.style.transformOrigin = '0 0';
       const svg = svgEl('svg', { class: 'vra-edge-layer', width: extents.width, height: extents.height });
       viewport.append(svg);
 
@@ -741,7 +748,6 @@
         const meta = TYPE_META.get(step.type) || { label: step.type, group: 'Workflow' };
         const card = el('article', {
           class: 'vra-node ' + (step.id === state.selectedId ? 'selected ' : '') + (step.id === state.connectFrom ? 'connecting ' : ''),
-          style: `left:${pos.x}px;top:${pos.y}px`,
           'data-step-id': step.id,
           onclick: event => {
             event.stopPropagation();
@@ -773,6 +779,11 @@
                 renderFooter();
               },
             }, state.connectFrom === step.id ? 'Anuluj' : 'Połącz →')));
+
+        // Same CSP rule as for the viewport: set dynamic geometry through the
+        // CSSOM instead of emitting a blocked inline style attribute.
+        card.style.left = pos.x + 'px';
+        card.style.top = pos.y + 'px';
 
         card.addEventListener('pointerdown', event => {
           if (event.button !== 0 || event.target.closest('button')) return;
