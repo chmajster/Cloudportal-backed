@@ -24,7 +24,9 @@ class FakeAdapter:
     def __init__(self):
         self.calls = []
         self.fail_wait = False
+        self.capability_calls = 0
     def capabilities(self, target):
+        self.capability_calls += 1
         return {'actions': [row.id for row in all_actions()]}
     def snapshot_state(self, target):
         return {'power_state': 'stopped', 'name': target.name, 'node': target.node, 'cpu_cores': 2}
@@ -64,6 +66,15 @@ def submit(resource, headers=None, action='power_on', params=None):
     client, admin, vm, _ = resource
     return client.post(f'/api/v1/resources/{vm}/actions/{action}', headers=headers or key(admin),
                        json={'parameters': params or {}, 'reason': 'test operation'})
+
+
+def test_action_catalog_reuses_provider_capabilities(resource):
+    client, headers, vm, fake = resource
+
+    response = client.get(f'/api/v1/resources/{vm}/actions', headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert fake.capability_calls == 1
 
 
 def test_create_execute_replay_and_release_lock(resource):
