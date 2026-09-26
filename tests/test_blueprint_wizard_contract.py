@@ -43,6 +43,39 @@ console.log(JSON.stringify({
     }
 
 
+def test_wizard_payload_persists_blueprint_avatar_id():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'Avatar Blueprint';
+state.slug = 'avatar-blueprint';
+state.avatarId = 'ubuntu';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = false;
+state.manualVmName = 'avatar-vm';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+console.log(JSON.stringify(core.buildPayload(state, data)));
+""")
+
+    assert result['avatar_id'] == 'ubuntu'
+
+
 def test_wizard_payload_preserves_hostname_ipam_ansible_and_provider_credentials():
     result = run_core("""
 const state = core.stateDefaults();

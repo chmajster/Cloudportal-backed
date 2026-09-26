@@ -44,6 +44,12 @@ class BlueprintExecutionSettingsOutput(Output):
     approval_timeout_hours: int
 
 
+class BlueprintAvatarOutput(Output):
+    id: str
+    name: str
+    data_uri: str
+
+
 class LDAPSettingsOutput(Output):
     enabled: bool
     url: str
@@ -335,6 +341,7 @@ class BlueprintOutput(Output):
     slug: str
     name: str
     description: str
+    avatar_id: str | None
     version: int
     is_active: bool
     visibility: dict[str, bool]

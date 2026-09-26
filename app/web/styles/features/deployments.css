@@ -569,6 +569,11 @@
   width: 20px;
   height: 20px;
 }
+.product-card-icon img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
 
 .product-card-copy {
   min-width: 0;

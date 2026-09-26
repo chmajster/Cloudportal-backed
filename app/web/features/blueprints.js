@@ -89,12 +89,14 @@ async function blueprintsView() {
   const scopeAllows = permission =>
     allowed(permission) || (selected.permissions || []).includes(permission);
 
-  const [blueprintResult, roleResult] = await Promise.all([
+  const [blueprintResult, roleResult, avatarResult] = await Promise.all([
     api('/blueprints?limit=200', { headers: scopeHeaders }),
     allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
+    api('/blueprint-avatars').catch(() => ({ items: [] })),
   ]);
   const blueprints = blueprintResult.items;
   const roleNames = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
+  const avatarById = new Map((avatarResult.items || []).map(item => [String(item.id), item]));
   const canDesignBlueprint = scopeAllows('providers.read')
     && scopeAllows('credentials.read')
     && scopeAllows('terraform.read');
@@ -138,7 +140,17 @@ async function blueprintsView() {
     heading('Wersjonowane definicje self-service. DAG, formularz zmiennych i provisioning są wykonywane przez wspólną warstwę API.', actions),
     node('section', { class: 'panel' }, scopeSelect),
     table([
-      { label: 'Blueprint', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })) },
+      { label: 'Blueprint', value: item => {
+        const avatar = item.avatar_id ? avatarById.get(String(item.avatar_id)) : null;
+        return node('div', { class: 'blueprint-list-name' },
+          node('span', { class: 'blueprint-list-avatar', 'aria-hidden': 'true' },
+            avatar?.data_uri
+              ? node('img', { src: avatar.data_uri, alt: '', loading: 'lazy', decoding: 'async' })
+              : appIcon('box')),
+          node('div', {},
+            node('strong', { text: item.name }),
+            node('div', { class: 'mono muted', text: `${item.slug} · v${item.version}` })));
+      } },
       { label: 'Status', value: item => badge(statusLabel(item.is_active ? 'active' : 'inactive'), item.is_active ? 'ok' : 'danger') },
       { label: 'Widoczność', value: item => Object.entries(item.visibility).filter(([, value]) => value).map(([key]) => ({ backend: 'Backend', cloudportal: 'CloudPortal', api: 'API' }[key] || key)).join(', ') || '—' },
       { label: 'Kroki', value: item => item.workflow.length },

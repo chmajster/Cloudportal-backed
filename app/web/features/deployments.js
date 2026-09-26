@@ -13,10 +13,11 @@ async function launchProductBlueprint(item) {
   await navigate('/products/' + encodeURIComponent(item.id)
     + '/' + encodeURIComponent(item.slug || item.name || 'product') + '/create');
 }
-function productCard(item) {
+function productCard(item, avatarById = new Map()) {
   const deployment = item.deployment || {};
   const template = deployment.template || 'VM';
   const provider = deployment.provider || '';
+  const avatar = item.avatar_id ? avatarById.get(String(item.avatar_id)) : null;
   const meta = node('div', { class: 'product-card-meta' },
     badge('v' + item.version, 'info'),
     badge(template, ''),
@@ -25,7 +26,10 @@ function productCard(item) {
 
   return node('article', { class: 'product-card' },
     node('div', { class: 'product-card-top' },
-      node('span', { class: 'product-card-icon', 'aria-hidden': 'true' }, appIcon('box')),
+      node('span', { class: 'product-card-icon', 'aria-hidden': 'true' },
+        avatar?.data_uri
+          ? node('img', { src: avatar.data_uri, alt: '', loading: 'lazy', decoding: 'async' })
+          : appIcon('box')),
       node('div', { class: 'product-card-copy' },
         node('strong', { text: item.name }),
         node('small', { class: 'mono muted', text: item.slug }))),
@@ -37,7 +41,7 @@ function productCard(item) {
     node('div', { class: 'product-card-actions' },
       button('Utwórz VM', () => launchProductBlueprint(item), 'primary')));
 }
-function productsPanel(blueprints, canUseProducts) {
+function productsPanel(blueprints, canUseProducts, avatarById = new Map()) {
   const body = node('div', { class: 'product-grid' });
   if (!canUseProducts) {
     body.append(node('div', {
@@ -50,7 +54,7 @@ function productsPanel(blueprints, canUseProducts) {
       text: 'Brak gotowych Blueprintów. Aktywuj Blueprint widoczny w panelu backendu, aby pojawił się jako produkt.',
     }));
   } else {
-    blueprints.forEach(item => body.append(productCard(item)));
+    blueprints.forEach(item => body.append(productCard(item, avatarById)));
   }
 
   return node('section', { class: 'panel product-catalog-panel' },
@@ -68,13 +72,17 @@ async function deploymentsView() {
     && allowed('deployments.create')
     && allowed('terraform.read');
 
-  const [blueprintResult, templateResult] = await Promise.all([
+  const [blueprintResult, templateResult, avatarResult] = await Promise.all([
     canUseProducts ? api('/blueprints?available=true&limit=200') : Promise.resolve({ items: [] }),
     canUseProducts ? api('/templates') : Promise.resolve({ items: [] }),
+    canUseProducts ? api('/blueprint-avatars').catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
   ]);
 
   const enabledTemplates = new Set(
     (templateResult.items || []).filter(item => item.enabled !== false).map(item => item.id)
+  );
+  const avatarById = new Map(
+    (avatarResult.items || []).map(item => [String(item.id), item])
   );
   const products = (blueprintResult.items || []).filter(item =>
     item.is_active
@@ -84,7 +92,7 @@ async function deploymentsView() {
 
   dom.content.replaceChildren(
     heading('Wybierz gotowy produkt i utwórz nową maszynę lub usługę. Lista istniejących zasobów znajduje się w sekcji „Moje zasoby” w menu bocznym.'),
-    productsPanel(products, canUseProducts)
+    productsPanel(products, canUseProducts, avatarById)
   );
 }
 function managedResourceCard(item, providerNames) {

@@ -83,12 +83,13 @@
     const editingItem = options.item || null;
     const scopePermission = editingItem ? 'blueprints.update' : 'blueprints.create';
     try {
-      const [creationScopes, projectContext, playbooks, roles, users, vmClassification] = await Promise.all([
+      const [creationScopes, projectContext, playbooks, roles, users, avatars, vmClassification] = await Promise.all([
         safeApi('/blueprints/creation-scopes?permission=' + encodeURIComponent(scopePermission) + '&limit=200'),
         optionalApi('/project-context', { selected: null, version: 0 }),
         allowed('ansible.read') ? safeApi('/ansible/playbooks') : Promise.resolve([]),
         allowed('roles.read') ? safeApi('/roles?limit=200') : Promise.resolve([]),
         allowed('users.read') ? safeApi('/users?limit=200') : Promise.resolve([]),
+        optionalApi('/blueprint-avatars', []),
         optionalApi('/settings/vm-classification', {
           environments: { test: true, dev: true, nonprod: true, prod: true },
           apmids: [],
@@ -110,6 +111,7 @@
         pools: [],
         playbooks: playbooks.filter(value => value.enabled !== false),
         credentials: [],
+        avatars,
         roles,
         users: users.filter(value => value.is_active !== false),
         blueprints: [],
@@ -257,6 +259,7 @@
           name: 'name',
           slug: 'slug',
           description: 'description',
+          avatar_id: 'avatarId',
           is_active: 'active',
           executor: 'executor',
           cpu: 'cpu',
@@ -308,6 +311,7 @@
           state.name = root.querySelector('[name="name"]')?.value.trim() || state.name;
           state.slug = root.querySelector('[name="slug"]')?.value.trim() || state.slug;
           state.description = root.querySelector('[name="description"]')?.value.trim() || '';
+          state.avatarId = root.querySelector('[name="avatar_id"]')?.value || '';
           state.active = root.querySelector('[name="is_active"]')?.checked ?? state.active;
           state.executor = root.querySelector('[name="executor"]')?.value || state.executor;
         } else if (state.step === 2) {
@@ -438,6 +442,34 @@
 
         const scopeFields = blueprintScope.renderFields();
 
+        const avatarField = selectField('Avatar Blueprintu', 'avatar_id', [
+          { value: '', label: 'Domyślny — ikona Blueprintu' },
+          ...data.avatars.map(item => ({ value: item.id, label: item.name + ' · ' + item.id })),
+        ], state.avatarId, {
+          wide: true,
+          help: 'Awatary są zarządzane w Narzędzia → Awatary Blueprintów.',
+        });
+        const avatarVisual = node('div', { class: 'blueprint-wizard-avatar-visual', 'aria-hidden': 'true' });
+        const avatarCopy = node('div', { class: 'blueprint-wizard-avatar-copy' });
+        const avatarPreview = node('div', { class: 'blueprint-wizard-avatar-picker wide' }, avatarVisual, avatarCopy);
+        const avatarSelect = avatarField.querySelector('select');
+        const renderAvatar = () => {
+          const selectedAvatar = data.avatars.find(item => String(item.id) === String(avatarSelect.value || ''));
+          avatarVisual.replaceChildren(selectedAvatar?.data_uri
+            ? node('img', { src: selectedAvatar.data_uri, alt: '', loading: 'lazy', decoding: 'async' })
+            : appIcon('box'));
+          avatarCopy.replaceChildren(
+            node('strong', { text: selectedAvatar?.name || 'Domyślny avatar' }),
+            node('small', { class: 'muted', text: selectedAvatar
+              ? 'ID: ' + selectedAvatar.id
+              : 'Jeśli nie wybierzesz awatara, produkt użyje standardowej ikony Blueprintu.' }));
+        };
+        avatarSelect.addEventListener('change', () => {
+          state.avatarId = avatarSelect.value || '';
+          renderAvatar();
+        });
+        renderAvatar();
+
         const content = node('div', { class: 'form-grid' },
           node('div', { class: 'blueprint-wizard-info wide' },
             node('strong', { text: 'Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji.' }),
@@ -449,6 +481,8 @@
             tag: 'textarea', value: state.description, wide: true,
             placeholder: 'Do czego służy ten Blueprint i kiedy powinien być używany?',
           }),
+          avatarField,
+          avatarPreview,
           advanced);
 
         const nameInput = name.querySelector('input');
@@ -1094,6 +1128,7 @@
         const steps = state.advancedWorkflow ? state.workflow : currentAutoWorkflow();
         const roleNames = state.allowedRoleIds.map(id => data.roles.find(value => Number(value.id) === Number(id))?.name).filter(Boolean);
         const userNames = state.allowedUserIds.map(id => data.users.find(value => Number(value.id) === Number(id))?.username).filter(Boolean);
+        const avatar = data.avatars.find(value => String(value.id) === String(state.avatarId || ''));
 
         const sections = [
           ['Blueprint', [
@@ -1101,6 +1136,7 @@
             ['Slug', state.slug],
             ['Organizacja', blueprintScope.tenantLabel(state.tenantId)],
             ['Projekt', blueprintScope.projectLabel(state.projectId)],
+            ['Avatar', avatar ? avatar.name + ' · ' + avatar.id : 'Domyślny'],
             ['Opis', state.description || '—'],
           ]],
           ['Platforma', [
