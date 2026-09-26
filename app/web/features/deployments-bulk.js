@@ -28,12 +28,27 @@ function isTerraformManaged(item) {
   return item?.management_mode === 'terraform' && Boolean(item?.deployment_id);
 }
 
+function isProxmoxManaged(item) {
+  return item?.management_mode === 'proxmox' && Boolean(item?.deployment_id);
+}
+
+function isDeploymentManaged(item) {
+  return isTerraformManaged(item) || isProxmoxManaged(item);
+}
+
 function canDelete(item) {
   if (!resourceId(item) || item.lifecycle_status !== 'active') return false;
-  if (isTerraformManaged(item)) {
+  if (isDeploymentManaged(item)) {
     return allowed('deployments.destroy')
       && allowed('jobs.execute')
       && allowed('terraform.execute');
+  }
+  if (isProxmoxManaged(item)) {
+    return allowed('deployments.destroy')
+      && allowed('jobs.execute')
+      && allowed('vms.read')
+      && allowed('vms.delete')
+      && allowed('vms.power');
   }
   return allowed('day2.view') && allowed('day2.delete');
 }
@@ -228,7 +243,7 @@ async function submitDeleteItem(item, idempotencyKeys) {
       body: {},
     });
     selection.delete(id);
-    return { item, result, mode: 'terraform' };
+    return { item, result, mode: isProxmoxManaged(item) ? 'proxmox' : 'terraform' };
   }
 
   const key = 'day2-delete:' + id;
@@ -259,9 +274,11 @@ function requestDelete(items, onComplete) {
   const preview = selected.slice(0, 5).map(item => item.name || ('VM ' + item.vm_id)).join(', ');
   const remainder = selected.length > 5 ? ` i ${selected.length - 5} więcej` : '';
   const terraformCount = selected.filter(isTerraformManaged).length;
-  const providerCount = selected.length - terraformCount;
+  const proxmoxCount = selected.filter(isProxmoxManaged).length;
+  const providerCount = selected.length - terraformCount - proxmoxCount;
   const modes = [
     terraformCount ? `${terraformCount} przez Terraform destroy` : '',
+    proxmoxCount ? `${proxmoxCount} przez Proxmox API` : '',
     providerCount ? `${providerCount} bezpośrednio u providera` : '',
   ].filter(Boolean).join(', ');
   const idempotencyKeys = new Map();
