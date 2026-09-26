@@ -40,10 +40,11 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     'Inventory AWX', 'awx_inventory_id', [], selection.inventory,
     { wide: true, placeholder: 'Automatycznie — użyj lub utwórz inventory' }
   );
-  const inventoryNameField = field('Nazwa inventory tworzonego automatycznie', 'awx_inventory_name', {
-    value: config.inventory_name || 'CloudPortal',
+  const inventoryNameField = field('Pattern nazwy inventory tworzonego automatycznie', 'awx_inventory_name', {
+    value: config.inventory_name || '<Projekt>-<APMID>-<ENV>',
     wide: true,
-    help: 'Używane tylko wtedy, gdy nie wskażesz istniejącego inventory.',
+    placeholder: '<Projekt>-<APMID>-<ENV>',
+    help: 'Dostępne tokeny: <Projekt>, <APMID>, <ENV>. <Projekt> używa wybranego projektu AWX, a bez wyboru bieżącego projektu CloudPortal. APMID i ENV są rozwiązywane podczas tworzenia VM.',
   });
   const groupEnvironmentField = checkboxField(
     'Twórz/przypisuj grupę env-<environment>',
@@ -282,7 +283,7 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
         organization_id: organizationSelect.value ? Number(organizationSelect.value) : null,
         project_id: projectSelect.value ? Number(projectSelect.value) : null,
         inventory_id: inventorySelect.value ? Number(inventorySelect.value) : null,
-        inventory_name: String(inventoryNameField.querySelector('input').value || 'CloudPortal').trim() || 'CloudPortal',
+        inventory_name: String(inventoryNameField.querySelector('input').value || '<Projekt>-<APMID>-<ENV>').trim() || '<Projekt>-<APMID>-<ENV>',
         group_by_environment: runtimeEnvironmentSync || groupEnvironmentControl.checked,
         group_by_apmid: runtimeApmidSync || groupApmidControl.checked,
         job_template_id: jobTemplateSelect.value ? Number(jobTemplateSelect.value) : null,

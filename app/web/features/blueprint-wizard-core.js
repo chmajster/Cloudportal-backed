@@ -225,7 +225,7 @@
       awxOrganizationId: '',
       awxProjectId: '',
       awxInventoryId: '',
-      awxInventoryName: 'CloudPortal',
+      awxInventoryName: '<Projekt>-<APMID>-<ENV>',
       awxGroupByEnvironment: true,
       awxGroupByApmid: true,
       awxJobTemplateId: '',
@@ -351,7 +351,7 @@
     state.awxOrganizationId = awx.organization_id == null ? '' : String(awx.organization_id);
     state.awxProjectId = awx.project_id == null ? '' : String(awx.project_id);
     state.awxInventoryId = awx.inventory_id == null ? '' : String(awx.inventory_id);
-    state.awxInventoryName = awx.inventory_name || 'CloudPortal';
+    state.awxInventoryName = awx.inventory_name || '<Projekt>-<APMID>-<ENV>';
     state.awxGroupByEnvironment = awx.group_by_environment !== false;
     state.awxGroupByApmid = awx.group_by_apmid !== false;
     state.awxJobTemplateId = awx.job_template_id == null ? '' : String(awx.job_template_id);
@@ -489,7 +489,7 @@
         organization_id: state.awxOrganizationId ? Number(state.awxOrganizationId) : null,
         project_id: state.awxProjectId ? Number(state.awxProjectId) : null,
         inventory_id: state.awxInventoryId ? Number(state.awxInventoryId) : null,
-        inventory_name: String(state.awxInventoryName || 'CloudPortal').trim() || 'CloudPortal',
+        inventory_name: String(state.awxInventoryName || '<Projekt>-<APMID>-<ENV>').trim() || '<Projekt>-<APMID>-<ENV>',
         group_by_environment: Boolean(state.awxGroupByEnvironment || state.selectEnvironmentOnExecute),
         group_by_apmid: Boolean(state.awxGroupByApmid || state.selectApmidOnExecute),
         job_template_id: state.awxJobTemplateId ? Number(state.awxJobTemplateId) : null,

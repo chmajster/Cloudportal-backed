@@ -86,6 +86,16 @@
     if (state.advancedWorkflow && !state.workflow.some(step => step.type === 'register_awx')) {
       errors.awx_enabled = 'Włączony AWX wymaga kroku register_awx w workflow.';
     }
+    if (!state.awxInventoryId) {
+      const pattern = String(state.awxInventoryName || '<Projekt>-<APMID>-<ENV>').trim();
+      const allowed = new Set(['projekt', 'project', 'apmid', 'env', 'environment']);
+      const tokens = [...pattern.matchAll(/<([^<>]+)>/g)].map(match => String(match[1] || '').trim());
+      const unknown = tokens.filter(token => !allowed.has(token.toLowerCase()));
+      if (!pattern) errors.awx_inventory_name = 'Podaj pattern nazwy inventory AWX.';
+      else if (unknown.length) {
+        errors.awx_inventory_name = 'Nieobsługiwany token patternu: <' + unknown[0] + '>.';
+      }
+    }
 
     const discovery = state.awxDiscovery;
     if (!discovery) return errors;
@@ -246,21 +256,22 @@
     });
 
     const inventory = selectField('Inventory AWX', 'awx_inventory_id', [
-      { value: '', label: 'Automatycznie — użyj/utwórz „' + (state.awxInventoryName || 'CloudPortal') + '”' },
+      { value: '', label: 'Automatycznie — pattern „' + (state.awxInventoryName || '<Projekt>-<APMID>-<ENV>') + '”' },
       ...filteredInventories.map(row => ({ value: row.id, label: row.name })),
     ], state.awxInventoryId, {
       wide: true,
-      help: 'Możesz wskazać istniejące inventory albo pozwolić CloudPortalowi utworzyć je automatycznie.',
+      help: 'Możesz wskazać istniejące inventory albo pozwolić CloudPortalowi znaleźć lub utworzyć inventory według patternu.',
     });
     inventory.querySelector('select').addEventListener('change', event => {
       state.awxInventoryId = event.currentTarget.value;
       rerender();
     });
 
-    const inventoryName = field('Nazwa inventory tworzonego automatycznie', 'awx_inventory_name', {
-      value: state.awxInventoryName || 'CloudPortal',
+    const inventoryName = field('Pattern nazwy inventory tworzonego automatycznie', 'awx_inventory_name', {
+      value: state.awxInventoryName || '<Projekt>-<APMID>-<ENV>',
       wide: true,
-      help: 'Pole jest używane tylko wtedy, gdy nie wskażesz istniejącego inventory.',
+      placeholder: '<Projekt>-<APMID>-<ENV>',
+      help: 'Dostępne tokeny: <Projekt>, <APMID>, <ENV>. <Projekt> używa wybranego projektu AWX, a bez wyboru bieżącego projektu CloudPortal. APMID i ENV są rozwiązywane podczas tworzenia VM.',
     });
     inventoryName.querySelector('input').addEventListener('input', event => {
       state.awxInventoryName = event.currentTarget.value;
@@ -380,7 +391,7 @@
       ['Projekt AWX', nameFor(discovery.projects, state.awxProjectId)],
       ['Inventory AWX', state.awxInventoryId
         ? nameFor(discovery.inventories, state.awxInventoryId)
-        : 'Automatycznie: ' + (state.awxInventoryName || 'CloudPortal')],
+        : 'Pattern: ' + (state.awxInventoryName || '<Projekt>-<APMID>-<ENV>')],
       ['Job Template', state.awxJobTemplateId
         ? nameFor(discovery.job_templates, state.awxJobTemplateId)
         : 'Nie uruchamiaj'],

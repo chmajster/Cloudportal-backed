@@ -22,7 +22,8 @@ from pathlib import Path
 from sqlalchemy import select, update
 from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
-from app.awx import AwxClient, AwxError
+from app.awx import (AwxClient, AwxError, DEFAULT_AWX_INVENTORY_PATTERN,
+                     render_awx_inventory_name)
 from app.config import settings
 from app.database import session
 from app.instance_operation import normal_instance_operation
@@ -739,6 +740,41 @@ def blueprint_runtime_facts(context):
     }
 
 
+def resolve_awx_inventory_name(context, client, config, facts):
+    configured = str(
+        config.get('inventory_name') or DEFAULT_AWX_INVENTORY_PATTERN
+    ).strip() or DEFAULT_AWX_INVENTORY_PATTERN
+
+    # The name/pattern is irrelevant when the Blueprint points at an existing
+    # inventory. Do not require runtime pattern values in that mode.
+    if config.get('inventory_id') or not re.search(r'<[^<>]+>', configured):
+        return configured
+
+    project_name = None
+    if re.search(r'<(?:Projekt|Project)>', configured, re.IGNORECASE):
+        project_id = config.get('project_id')
+        if project_id:
+            payload = client.request('GET', f'projects/{int(project_id)}/').json()
+            if not isinstance(payload, dict) or not payload.get('id'):
+                raise AwxError('Selected AWX project is unavailable for inventory pattern rendering')
+            project_name = str(payload.get('name') or '').strip()
+        else:
+            from app.projects.models import Project
+            with session() as db:
+                project = db.get(Project, str(context.deployment.project_id))
+                if project is not None and project.deleted_at is None:
+                    project_name = str(project.name or '').strip()
+        if not project_name:
+            raise AwxError('AWX inventory pattern requires a project name')
+
+    return render_awx_inventory_name(
+        configured,
+        project=project_name,
+        apmid=facts.get('apmid'),
+        environment=facts.get('environment'),
+    )
+
+
 def wait_for_awx_job(context, client, job_id, timeout):
     deadline = time.monotonic() + max(1, float(timeout))
     last_status = 'unknown'
@@ -803,6 +839,7 @@ def register_awx_host(context, runtime, workspace, *, timeout=600, step_id='regi
     )
     context.check()
     try:
+        inventory_name = resolve_awx_inventory_name(context, client, config, facts)
         result = client.register_host(
             hostname=context.deployment.name,
             ansible_host=address,
@@ -810,7 +847,7 @@ def register_awx_host(context, runtime, workspace, *, timeout=600, step_id='regi
             environment=facts.get('environment'),
             apmid=facts.get('apmid'),
             inventory_id=config.get('inventory_id'),
-            inventory_name=str(config.get('inventory_name') or 'CloudPortal'),
+            inventory_name=inventory_name,
             organization_id=config.get('organization_id'),
             group_by_environment=bool(config.get('group_by_environment', True)),
             group_by_apmid=bool(config.get('group_by_apmid', True)),
@@ -908,17 +945,20 @@ def cleanup_awx_after_destroy(context):
         verify_ssl = credential.verify_ssl
 
     try:
-        result = AwxClient(
+        client = AwxClient(
             endpoint,
             verify_ssl=verify_ssl,
             token=secret.get('token'),
             username=username,
             password=secret.get('password'),
             timeout=30,
-        ).remove_host(
+        )
+        facts = blueprint_runtime_facts(context)
+        inventory_name = resolve_awx_inventory_name(context, client, config, facts)
+        result = client.remove_host(
             hostname=context.deployment.name,
             inventory_id=config.get('inventory_id'),
-            inventory_name=str(config.get('inventory_name') or 'CloudPortal'),
+            inventory_name=inventory_name,
             organization_id=config.get('organization_id'),
         )
     except AwxError:
