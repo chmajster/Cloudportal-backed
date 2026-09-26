@@ -210,6 +210,43 @@ def test_approval_and_cancel_state_machine(resource):
         assert db.get(Job, row['job_id']).status == 'cancelled'
 
 
+def test_expired_policy_stage_cannot_approve_day2_action(resource):
+    client, admin, vm, _fake = resource
+    with session() as db:
+        db.add(Setting(key='day2', value={'default_approval_policy': 'all'}))
+        db.commit()
+
+    response = submit(resource)
+    assert response.status_code == 202, response.text
+    data = response.json()
+    assert data['approval_required']
+
+    with session() as db:
+        job = db.get(Job, data['job_id'])
+        payload = dict(job.payload or {})
+        payload['_policy_approval'] = {
+            'current_stage': 0,
+            'complete': False,
+            'stages': [{
+                'name': 'Security',
+                'approver': {'type': 'any'},
+                'timeout_hours': 1,
+            }],
+            'approvals': [],
+            'stage_requested_at': (now() - timedelta(hours=2)).isoformat(),
+            'stage_expires_at': (now() - timedelta(hours=1)).isoformat(),
+        }
+        job.payload = payload
+        db.commit()
+
+    denied = client.post(
+        '/api/v1/day2-actions/' + data['action_request_id'] + '/approve',
+        headers=admin,
+    )
+    assert denied.status_code == 409, denied.text
+    assert 'expired' in denied.text.lower()
+
+
 def test_dispatcher_terminal_outcome_updates_action(resource):
     from app.day2.reconciliation import reconcile_finished_jobs
     data = submit(resource).json()
