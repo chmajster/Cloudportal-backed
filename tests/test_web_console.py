@@ -632,6 +632,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Synchronizacja klasyfikacji z AWX' in script
     assert 'Environment wybrany podczas tworzenia VM trafi do host vars AWX' in script
     assert 'APMID wybrany podczas tworzenia VM trafi do host vars AWX' in script
+    assert "api('/policies/scopes')" in script
+    assert "selectField('Poziom przypisania', 'scope_level'" in script
+    assert "selectField('Organizacja', 'target_tenant_id'" in script
+    assert "selectField('Projekt', 'target_project_id'" in script
+    assert "multiCheckboxField(\n        'APMID',\n        'scope_apmids'" in script
+    assert "multiCheckboxField(\n        'Środowiska / ENV',\n        'scope_environments'" in script
+    assert "'X-Tenant-ID': targetTenantId" in script
+    assert "'X-Project-ID': requestProjectId" in script
+    assert 'Zaawansowane selektory scope — JSON' in script
     assert "environment=facts.get('environment')" in Path('app/jobs/worker.py').read_text()
     assert "apmid=facts.get('apmid')" in Path('app/jobs/worker.py').read_text()
     assert "registerExtension('blueprint-wizard-hostname'" in script
