@@ -766,8 +766,6 @@ class BlueprintStep(Input):
 
 class AwxOnboardingInput(Input):
     credential_id: int = Field(gt=0)
-    organization_id: int | None = Field(default=None, gt=0)
-    project_id: int | None = Field(default=None, gt=0)
     inventory_id: int | None = Field(default=None, gt=0)
     inventory_name: Annotated[str, Field(min_length=1, max_length=100)] = '<Projekt>-<APMID>-<ENV>'
     group_by_environment: bool = True
