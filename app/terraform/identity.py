@@ -85,11 +85,25 @@ def reserve_proxmox_vm_id(deployment_id: str, credential, context=None) -> int:
             )
             variables = dict(deployment.variables or {})
             existing = variables.get('vm_id')
-            if existing not in {None, ''}:
-                return int(existing)
 
             live_ids = ProxmoxProvider(credential).used_vm_ids()
             reserved_ids = _reserved_ids(db, deployment.provider_id, deployment.id)
+
+            if existing not in {None, ''}:
+                existing = int(existing)
+                current_inventory = db.scalar(
+                    select(ManagedVM).where(
+                        ManagedVM.provider_id == deployment.provider_id,
+                        ManagedVM.vm_id == existing,
+                        ManagedVM.deployment_id == deployment.id,
+                    )
+                )
+                if existing in reserved_ids:
+                    raise RuntimeError('Requested Proxmox VMID is reserved by another deployment')
+                if existing in live_ids and current_inventory is None:
+                    raise RuntimeError('Requested Proxmox VMID already exists outside this deployment')
+                return existing
+
             used = live_ids | reserved_ids
 
             candidate = 100
