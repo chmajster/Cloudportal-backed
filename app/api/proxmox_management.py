@@ -108,6 +108,7 @@ class CloneVMInput(Input):
     full: bool = True
     storage: Slug | None = None
     pool: Slug | None = None
+    convert_to_template: bool = False
 
 
 class BackupVMInput(Input):
@@ -332,6 +333,13 @@ def convert_to_template(provider_id: int, node: NODE, vmid: VMID, request: Reque
 def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, request: Request,
              actor=Depends(require('vms.clone')), db=Depends(get_db, scope='function')):
     require_governed_legacy_mutation(db, request.state.resource_scope, DIMENSIONS, 'VM clone')
+    if data.new_vm_id == int(vmid):
+        raise HTTPException(422, 'Clone target VMID must differ from source VMID')
+    if data.convert_to_template and 'vms.template' not in request.state.permissions:
+        raise HTTPException(403, 'vms.template required for automatic clone-to-template conversion')
+    if data.convert_to_template and not data.full:
+        raise HTTPException(422, 'Automatic clone-to-template conversion requires a full clone')
+
     def execute():
         task = adapter(db, provider_id).clone_vm(
             node,
@@ -343,11 +351,32 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
             storage=data.storage,
             pool=data.pool,
         )
-        track_proxmox_task(provider_id=provider_id, node=node, upid=task, action='clone',
-                           vm_id=vmid, target_node=data.target or node, target_vm_id=data.new_vm_id,
-                           name=data.name, created_by=actor.user_id)
-        audit(db, request, 'vm.cloned', 'vms', f'{provider_id}:{node}:{vmid}->{data.new_vm_id}')
-        return task_result(task)
+        tracked = track_proxmox_task(
+            provider_id=provider_id,
+            node=node,
+            upid=task,
+            action='clone',
+            vm_id=vmid,
+            target_node=data.target or node,
+            target_vm_id=data.new_vm_id,
+            name=data.name,
+            created_by=actor.user_id,
+            convert_to_template=data.convert_to_template,
+        )
+        audit(
+            db,
+            request,
+            'vm.clone_to_template_started' if data.convert_to_template else 'vm.cloned',
+            'vms',
+            f'{provider_id}:{node}:{vmid}->{data.new_vm_id}',
+        )
+        return {
+            **task_result(task),
+            'convert_to_template': data.convert_to_template,
+            'follow_up_tracked': bool(tracked) if data.convert_to_template else None,
+            'target_node': data.target or node,
+            'target_vm_id': data.new_vm_id,
+        }
     return idempotent(db, request, actor, data.model_dump(), execute, required=True)
 
 

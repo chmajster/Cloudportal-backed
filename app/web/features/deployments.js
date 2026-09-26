@@ -5,7 +5,6 @@ let jobLogPollNonce = 0;
 let myResourcesPollTimer = null;
 let jobsPollTimer = null;
 const { resourceSummaryCard, resourceEmptyState, resourceSection } = window.DeploymentsResourceUI;
-
 async function launchProductBlueprint(item) {
   if (!hasCommand('blueprints.execute')) {
     toast('Uruchamianie Blueprintu nie jest dostępne.', 'error');
@@ -14,7 +13,6 @@ async function launchProductBlueprint(item) {
   await navigate('/products/' + encodeURIComponent(item.id)
     + '/' + encodeURIComponent(item.slug || item.name || 'product') + '/create');
 }
-
 function productCard(item) {
   const deployment = item.deployment || {};
   const template = deployment.template || 'VM';
@@ -39,7 +37,6 @@ function productCard(item) {
     node('div', { class: 'product-card-actions' },
       button('Utwórz VM', () => launchProductBlueprint(item), 'primary')));
 }
-
 function productsPanel(blueprints, canUseProducts) {
   const body = node('div', { class: 'product-grid' });
   if (!canUseProducts) {
@@ -65,7 +62,6 @@ function productsPanel(blueprints, canUseProducts) {
       badge(String(blueprints.length) + ' dostępnych', blueprints.length ? 'ok' : '')),
     body);
 }
-
 async function deploymentsView() {
   const canUseProducts = allowed('blueprints.read')
     && allowed('blueprints.execute')
@@ -91,7 +87,6 @@ async function deploymentsView() {
     productsPanel(products, canUseProducts)
   );
 }
-
 function managedResourceCard(item, providerNames) {
   const details = {
     Typ: item.resource_type,
@@ -115,7 +110,6 @@ function managedResourceCard(item, providerNames) {
     node('div', { class: 'my-resource-card-actions' },
       button('Szczegóły', () => navigate('/resources/managed/' + encodeURIComponent(item.id)))));
 }
-
 async function myResourcesView(repairInventory = true) {
   if (myResourcesPollTimer) { clearTimeout(myResourcesPollTimer); myResourcesPollTimer = null; }
   const preserveScroll = Boolean(dom.content.querySelector('.my-resources-page-head'));
@@ -190,7 +184,6 @@ async function myResourcesView(repairInventory = true) {
     if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) myResourcesView(false).catch(error => toast(error.message, 'error'));
   });
 }
-
 function deploymentActions(item, returnTo = 'my-resources') {
   const actions = [button('Szczegóły', () => navigate('/resources/deployments/' + encodeURIComponent(item.id)))];
   const reconciliationRequired = item.status === 'reconciliation_required';
@@ -228,7 +221,6 @@ function deploymentActions(item, returnTo = 'my-resources') {
   }
   return actions;
 }
-
 function showDeploymentDetails(item) {
   const variableRows = Object.entries(item.variables || {}).map(([key, value]) => ({ key, value }));
   const workflow = item.workflow || {};
@@ -277,17 +269,13 @@ function showDeploymentDetails(item) {
   dom.modalActions.replaceChildren(...actions);
   if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) dom.modal.showModal();
 }
-
 async function createTerraformJob(item, operation) {
   try { await api('/jobs', { method: 'POST', body: { operation, deployment_id: item.id }, idempotent: true }); toast(`Utworzono zadanie: ${operationLabel(operation)}.`); navigate('jobs'); }
   catch (error) { toast(error.message, 'error'); }
 }
-
-
 function deploymentVariableValue(container, name) {
   return container.querySelector('[name="' + name + '"]')?.value || '';
 }
-
 function createProxmoxTemplatePicker(container, rows, selectedId = '', selectedNode = '', onSelect = null) {
   const current = deploymentVariableWrapper(container, 'template_id');
   if (!current) return null;
@@ -541,8 +529,6 @@ async function enhanceProxmoxDeploymentVariables(container, template, providerSe
 
   await loadNodeResources();
 }
-
-
 function createAnsiblePlaybookPreview(playbookSelect) {
   const body = node('div', { class: 'ansible-playbook-preview-body' },
     node('div', { class: 'muted', text: 'Kliknij „Podgląd playbooka”, aby wczytać YAML.' }));
@@ -864,7 +850,6 @@ async function createDeployment() {
     });
   } catch (error) { toast(error.message, 'error'); }
 }
-
 function jobDispatchedToWorker(item) {
   return item?.status === 'queued' && Boolean(item?.dispatched_at);
 }
@@ -1157,7 +1142,6 @@ async function runStandaloneAnsible(initialPlaybookId = null) {
     });
   } catch (error) { toast(error.message, 'error'); }
 }
-
 function jobLogVmId(current, deployment = null, logs = []) {
   const values = deployment?.variables || {};
   const direct = current?.vm_id
@@ -1177,7 +1161,6 @@ function jobLogVmId(current, deployment = null, logs = []) {
   }
   return '';
 }
-
 function jobLogHostname(deployment = null) {
   const variables = deployment?.variables || {};
   const value = deployment?.name
@@ -1186,7 +1169,6 @@ function jobLogHostname(deployment = null) {
     ?? '';
   return String(value || '').trim();
 }
-
 function jobLogIdFromRoute() {
   const route = String(location.hash.slice(1) || '').split('/page/')[0].replace(/\/+$/, '');
   const match = route.match(/^\/?jobs\/([^/]+)$/);

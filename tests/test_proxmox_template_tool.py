@@ -1,0 +1,43 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_tools_exposes_clone_vm_to_template_workflow():
+    feature = (ROOT / 'app' / 'web' / 'features' / 'proxmox-template-tool.js').read_text()
+    tools = (ROOT / 'app' / 'web' / 'features' / 'tools.js').read_text()
+    navigation = (ROOT / 'app' / 'web' / 'shared' / 'navigation.js').read_text()
+
+    assert "id: 'proxmox-template-clone'" in feature
+    assert "navigationParent: 'tools'" in feature
+    assert "label: 'VM → Template'" in feature
+    assert "convert_to_template: true" in feature
+    assert "full: true" in feature
+    assert "Klonuj i utwórz template" in feature
+    assert "Oryginalna VM" in feature
+    assert "Źródłowa VM nie jest konwertowana" in feature
+    assert "waitProxmoxTask" in feature
+    assert "waitForTemplate" in feature
+    assert "result.follow_up_tracked === false" in feature
+    assert "'proxmox-template-clone': '/admin/tools/proxmox-template'" in navigation
+
+    assert "allowed('vms.clone')" in tools
+    assert "allowed('vms.template')" in tools
+    assert "window.ProxmoxTemplateTool.card()" in tools
+
+
+def test_clone_to_template_backend_is_durable_and_target_only():
+    api = (ROOT / 'app' / 'api' / 'proxmox_management.py').read_text()
+    reconcile = (ROOT / 'app' / 'providers' / 'task_reconcile.py').read_text()
+
+    assert 'convert_to_template: bool = False' in api
+    assert "data.new_vm_id == int(vmid)" in api
+    assert "Automatic clone-to-template conversion requires a full clone" in api
+    assert "vms.template required for automatic clone-to-template conversion" in api
+    assert "convert_to_template=data.convert_to_template" in api
+
+    assert "item.get('action') != 'clone'" in reconcile
+    assert "not item.get('convert_to_template')" in reconcile
+    assert "adapter.convert_to_template(target_node, int(target_vm_id))" in reconcile
+    assert "action='template'" in reconcile

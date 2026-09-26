@@ -260,6 +260,133 @@ def test_proxmox_task_reconciliation_registers_clone(client, headers, monkeypatc
 
 
 
+def test_clone_can_schedule_automatic_template_conversion(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = resources(client, headers)
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'clone_vm',
+        lambda self, node, vmid, **kwargs: 'UPID:clone-template-route',
+    )
+    monkeypatch.setattr(
+        'app.api.proxmox_management.track_proxmox_task',
+        lambda **kwargs: True,
+    )
+
+    base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
+    response = client.post(base + '/clone', headers=idem(headers), json={
+        'new_vm_id': 405,
+        'name': 'golden-template',
+        'target': 'pve02',
+        'full': True,
+        'storage': 'local-lvm',
+        'convert_to_template': True,
+    })
+    assert response.status_code == 202, response.text
+    assert response.json()['task'] == 'UPID:clone-template-route'
+    assert response.json()['convert_to_template'] is True
+    assert response.json()['follow_up_tracked'] is True
+    assert response.json()['target_node'] == 'pve02'
+    assert response.json()['target_vm_id'] == 405
+
+    same_id = client.post(base + '/clone', headers=idem(headers), json={
+        'new_vm_id': 101,
+        'name': 'invalid-template',
+        'full': True,
+        'convert_to_template': True,
+    })
+    assert same_id.status_code == 422, same_id.text
+
+    linked = client.post(base + '/clone', headers=idem(headers), json={
+        'new_vm_id': 406,
+        'name': 'linked-template',
+        'full': False,
+        'convert_to_template': True,
+    })
+    assert linked.status_code == 422, linked.text
+    assert 'full clone' in linked.text
+
+
+def test_clone_task_reconciler_converts_only_target_clone_to_template(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = resources(client, headers)
+    calls = []
+
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'task_status',
+        lambda self, node, upid: {'status': 'stopped', 'exitstatus': 'OK'},
+    )
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'vm_status',
+        lambda self, node, vmid: {
+            'vmid': vmid,
+            'node': node,
+            'name': 'source-vm' if int(vmid) == 101 else 'golden-template',
+            'template': 0,
+        },
+    )
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'convert_to_template',
+        lambda self, node, vmid: calls.append((node, vmid)) or 'UPID:auto-template',
+    )
+
+    with session() as db:
+        db.add(ManagedVM(
+            provider_id=provider['id'],
+            node='pve01',
+            vm_id=101,
+            name='source-vm',
+            management_mode='external',
+            lifecycle_status='active',
+            created_by=1,
+        ))
+        db.commit()
+
+    track_proxmox_task(
+        provider_id=provider['id'],
+        node='pve01',
+        upid='UPID:auto-clone',
+        action='clone',
+        created_by=1,
+        vm_id=101,
+        target_node='pve02',
+        target_vm_id=407,
+        name='golden-template',
+        convert_to_template=True,
+    )
+
+    first = reconcile_proxmox_tasks_once()
+    assert first['completed'] >= 1
+    assert calls == [('pve02', 407)]
+
+    with session() as db:
+        clone = db.query(ManagedVM).filter(
+            ManagedVM.provider_id == provider['id'],
+            ManagedVM.vm_id == 407,
+        ).one()
+        assert clone.management_mode == 'external'
+        assert clone.node == 'pve02'
+
+    second = reconcile_proxmox_tasks_once()
+    assert second['completed'] >= 1
+    with session() as db:
+        assert db.query(ManagedVM).filter(
+            ManagedVM.provider_id == provider['id'],
+            ManagedVM.vm_id == 407,
+        ).one_or_none() is None
+        source = db.query(ManagedVM).filter(
+            ManagedVM.provider_id == provider['id'],
+            ManagedVM.vm_id == 101,
+        ).one()
+        assert source.lifecycle_status == 'active'
+        assert source.name == 'source-vm'
+
+
 def test_active_quota_blocks_legacy_capacity_mutations(client, headers, monkeypatch):
     from app.providers.proxmox import ProxmoxProvider
 

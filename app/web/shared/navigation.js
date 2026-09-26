@@ -68,6 +68,7 @@
     hostnames: '/admin/tools/hostnames',
     'hostname-defaults': '/admin/tools/hostname-defaults',
     'ansible-host-entry': '/admin/tools/ansible-host-entry',
+    'proxmox-template-clone': '/admin/tools/proxmox-template',
     settings: '/admin/settings',
     updates: '/admin/updates',
     observability: '/admin/monitoring',
