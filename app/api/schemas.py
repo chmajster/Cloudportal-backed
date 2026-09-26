@@ -17,6 +17,12 @@ class CatalogItemStateInput(Input):
     enabled: bool
 
 
+class BlueprintAvatarInput(Input):
+    id: Slug
+    name: Name
+    data_uri: Annotated[str, Field(min_length=32, max_length=180000)]
+
+
 class Login(Input):
     username: Annotated[str, Field(min_length=1, max_length=254)]
     password: Annotated[str, Field(min_length=1, max_length=256)]
@@ -810,6 +816,7 @@ class BlueprintInput(Input):
     slug: Slug
     name: Name
     description: Annotated[str, Field(max_length=4000)] = ''
+    avatar_id: Slug | None = None
     is_active: bool = True
     visibility: BlueprintVisibility = Field(default_factory=BlueprintVisibility)
     allowed_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
