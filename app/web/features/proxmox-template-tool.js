@@ -3,6 +3,18 @@
 (() => {
 const REQUIRED_PERMISSIONS = ['providers.read', 'vms.read', 'vms.clone', 'vms.template'];
 
+function toolMetaItem(label, value, mono = false) {
+  return node('div', { class: 'tool-meta-item' },
+    node('span', { text: label }),
+    node('strong', { class: mono ? 'mono' : '', text: value || '—' }));
+}
+
+function progressRow(label, valueNode) {
+  return node('div', { class: 'check' },
+    node('span', { text: label }),
+    valueNode);
+}
+
 function replaceSelectOptions(select, options, placeholder = null) {
   const rows = [];
   if (placeholder !== null) rows.push(node('option', { value: '', text: placeholder }));
@@ -45,10 +57,10 @@ function cloneTemplateToolCard() {
         })),
       badge('Pełny clone', 'ok')),
     node('div', { class: 'tool-meta-grid' },
-      toolMeta('Źródło', 'Istniejąca VM'),
-      toolMeta('Klon', 'Nowy VMID'),
-      toolMeta('Tryb', 'Full clone'),
-      toolMeta('Wynik', 'Proxmox template')),
+      toolMetaItem('Źródło', 'Istniejąca VM'),
+      toolMetaItem('Klon', 'Nowy VMID'),
+      toolMetaItem('Tryb', 'Full clone'),
+      toolMetaItem('Wynik', 'Proxmox template')),
     node('div', { class: 'tool-card-footer' },
       node('span', { class: 'tool-health' },
         node('span', { class: 'status-dot ok' }),
@@ -163,9 +175,9 @@ async function proxmoxTemplateCloneView() {
       node('h2', { text: 'Przebieg' }),
       badge('Gotowy', 'info')),
     node('div', { class: 'checks' },
-      info('Klonowanie VM', stepClone),
-      info('Konwersja klona do template', stepConvert),
-      info('Weryfikacja oryginału', stepVerify)),
+      progressRow('Klonowanie VM', stepClone),
+      progressRow('Konwersja klona do template', stepConvert),
+      progressRow('Weryfikacja oryginału', stepVerify)),
     detail
   );
 
