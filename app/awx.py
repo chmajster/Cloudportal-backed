@@ -294,6 +294,14 @@ class AwxClient:
             (row for row in matches if str(row.get('name') or '').strip().casefold() == normalized.casefold()),
             None,
         )
+        if exact is None:
+            exact = next(
+                (
+                    row for row in self.list_resource('organizations')
+                    if str(row.get('name') or '').strip().casefold() == normalized.casefold()
+                ),
+                None,
+            )
         if exact:
             return exact
         data = self.request('POST', 'organizations/', json={
@@ -321,6 +329,17 @@ class AwxClient:
             ),
             None,
         )
+        if exact is None:
+            exact = next(
+                (
+                    row for row in self.list_resource(
+                        'projects', params={'organization': int(organization_id)}
+                    )
+                    if str(row.get('name') or '').strip().casefold() == normalized.casefold()
+                    and int(row.get('organization') or 0) == int(organization_id)
+                ),
+                None,
+            )
         if exact:
             return exact
         raise AwxError(
