@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -274,10 +274,20 @@ def list_exceptions(db, policy_id: str, selected_scope):
     ).order_by(PolicyException.created_at.desc())).all()
 
 
+def _utc_naive(value):
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def create_exception(db, actor, selected_scope, permissions, policy_id: str, data):
     row = get_visible_policy(db, policy_id, selected_scope)
     _authorize_existing_write(db, actor, row, selected_scope, permissions)
-    if data.valid_from and data.valid_until and data.valid_until <= data.valid_from:
+    valid_from = _utc_naive(data.valid_from)
+    valid_until = _utc_naive(data.valid_until)
+    if valid_from and valid_until and valid_until <= valid_from:
         raise HTTPException(422, "valid_until must be after valid_from")
     exception = PolicyException(
         policy_id=row.id,
@@ -286,12 +296,26 @@ def create_exception(db, actor, selected_scope, permissions, policy_id: str, dat
         ticket=data.ticket,
         status=data.status,
         condition=data.condition,
-        valid_from=data.valid_from.replace(tzinfo=None) if data.valid_from else None,
-        valid_until=data.valid_until.replace(tzinfo=None) if data.valid_until else None,
+        valid_from=valid_from,
+        valid_until=valid_until,
         created_by=actor.user_id,
         approved_by=actor.user_id if data.status == "approved" else None,
     )
     db.add(exception)
+    db.flush()
+    return exception
+
+
+def approve_exception(db, actor, selected_scope, permissions, policy_id: str, exception_id: str):
+    row = get_visible_policy(db, policy_id, selected_scope)
+    _authorize_existing_write(db, actor, row, selected_scope, permissions)
+    exception = db.get(PolicyException, str(exception_id))
+    if exception is None or exception.policy_id != row.id:
+        raise HTTPException(404, "Policy exception not found")
+    if exception.status == "revoked":
+        raise HTTPException(409, "Revoked policy exception cannot be approved")
+    exception.status = "approved"
+    exception.approved_by = actor.user_id
     db.flush()
     return exception
 
@@ -372,7 +396,7 @@ def _decision_row(db, context: dict, result, *, dry_run=False):
     return row
 
 
-def evaluate_context(db, context: dict, *, persist=False):
+def evaluate_context(db, context: dict, *, persist=False, durable_denies=False):
     policies = _policies_for_context(db, context)
     policy_ids = [row.id for row in policies]
     exceptions = []
@@ -387,7 +411,15 @@ def evaluate_context(db, context: dict, *, persist=False):
     result = evaluate(policies, context, exceptions)
     public = result.public()
     if persist:
-        decision = _decision_row(db, context, result)
+        if durable_denies and result.decision == "deny":
+            # Denied HTTP requests are rolled back by the request transaction.
+            # Roll back any staged request mutations first, then persist only
+            # the security decision so denied operations remain auditable.
+            db.rollback()
+            decision = _decision_row(db, context, result)
+            db.commit()
+        else:
+            decision = _decision_row(db, context, result)
         public["decision_id"] = decision.id
     return public
 
