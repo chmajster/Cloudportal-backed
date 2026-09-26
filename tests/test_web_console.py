@@ -278,7 +278,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "activityTitle + ': zakończone'" in script
     assert "const settlingInventory = (vms || []).some" in script
     assert "}, vms);" in script
-    assert "node('strong', { text: 'Provisioning' })" in script
+    assert "const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';" in script
+    assert "node('strong', { text: activityTitle })" in script
     assert "Provisioning został ponowiony." in script
     assert "Usuń nieudany provisioning" in script
     assert "item.provisioning_job?.current_stage" in script
