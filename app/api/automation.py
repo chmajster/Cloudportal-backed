@@ -14,6 +14,7 @@ from app.automation.schemas import BlueprintBundleInput
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
+from app.blueprint_avatars import blueprint_avatar
 from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
@@ -165,6 +166,8 @@ def validate_blueprint_template_variables(data: BlueprintInput):
 
 
 def validate_blueprint_references(db, data, blueprint_id=None):
+    if data.avatar_id:
+        blueprint_avatar(db, data.avatar_id)
     provider = find(db, Provider, data.deployment.provider_id)
     existing = db.get(Blueprint, blueprint_id) if blueprint_id is not None else None
     existing_template = existing.deployment.get('template') if existing else None
