@@ -935,9 +935,6 @@ class BlueprintInput(Input):
                 raise ValueError('Rollback-only step cannot be a dependency of the normal workflow')
         if any(step.type == 'terraform_destroy' and step.id not in rollback_targets for step in self.workflow):
             raise ValueError('terraform_destroy is allowed only as a rollback target')
-        if any(step.type == 'release_ip' for step in self.workflow):
-            raise ValueError('release_ip is not allowed during VM provisioning; IP is released by destroy/recovery')
-
         from app.automation.cloud_init import validate_cloud_init_workflow
         validate_cloud_init_workflow([step.model_dump() for step in self.workflow])
 
