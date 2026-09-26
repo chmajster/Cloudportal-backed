@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.jobs.approval import approve_policy_stage, gate_job_for_approval
 
 from app.policy_engine.engine import evaluate
+from app.policy_engine.integration import compose_scope_key
 
 
 def policy(policy_id, *, priority=5000, status='enforced', enforcement='hard',
@@ -22,19 +23,72 @@ def policy(policy_id, *, priority=5000, status='enforced', enforcement='hard',
     }
 
 
-def context(*, user_id=1, apmid='LEO', environment='dev', cpu=4):
+def context(*, user_id=1, organization='Organizacja', project='LEO-131',
+            apmid='LEO', environment='dev', cpu=4):
+    scope_key = compose_scope_key(organization, project, apmid, environment)
     return {
         'actor': {'id': user_id, 'username': 'user', 'roles': ['Deployer'], 'groups': []},
-        'scope': {'tenant_id': 'tenant-1', 'project_id': 'project-1'},
+        'scope': {
+            'tenant_id': 'tenant-1',
+            'project_id': 'project-1',
+            'organization': organization,
+            'organization_slug': 'organizacja',
+            'project': project,
+            'project_slug': 'leo-131',
+            'apmid': apmid,
+            'environment': environment,
+            'key': scope_key,
+        },
         'request': {'action': 'vm.create', 'phase': 'pre_provision'},
         'resource': {
             'type': 'vm',
+            'organization': organization,
+            'project': project,
+            'scope_key': scope_key,
             'apmid': apmid,
             'environment': environment,
             'cpu': cpu,
             'tags': ['linux'],
         },
     }
+
+
+def test_canonical_enterprise_scope_key_and_whitelist():
+    expected = 'Organizacja-LEO-131-IAASTEAM-PROD'
+    assert compose_scope_key('Organizacja', 'LEO-131', 'IAASTEAM', 'prod') == expected
+
+    rule = policy(
+        'organization-project-apmid-prod',
+        policy_type='access',
+        scope={
+            'organizations': ['Organizacja'],
+            'projects': ['LEO-131'],
+            'apmids': ['IAASTEAM'],
+            'environments': ['prod'],
+            'scope_keys': [expected],
+            'actions': ['vm.create'],
+            'resource_types': ['vm'],
+        },
+        effects=[{'type': 'allow', 'mode': 'whitelist'}],
+    )
+
+    allowed = context(
+        organization='Organizacja',
+        project='LEO-131',
+        apmid='IAASTEAM',
+        environment='prod',
+    )
+    assert allowed['scope']['key'] == expected
+    assert allowed['resource']['scope_key'] == expected
+    assert evaluate([rule], allowed).decision == 'allow'
+
+    denied = context(
+        organization='Organizacja',
+        project='LEO-131',
+        apmid='IAASTEAM',
+        environment='dev',
+    )
+    assert evaluate([rule], denied).decision == 'deny'
 
 
 def test_access_whitelist_can_limit_one_apmid_to_dev():
