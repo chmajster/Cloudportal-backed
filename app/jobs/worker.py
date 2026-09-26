@@ -769,7 +769,7 @@ def execute_configured_ansible(context, runtime, workspace, *, timeout=600, addr
 
 BLUEPRINT_DECLARATIVE_STEPS = {'cloud_init'}
 BLUEPRINT_DIRECT_PROXMOX_STEPS = {
-    'clone_vm', 'configure_vm', 'start_vm', 'set_hostname', 'set_tags',
+    'clone_vm', 'configure_vm', 'start_vm',
 }
 BLUEPRINT_POST_APPLY_STEPS = {
     'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
@@ -1962,6 +1962,7 @@ def run_blueprint_workflow(context, executor):
                 f'workflow.step.blocked: {step_id}:{step_type}: '
                 'dependency not executed: ' + ', '.join(blocked_dependencies)
             )
+            persist_workflow_runtime(context, runtime)
             continue
 
         retry = int(step.get('retry') or 0)
@@ -1970,6 +1971,7 @@ def run_blueprint_workflow(context, executor):
         if not blueprint_conditions_match(step, context):
             runtime['step_states'][step_id] = 'skipped'
             context.log(f'workflow.step.skipped: {step_id}:{step_type}: condition=false')
+            persist_workflow_runtime(context, runtime)
             continue
 
         attempts = retry + 1
@@ -2266,11 +2268,13 @@ def run_proxmox_blueprint_workflow(context):
                 f'workflow.step.blocked: {step_id}:{step_type}: '
                 'dependency not executed: ' + ', '.join(blocked)
             )
+            persist_workflow_runtime(context, runtime)
             continue
 
         if not blueprint_conditions_match(step, context):
             runtime['step_states'][step_id] = 'skipped'
             context.log(f'workflow.step.skipped: {step_id}:{step_type}: condition=false')
+            persist_workflow_runtime(context, runtime)
             continue
 
         retry = int(step.get('retry') or 0)
@@ -2293,7 +2297,7 @@ def run_proxmox_blueprint_workflow(context):
                     proxmox_provision.clone(context, timeout=timeout)
                     runtime['applied'] = True
                     sync_direct_inventory()
-                elif step_type in {'configure_vm', 'set_hostname', 'set_tags'}:
+                elif step_type == 'configure_vm':
                     if not runtime['applied']:
                         raise ExecutionFailed(
                             f'{step_type} requires a completed direct Proxmox clone'
