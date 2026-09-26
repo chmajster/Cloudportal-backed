@@ -1253,7 +1253,10 @@
           const created = await api(requestPath, {
             method: editingItem ? 'PUT' : 'POST',
             body: requestBody,
-            headers: parts.core.scopeHeaders(state),
+            headers: {
+              ...parts.core.scopeHeaders(state),
+              ...(editingItem ? { 'If-Match': String(editingItem.version) } : {}),
+            },
             idempotent: !editingItem,
           });
           window.CloudportalBlueprintScope = {
