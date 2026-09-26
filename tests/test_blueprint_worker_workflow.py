@@ -55,11 +55,11 @@ class FakeExecutor:
 
 def test_blueprint_workflow_order_respects_dependencies():
     ordered = worker.blueprint_workflow_order([
-        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
-        {'id': 'hostname', 'type': 'generate_hostname', 'depends_on': []},
-        {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname']},
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud']},
+        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': ['plan']},
+        {'id': 'plan', 'type': 'terraform_plan', 'depends_on': []},
     ])
-    assert [step['id'] for step in ordered] == ['hostname', 'clone', 'apply']
+    assert [step['id'] for step in ordered] == ['plan', 'cloud', 'apply']
 
 
 def test_blueprint_workflow_order_rejects_cycle():
@@ -85,8 +85,7 @@ def test_blueprint_conditions_use_runtime_facts():
 
 def test_blueprint_workflow_materializes_declarative_cloud_init_at_apply(monkeypatch):
     steps = [
-        {'id': 'hostname', 'type': 'generate_hostname', 'depends_on': [], 'retry': 0, 'timeout': 30},
-        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': ['hostname'], 'retry': 0, 'timeout': 30},
+        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': [], 'retry': 0, 'timeout': 30},
         {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud'], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
