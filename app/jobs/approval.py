@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 from app.blueprint_settings import effective_blueprint_execution_settings
@@ -17,9 +18,8 @@ def blueprint_requires_approval(job, deployment=None):
     return job.operation == 'terraform.apply' and bool(blueprint_snapshot(job, deployment).get('requires_approval'))
 
 
-def policy_approval_stages(job, deployment=None):
+def policy_approval_stages_from_effects(effects):
     """Flatten Policy Engine approval effects into deterministic stages."""
-    effects = blueprint_snapshot(job, deployment).get('policy_approvals') or []
     stages = []
     for effect in effects:
         if not isinstance(effect, dict):
@@ -39,6 +39,17 @@ def policy_approval_stages(job, deployment=None):
     return stages[:20]
 
 
+def policy_approval_stages(job, deployment=None):
+    return policy_approval_stages_from_effects(
+        blueprint_snapshot(job, deployment).get('policy_approvals') or []
+    )
+
+
+def policy_approval_signature(effects):
+    stages = policy_approval_stages_from_effects(effects or [])
+    return json.dumps(stages, sort_keys=True, separators=(',', ':'), default=str)
+
+
 def _approval_timeout(config, stage):
     value = stage.get('timeout_hours')
     if value is None:
@@ -49,27 +60,52 @@ def _approval_timeout(config, stage):
         return config['approval_timeout_hours']
 
 
-def _actor_role_values(actor):
+def _actor_role_values(actor, db=None, job=None):
     roles = list(getattr(getattr(actor, 'user', None), 'roles', []) or [])
-    names = {str(getattr(role, 'name', '')) for role in roles}
-    ids = {str(getattr(role, 'id', '')) for role in roles}
+    names = {str(getattr(role, 'name', '')) for role in roles if getattr(role, 'name', None)}
+    ids = {str(getattr(role, 'id', '')) for role in roles if getattr(role, 'id', None) is not None}
+    if db is not None and job is not None:
+        from sqlalchemy import select
+        from app.models import Role
+        from app.projects.models import ProjectRoleAssignment
+        from app.tenancy.models import TenantRoleAssignment
+
+        user_id = getattr(actor, 'user_id', None)
+        tenant_id = getattr(job, 'tenant_id', None)
+        project_id = getattr(job, 'project_id', None)
+        role_ids = set()
+        if user_id is not None and tenant_id:
+            role_ids.update(db.scalars(select(TenantRoleAssignment.role_id).where(
+                TenantRoleAssignment.tenant_id == str(tenant_id),
+                TenantRoleAssignment.user_id == int(user_id),
+            )).all())
+        if user_id is not None and tenant_id and project_id:
+            role_ids.update(db.scalars(select(ProjectRoleAssignment.role_id).where(
+                ProjectRoleAssignment.tenant_id == str(tenant_id),
+                ProjectRoleAssignment.project_id == str(project_id),
+                ProjectRoleAssignment.user_id == int(user_id),
+            )).all())
+        if role_ids:
+            scoped = db.scalars(select(Role).where(Role.id.in_(role_ids))).all()
+            names.update(str(role.name) for role in scoped)
+            ids.update(str(role.id) for role in scoped)
     return names, ids
 
 
-def _approver_matches(spec, actor, permissions):
+def _approver_matches(spec, actor, permissions, db=None, job=None):
     """Evaluate a policy approver without relying on role labels as base RBAC."""
     if spec in (None, '', {}, []):
         return True
     if isinstance(spec, str):
-        names, _ = _actor_role_values(actor)
+        names, _ = _actor_role_values(actor, db, job)
         return spec in names
     if isinstance(spec, list):
-        return any(_approver_matches(item, actor, permissions) for item in spec)
+        return any(_approver_matches(item, actor, permissions, db, job) for item in spec)
     if not isinstance(spec, dict):
         return False
 
     kind = str(spec.get('type') or 'permission').lower()
-    names, ids = _actor_role_values(actor)
+    names, ids = _actor_role_values(actor, db, job)
     if kind in {'any', 'any_approver'}:
         return True
     if kind == 'user':
@@ -101,7 +137,7 @@ def _approver_matches(spec, actor, permissions):
     return False
 
 
-def approve_policy_stage(job, actor, permissions):
+def approve_policy_stage(job, actor, permissions, db=None):
     """Approve exactly one Policy Engine stage. Returns None when not policy-driven."""
     payload = dict(job.payload or {})
     state = dict(payload.get('_policy_approval') or {})
@@ -114,7 +150,7 @@ def approve_policy_stage(job, actor, permissions):
         return {'complete': True, 'stage': None}
 
     stage = dict(stages[current_index])
-    if not _approver_matches(stage.get('approver'), actor, permissions):
+    if not _approver_matches(stage.get('approver'), actor, permissions, db, job):
         from fastapi import HTTPException
         approver_type = (
             str((stage.get('approver') or {}).get('type'))
