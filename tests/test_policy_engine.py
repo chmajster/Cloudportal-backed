@@ -286,6 +286,20 @@ def test_approved_exception_temporarily_skips_policy():
     assert result.trace[0]['reason'] == 'exception'
 
 
+def test_policy_scope_picker_options_are_rbac_filtered(client, headers):
+    response = client.get('/api/v1/policies/scopes', headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert set(payload) == {'global_allowed', 'tenants', 'projects'}
+    assert isinstance(payload['global_allowed'], bool)
+    assert isinstance(payload['tenants'], list)
+    assert isinstance(payload['projects'], list)
+    for tenant in payload['tenants']:
+        assert {'id', 'name', 'slug'} <= set(tenant)
+    for project in payload['projects']:
+        assert {'id', 'tenant_id', 'name', 'slug', 'tenant_name', 'tenant_slug'} <= set(project)
+
+
 def test_policy_api_versions_simulator_and_whitelist(client, headers):
     created = client.post('/api/v1/policies', headers=headers, json={
         'name': 'LEO DEV deploy only',
