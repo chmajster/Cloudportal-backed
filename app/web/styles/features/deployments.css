@@ -1044,6 +1044,10 @@
   color: var(--text);
   font-size: .7rem;
 }
+.job-progress-cell {
+  min-width: 190px;
+  max-width: 300px;
+}
 @keyframes proxmox-progress-indeterminate {
   from { transform: translateX(-90%); }
   to { transform: translateX(275%); }
