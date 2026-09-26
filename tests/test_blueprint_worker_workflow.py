@@ -545,6 +545,17 @@ def test_direct_proxmox_runs_destroy_rollback_on_terminal_failure(monkeypatch):
     context = FakeContext(steps, executor='proxmox')
     destroyed = []
 
+    class DummySession:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def get(self, model, key):
+            return None
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(worker, 'session', lambda: DummySession())
     monkeypatch.setattr(worker.proxmox_provision, 'clone', lambda context, timeout=0: 120)
     monkeypatch.setattr(worker.proxmox_provision, 'register_inventory', lambda context: {'node': 'pve01', 'vm_id': 120})
     monkeypatch.setattr(worker.proxmox_provision, 'destroy', lambda context, timeout=0: destroyed.append(timeout) or True)
