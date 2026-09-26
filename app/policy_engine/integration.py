@@ -233,7 +233,6 @@ def _write_aliases(db, rendered, effective_resource, effective_scope=None):
             selected_provider = None
         if selected_provider is not None:
             rendered["credentials_id"] = selected_provider.credentials_id
-            rendered["provider"] = selected_provider.type
     if effective_resource.get("template"):
         rendered["template"] = effective_resource["template"]
 
