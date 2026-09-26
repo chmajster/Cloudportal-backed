@@ -836,14 +836,6 @@ def resolve_awx_scope(context, client, config, *, require_project=True):
 
     organization = client.ensure_organization(name=tenant_name)
     organization_id = int(organization['id'])
-    configured_organization_id = config.get('organization_id')
-    if (
-        configured_organization_id
-        and int(configured_organization_id) != organization_id
-    ):
-        raise AwxError(
-            'Legacy AWX organization selection conflicts with the CloudPortal Tenant mapping'
-        )
 
     awx_project = None
     if require_project:
@@ -851,11 +843,6 @@ def resolve_awx_scope(context, client, config, *, require_project=True):
             name=project_name,
             organization_id=organization_id,
         )
-        configured_project_id = config.get('project_id')
-        if configured_project_id and int(configured_project_id) != int(awx_project['id']):
-            raise AwxError(
-                'Legacy AWX project selection conflicts with the CloudPortal Project mapping'
-            )
 
     return {
         'organization_id': organization_id,
