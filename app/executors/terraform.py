@@ -17,6 +17,7 @@ from app.executors.cloud_init import blueprint_snapshot, native_cloud_init_reque
 from app.models import Credential, now
 from app.security.core import decrypt_secret
 from app.terraform.identity import bind_proxmox_vm_id, reserve_proxmox_vm_id
+from app.terraform.tags import proxmox_management_tags
 from app.terraform.state import distributed_deployment_lock, persist_state, restore_state
 
 
@@ -394,6 +395,13 @@ class TerraformExecutor(Executor):
             if name in {'PROXMOX_VE_SSH_PASSWORD', 'PROXMOX_VE_SSH_PRIVATE_KEY'} and value
         )
         runtime_variables = dict(deployment.variables or {})
+        if (
+            provider_type == 'proxmox'
+            and deployment.template in {'proxmox-vm', 'proxmox-appliance'}
+            and operation in {'terraform.plan', 'terraform.apply'}
+        ):
+            runtime_variables['tags'] = proxmox_management_tags(deployment)
+            context.log('proxmox.tags: ' + ', '.join(runtime_variables['tags']))
         if provider_type == 'proxmox' and operation in {'terraform.plan', 'terraform.apply'}:
             runtime_variables['qemu_guest_agent_bootstrap'] = bool(qemu_bootstrap)
             if qemu_bootstrap:
