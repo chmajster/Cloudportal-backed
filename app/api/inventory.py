@@ -417,7 +417,8 @@ def managed_vm_history(
         target = f'{row.provider_id}:{row.node}:{row.vm_id}'
         audit_filters = [
             Audit.resource_id == row.id,
-            Audit.resource_id.like(target + '%'),
+            Audit.resource_id == target,
+            Audit.resource_id.like(target + ':%'),
         ]
         if row.deployment_id:
             audit_filters.append(Audit.resource_id == row.deployment_id)
