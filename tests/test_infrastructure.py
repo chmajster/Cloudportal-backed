@@ -852,6 +852,40 @@ def test_force_dispatch_bypasses_runtime_parallel_limit(client, headers, monkeyp
         assert queued.dispatched_at is not None
 
 
+def test_force_dispatch_is_idempotent_when_job_is_already_in_rq(client, headers, monkeypatch):
+    from app.jobs import force_dispatch as force_dispatch_module
+
+    created = deployment(client, headers)
+
+    class ExistingRQJob:
+        def get_status(self, refresh=True):
+            return 'queued'
+
+    monkeypatch.setattr(force_dispatch_module.RQJob, 'fetch', lambda *args, **kwargs: ExistingRQJob())
+
+    response = client.post(
+        f"/api/v1/jobs/{created['job']['id']}/force-dispatch",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['status'] == 'queued'
+    assert body['dispatched_at'] is not None
+
+    listed = client.get('/api/v1/jobs?limit=200', headers=headers)
+    assert listed.status_code == 200, listed.text
+    same = next(item for item in listed.json()['items'] if item['id'] == created['job']['id'])
+    assert same['dispatched_at'] is not None
+
+    with session() as db:
+        messages = [
+            row.message for row in db.scalars(
+                select(JobLog).where(JobLog.job_id == created['job']['id']).order_by(JobLog.id)
+            ).all()
+        ]
+        assert any('job.force_dispatch.noop' in message for message in messages)
+
+
 def test_dispatcher_and_rq_execute_durable_job(client,headers,monkeypatch,tmp_path):
     from app.jobs.queue import dispatch_once, queue
     from rq import SimpleWorker
