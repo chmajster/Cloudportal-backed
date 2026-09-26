@@ -394,11 +394,16 @@ def evaluate_context(db, context: dict, *, persist=False):
 
 def list_decisions(db, selected_scope, *, limit=100, offset=0, action=None, decision=None):
     tenant_id, project_id = _selected_scope_tuple(selected_scope)
-    query = select(PolicyDecision).where(or_(
-        PolicyDecision.tenant_id.is_(None),
-        and_(PolicyDecision.tenant_id == tenant_id, PolicyDecision.project_id.is_(None)),
-        and_(PolicyDecision.tenant_id == tenant_id, PolicyDecision.project_id == project_id),
-    ))
+    # Decision logs contain concrete actor/resource context. Unlike policy
+    # definitions, they must never inherit global visibility into a project.
+    # A project can see its own rows plus tenant-wide rows of the same tenant.
+    query = select(PolicyDecision).where(
+        PolicyDecision.tenant_id == tenant_id,
+        or_(
+            PolicyDecision.project_id.is_(None),
+            PolicyDecision.project_id == project_id,
+        ),
+    )
     if action:
         query = query.where(PolicyDecision.action == action)
     if decision:
