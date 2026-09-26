@@ -331,6 +331,18 @@ def test_clone_task_reconciler_converts_only_target_clone_to_template(client, he
         lambda self, node, vmid: calls.append((node, vmid)) or 'UPID:auto-template',
     )
 
+    with session() as db:
+        db.add(ManagedVM(
+            provider_id=provider['id'],
+            node='pve01',
+            vm_id=101,
+            name='source-vm',
+            management_mode='external',
+            lifecycle_status='active',
+            created_by=1,
+        ))
+        db.commit()
+
     track_proxmox_task(
         provider_id=provider['id'],
         node='pve01',
@@ -363,10 +375,12 @@ def test_clone_task_reconciler_converts_only_target_clone_to_template(client, he
             ManagedVM.provider_id == provider['id'],
             ManagedVM.vm_id == 407,
         ).one_or_none() is None
-        assert db.query(ManagedVM).filter(
+        source = db.query(ManagedVM).filter(
             ManagedVM.provider_id == provider['id'],
             ManagedVM.vm_id == 101,
-        ).one_or_none() is None
+        ).one()
+        assert source.lifecycle_status == 'active'
+        assert source.name == 'source-vm'
 
 
 def test_active_quota_blocks_legacy_capacity_mutations(client, headers, monkeypatch):
