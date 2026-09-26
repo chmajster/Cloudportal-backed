@@ -295,6 +295,45 @@ def _execute_unfenced(job_id):
             user, permissions = _execution_permissions(db, job, request)
             target, credential, _ = load_target(db, request.resource_id)
             refresh_resource_lock(db, target.resource_id, request.id, day2_settings(db)['resource_lock_timeout'])
+
+            from app.jobs.approval import policy_approval_signature
+            from app.policy_engine.integration import revalidate_day2_job
+            policy_result = revalidate_day2_job(db, job, request, user, permissions, target)
+            if policy_result.get('decision') == 'deny':
+                reasons = [
+                    str(item.get('message') or item.get('type') or 'policy violation')
+                    for item in (policy_result.get('violations') or [])
+                ]
+                raise failure(
+                    'PERMISSION_DENIED',
+                    message='Current Policy Engine decision denies this Day-2 action'
+                    + (': ' + '; '.join(reasons[:3]) if reasons else ''),
+                    status_code=403,
+                )
+            effective_params = (
+                ((policy_result.get('effective_context') or {}).get('request') or {}).get('parameters')
+            )
+            if isinstance(effective_params, dict) and effective_params != (request.parameters or {}):
+                raise failure(
+                    'INVALID_STATE',
+                    message='Policy changed protected Day-2 parameters after the action was queued',
+                    status_code=409,
+                )
+            if policy_result.get('decision') == 'approval_required':
+                stored_policy = dict((job.payload or {}).get('_policy') or {})
+                current_signature = policy_approval_signature(policy_result.get('approvals') or [])
+                policy_state = dict((job.payload or {}).get('_policy_approval') or {})
+                if (
+                    request.approval_state != 'approved'
+                    or not policy_state.get('complete')
+                    or current_signature != stored_policy.get('approval_signature')
+                ):
+                    raise failure(
+                        'APPROVAL_REQUIRED',
+                        message='Current Policy Engine approval definition differs from the approved request',
+                        status_code=409,
+                    )
+
             adapter = day2_provider(credential)
             validation = validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions, quota_check=False)
             if validation['approval_required'] and request.approval_state != 'approved':

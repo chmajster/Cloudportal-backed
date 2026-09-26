@@ -1,0 +1,63 @@
+.policy-form textarea {
+  min-height: 10rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .82rem;
+  line-height: 1.45;
+}
+
+.policy-json {
+  max-height: 30rem;
+  overflow: auto;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+  background: var(--surface-soft, var(--surface));
+  font: .8rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.policy-json-details summary {
+  cursor: pointer;
+  margin-bottom: .75rem;
+  font-weight: 600;
+}
+
+.policy-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: .75rem;
+}
+
+.policy-meta-grid > div {
+  display: grid;
+  gap: .25rem;
+  padding: .75rem;
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+}
+
+.policy-simulator-result {
+  display: grid;
+  gap: .75rem;
+  margin-top: .5rem;
+}
+
+.policy-decision {
+  padding: .75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+}
+
+.policy-decision-allow {
+  border-color: var(--success, var(--border));
+}
+
+.policy-decision-deny {
+  border-color: var(--danger, var(--border));
+}
+
+.policy-decision-approval_required {
+  border-color: var(--warning, var(--border));
+}

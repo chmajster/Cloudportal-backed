@@ -13,6 +13,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'projects',
         'resource-scope',
         'quotas',
+        'policy-engine',
         'infrastructure',
         'custom-ansible',
         'proxmox-management',
@@ -47,6 +48,8 @@ def test_feature_registry_exposes_expected_router_contracts():
     assert '/tenants' in paths('tenancy')
     assert '/tenants/{tenant_id}/members' in paths('tenancy')
     assert '/quotas' in paths('quotas')
+    assert '/policies' in paths('policy-engine')
+    assert '/policies/evaluate' in paths('policy-engine')
     assert '/providers' in paths('infrastructure')
     assert '/blueprints' in paths('automation')
     assert '/appliances/ova-blueprints' in paths('appliances')

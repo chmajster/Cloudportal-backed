@@ -498,10 +498,22 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs, awx = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
         )
+        from app.policy_engine.integration import enforce_blueprint_execution
+        rendered, policy_result = enforce_blueprint_execution(
+            db, request, actor, request.state.permissions, row, rendered,
+            apmid=data.apmid or (row.deployment or {}).get('apmid'),
+            environment=data.environment or (row.deployment or {}).get('environment'),
+        )
         blueprint_variables = rendered.pop('blueprint_variables')
         parsed = DeploymentInput.model_validate(rendered)
         require_catalog_item_enabled(db, 'templates', parsed.template)
+        parsed.variables = validate_template_variables(
+            parsed.template, parsed.variables
+        ).model_dump(mode='json')
         provider = find(db, Provider, parsed.provider_id)
+        template_meta, _ = template_definition(parsed.template)
+        if provider.type != template_meta['provider']:
+            raise HTTPException(422, 'Policy-selected provider does not match the Terraform template')
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
         primary_ansible = parsed.ansible or (ansible_runs[0] if ansible_runs else None)
@@ -540,8 +552,20 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                                         'template_guest_credential_id': template_guest_credential_id,
                                                         'guest_account_mode': (row.deployment or {}).get('guest_account_mode', 'cloud_init_managed'),
                                                         'awx': awx.model_dump() if awx else None,
-                                                        'requires_approval': row.requires_approval,
-                                                        'auto_approve_for_executors': row.auto_approve_for_executors,
+                                                        'requires_approval': (
+                                                            row.requires_approval
+                                                            or policy_result.get('decision') == 'approval_required'
+                                                        ),
+                                                        'policy_decision_id': policy_result.get('decision_id'),
+                                                        'policy_matched_ids': policy_result.get('matched_policy_ids') or [],
+                                                        'policy_approvals': policy_result.get('approvals') or [],
+                                                        'policy_obligations': policy_result.get('obligations') or [],
+                                                        'policy_warnings': policy_result.get('warnings') or [],
+                                                        'auto_approve_for_executors': (
+                                                            False
+                                                            if policy_result.get('decision') == 'approval_required'
+                                                            else row.auto_approve_for_executors
+                                                        ),
                                                         'approval_timeout_hours': row.approval_timeout_hours,
                                                         'recovery_policy': row.recovery_policy}},
                                 created_by=actor.user_id, executor=parsed.executor)

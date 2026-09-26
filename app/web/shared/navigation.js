@@ -19,6 +19,7 @@
       'tokens',
       'users',
       'roles',
+      'policies',
     ]) },
     { id: 'organization', label: 'ORGANIZACJA', rank: 3, routes: Object.freeze([
       'tenants',
@@ -60,6 +61,7 @@
     webhooks: '/operations/webhooks',
     users: '/access/users',
     roles: '/access/roles',
+    policies: '/access/policies',
     credentials: '/access/credentials',
     tokens: '/access/tokens',
     tools: '/admin/tools',
