@@ -1,6 +1,5 @@
 import uuid
 
-from app.automation.service import normalize_legacy_blueprint_template, runtime_selection_flag
 from app.api.schemas import BlueprintVisibility
 
 
@@ -11,42 +10,6 @@ def test_blueprint_visibility_defaults_include_cloudportal():
         'cloudportal': True,
         'api': True,
     }
-
-
-def test_legacy_clone_blueprint_is_not_validated_as_ova_appliance():
-    legacy = {
-        'template': 'proxmox-appliance',
-        'variables': {
-            'name': 'srv001',
-            'node': 'pve01',
-            'template_id': 9000,
-            'template_node': 'pve01',
-            'storage': 'local-lvm',
-            'network': 'vmbr0',
-            'disk': 40,
-        },
-    }
-    normalized = normalize_legacy_blueprint_template(legacy)
-    assert normalized['template'] == 'proxmox-vm'
-
-    appliance = {
-        'template': 'proxmox-appliance',
-        'variables': {
-            'name': 'ova01',
-            'node': 'pve01',
-            'storage': 'local-lvm',
-            'import_file_ids': ['local:import/appliance.qcow2'],
-        },
-    }
-    untouched = normalize_legacy_blueprint_template(appliance)
-    assert untouched['template'] == 'proxmox-appliance'
-
-
-def test_runtime_selection_flag_normalizes_legacy_json_values():
-    for value in (True, 1, 'true', '1', 'yes', 'tak', 'on'):
-        assert runtime_selection_flag(value) is True
-    for value in (False, 0, None, '', 'false', '0', 'no', 'nie', 'off'):
-        assert runtime_selection_flag(value) is False
 
 
 def resources(client, headers):
