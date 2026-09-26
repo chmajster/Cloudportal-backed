@@ -159,10 +159,21 @@ def test_missing_terraform_vm_can_be_removed_only_after_provider_confirms_absenc
     refreshed = client.get(f'/api/v1/inventory/vms/{vm_id}?refresh=true', headers=headers)
     assert refreshed.status_code == 200, refreshed.text
     assert refreshed.json()['live'] is None
+    assert refreshed.json()['lifecycle_status'] == 'missing'
 
-    removed = client.delete(f'/api/v1/inventory/vms/{vm_id}/missing', headers=headers)
+    reconciled = client.post('/api/v1/inventory/reconcile', headers=headers, json={})
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json()['missing_count'] == 1
+    with session() as db:
+        assert db.get(ManagedVM, vm_id).lifecycle_status == 'missing'
+
+    removed = client.delete(
+        f'/api/v1/inventory/vms/{vm_id}/missing?purge=true',
+        headers=headers,
+    )
     assert removed.status_code == 200, removed.text
     assert removed.json()['deleted'] is True
+    assert removed.json()['purged'] is True
     assert removed.json()['provider_absent'] is True
 
     with session() as db:
@@ -171,16 +182,68 @@ def test_missing_terraform_vm_can_be_removed_only_after_provider_confirms_absenc
         resource = db.scalar(select(ManagedResource).where(
             ManagedResource.deployment_id == deployment_id
         ))
-        assert vm is not None
-        assert vm.lifecycle_status == 'destroyed'
-        assert vm.destroyed_at is not None
-        assert resource.lifecycle_status == 'destroyed'
-        assert resource.destroyed_at is not None
+        assert vm is None
+        assert resource is None
         assert deployment.status == 'reconciliation_required'
 
     repaired = client.post('/api/v1/inventory/reconcile', headers=headers, json={})
     assert repaired.status_code == 200, repaired.text
     assert repaired.json()['repaired_count'] == 0
+
+
+
+def test_inventory_reconcile_restores_missing_vm_when_it_reappears(client, headers, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    p = provider(client, headers)
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'discover',
+        lambda self, resource, node=None: [{
+            'vmid': 903,
+            'name': 'returns-later',
+            'node': 'pve01',
+            'status': 'stopped',
+            'type': 'qemu',
+            'template': 0,
+        }] if resource == 'vms' else [],
+    )
+    imported = client.post('/api/v1/inventory/vms/import', headers=key(headers), json={
+        'provider_id': p['id'],
+        'vm_id': 903,
+    })
+    assert imported.status_code == 201, imported.text
+    vm_id = imported.json()['id']
+
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'discover',
+        lambda self, resource, node=None: [] if resource == 'vms' else [],
+    )
+    missing = client.post('/api/v1/inventory/reconcile', headers=headers, json={})
+    assert missing.status_code == 200, missing.text
+    assert missing.json()['missing_count'] == 1
+
+    monkeypatch.setattr(
+        ProxmoxProvider,
+        'discover',
+        lambda self, resource, node=None: [{
+            'vmid': 903,
+            'name': 'returns-later',
+            'node': 'pve02',
+            'status': 'running',
+            'type': 'qemu',
+            'template': 0,
+        }] if resource == 'vms' else [],
+    )
+    restored = client.post('/api/v1/inventory/reconcile', headers=headers, json={})
+    assert restored.status_code == 200, restored.text
+    assert restored.json()['restored_count'] == 1
+
+    with session() as db:
+        vm = db.get(ManagedVM, vm_id)
+        assert vm.lifecycle_status == 'active'
+        assert vm.node == 'pve02'
 
 
 def test_missing_vm_cleanup_refuses_when_vm_still_exists(client, headers, monkeypatch):
