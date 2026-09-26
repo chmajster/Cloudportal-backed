@@ -234,6 +234,8 @@
       awxTimeout: 300,
       awxDiscovery: null,
       awxDiscoveryError: '',
+      awxMappedScope: null,
+      awxMappedScopeError: '',
       cloudInitEnabled: true,
       installQemuGuestAgent: true,
       waitAgent: true,
@@ -348,8 +350,10 @@
     const awx = deployment.awx || {};
     state.awxEnabled = Boolean(deployment.awx || workflowTypes.has('register_awx'));
     state.awxCredentialId = awx.credential_id == null ? '' : String(awx.credential_id);
-    state.awxOrganizationId = awx.organization_id == null ? '' : String(awx.organization_id);
-    state.awxProjectId = awx.project_id == null ? '' : String(awx.project_id);
+    // Organization/Project are derived from the immutable CloudPortal Tenant/Project scope.
+    // Keep legacy fields empty so saving an old Blueprint removes manual AWX scope overrides.
+    state.awxOrganizationId = '';
+    state.awxProjectId = '';
     state.awxInventoryId = awx.inventory_id == null ? '' : String(awx.inventory_id);
     state.awxInventoryName = awx.inventory_name || '<Projekt>-<APMID>-<ENV>';
     state.awxGroupByEnvironment = awx.group_by_environment !== false;
@@ -486,8 +490,6 @@
     if (state.awxEnabled && state.awxCredentialId) {
       deployment.awx = {
         credential_id: Number(state.awxCredentialId),
-        organization_id: state.awxOrganizationId ? Number(state.awxOrganizationId) : null,
-        project_id: state.awxProjectId ? Number(state.awxProjectId) : null,
         inventory_id: state.awxInventoryId ? Number(state.awxInventoryId) : null,
         inventory_name: String(state.awxInventoryName || '<Projekt>-<APMID>-<ENV>').trim() || '<Projekt>-<APMID>-<ENV>',
         group_by_environment: Boolean(state.awxGroupByEnvironment || state.selectEnvironmentOnExecute),
