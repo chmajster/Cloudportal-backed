@@ -392,10 +392,16 @@ def _limit_violation(effect: Mapping[str, Any], context: Mapping[str, Any]):
         value = _number(actual)
     except (TypeError, ValueError):
         return {"field": path, "actual": actual, "message": _message(effect, f"{path} is not numeric")}
-    if effect.get("min") is not None and value < _number(effect["min"]):
+    try:
+        minimum = _number(effect["min"]) if effect.get("min") is not None else None
+        maximum = _number(effect["max"]) if effect.get("max") is not None else None
+    except (TypeError, ValueError):
+        return {"field": path, "actual": actual,
+                "message": _message(effect, f"{path} policy limit is not numeric")}
+    if minimum is not None and value < minimum:
         return {"field": path, "actual": actual, "min": effect["min"],
                 "message": _message(effect, f"{path} is below the allowed minimum")}
-    if effect.get("max") is not None and value > _number(effect["max"]):
+    if maximum is not None and value > maximum:
         return {"field": path, "actual": actual, "max": effect["max"],
                 "message": _message(effect, f"{path} exceeds the allowed maximum")}
     allowed = effect.get("allowed")
@@ -484,7 +490,41 @@ def _apply_effect(effect: Mapping[str, Any], context: dict, *, policy_id: str, a
         applied.append(item)
         return
 
-    # Remaining effects are obligations consumed by a lifecycle integration.
+    if kind == "set_lease":
+        field = str(effect.get("field") or "resource.lease_hours")
+        value = effect.get("value", effect.get("hours"))
+        item["changed"] = set_path(context, field, value)
+        applied.append(item)
+        return
+
+    if kind.startswith("require_"):
+        obligation_fields = {
+            "require_mfa": ("actor.mfa_verified", "request.mfa_verified"),
+            "require_justification": ("request.justification", "request.reason"),
+            "require_change_ticket": ("request.change_ticket", "request.ticket"),
+            "require_backup": ("resource.has_backup", "request.backup_verified"),
+            "require_snapshot": ("resource.has_snapshot", "request.snapshot_verified"),
+            "require_ansible": ("resource.has_ansible", "blueprint.has_ansible", "request.has_ansible"),
+        }
+        paths = [str(effect.get("field"))] if effect.get("field") else list(obligation_fields.get(kind, ()))
+        satisfied = any(bool(get_path(context, path, None)) for path in paths)
+        obligations.append({**item, "satisfied": satisfied})
+        if not satisfied:
+            message = _message(effect, f"{kind} requirement is not satisfied")
+            if advisory:
+                warnings.append(message)
+            else:
+                violations.append({
+                    "policy_id": policy_id,
+                    "type": "obligation",
+                    "effect": kind,
+                    "message": message,
+                })
+        applied.append(item)
+        return
+
+    # Non-blocking lifecycle side effects such as notify are recorded for
+    # downstream consumers but do not grant access by themselves.
     obligations.append(item)
     applied.append(item)
 
@@ -560,7 +600,7 @@ def evaluate(policies: Iterable[Any], context: Mapping[str, Any], exceptions: It
         status = str(_policy_value(policy, "status", ""))
         enforcement = str(_policy_value(policy, "enforcement", "hard"))
         matched_ids.append(policy_id)
-        if _is_whitelist_access(policy):
+        if _is_whitelist_access(policy) and status == "enforced":
             matched_whitelist_ids.add(policy_id)
 
         if status == "dry_run":
@@ -672,5 +712,16 @@ def validate_effects(effects: Any):
             raise ValueError(f"Unsupported effect type: {kind}")
         if kind in {"set_default", "force_value", "limit_value"} and not effect.get("field"):
             raise ValueError(f"{kind} requires field")
-        if kind == "limit_value" and not any(key in effect for key in ("min", "max", "allowed")):
-            raise ValueError("limit_value requires min, max or allowed")
+        if kind == "limit_value":
+            if not any(key in effect for key in ("min", "max", "allowed")):
+                raise ValueError("limit_value requires min, max or allowed")
+            numeric = {}
+            for key in ("min", "max"):
+                if effect.get(key) is None:
+                    continue
+                try:
+                    numeric[key] = _number(effect[key])
+                except (TypeError, ValueError):
+                    raise ValueError(f"limit_value {key} must be numeric") from None
+            if "min" in numeric and "max" in numeric and numeric["min"] > numeric["max"]:
+                raise ValueError("limit_value min cannot exceed max")
