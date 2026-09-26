@@ -27,6 +27,22 @@ const core = window.BlueprintWizardParts.core;
     return json.loads(result.stdout)
 
 
+def test_new_blueprint_defaults_to_cloudportal_visibility():
+    result = run_core("""
+const state = core.stateDefaults();
+console.log(JSON.stringify({
+  backend: state.visibilityBackend,
+  cloudportal: state.visibilityCloudportal,
+  api: state.visibilityApi,
+}));
+""")
+    assert result == {
+        'backend': True,
+        'cloudportal': True,
+        'api': True,
+    }
+
+
 def test_wizard_payload_preserves_hostname_ipam_ansible_and_provider_credentials():
     result = run_core("""
 const state = core.stateDefaults();

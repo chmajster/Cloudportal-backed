@@ -1,6 +1,16 @@
 import uuid
 
 from app.automation.service import normalize_legacy_blueprint_template, runtime_selection_flag
+from app.api.schemas import BlueprintVisibility
+
+
+def test_blueprint_visibility_defaults_include_cloudportal():
+    visibility = BlueprintVisibility()
+    assert visibility.model_dump() == {
+        'backend': True,
+        'cloudportal': True,
+        'api': True,
+    }
 
 
 def test_legacy_clone_blueprint_is_not_validated_as_ova_appliance():
