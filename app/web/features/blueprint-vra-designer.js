@@ -298,8 +298,7 @@
     }
 
     const ansibleSteps = steps.filter(step => step.type === 'run_ansible_playbook');
-    const hasAnsible = Boolean(deployment.ansible || (deployment.ansible_runs || []).length);
-    if (deployment.ansible && (deployment.ansible_runs || []).length) errors.push('Użyj ansible albo ansible_runs, nie obu jednocześnie.');
+    const hasAnsible = Boolean((deployment.ansible_runs || []).length);
     if (hasAnsible && ansibleSteps.length !== 1) errors.push('Skonfigurowane Ansible wymaga dokładnie jednego run_ansible_playbook.');
     if (!hasAnsible && ansibleSteps.length) errors.push('run_ansible_playbook wymaga konfiguracji Ansible.');
 
@@ -347,7 +346,7 @@
     if (provider && provider.type !== 'proxmox') {
       const invalid = [...new Set(workflow.filter(step => proxmoxOnly.has(step.type)).map(step => step.type))];
       if (invalid.length) errors.push('Wybrany provider nie obsługuje kroków: ' + invalid.join(', ') + '.');
-      if (deployment.ansible || (deployment.ansible_runs || []).length) errors.push('Post-provisioning Ansible wymaga providera Proxmox.');
+      if ((deployment.ansible_runs || []).length) errors.push('Post-provisioning Ansible wymaga providera Proxmox.');
       if (deployment.awx) errors.push('AWX onboarding wymaga providera Proxmox.');
     }
     return errors;
@@ -1071,10 +1070,6 @@
       ], value => mutate(() => { deployment.executor = value; })));
       body.append(textField('Variables (JSON)', JSON.stringify(deployment.variables || {}, null, 2), value => {
         try { const parsed = parseJson(value, 'Variables', {}); mutate(() => { deployment.variables = parsed; }); }
-        catch (error) { toast(error.message, 'error'); }
-      }, { multiline: true }));
-      body.append(textField('Ansible (JSON / null)', deployment.ansible ? JSON.stringify(deployment.ansible, null, 2) : '', value => {
-        try { const parsed = value.trim() ? parseJson(value, 'Ansible', {}) : null; mutate(() => { deployment.ansible = parsed; }); }
         catch (error) { toast(error.message, 'error'); }
       }, { multiline: true }));
       body.append(textField('Ansible runs (JSON array)', JSON.stringify(deployment.ansible_runs || [], null, 2), value => {
