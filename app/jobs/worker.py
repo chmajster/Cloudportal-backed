@@ -1658,12 +1658,8 @@ def health_check_vm(context, workspace):
 def create_blueprint_snapshot(context, workspace, step):
     if context.deployment.provider != 'proxmox':
         raise ExecutionFailed('create_snapshot is supported only for Proxmox deployments')
-    vm_id = vm_id_from_state(workspace)
-    node = str((context.deployment.variables or {}).get('node') or '')
-    if not node:
-        raise ExecutionFailed('Proxmox node missing from deployment variables')
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
     snapname = ('bp-' + context.job.id[:8] + '-' + str(step.get('id') or 'snapshot'))[:40]
-    provider = provider_for(context.credential)
     try:
         existing = provider.snapshots(node, vm_id) or []
     except Exception:
