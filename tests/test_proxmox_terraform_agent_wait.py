@@ -43,6 +43,18 @@ class ProxmoxTerraformAgentWaitTests(unittest.TestCase):
         wait = block(agent, 'wait_for_ip', indent=4)
         self.assertRegex(wait, r'(?m)^\s*disabled\s*=\s*true\s*$')
 
+    def test_legacy_qemu_snippet_refresh_is_null_safe_during_native_iso_migration(self):
+        snippet = block(
+            self.source,
+            'resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init"',
+        )
+        self.assertIn('var.cloud_init_snippet_storage != null', snippet)
+        self.assertIn(
+            'coalesce(var.cloud_init_snippet_storage, var.cloud_init_seed_storage, var.storage)',
+            snippet,
+        )
+        self.assertIn('var.cloud_init_snippet_storage != null', self.vm)
+
     def test_primary_ip_output_does_not_require_agent_network_data(self):
         output = block(self.source, 'output "primary_ip"')
         self.assertRegex(output, r'(?m)^\s*value\s*=\s*local\.configured_primary_ip\s*$')

@@ -25,9 +25,16 @@ resource "proxmox_virtual_environment_file" "cloud_init_seed" {
 }
 
 resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init" {
-  count        = var.cloud_init_seed_path == null && var.install_qemu_guest_agent && !var.qemu_guest_agent_bootstrap ? 1 : 0
+  count = (
+    var.cloud_init_seed_path == null
+    && var.install_qemu_guest_agent
+    && !var.qemu_guest_agent_bootstrap
+    && var.cloud_init_snippet_storage != null
+  ) ? 1 : 0
   content_type = "snippets"
-  datastore_id = var.cloud_init_snippet_storage
+  # Keep this argument non-null while Terraform refreshes a legacy snippet
+  # instance that is about to be removed after migration to native NoCloud ISO.
+  datastore_id = coalesce(var.cloud_init_snippet_storage, var.cloud_init_seed_storage, var.storage)
   node_name    = var.node
 
   source_raw {
@@ -90,7 +97,12 @@ resource "proxmox_virtual_environment_vm" "vm" {
     for_each = var.cloud_init_seed_path == null ? [1] : []
     content {
       datastore_id        = var.storage
-      vendor_data_file_id = var.cloud_init_seed_path == null && var.install_qemu_guest_agent && !var.qemu_guest_agent_bootstrap ? proxmox_virtual_environment_file.qemu_guest_agent_cloud_init[0].id : null
+      vendor_data_file_id = (
+        var.cloud_init_seed_path == null
+        && var.install_qemu_guest_agent
+        && !var.qemu_guest_agent_bootstrap
+        && var.cloud_init_snippet_storage != null
+      ) ? proxmox_virtual_environment_file.qemu_guest_agent_cloud_init[0].id : null
       dynamic "dns" {
         for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
         content {
