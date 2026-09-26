@@ -178,11 +178,17 @@ console.log(JSON.stringify({enabled:state.awxEnabled, cloudInit:state.cloudInitE
     assert result['steps'][-1]['depends_on'] == [result['steps'][-2]['id']]
 
 
-def test_ui_awx_validates_organization_project_inventory_and_job_template_relationships():
+def test_ui_awx_validates_inventory_and_job_template_against_mapped_scope():
     result = run_ui('''
 const state = parts.core.stateDefaults(); state.providerType = 'proxmox'; state.cloudInitEnabled = true;
 state.awxEnabled = true; state.awxCredentialId = '77';
-state.awxOrganizationId = '9'; state.awxProjectId = '21'; state.awxInventoryId = '12'; state.awxJobTemplateId = '33';
+state.awxInventoryId = '12'; state.awxJobTemplateId = '33';
+state.awxMappedScope = {
+  tenant:{id:'tenant-1',name:'Platform'},
+  project:{id:'project-1',name:'Linux'},
+  organization:{id:9,name:'Platform'},
+  awx_project:{id:21,name:'Linux',organization:9}
+};
 state.awxDiscovery = {
   organizations:[{id:9,name:'Platform'}],
   projects:[{id:21,name:'Linux',organization:9}],
@@ -191,11 +197,15 @@ state.awxDiscovery = {
 };
 const valid = parts.awx.validate(state);
 state.awxDiscovery.job_templates[0].project = 22;
-const mismatch = parts.awx.validate(state);
-console.log(JSON.stringify({valid,mismatch}));
+const projectMismatch = parts.awx.validate(state);
+state.awxDiscovery.job_templates[0].project = 21;
+state.awxDiscovery.inventories[0].organization = 10;
+const organizationMismatch = parts.awx.validate(state);
+console.log(JSON.stringify({valid,projectMismatch,organizationMismatch}));
 ''')
     assert result['valid'] == {}
-    assert 'awx_job_template_id' in result['mismatch']
+    assert 'awx_job_template_id' in result['projectMismatch']
+    assert 'awx_inventory_id' in result['organizationMismatch']
 
 
 def test_ui_does_not_require_snippets_for_native_iso():
