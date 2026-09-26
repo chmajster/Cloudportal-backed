@@ -666,6 +666,7 @@ def test_reapply_can_reconcile_changed_proxmox_vm_identity(client, headers, monk
 
 
 def test_terraform_reuses_init_and_shared_provider_cache(client, headers, monkeypatch):
+    monkeypatch.setattr('app.executors.terraform.reserve_proxmox_vm_id', lambda *args, **kwargs: 501)
     d = deployment(client, headers)
     with session() as db:
         dep = db.get(Deployment, d['id'])
