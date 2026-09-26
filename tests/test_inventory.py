@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import select
 
 from app.database import session
+from app.day2.models import Day2ActionRequest
 from app.models import Audit, Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, User
 from app.terraform.state import persist_state
 
