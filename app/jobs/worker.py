@@ -2019,6 +2019,10 @@ def run_blueprint_workflow(context, executor):
                         f'workflow.step.declarative: {step_id}:{step_type}; '
                         'desired state will be applied by terraform_apply'
                     )
+                elif step_type in BLUEPRINT_DIRECT_PROXMOX_STEPS:
+                    raise ExecutionFailed(
+                        f'{step_type} is available only with the direct Proxmox executor'
+                    )
                 elif step_type == 'terraform_plan':
                     context.keep_terraform_plan = True
                     try:
