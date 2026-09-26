@@ -1,5 +1,9 @@
 variable "name" { type = string }
 variable "node" { type = string }
+variable "vm_id" {
+  type    = number
+  default = null
+}
 variable "template_id" { type = number }
 variable "template_node" {
   type    = string
