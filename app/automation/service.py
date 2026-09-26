@@ -185,7 +185,6 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     ip_allocation = None
     deployment = deepcopy(blueprint.deployment)
 
-    has_apmid_selection_flag = 'select_apmid_on_execute' in deployment
     select_apmid_on_execute = deployment.pop('select_apmid_on_execute', False)
     select_environment_on_execute = deployment.pop('select_environment_on_execute', False)
     fixed_apmid = deployment.pop('apmid', None)
@@ -233,11 +232,6 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     fixed_environment = str(fixed_environment or tagged_environment or '').strip().lower() or None
     runtime_apmid = str(apmid or '').strip().upper() or None
     runtime_environment = str(environment or '').strip().lower() or None
-
-    # Preserve legacy behavior for old Blueprints created before the explicit
-    # runtime APMID switch existed: if they had no fixed APMID, keep asking for one.
-    if not has_apmid_selection_flag and not fixed_apmid:
-        select_apmid_on_execute = True
 
     classification = vm_classification_settings(db)
     if select_apmid_on_execute:
