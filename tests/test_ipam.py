@@ -146,10 +146,7 @@ def test_blueprint_ipam_injects_static_ip_and_releases_after_destroy(client, hea
             },
         },
         'workflow': [
-            {'id': 'name', 'type': 'generate_hostname'},
-            {'id': 'ip', 'type': 'allocate_ip', 'depends_on': ['name']},
-            {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['ip']},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
+            {'id': 'apply', 'type': 'terraform_apply'},
         ],
     })
     assert blueprint.status_code == 201, blueprint.text
