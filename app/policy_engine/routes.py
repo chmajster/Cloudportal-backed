@@ -82,9 +82,7 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
     ).all()
 
     return {
-        "global_allowed": bool(
-            identity.platform_admin and "governance.admin" in identity.global_permissions
-        ),
+        "global_allowed": "governance.admin" in identity.global_permissions,
         "tenants": [
             {"id": row.id, "name": row.name, "slug": row.slug}
             for row in tenants
