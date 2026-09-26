@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from app.jobs.approval import approve_policy_stage, gate_job_for_approval
 
 from app.policy_engine.engine import evaluate
@@ -89,6 +91,52 @@ def test_canonical_enterprise_scope_key_and_whitelist():
         environment='dev',
     )
     assert evaluate([rule], denied).decision == 'deny'
+
+
+def test_dry_run_whitelist_cannot_bypass_enforced_whitelist():
+    enforced = policy(
+        'enforced-dev',
+        policy_type='access',
+        scope={'actions': ['vm.create'], 'resource_types': ['vm'], 'apmids': ['LEO'], 'environments': ['dev']},
+        effects=[{'type': 'allow', 'mode': 'whitelist'}],
+    )
+    dry_run = policy(
+        'future-prod',
+        status='dry_run',
+        policy_type='access',
+        scope={'actions': ['vm.create'], 'resource_types': ['vm'], 'apmids': ['LEO'], 'environments': ['prod']},
+        effects=[{'type': 'allow', 'mode': 'whitelist'}],
+    )
+
+    result = evaluate([enforced, dry_run], context(apmid='LEO', environment='prod'))
+
+    assert result.decision == 'deny'
+    assert any(item['type'] == 'access_whitelist' for item in result.violations)
+
+
+def test_hard_obligation_fails_closed_until_satisfied():
+    rule = policy(
+        'justification-required',
+        effects=[{'type': 'require_justification', 'message': 'Justification required'}],
+    )
+
+    denied_context = context()
+    denied = evaluate([rule], denied_context)
+    assert denied.decision == 'deny'
+    assert denied.violations[0]['type'] == 'obligation'
+
+    allowed_context = context()
+    allowed_context['request']['reason'] = 'approved maintenance'
+    allowed = evaluate([rule], allowed_context)
+    assert allowed.decision == 'allow'
+    assert allowed.obligations[0]['satisfied'] is True
+
+
+def test_limit_value_rejects_nonnumeric_bounds():
+    from app.policy_engine.engine import validate_effects
+
+    with pytest.raises(ValueError, match='must be numeric'):
+        validate_effects([{'type': 'limit_value', 'field': 'resource.cpu', 'max': 'nope'}])
 
 
 def test_access_whitelist_can_limit_one_apmid_to_dev():
