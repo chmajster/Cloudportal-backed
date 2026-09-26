@@ -536,6 +536,33 @@ def test_notification_rollback_runs_when_step_fails(monkeypatch):
     assert 'workflow.rollback.notification: rollback ran' in context.logs
 
 
+def test_direct_proxmox_runs_destroy_rollback_on_terminal_failure(monkeypatch):
+    steps = [
+        {'id': 'destroy', 'type': 'terraform_destroy', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'clone', 'type': 'clone_vm', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'health', 'type': 'health_check', 'depends_on': ['clone'], 'rollback': 'destroy', 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps, executor='proxmox')
+    destroyed = []
+
+    monkeypatch.setattr(worker.proxmox_provision, 'clone', lambda context, timeout=0: 120)
+    monkeypatch.setattr(worker.proxmox_provision, 'register_inventory', lambda context: {'node': 'pve01', 'vm_id': 120})
+    monkeypatch.setattr(worker.proxmox_provision, 'destroy', lambda context, timeout=0: destroyed.append(timeout) or True)
+    monkeypatch.setattr(worker, 'persist_workflow_runtime', lambda context, runtime: None)
+    monkeypatch.setattr(
+        worker,
+        'health_check_vm',
+        lambda context, workspace: (_ for _ in ()).throw(ExecutionFailed('health failed')),
+    )
+
+    with pytest.raises(ExecutionFailed, match='health failed'):
+        worker.run_proxmox_blueprint_workflow(context)
+
+    assert destroyed == [30]
+    assert context.rollback_destroyed is True
+    assert any('workflow.rollback.start:health:destroy:terraform_destroy' in value for value in context.stages)
+
+
 def test_snapshot_waits_for_proxmox_task(monkeypatch):
     context = FakeContext([])
     statuses = iter([
