@@ -281,24 +281,20 @@ def validate_authorization(db, job):
                     'Policy changed protected provisioning inputs after the job was queued: ' + fields
                 )
             if policy_result.get('decision') == 'approval_required':
+                from app.jobs.approval import policy_approval_signature
+
                 payload = dict(job.payload or {})
-                current_approval_ids = {
-                    str(item.get('policy_id') or '')
-                    for item in (policy_result.get('approvals') or [])
-                    if item.get('policy_id')
-                }
-                original_approval_ids = {
-                    str(item.get('policy_id') or '')
-                    for item in (((payload.get('blueprint') or {}).get('policy_approvals')) or [])
-                    if isinstance(item, dict) and item.get('policy_id')
-                }
+                current_signature = policy_approval_signature(policy_result.get('approvals') or [])
+                original_signature = policy_approval_signature(
+                    ((payload.get('blueprint') or {}).get('policy_approvals')) or []
+                )
                 approval = dict(payload.get('_approval') or {})
                 policy_approval = dict(payload.get('_policy_approval') or {})
                 approved = approval.get('status') == 'approved'
                 if policy_approval:
                     approved = approved and bool(policy_approval.get('complete'))
-                if not approved or not current_approval_ids <= original_approval_ids:
-                    raise ExecutionFailed('Current Policy Engine decision requires a new approval')
+                if not approved or current_signature != original_signature:
+                    raise ExecutionFailed('Current Policy Engine approval definition requires a new approval')
 
 
 def ensure_runtime_credential(credential):
