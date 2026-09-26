@@ -146,10 +146,10 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['select_apmid_on_execute'] is True
     assert deployment['name'] == '{{ hostname }}'
     assert deployment['variables']['name'] == '{{ hostname }}'
-    assert deployment['ansible']['playbook'] == 'bootstrap-linux'
-    assert deployment['ansible']['credentials_id'] == 17
-    assert deployment['ansible']['variables']['hostname'] == '{{ hostname }}'
-    assert deployment['ansible_runs'] == [deployment['ansible']]
+    assert 'ansible' not in deployment
+    assert deployment['ansible_runs'][0]['playbook'] == 'bootstrap-linux'
+    assert deployment['ansible_runs'][0]['credentials_id'] == 17
+    assert deployment['ansible_runs'][0]['variables']['hostname'] == '{{ hostname }}'
     assert deployment['variables']['tags'] == ['linux', 'production']
 
     workflow_types = [step['type'] for step in result['workflow']]
@@ -207,7 +207,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'linux-system-update',
     ]
     assert [run['credentials_id'] for run in runs] == [17, 18]
-    assert result['deployment']['ansible'] == runs[0]
+    assert 'ansible' not in result['deployment']
     assert [step['type'] for step in result['workflow']] == [
         'cloud_init',
         'terraform_apply',
