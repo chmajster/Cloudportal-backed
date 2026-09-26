@@ -561,6 +561,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     source = portal_source(source_header)
     if not available_to(row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
+    validate_persisted_blueprint_contract(row)
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
         raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
     workflow_types = {step.get('type') for step in (row.workflow or [])}
