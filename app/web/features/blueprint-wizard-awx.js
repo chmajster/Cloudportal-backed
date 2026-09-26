@@ -60,13 +60,25 @@
   async function discover(state, credentialId) {
     state.awxDiscovery = null;
     state.awxDiscoveryError = '';
+    state.awxMappedScope = null;
+    state.awxMappedScopeError = '';
     if (!credentialId) return;
+    const headers = parts.core.scopeHeaders(state);
     try {
       state.awxDiscovery = await api('/credentials/' + Number(credentialId) + '/awx/discovery', {
-        headers: parts.core.scopeHeaders(state),
+        headers,
       });
     } catch (error) {
       state.awxDiscoveryError = error.message;
+      return;
+    }
+    try {
+      state.awxMappedScope = await api('/credentials/' + Number(credentialId) + '/awx/scope', {
+        method: 'POST',
+        headers,
+      });
+    } catch (error) {
+      state.awxMappedScopeError = error.message;
     }
   }
 
@@ -97,39 +109,33 @@
       }
     }
 
+    if (state.awxMappedScopeError) {
+      errors.awx_scope = 'Nie można zmapować Tenant/Project CloudPortal do AWX: ' + state.awxMappedScopeError;
+      return errors;
+    }
+    const mapped = state.awxMappedScope;
     const discovery = state.awxDiscovery;
-    if (!discovery) return errors;
+    if (!discovery || !mapped) return errors;
 
-    const organizationId = String(state.awxOrganizationId || '');
-    const projectId = String(state.awxProjectId || '');
+    const organizationId = String(mapped.organization?.id || '');
+    const projectId = String(mapped.awx_project?.id || '');
     const inventoryId = String(state.awxInventoryId || '');
     const jobTemplateId = String(state.awxJobTemplateId || '');
-
-    const organizations = discovery.organizations || [];
-    const projects = discovery.projects || [];
     const inventories = discovery.inventories || [];
     const templates = discovery.job_templates || [];
 
-    if (organizationId && !organizations.some(row => String(row.id) === organizationId)) {
-      errors.awx_organization_id = 'Wybrana organizacja AWX nie jest już dostępna.';
-    }
-    const project = projects.find(row => String(row.id) === projectId);
-    if (projectId && !project) {
-      errors.awx_project_id = 'Wybrany projekt AWX nie jest już dostępny.';
-    } else if (project && organizationId && String(project.organization || '') !== organizationId) {
-      errors.awx_project_id = 'Wybrany projekt AWX nie należy do wybranej organizacji.';
-    }
     const inventory = inventories.find(row => String(row.id) === inventoryId);
     if (inventoryId && !inventory) {
       errors.awx_inventory_id = 'Wybrane inventory AWX nie jest już dostępne.';
     } else if (inventory && organizationId && String(inventory.organization || '') !== organizationId) {
-      errors.awx_inventory_id = 'Wybrane inventory AWX nie należy do wybranej organizacji.';
+      errors.awx_inventory_id = 'Wybrane inventory AWX nie należy do Organization mapowanej z Tenanta CloudPortal.';
     }
+
     const jobTemplate = templates.find(row => String(row.id) === jobTemplateId);
     if (jobTemplateId && !jobTemplate) {
       errors.awx_job_template_id = 'Wybrany Job Template AWX nie jest już dostępny.';
     } else if (jobTemplate && projectId && String(jobTemplate.project || '') !== projectId) {
-      errors.awx_job_template_id = 'Wybrany Job Template nie należy do wybranego projektu AWX.';
+      errors.awx_job_template_id = 'Wybrany Job Template nie należy do Projectu AWX mapowanego z Projektu CloudPortal.';
     }
 
     return errors;
@@ -177,6 +183,8 @@
       state.awxCredentialId = event.currentTarget.value;
       state.awxOrganizationId = '';
       state.awxProjectId = '';
+      state.awxMappedScope = null;
+      state.awxMappedScopeError = '';
       state.awxInventoryId = '';
       state.awxJobTemplateId = '';
       await discover(state, state.awxCredentialId);
@@ -190,77 +198,40 @@
     }
 
     const discovery = state.awxDiscovery || {};
-    const organizations = discovery.organizations || [];
-    const projects = discovery.projects || [];
     const inventories = discovery.inventories || [];
     const jobTemplates = discovery.job_templates || [];
-    const organizationId = String(state.awxOrganizationId || '');
-    const projectId = String(state.awxProjectId || '');
+    const mapped = state.awxMappedScope || {};
+    const organizationId = String(mapped.organization?.id || '');
+    const projectId = String(mapped.awx_project?.id || '');
     const inventoryId = String(state.awxInventoryId || '');
-    const projectById = new Map(projects.map(row => [String(row.id), row]));
 
-    const filteredProjects = projects.filter(row =>
-      !organizationId || String(row.organization || '') === organizationId);
     const filteredInventories = inventories.filter(row =>
       !organizationId || String(row.organization || '') === organizationId);
-    const filteredJobTemplates = jobTemplates.filter(row => {
-      if (projectId) return String(row.project || '') === projectId;
-      if (!organizationId || !row.project) return true;
-      return String(projectById.get(String(row.project))?.organization || '') === organizationId;
-    });
+    const filteredJobTemplates = jobTemplates.filter(row =>
+      !projectId || String(row.project || '') === projectId);
 
-    const organization = selectField('Organizacja AWX', 'awx_organization_id', [
-      { value: '', label: 'Automatycznie / bez ograniczenia do organizacji' },
-      ...organizations.map(row => ({ value: row.id, label: row.name })),
-    ], state.awxOrganizationId, {
-      wide: true,
-      help: 'Jeżeli inventory będzie tworzone automatycznie, zostanie utworzone w tej organizacji.',
-    });
-    organization.querySelector('select').addEventListener('change', event => {
-      state.awxOrganizationId = event.currentTarget.value;
-      const selectedProject = projects.find(row => String(row.id) === String(state.awxProjectId));
-      if (selectedProject && state.awxOrganizationId
-          && String(selectedProject.organization || '') !== String(state.awxOrganizationId)) {
-        state.awxProjectId = '';
-        state.awxJobTemplateId = '';
-      }
-      const selectedInventory = inventories.find(row => String(row.id) === String(state.awxInventoryId));
-      if (selectedInventory && state.awxOrganizationId
-          && String(selectedInventory.organization || '') !== String(state.awxOrganizationId)) {
-        state.awxInventoryId = '';
-      }
-      rerender();
-    });
-
-    const project = selectField('Projekt AWX', 'awx_project_id', [
-      { value: '', label: 'Bez przypisanego projektu / nie filtruj Job Template' },
-      ...filteredProjects.map(row => ({
-        value: row.id,
-        label: labelWithMeta(row, [
-          row.scm_type ? 'SCM: ' + row.scm_type : '',
-          row.status ? 'status: ' + row.status : '',
-        ]),
-      })),
-    ], state.awxProjectId, {
-      wide: true,
-      help: 'Projekt jest zapisany w Blueprintcie i ogranicza listę Job Template do właściwego projektu AWX.',
-    });
-    project.querySelector('select').addEventListener('change', event => {
-      state.awxProjectId = event.currentTarget.value;
-      const selectedTemplate = jobTemplates.find(row => String(row.id) === String(state.awxJobTemplateId));
-      if (selectedTemplate && state.awxProjectId
-          && String(selectedTemplate.project || '') !== String(state.awxProjectId)) {
-        state.awxJobTemplateId = '';
-      }
-      rerender();
-    });
+    const scopeInfo = state.awxMappedScopeError
+      ? node('div', { class: 'blueprint-wizard-info danger wide' },
+          node('strong', { text: 'Mapowanie scope AWX wymaga konfiguracji' }),
+          node('span', { text: state.awxMappedScopeError }))
+      : (state.awxMappedScope
+          ? node('div', { class: 'blueprint-wizard-info wide' },
+              node('strong', { text: 'Scope AWX z CloudPortal' }),
+              node('span', { text:
+                'Tenant „' + (mapped.tenant?.name || '—') + '” → Organization „'
+                + (mapped.organization?.name || '—') + '” (#' + (mapped.organization?.id || '—') + ') · '
+                + 'Project „' + (mapped.project?.name || '—') + '” → AWX Project „'
+                + (mapped.awx_project?.name || '—') + '” (#' + (mapped.awx_project?.id || '—') + ')' }))
+          : node('div', { class: 'blueprint-wizard-info wide' },
+              node('strong', { text: 'Scope AWX jest dziedziczony z CloudPortal' }),
+              node('span', { text: 'Tenant CloudPortal = Organization AWX, Project CloudPortal = Project AWX. Mapowanie zostanie sprawdzone po połączeniu z AWX.' })));
 
     const inventory = selectField('Inventory AWX', 'awx_inventory_id', [
       { value: '', label: 'Automatycznie — pattern „' + (state.awxInventoryName || '<Projekt>-<APMID>-<ENV>') + '”' },
       ...filteredInventories.map(row => ({ value: row.id, label: row.name })),
     ], state.awxInventoryId, {
       wide: true,
-      help: 'Możesz wskazać istniejące inventory albo pozwolić CloudPortalowi znaleźć lub utworzyć inventory według patternu.',
+      help: 'Lista zawiera tylko inventory z Organization AWX mapowanej z Tenanta CloudPortal.',
     });
     inventory.querySelector('select').addEventListener('change', event => {
       state.awxInventoryId = event.currentTarget.value;
@@ -271,7 +242,7 @@
       value: state.awxInventoryName || '<Projekt>-<APMID>-<ENV>',
       wide: true,
       placeholder: '<Projekt>-<APMID>-<ENV>',
-      help: 'Dostępne tokeny: <Projekt>, <APMID>, <ENV>. <Projekt> używa wybranego projektu AWX, a bez wyboru bieżącego projektu CloudPortal. APMID i ENV są rozwiązywane podczas tworzenia VM.',
+      help: 'Dostępne tokeny: <Projekt>, <APMID>, <ENV>. <Projekt> zawsze oznacza Project AWX mapowany z bieżącego Projektu CloudPortal. APMID i ENV są rozwiązywane podczas tworzenia VM.',
     });
     inventoryName.querySelector('input').addEventListener('input', event => {
       state.awxInventoryName = event.currentTarget.value;
@@ -301,12 +272,11 @@
         value: row.id,
         label: labelWithMeta(row, [
           row.playbook ? 'playbook: ' + row.playbook : '',
-          row.project ? 'projekt: ' + (projectById.get(String(row.project))?.name || ('#' + row.project)) : '',
         ]),
       })),
     ], state.awxJobTemplateId, {
       wide: true,
-      help: 'Po rejestracji hosta CloudPortal może uruchomić Job Template należący do wybranego projektu AWX.',
+      help: 'Lista zawiera tylko Job Template należące do Projectu AWX mapowanego z Projektu CloudPortal.',
     });
     jobTemplate.querySelector('select').addEventListener('change', event => {
       state.awxJobTemplateId = event.currentTarget.value;
@@ -357,8 +327,7 @@
                   + ' · job templates: ' + jobTemplates.length }))
             : null),
       node('div', { class: 'blueprint-wizard-inline-actions wide' }, refresh),
-      organization,
-      project,
+      scopeInfo,
       inventory,
       inventoryName,
       (runtimeEnvironmentSync || runtimeApmidSync)
@@ -383,12 +352,13 @@
   function summaryRows(state, data) {
     if (!enabled(state)) return [['AWX', 'Wyłączony']];
     const discovery = state.awxDiscovery || {};
+    const mapped = state.awxMappedScope || {};
     const nameFor = (rows, id) => (rows || []).find(row => String(row.id) === String(id))?.name || (id ? '#' + id : '—');
     const credential = (data.credentials || []).find(row => String(row.id) === String(state.awxCredentialId));
     return [
       ['AWX', credential?.name || (state.awxCredentialId ? '#' + state.awxCredentialId : '—')],
-      ['Organizacja AWX', nameFor(discovery.organizations, state.awxOrganizationId)],
-      ['Projekt AWX', nameFor(discovery.projects, state.awxProjectId)],
+      ['Tenant → Organization AWX', mapped.organization?.name || (state.awxMappedScopeError ? 'Błąd mapowania' : 'Automatycznie')],
+      ['Project → Project AWX', mapped.awx_project?.name || (state.awxMappedScopeError ? 'Błąd mapowania' : 'Automatycznie')],
       ['Inventory AWX', state.awxInventoryId
         ? nameFor(discovery.inventories, state.awxInventoryId)
         : 'Pattern: ' + (state.awxInventoryName || '<Projekt>-<APMID>-<ENV>')],
