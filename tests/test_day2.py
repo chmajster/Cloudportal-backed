@@ -3,6 +3,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 import uuid
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select, func
 from conftest import new_user
 from app.database import session
@@ -150,6 +151,32 @@ def test_bulk_conflict_rolls_back_failed_child(resource):
     with session() as db:
         assert db.scalar(select(func.count()).select_from(Day2ActionRequest)) == 1
         assert db.scalar(select(func.count()).select_from(Job).where(Job.operation.like('day2.%'))) == 1
+
+
+def test_bulk_isolates_scoped_http_error_per_resource(resource, monkeypatch):
+    client, headers, vm, _ = resource
+
+    def governed_rejection(*_args, **_kwargs):
+        raise HTTPException(409, {'code': 'PROJECT_QUOTA_EXCEEDED', 'message': 'Quota exceeded for vm_count'})
+
+    monkeypatch.setattr('app.api.day2.create_action', governed_rejection)
+    bulk = client.post(
+        '/api/v1/day2-actions/bulk',
+        headers=key(headers),
+        json={'action': 'power_on', 'resource_ids': [vm]},
+    )
+    assert bulk.status_code == 202, bulk.text
+    body = bulk.json()
+    assert body['children'] == []
+    assert body['status'] == 'PARTIAL'
+    assert body['errors'] == [{
+        'resource_id': vm,
+        'code': 'PROJECT_QUOTA_EXCEEDED',
+        'message': 'Quota exceeded for vm_count',
+    }]
+    with session() as db:
+        assert db.scalar(select(func.count()).select_from(Day2ActionRequest)) == 0
+        assert db.scalar(select(func.count()).select_from(Job).where(Job.operation.like('day2.%'))) == 0
 
 
 def test_approval_and_cancel_state_machine(resource):
