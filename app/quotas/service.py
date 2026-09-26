@@ -615,7 +615,7 @@ def prepare_job_reservation(db, job: Job, deployment: Deployment | None = None):
         return None
 
     payload = dict(job.payload or {})
-    if job.operation == 'terraform.destroy':
+    if job.operation in {'terraform.destroy', 'proxmox.destroy'}:
         # A new destroy supersedes stale/uncertain quota work for the same
         # deployment. new_job() already rejects deployments with active jobs,
         # so any remaining active reservation here belongs to a terminal,
@@ -695,12 +695,12 @@ def reconcile_terraform_presence(db, scope: Scope, subject_id: str, *, present: 
         QuotaReservation.subject_type == 'deployment',
         QuotaReservation.subject_id == str(subject_id),
         QuotaReservation.status.in_(ACTIVE_RESERVATION_STATES),
-        QuotaReservation.operation.in_(('terraform.apply', 'terraform.destroy')),
+        QuotaReservation.operation.in_(('terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy')),
     ).order_by(QuotaReservation.created_at).with_for_update()).all()
     resolved = []
     allocation = _allocation(db, scope, 'deployment', str(subject_id), lock=True)
     for row in rows:
-        if row.operation == 'terraform.apply':
+        if row.operation in {'terraform.apply', 'proxmox.provision'}:
             # Presence proves an initial create reached the provider, but it
             # does not prove a re-apply changed CPU/RAM/disk to the requested
             # target. Keep update reservations unresolved until stronger
