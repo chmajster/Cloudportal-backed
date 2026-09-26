@@ -117,132 +117,77 @@ function managedResourceCard(item, providerNames) {
 }
 
 async function myResourcesView(repairInventory = true) {
-  if (myResourcesPollTimer) {
-    clearTimeout(myResourcesPollTimer);
-    myResourcesPollTimer = null;
-  }
+  if (myResourcesPollTimer) { clearTimeout(myResourcesPollTimer); myResourcesPollTimer = null; }
   const preserveScroll = Boolean(dom.content.querySelector('.my-resources-page-head'));
   const preservedScrollY = preserveScroll ? window.scrollY : 0;
   const canReadInventory = allowed('inventory.read');
-
   if (repairInventory && canReadInventory && allowed('inventory.update')) {
     try {
       const repaired = await api('/inventory/reconcile', { method: 'POST', body: {} });
-      if (Number(repaired.repaired_count || 0) > 0) {
-        toast('Odbudowano inventory dla ' + repaired.repaired_count + ' wdrożeń.');
-      }
-      if (Number(repaired.missing_count || 0) > 0) {
-        toast('Oznaczono ' + repaired.missing_count + ' VM jako brakujące w Proxmox.', 'warning');
-      }
-      if (Number(repaired.restored_count || 0) > 0) {
-        toast('Przywrócono status active dla ' + repaired.restored_count + ' VM obecnych ponownie w Proxmox.');
-      }
-    } catch (error) {
-      toast('Nie udało się automatycznie zsynchronizować inventory: ' + error.message, 'warning');
-    }
+      if (Number(repaired.repaired_count || 0) > 0) toast('Odbudowano inventory dla ' + repaired.repaired_count + ' wdrożeń.');
+      if (Number(repaired.missing_count || 0) > 0) toast('Oznaczono ' + repaired.missing_count + ' VM jako brakujące w Proxmox.', 'warning');
+      if (Number(repaired.restored_count || 0) > 0) toast('Przywrócono status active dla ' + repaired.restored_count + ' VM obecnych ponownie w Proxmox.');
+    } catch (error) { toast('Nie udało się automatycznie zsynchronizować inventory: ' + error.message, 'warning'); }
   }
 
   const optionalItems = path => api(path).then(result => result.items || []).catch(() => []);
   const [deploymentResult, vmResult, resourceResult, providerResult, jobResult, users, projects, tenants] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
-    canReadInventory
-      ? api('/inventory/vms?' + (repairInventory ? 'refresh=true&' : '') + 'limit=200')
-      : Promise.resolve({ items: [] }),
+    canReadInventory ? api('/inventory/vms?' + (repairInventory ? 'refresh=true&' : '') + 'limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
     allowed('jobs.read') ? api('/jobs?limit=200') : Promise.resolve({ items: [] }),
     allowed('users.read') ? optionalItems('/users?limit=200') : Promise.resolve([]),
-    optionalItems('/projects?limit=200'),
-    optionalItems('/tenants?limit=200'),
+    optionalItems('/projects?limit=200'), optionalItems('/tenants?limit=200'),
   ]);
-
   const deployments = deploymentResult.items || [];
   const deploymentById = new Map(deployments.map(item => [item.id, item]));
   const vms = (await window.MyResourcesVmBrowser.composeProvisioning({
-    deployments,
-    vms: vmResult.items || [],
-    jobs: jobResult.items || [],
+    deployments, vms: vmResult.items || [], jobs: jobResult.items || [],
   })).filter(item => item.lifecycle_status !== 'destroyed');
-
-  const resources = (resourceResult.items || []).filter(
-    item => item.resource_type !== 'vm' && item.lifecycle_status !== 'destroyed'
-  );
+  const resources = (resourceResult.items || []).filter(item => item.resource_type !== 'vm' && item.lifecycle_status !== 'destroyed');
   const providerNames = new Map((providerResult.items || []).map(provider => [Number(provider.id), provider.name]));
   const vmByDeployment = new Map(vms.filter(item => item.deployment_id).map(item => [item.deployment_id, item]));
-  const userNames = new Map(users.map(user => [
-    String(user.id),
-    [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || user.username || ('#' + user.id),
-  ]));
+  const userNames = new Map(users.map(user => [String(user.id), [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || user.username || ('#' + user.id)]));
   if (state.identity?.user?.id) {
     const current = state.identity.user;
-    userNames.set(String(current.id),
-      [current.first_name, current.last_name].filter(Boolean).join(' ').trim()
-      || current.username
-      || ('#' + current.id));
+    userNames.set(String(current.id), [current.first_name, current.last_name].filter(Boolean).join(' ').trim() || current.username || ('#' + current.id));
   }
   const projectNames = new Map(projects.map(project => [String(project.id), project.name || project.slug || project.id]));
   const tenantNames = new Map(tenants.map(tenant => [String(tenant.id), tenant.name || tenant.slug || tenant.id]));
-
-  const vmGrid = vms.length
-    ? window.MyResourcesVmBrowser.create({
-        vms,
-        providerNames,
-        deploymentById,
-        userNames,
-        projectNames,
-        tenantNames,
-        onRefresh: () => myResourcesView(false),
-      })
-    : resourceEmptyState('monitor', 'Brak maszyn VM', 'Nie ma VM dostępnych dla bieżących uprawnień.');
-
+  const vmGrid = vms.length ? window.MyResourcesVmBrowser.create({
+    vms, providerNames, deploymentById, userNames, projectNames, tenantNames, onRefresh: () => myResourcesView(false),
+  }) : resourceEmptyState('monitor', 'Brak maszyn VM', 'Nie ma VM dostępnych dla bieżących uprawnień.');
   const resourceGrid = resources.length
     ? node('div', { class: 'my-resource-grid' }, ...resources.map(item => managedResourceCard(item, providerNames)))
     : resourceEmptyState('box', 'Brak innych zasobów', 'Nie ma innych zarządzanych zasobów dostępnych dla bieżących uprawnień.');
 
-  const deploymentContent = deployments.length
-    ? table([
-        { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
-        { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || ('#' + item.provider_id) },
-        { label: 'Typ', value: item => vmByDeployment.has(item.id) ? badge('VM', 'info') : badge(item.template || 'Zasób', '') },
-        { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
-        { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
-      ], deployments, item => {
-        const actions = [];
-        const vm = vmByDeployment.get(item.id);
-        if (vm && !vm.provisioning_placeholder && allowed('vms.read') && hasCommand('inventory.openVm')) {
-          actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', vm, 'overview', 'my-resources'), 'primary'));
-        }
-        actions.push(...deploymentActions(item, 'my-resources'));
-        return actions;
-      })
-    : resourceEmptyState('rocket', 'Brak wdrożeń', 'Nie ma wdrożeń dostępnych dla bieżących uprawnień.');
-
-  const body = node('div', { class: 'my-resources-body' },
-    node('div', { class: 'my-resources-summary' },
-      resourceSummaryCard('server', 'VM', vms.length, 'Maszyny wirtualne', 'vm', 'my-resources-vms'),
-      resourceSummaryCard('database', 'Inne zasoby', resources.length, 'Zasoby dodatkowe', 'resources', 'my-resources-other'),
-      resourceSummaryCard('rocket', 'Wdrożenia', deployments.length, 'Aktywne wdrożenia', 'deployments', 'my-resources-deployments')),
-    resourceSection('my-resources-vms', 'monitor', 'Maszyny wirtualne', 'Zaznacz VM, aby wykonać akcję masową, albo kliknij „Zarządzaj VM”, aby przejść do konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
-    resourceSection('my-resources-other', 'box', 'Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
-    resourceSection('my-resources-deployments', 'rocket', 'Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent));
+  const deploymentContent = deployments.length ? table([
+    { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: short(item.id, 18) })) },
+    { label: 'Platforma', value: item => providerNames.get(Number(item.provider_id)) || CREDENTIAL_TYPE_CONFIG[item.provider]?.label || ('#' + item.provider_id) },
+    { label: 'Typ', value: item => vmByDeployment.has(item.id) ? badge('VM', 'info') : badge(item.template || 'Zasób', '') },
+    { label: 'Status', value: item => badge(statusLabel(item.status), statusKind(item.status)) },
+    { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
+  ], deployments, item => {
+    const actions = [], vm = vmByDeployment.get(item.id);
+    if (vm && !vm.provisioning_placeholder && allowed('vms.read') && hasCommand('inventory.openVm')) actions.push(button('Zarządzaj VM', () => runCommand('inventory.openVm', vm, 'overview', 'my-resources'), 'primary'));
+    actions.push(...deploymentActions(item, 'my-resources')); return actions;
+  }) : resourceEmptyState('rocket', 'Brak wdrożeń', 'Nie ma wdrożeń dostępnych dla bieżących uprawnień.');
 
   dom.content.replaceChildren(
-    node('div', { class: 'my-resources-page-head' },
-      node('p', {
-        class: 'my-resources-intro',
-        text: 'Zasoby i wdrożenia dostępne dla zalogowanego użytkownika. Wejście w VM otwiera panel sterowania zgodny z jego uprawnieniami.',
-      })),
-    body
+    node('div', { class: 'my-resources-page-head' }, node('p', { class: 'my-resources-intro', text: 'Zasoby i wdrożenia dostępne dla zalogowanego użytkownika. Wejście w VM otwiera panel sterowania zgodny z jego uprawnieniami.' })),
+    node('div', { class: 'my-resources-body' },
+      node('div', { class: 'my-resources-summary' },
+        resourceSummaryCard('server', 'VM', vms.length, 'Maszyny wirtualne', 'vm', 'my-resources-vms'),
+        resourceSummaryCard('database', 'Inne zasoby', resources.length, 'Zasoby dodatkowe', 'resources', 'my-resources-other'),
+        resourceSummaryCard('rocket', 'Wdrożenia', deployments.length, 'Aktywne wdrożenia', 'deployments', 'my-resources-deployments')),
+      resourceSection('my-resources-vms', 'monitor', 'Maszyny wirtualne', 'Zaznacz VM, aby wykonać akcję masową, albo kliknij „Zarządzaj VM”, aby przejść do konsoli, snapshotów, backupów i konfiguracji.', vms.length, vmGrid),
+      resourceSection('my-resources-other', 'box', 'Inne zasoby', 'Pozostałe zasoby zarządzane przez Cloudportal i dostępne przez bieżące uprawnienia.', resources.length, resourceGrid),
+      resourceSection('my-resources-deployments', 'rocket', 'Wdrożenia i operacje', 'Historia i stan wdrożeń. Dla wdrożenia VM dostępny jest bezpośredni skrót do panelu maszyny.', deployments.length, deploymentContent))
   );
-
-  if (preservedScrollY > 0) {
-    requestAnimationFrame(() => window.scrollTo({ top: preservedScrollY, behavior: 'auto' }));
-  }
-
+  if (preservedScrollY > 0) requestAnimationFrame(() => window.scrollTo({ top: preservedScrollY, behavior: 'auto' }));
   myResourcesPollTimer = window.DeploymentProvisioningPoll.schedule(deployments, () => {
-    if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
-      myResourcesView(false).catch(error => toast(error.message, 'error'));
-    }
+    if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) myResourcesView(false).catch(error => toast(error.message, 'error'));
   });
 }
 
