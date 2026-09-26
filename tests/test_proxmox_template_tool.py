@@ -17,9 +17,11 @@ def test_tools_exposes_clone_vm_to_template_workflow():
     assert "Klonuj i utwórz template" in feature
     assert "Oryginalna VM" in feature
     assert "Źródłowa VM nie jest konwertowana" in feature
-    assert "waitProxmoxTask" in feature
-    assert "waitForTemplate" in feature
-    assert "result.follow_up_tracked === false" in feature
+    assert "waitProxmoxTask" not in feature
+    assert "waitForTemplate" not in feature
+    assert "result.job?.id" in feature
+    assert "navigate('jobs')" in feature
+    assert "działa w tle" in feature
     assert "'proxmox-template-clone': '/admin/tools/proxmox-template'" in navigation
     assert "field('Szukaj VM', 'source_vm_filter'" in feature
     assert "sourceVmSearchText(item)" in feature
@@ -32,6 +34,7 @@ def test_tools_exposes_clone_vm_to_template_workflow():
 
     assert "allowed('vms.clone')" in tools
     assert "allowed('vms.template')" in tools
+    assert "allowed('jobs.execute')" in tools
     assert "window.ProxmoxTemplateTool.card()" in tools
 
 
@@ -43,7 +46,9 @@ def test_clone_to_template_backend_is_durable_and_target_only():
     assert "data.new_vm_id == int(vmid)" in api
     assert "Automatic clone-to-template conversion requires a full clone" in api
     assert "vms.template required for automatic clone-to-template conversion" in api
-    assert "convert_to_template=data.convert_to_template" in api
+    assert "'proxmox.clone_template'" in api
+    assert "'vm.clone_to_template_queued'" in api
+    assert "'background': True" in api
 
     assert "item.get('action') != 'clone'" in reconcile
     assert "not item.get('convert_to_template')" in reconcile
