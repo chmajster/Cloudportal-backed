@@ -121,7 +121,7 @@ function validateWorkflow(state, editingItem) {
   if (planSteps.length > 1) fail('Workflow może zawierać maksymalnie jeden terraform_plan.');
 
   const directProxmox = state.executor === 'proxmox';
-  const directOnly = new Set(['clone_vm', 'configure_vm', 'start_vm', 'set_hostname', 'set_tags']);
+  const directOnly = new Set(['clone_vm', 'configure_vm', 'start_vm']);
   if (directProxmox) {
     if (steps.some(step => ['terraform_plan', 'terraform_apply'].includes(step.type))) {
       fail('Tryb Proxmox API nie może zawierać kroków Terraform plan/apply.');
@@ -132,7 +132,7 @@ function validateWorkflow(state, editingItem) {
     if (cloneSteps.length === 1) {
       const cloneId = cloneSteps[0].id;
       const afterClone = new Set([
-        'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
+        'configure_vm', 'cloud_init', 'start_vm',
         'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
         'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
       ]);
@@ -192,7 +192,7 @@ function validateWorkflow(state, editingItem) {
     const proxmoxOnly = new Set([
       'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
       'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
-      'clone_vm', 'configure_vm', 'start_vm', 'set_hostname', 'set_tags',
+      'clone_vm', 'configure_vm', 'start_vm',
     ]);
     const invalid = [...new Set(steps.filter(step => proxmoxOnly.has(step.type)).map(step => step.type))];
     if (invalid.length) fail('Te kroki workflow są dostępne tylko dla Proxmox: ' + invalid.join(', ') + '.');
