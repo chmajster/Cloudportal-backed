@@ -731,6 +731,175 @@ async function apmidView() {
 }
 
 
+function blueprintAvatarPreview(item, className = 'blueprint-avatar-preview') {
+  if (!item?.data_uri) {
+    return node('span', { class: className + ' empty', 'aria-hidden': 'true' }, appIcon('box'));
+  }
+  return node('span', { class: className },
+    node('img', {
+      src: item.data_uri,
+      alt: '',
+      loading: 'lazy',
+      decoding: 'async',
+    }));
+}
+
+function blueprintAvatarTool(avatars = []) {
+  return node('article', { class: 'panel tool-card' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' },
+        avatars[0] ? blueprintAvatarPreview(avatars[0], 'tool-avatar-preview') : appIcon('box')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Blueprinty' }),
+        node('h2', { text: 'Awatary Blueprintów' }),
+        node('p', { class: 'muted', text: 'Zarządzaj ikonami ICO używanymi na kartach produktów i w kreatorze Blueprintu.' })),
+      badge(avatars.length ? String(avatars.length) + ' ikon' : 'Brak ikon', avatars.length ? 'ok' : 'warning')),
+    node('div', { class: 'tool-meta-grid' },
+      toolMeta('Dostępne awatary', String(avatars.length)),
+      toolMeta('Format', 'image/x-icon · base64')),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot ' + (avatars.length ? 'ok' : 'warn') }),
+        avatars.length ? 'Awatary gotowe do użycia' : 'Dodaj pierwszy avatar Blueprintu'),
+      button('Zarządzaj awatarami', () => navigate('blueprint-avatars'), 'primary')));
+}
+
+function blueprintAvatarForm(item = null) {
+  const editing = Boolean(item);
+  const idField = field('ID awatara', 'id', {
+    required: true,
+    value: item?.id || '',
+    placeholder: 'ubuntu',
+    help: 'Stały identyfikator używany przez Blueprint, np. ubuntu lub windows-server.',
+  });
+  if (editing) idField.querySelector('input').disabled = true;
+
+  const nameField = field('Nazwa', 'name', {
+    required: true,
+    value: item?.name || '',
+    placeholder: 'Ubuntu',
+  });
+  const dataField = field('x-icon;base64', 'data_uri', {
+    tag: 'textarea',
+    required: true,
+    wide: true,
+    value: item?.data_uri || '',
+    placeholder: 'data:image/x-icon;base64,AAACAA...',
+    help: 'Wklej pełny data URI: data:image/x-icon;base64,... Maksymalny rozmiar po dekodowaniu: 128 KiB.',
+  });
+  const dataInput = dataField.querySelector('textarea');
+  dataInput.rows = 8;
+
+  const previewImage = node('img', {
+    class: 'blueprint-avatar-form-image',
+    alt: 'Podgląd awatara',
+    hidden: true,
+  });
+  const previewStatus = node('span', { class: 'muted', text: 'Wklej poprawny data:image/x-icon;base64,...' });
+  const preview = node('div', { class: 'blueprint-avatar-form-preview wide' },
+    node('div', { class: 'blueprint-avatar-form-preview-box' }, previewImage),
+    node('div', {},
+      node('strong', { text: 'Podgląd' }),
+      previewStatus));
+
+  const refreshPreview = () => {
+    const value = String(dataInput.value || '').trim();
+    const validPrefix = /^(?:data:)?image\/(?:x-icon|vnd\.microsoft\.icon);base64,/i.test(value);
+    if (!validPrefix) {
+      previewImage.hidden = true;
+      previewImage.removeAttribute('src');
+      previewStatus.textContent = 'Niepoprawny prefix. Użyj data:image/x-icon;base64,...';
+      return;
+    }
+    previewImage.hidden = false;
+    previewImage.src = value.startsWith('data:') ? value : 'data:' + value;
+    previewStatus.textContent = 'Podgląd z danych base64.';
+  };
+  dataInput.addEventListener('input', refreshPreview);
+  refreshPreview();
+
+  const body = node('div', { class: 'form-grid' },
+    idField,
+    nameField,
+    dataField,
+    preview);
+
+  openModal({
+    title: editing ? 'Edytuj avatar Blueprintu' : 'Dodaj avatar Blueprintu',
+    eyebrow: 'Narzędzia · Awatary Blueprintów',
+    body,
+    submitLabel: editing ? 'Zapisz avatar' : 'Dodaj avatar',
+    wide: true,
+    onSubmit: async data => {
+      const id = editing ? item.id : String(data.get('id') || '').trim();
+      const payload = {
+        id,
+        name: String(data.get('name') || '').trim(),
+        data_uri: String(data.get('data_uri') || '').trim(),
+      };
+      await api('/settings/blueprint-avatars' + (editing ? '/' + encodeURIComponent(item.id) : ''), {
+        method: editing ? 'PUT' : 'POST',
+        body: payload,
+      });
+      toast(editing ? 'Avatar Blueprintu zaktualizowany.' : 'Avatar Blueprintu dodany.');
+      navigate('blueprint-avatars');
+    },
+  });
+}
+
+async function blueprintAvatarsView() {
+  const result = await api('/settings/blueprint-avatars');
+  const avatars = result.items || [];
+  const canEdit = allowed('settings.update');
+
+  const list = node('div', { class: 'blueprint-avatar-list' });
+  if (!avatars.length) {
+    list.append(node('div', { class: 'apmid-empty' },
+      node('strong', { text: 'Brak awatarów Blueprintów' }),
+      node('span', { class: 'muted', text: 'Dodaj pierwszy plik ICO w formacie data:image/x-icon;base64,...' })));
+  } else {
+    avatars.forEach(item => {
+      const actions = [];
+      if (canEdit) {
+        actions.push(
+          button('Edytuj', () => blueprintAvatarForm(item), 'ghost'),
+          button('Usuń', () => confirmAction(
+            'Usuń avatar Blueprintu',
+            'Avatar „' + item.name + '” zostanie usunięty. Jeśli jest przypisany do Blueprintu, backend zablokuje operację.',
+            async () => {
+              await api('/settings/blueprint-avatars/' + encodeURIComponent(item.id), { method: 'DELETE' });
+              toast('Avatar Blueprintu usunięty.');
+              await blueprintAvatarsView();
+            }
+          ), 'danger')
+        );
+      }
+      list.append(node('div', { class: 'blueprint-avatar-list-row' },
+        blueprintAvatarPreview(item),
+        node('div', { class: 'blueprint-avatar-list-copy' },
+          node('strong', { text: item.name }),
+          node('small', { class: 'mono muted', text: item.id }),
+          node('small', { class: 'muted', text: 'image/x-icon · base64' })),
+        node('div', { class: 'blueprint-avatar-list-actions' }, ...actions)));
+    });
+  }
+
+  const panel = node('section', { class: 'panel blueprint-avatar-manager' },
+    node('div', { class: 'apmid-list-head' },
+      node('div', {},
+        node('span', { class: 'tools-eyebrow', text: 'Katalog ikon' }),
+        node('h2', { text: 'Awatary Blueprintów' }),
+        node('p', { class: 'muted', text: 'Awatary są globalnym katalogiem ikon. Blueprint przechowuje tylko ID wybranego awatara.' })),
+      canEdit ? button('Dodaj avatar', () => blueprintAvatarForm(), 'primary') : badge('Tylko odczyt', 'info')),
+    list);
+
+  dom.content.replaceChildren(
+    heading('Awatary dostępne w kreatorze Blueprintu.', [button('← Narzędzia', () => navigate('tools'))]),
+    panel
+  );
+}
+
+
 function instanceBackupTool() {
   return node('article', { class: 'panel tool-card' },
     node('div', { class: 'tool-card-head' },
@@ -767,6 +936,23 @@ async function toolsView() {
             node('p', { class: 'muted', text: 'Środowiska, lista APMID oraz globalne Location i Role.' })),
           badge('Niedostępny', 'warning')),
         node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać ustawień klasyfikacji VM.' })));
+    }
+  }
+
+  if (allowed('settings.read')) {
+    try {
+      const avatars = await api('/settings/blueprint-avatars');
+      cards.push(blueprintAvatarTool(avatars.items || []));
+    } catch (error) {
+      cards.push(node('article', { class: 'panel tool-card' },
+        node('div', { class: 'tool-card-head' },
+          node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('box')),
+          node('div', { class: 'tool-title' },
+            node('span', { class: 'tool-category', text: 'Blueprinty' }),
+            node('h2', { text: 'Awatary Blueprintów' }),
+            node('p', { class: 'muted', text: 'Katalog ikon ICO dla produktów self-service.' })),
+          badge('Niedostępny', 'warning')),
+        node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać awatarów Blueprintów.' })));
     }
   }
 
@@ -856,6 +1042,15 @@ registerView({
   permission: 'settings.read',
   order: 157,
 }, hostnameDefaultsView);
+registerView({
+  id: 'blueprint-avatars',
+  label: 'Awatary Blueprintów',
+  iconName: 'box',
+  navigation: false,
+  navigationParent: 'tools',
+  permission: 'settings.read',
+  order: 157,
+}, blueprintAvatarsView);
 registerView({
   id: 'ansible-host-entry',
   label: 'Generator hosta Ansible',
