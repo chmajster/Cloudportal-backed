@@ -305,6 +305,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'/missing?purge=true', { method: 'DELETE' }" in script
     assert "registerCommand('inventory.cleanupMissingVm'" in script
     assert "button('Usuń pozostałe dane'" in script
+    assert "!['destroyed', 'reconciliation_required'].includes(item.status)" in script
     assert "(repairInventory ? 'refresh=true&' : '') + 'limit=200'" in script
     assert 'VM nie istnieje w Proxmox' in script
     assert 'nie została znaleziona na platformie' in script
