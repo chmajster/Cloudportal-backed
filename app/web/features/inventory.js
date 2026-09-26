@@ -56,7 +56,7 @@ function inventoryVmActions(item) {
     navigate('inventory');
   }));
   if (allowed('deployments.adopt') && allowed('terraform.read') && item.management_mode === 'external' && item.lifecycle_status === 'active' && !item.deployment_id) actions.push(button('Przejmij', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/adopt')));
-  if (allowed('inventory.delete') && (item.management_mode !== 'terraform' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z platformy źródłowej.', async () => {
+  if (allowed('inventory.delete') && (item.management_mode === 'external' || item.lifecycle_status === 'destroyed')) actions.push(button('Usuń z katalogu', () => confirmAction('Usuń z katalogu', 'Zasób nie zostanie usunięty z platformy źródłowej.', async () => {
     await api(`/inventory/vms/${item.id}`, { method: 'DELETE' });
     navigate('inventory');
   }), 'danger'));
@@ -287,7 +287,30 @@ function vmDetailActions(item, status = {}, snapshotCapability = null) {
     && allowed('jobs.execute')
     && allowed('terraform.execute');
   if (canRecreate) groups.danger.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
-  if (allowed('vms.delete')) groups.danger.push(button('Usuń VM', () => deleteVm(item), 'danger'));
+  const canDeleteDirectDeployment = item.management_mode === 'proxmox'
+    && item.deployment_id
+    && allowed('deployments.destroy')
+    && allowed('jobs.execute')
+    && allowed('vms.read')
+    && allowed('vms.delete')
+    && allowed('vms.power');
+  if (canDeleteDirectDeployment) {
+    groups.danger.push(button('Usuń VM', () => confirmAction(
+      'Usuń VM przez Proxmox API',
+      'VM zostanie trwale usunięta w Proxmox, a powiązane wdrożenie zostanie zamknięte.',
+      async () => {
+        await api('/deployments/' + encodeURIComponent(item.deployment_id) + '/destroy', {
+          method: 'POST',
+          body: {},
+          idempotent: true,
+        });
+        toast('Utworzono zadanie usuwania VM przez Proxmox API.');
+        navigate('my-resources');
+      },
+    ), 'danger'));
+  } else if (allowed('vms.delete') && item.management_mode !== 'terraform') {
+    groups.danger.push(button('Usuń VM', () => deleteVm(item), 'danger'));
+  }
 
   return groups;
 }
@@ -861,7 +884,7 @@ async function vmPower(item, action) {
 
 function deleteVm(item) {
   const fields = node('div', { class: 'form-grid' },
-    node('p', { class: 'wide field-help', text: 'Operacja usuwa VM bezpośrednio w Proxmox. Dla zasobów zarządzanych przez Terraform używaj akcji „Usuń zasoby” na wdrożeniu.' }),
+    node('p', { class: 'wide field-help', text: 'Operacja usuwa VM bezpośrednio w Proxmox. Dla VM powiązanych z deploymentem używaj akcji usuwania deploymentu.' }),
     checkboxField('Purge z konfiguracji HA/backup/replication', 'purge'),
     checkboxField('Usuń niepodpięte dyski', 'destroy_unreferenced_disks'));
   openModal({
