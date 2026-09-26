@@ -38,7 +38,7 @@ function nextFreeVmid(vms, templates) {
 
 function sourceVmLabel(item) {
   return [
-    'VMID ' + item.vmid,
+    String(item.vmid),
     item.name || ('vm-' + item.vmid),
     item.node || '—',
     statusLabel(item.status || 'unknown'),
