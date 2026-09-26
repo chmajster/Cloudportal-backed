@@ -886,8 +886,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'function showVmDetailsPage(' in script
     assert 'function vmRuntimeState(' in script
     assert "running: 'Uruchomiona'" in script
-    assert "node('span', { text: 'IP' })" in script
-    assert "info('Adres IP', primaryIp)" in script
+    assert "vmSummaryCard('Adres IP', primaryIp" in script
+    assert "vmFact('Adres IP', primaryIp, true)" in script
     assert 'let jobLogPollNonce = 0' in script
     assert 'let myResourcesPollTimer = null' in script
     assert "window.setTimeout(poll, 1500)" in script
@@ -897,10 +897,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "Po zakończeniu Terraform backend automatycznie doda VM" in script
     assert "parentView = null" in script
     assert "const returnLabel = 'Moje zasoby'" in script
-    assert "'start', 'Uruchom'" in script
-    assert "'shutdown', 'Wyłącz'" in script
-    assert "'reboot', 'Restart'" in script
-    assert "'reset', 'Twardy reset'" in script
+    assert "button('Uruchom', () => vmPower(item, 'start')" in script
+    assert "button('Wyłącz', () => vmPower(item, 'shutdown')" in script
+    assert "button('Restart', () => vmPower(item, 'reboot')" in script
+    assert "button('Twardy reset', () => vmPower(item, 'reset')" in script
     assert "button('Konsola'" in script
     assert "button('Snapshot'" in script
     assert "button('Backup'" in script
