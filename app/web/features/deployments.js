@@ -1193,6 +1193,26 @@ async function runStandaloneAnsible(initialPlaybookId = null) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
+function jobLogVmId(current, deployment = null, logs = []) {
+  const values = deployment?.variables || {};
+  const direct = current?.vm_id
+    ?? values.vm_id
+    ?? values.vmid
+    ?? values.target_vmid
+    ?? values.new_vmid
+    ?? null;
+  if (direct !== null && direct !== undefined && direct !== '') return String(direct);
+
+  for (const row of logs || []) {
+    const message = String(row?.message || '');
+    const match = message.match(/\bVMID\s+(\d+)\b/i)
+      || message.match(/\bvm[_-]?id\s*[=:]\s*(\d+)\b/i)
+      || message.match(/\/qemu\/(\d+)\b/i);
+    if (match) return match[1];
+  }
+  return '';
+}
+
 function jobLogIdFromRoute() {
   const route = String(location.hash.slice(1) || '').split('/page/')[0].replace(/\/+$/, '');
   const match = route.match(/^\/?jobs\/([^/]+)$/);
@@ -1227,18 +1247,18 @@ async function jobLogView() {
     }
   }, 'ghost');
 
-  dom.content.replaceChildren(
-    heading('Logi zadania ' + short(jobId, 18), [
-      button('← Zadania', () => navigate('jobs'), 'ghost'),
-      copyLink,
-    ]),
-    node('section', { class: 'panel job-log-page' },
-      metaHost,
-      statusHost,
-      inventoryState,
-      actionHost,
-      logOutput)
-  );
+  const headingHost = heading('Logi zadania ' + short(jobId, 18), [
+    button('← Zadania', () => navigate('jobs'), 'ghost'),
+    copyLink,
+  ]);
+  const pageHost = node('section', { class: 'panel job-log-page', 'data-vm-id': '' },
+    metaHost,
+    statusHost,
+    inventoryState,
+    actionHost,
+    logOutput);
+
+  dom.content.replaceChildren(headingHost, pageHost);
 
   let firstRender = true;
 
@@ -1262,12 +1282,21 @@ async function jobLogView() {
         api('/jobs/' + encodeURIComponent(jobId)),
         api('/jobs/' + encodeURIComponent(jobId) + '/logs?limit=200'),
       ]);
+      const deployment = current.deployment_id
+        ? await api('/deployments/' + encodeURIComponent(current.deployment_id)).catch(() => null)
+        : null;
+      const vmId = jobLogVmId(current, deployment, logs.items || []);
+      pageHost.dataset.vmId = vmId;
+      const headingText = 'Logi zadania ' + short(jobId, 18) + (vmId ? ' · VMID ' + vmId : '');
+      const headingTextNode = headingHost.querySelector('.page-heading-copy p, p');
+      if (headingTextNode) headingTextNode.textContent = headingText;
 
       metaHost.replaceChildren(
         node('dt', { text: 'Operacja' }), node('dd', { text: operationLabel(current.operation) }),
         node('dt', { text: 'ID zadania' }), node('dd', { class: 'mono', text: current.id }),
         node('dt', { text: 'Wdrożenie' }), node('dd', { class: 'mono', text: current.deployment_id || '—' }),
         node('dt', { text: 'Źródło' }), node('dd', { text: current.source || '—' }),
+        node('dt', { text: 'Numer VM' }), node('dd', { class: 'mono', text: vmId || '—' }),
         node('dt', { text: 'Utworzono' }), node('dd', { text: formatDate(current.created_at) })
       );
 

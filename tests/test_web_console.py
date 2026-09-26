@@ -307,6 +307,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.job-live-log' in stylesheet
     assert '.job-log-page' in stylesheet
     assert '.job-log-page-meta' in stylesheet
+    assert "node('dt', { text: 'Numer VM' })" in script
+    assert "'data-vm-id': ''" in script
+    assert "const vmId = jobLogVmId(current, deployment, logs.items || []);" in script
+    assert "(vmId ? ' · VMID ' + vmId : '')" in script
     assert "navigate('/jobs/' + encodeURIComponent(item.id))" in script
     assert "id: 'job-log'" in script
     assert "navigationParent: 'jobs'" in script
