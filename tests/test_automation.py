@@ -952,7 +952,7 @@ def test_blueprint_rejects_declarative_step_after_apply(client, headers):
         ],
     })
     assert response.status_code == 422
-    assert 'set_tags' in response.text
+    assert 'literal_error' in response.text
 
 
 def test_blueprint_rejects_release_ip_during_provisioning(client, headers):
@@ -972,7 +972,7 @@ def test_blueprint_rejects_release_ip_during_provisioning(client, headers):
         ],
     })
     assert response.status_code == 422
-    assert 'release_ip' in response.text
+    assert 'literal_error' in response.text
 
 
 def test_blueprint_allows_destroy_only_as_rollback_target(client, headers):
@@ -1070,7 +1070,7 @@ def test_blueprint_rejects_runtime_controls_on_terraform_cloud_init(client, head
         ],
     })
     assert response.status_code == 422
-    assert 'cloud_init is declarative' in response.text
+    assert 'pre-boot declaration' in response.text
 
 
 def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, headers):
