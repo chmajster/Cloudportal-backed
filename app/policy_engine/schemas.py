@@ -3,7 +3,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.policy_engine.engine import ENFORCEMENTS, POLICY_TYPES, STATUSES, validate_condition_tree, validate_effects
+from app.policy_engine.engine import (
+    ENFORCEMENTS, POLICY_TYPES, SCOPE_DIMENSIONS, STATUSES,
+    validate_condition_tree, validate_effects,
+)
 
 
 PolicyStatus = Literal["draft", "dry_run", "enforced", "disabled", "archived"]
@@ -43,6 +46,11 @@ class PolicyInput(BaseModel):
     def valid_scope(cls, value):
         if len(value) > 32:
             raise ValueError("Scope contains too many dimensions")
+        unknown = set(value) - SCOPE_DIMENSIONS
+        if unknown:
+            raise ValueError(
+                "Unsupported scope dimensions: " + ", ".join(sorted(unknown))
+            )
         if value.get("conditions"):
             validate_condition_tree(value["conditions"])
         return value
