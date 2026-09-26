@@ -214,7 +214,7 @@ function recreateVm(item) {
   );
 }
 
-function vmDetailActions(item, status = {}) {
+function vmDetailActions(item, status = {}, snapshotCapability = null) {
   const base = vmBase(item);
   const runtime = vmRuntimeState(status, item);
   const groups = {
@@ -246,8 +246,11 @@ function vmDetailActions(item, status = {}) {
   if (allowed('vms.console')) {
     groups.tools.push(button('Konsola', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'), 'primary'));
   }
-  if (allowed('snapshots.create')) {
+  if (allowed('snapshots.create') && snapshotCapability?.supported !== false) {
     groups.tools.push(button('Snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new')));
+  }
+  if (allowed('backups.create') && snapshotCapability?.supported === false) {
+    groups.tools.push(button('Backup zamiast snapshotu', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
   }
   if (allowed('backups.create')) {
     groups.tools.push(button('Backup', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
@@ -731,7 +734,13 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
   const routedDetails = state.view === 'routed-form'
     && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
-    const status = await api(`${vmBase(item)}/status`);
+    const [status, snapshotInfo] = await Promise.all([
+      api(`${vmBase(item)}/status`),
+      allowed('snapshots.read')
+        ? api(`${vmBase(item)}/snapshots`).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    const snapshotCapability = snapshotInfo?.capability || null;
     if (!routedDetails) {
       state.view = returnView;
       location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(returnView) : returnView;
@@ -793,7 +802,7 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
 
     const runtimeState = vmRuntimeState(status, item);
     const primaryIp = status.primary_ip || item.primary_ip || '—';
-    const actionGroups = vmDetailActions(item, status);
+    const actionGroups = vmDetailActions(item, status, snapshotCapability);
     const header = node('section', { class: 'vm-detail-header' },
       node('div', { class: 'vm-breadcrumbs' },
         node('button', { type: 'button', class: 'button link', onClick: () => navigate(returnView) }, returnLabel),
@@ -870,7 +879,19 @@ function deleteVm(item) {
   });
 }
 
-function createVmSnapshot(item) {
+async function createVmSnapshot(item) {
+  if (allowed('snapshots.read')) {
+    const snapshotResult = await api(`${vmBase(item)}/snapshots`);
+    const capability = snapshotResult.capability || {};
+    if (capability.supported === false) {
+      const message = capability.message || 'Snapshot nie jest obsługiwany przez tę VM.';
+      toast(message, 'error');
+      if (allowed('backups.create')) {
+        await navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new');
+      }
+      return;
+    }
+  }
   const fields = node('div', { class: 'form-grid' },
     field('Nazwa snapshotu', 'snapname', { required: true }),
     field('Opis', 'description', { wide: true }),

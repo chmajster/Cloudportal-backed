@@ -194,7 +194,7 @@ def test_snapshot_create_fails_before_proxmox_task_when_feature_is_unavailable(c
     })
     monkeypatch.setattr(
         ProxmoxProvider,
-        'create_snapshot',
+        '_post',
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('must not submit snapshot task')),
     )
 
@@ -204,6 +204,29 @@ def test_snapshot_create_fails_before_proxmox_task_when_feature_is_unavailable(c
     assert response.status_code == 409, response.text
     assert response.json()['detail']['code'] == 'SNAPSHOT_NOT_SUPPORTED'
     assert response.json()['detail']['capability']['supported'] is False
+
+
+def test_snapshot_preflight_is_shared_by_all_provider_callers(monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+
+    provider = object.__new__(ProxmoxProvider)
+    monkeypatch.setattr(provider, 'snapshot_capability', lambda *_args: {
+        'supported': False,
+        'check_available': True,
+        'reason': 'snapshot_feature_unavailable',
+        'message': 'Storage does not support snapshots.',
+    })
+    monkeypatch.setattr(
+        provider,
+        '_post',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('must not submit snapshot task')),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        provider.create_snapshot('pve01', 101, 'blocked')
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail['code'] == 'SNAPSHOT_NOT_SUPPORTED'
 
 
 def test_vm_rbac_separates_read_from_power(client, headers, monkeypatch):

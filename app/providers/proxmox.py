@@ -821,7 +821,21 @@ class ProxmoxProvider(InfrastructureProvider):
     def snapshots(self, node, vm_id):
         return self._get(f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/snapshot')
 
+    def ensure_snapshot_capability(self, node, vm_id):
+        capability = self.snapshot_capability(node, vm_id)
+        if capability.get('supported') is False:
+            raise HTTPException(
+                409,
+                {
+                    'code': 'SNAPSHOT_NOT_SUPPORTED',
+                    'message': capability.get('message') or 'Snapshot nie jest obsługiwany przez tę VM.',
+                    'capability': capability,
+                },
+            )
+        return capability
+
     def create_snapshot(self, node, vm_id, snapname, description='', include_ram=False):
+        self.ensure_snapshot_capability(node, vm_id)
         return self._post(
             f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/snapshot',
             {'snapname': snapname, 'description': description, 'vmstate': int(include_ram)},
