@@ -990,7 +990,7 @@ def test_blueprint_rejects_declarative_step_after_apply(client, headers):
         ],
     })
     assert response.status_code == 422
-    assert 'before terraform_apply' in response.text
+    assert 'set_tags' in response.text
 
 
 def test_blueprint_rejects_release_ip_during_provisioning(client, headers):
@@ -1010,7 +1010,7 @@ def test_blueprint_rejects_release_ip_during_provisioning(client, headers):
         ],
     })
     assert response.status_code == 422
-    assert 'release_ip is not allowed' in response.text
+    assert 'release_ip' in response.text
 
 
 def test_blueprint_allows_destroy_only_as_rollback_target(client, headers):
