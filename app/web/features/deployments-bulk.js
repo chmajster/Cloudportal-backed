@@ -66,7 +66,58 @@ function idempotencyKeyFor(keys, actionId, ids) {
   return keys.get(key);
 }
 
+async function submitSingle(actionId, id, label, keys, onSubmitted) {
+  const payload = requestPayload(actionId, [id], label);
+  try {
+    const result = await api(
+      '/resources/' + encodeURIComponent(id) + '/actions/' + encodeURIComponent(actionId),
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKeyFor(keys, actionId, [id]) },
+        body: { parameters: payload.parameters, reason: payload.reason },
+      },
+    );
+    const normalized = {
+      children: [{
+        resource_id: id,
+        action_request_id: result.action_request_id,
+        job_id: result.job_id,
+        status: String(result.state || 'queued').toUpperCase(),
+      }],
+      errors: [],
+    };
+    if (typeof onSubmitted === 'function') onSubmitted([id], normalized);
+    return normalized;
+  } catch (error) {
+    const detail = error?.data?.detail;
+    const normalized = {
+      children: [],
+      errors: [{
+        resource_id: id,
+        code: detail && typeof detail === 'object' ? detail.code : ('HTTP_' + (error?.status || 500)),
+        message: error?.message || 'Operacja nie powiodła się.',
+      }],
+    };
+    if (typeof onSubmitted === 'function') onSubmitted([id], normalized);
+    return normalized;
+  }
+}
+
+async function submitIndividually(actionId, ids, label, keys, onSubmitted) {
+  const summary = { children: [], errors: [] };
+  for (const id of ids) {
+    const result = await submitSingle(actionId, id, label, keys, onSubmitted);
+    summary.children.push(...result.children);
+    summary.errors.push(...result.errors);
+  }
+  return summary;
+}
+
 async function submitChunk(actionId, ids, label, keys, onSubmitted) {
+  if (ids.length === 1) {
+    return [await submitSingle(actionId, ids[0], label, keys, onSubmitted)];
+  }
+
   try {
     const result = await api('/day2-actions/bulk', {
       method: 'POST',
@@ -76,12 +127,17 @@ async function submitChunk(actionId, ids, label, keys, onSubmitted) {
     if (typeof onSubmitted === 'function') onSubmitted(ids, result);
     return [result];
   } catch (error) {
-    if (!isBulkLimitError(error) || ids.length <= 1) throw error;
-    const middle = Math.ceil(ids.length / 2);
-    return [
-      ...(await submitChunk(actionId, ids.slice(0, middle), label, keys, onSubmitted)),
-      ...(await submitChunk(actionId, ids.slice(middle), label, keys, onSubmitted)),
-    ];
+    if (isBulkLimitError(error) && ids.length > 1) {
+      const middle = Math.ceil(ids.length / 2);
+      return [
+        ...(await submitChunk(actionId, ids.slice(0, middle), label, keys, onSubmitted)),
+        ...(await submitChunk(actionId, ids.slice(middle), label, keys, onSubmitted)),
+      ];
+    }
+    if (Number(error?.status) >= 500) {
+      return [await submitIndividually(actionId, ids, label, keys, onSubmitted)];
+    }
+    throw error;
   }
 }
 
@@ -93,8 +149,11 @@ async function submitBulk(actionId, items, label, keys) {
   }
 
   const results = [];
-  const markSubmitted = submittedIds => {
-    submittedIds.forEach(id => selection.delete(String(id)));
+  const markSubmitted = (_submittedIds, result) => {
+    for (const child of result?.children || []) {
+      if (child?.resource_id === undefined || child?.resource_id === null) continue;
+      selection.delete(String(child.resource_id));
+    }
   };
   for (const batch of batches) {
     results.push(...(await submitChunk(actionId, batch, label, keys, markSubmitted)));

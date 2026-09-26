@@ -245,7 +245,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "await submitChunk(actionId, ids.slice(0, middle), label, keys, onSubmitted)" in script
     assert "document.addEventListener('cloudportal:app-hidden', () => selection.clear())" in script
     assert "headers: { 'Idempotency-Key': idempotencyKeyFor(keys, actionId, ids) }" in script
-    assert "submittedIds.forEach(id => selection.delete(String(id)))" in script
+    assert "async function submitSingle(actionId, id, label, keys, onSubmitted)" in script
+    assert "'/resources/' + encodeURIComponent(id) + '/actions/' + encodeURIComponent(actionId)" in script
+    assert "if (ids.length === 1)" in script
+    assert "if (Number(error?.status) >= 500)" in script
+    assert "for (const child of result?.children || [])" in script
+    assert "selection.delete(String(child.resource_id))" in script
+    assert "submittedIds.forEach(id => selection.delete(String(id)))" not in script
     assert "const pending = selected.filter(item => selection.has(resourceId(item)))" in script
     assert "Wybierz wszystkie" in script
     assert "Wyczyść" in script
