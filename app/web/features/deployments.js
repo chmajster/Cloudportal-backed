@@ -903,6 +903,19 @@ async function jobsView() {
         item.provider_waiting || jobDispatchedToWorker(item) ? 'warning' : statusKind(item.status)
       ) },
       { label: 'Etap', value: item => window.JobStageUI.cell(item) },
+      { label: 'Postęp', value: item => {
+        const percent = Number(item.progress_percent);
+        const hasPercent = Number.isFinite(percent) && percent >= 0 && percent <= 100;
+        const message = String(item.progress_message || '').trim();
+        if (!hasPercent && !message) return '—';
+        return node('div', { class: 'my-resource-provisioning-progress job-progress-cell' },
+          node('div', {
+            class: 'my-resource-provisioning-progress-track' + (hasPercent ? '' : ' indeterminate'),
+          }, node('span', { style: hasPercent ? 'width:' + percent.toFixed(1) + '%' : '' })),
+          node('div', { class: 'my-resource-provisioning-progress-copy' },
+            node('span', { text: message || 'Operacja w toku' }),
+            node('strong', { text: hasPercent ? Math.round(percent) + '%' : 'w toku' })));
+      } },
       { label: 'Synchronizacja', value: item => item.provider_waiting
         ? node('span', { class: 'muted', text: 'Próba ' + item.provider_retry_attempts + ' · kolejna ' + formatDate(item.provider_next_retry_at) })
         : jobDispatchedToWorker(item)
@@ -927,7 +940,7 @@ async function jobsView() {
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(item.status) && !item.cancel_requested) {
         actions.push(button('Anuluj', () => confirmAction(
           'Anuluj zadanie',
-          `Zadanie ${short(item.id)} zostanie zatrzymane. Trwający Terraform/Ansible otrzyma przerwanie.`,
+          `Zadanie ${short(item.id)} zostanie zatrzymane. Trwająca operacja providera/Terraform/Ansible otrzyma przerwanie.`,
           async () => {
             const result = await api(`/jobs/${item.id}/cancel`, { method: 'POST' });
             toast(result.status === 'cancelled' ? 'Zadanie anulowane.' : 'Anulowanie rozpoczęte.');
