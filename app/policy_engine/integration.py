@@ -12,17 +12,50 @@ from app.projects.models import Project
 from app.tenancy.models import Tenant
 
 
-def _actor(actor, permissions):
-    user = getattr(actor, "user", None)
+def _role_values(db, user, scope):
     roles = list(getattr(user, "roles", []) or [])
+    role_ids = {int(getattr(role, "id")) for role in roles if getattr(role, "id", None) is not None}
+    role_names = {str(getattr(role, "name")) for role in roles if getattr(role, "name", None)}
+    if db is not None and user is not None and scope:
+        from app.models import Role
+        from app.projects.models import ProjectRoleAssignment
+        from app.tenancy.models import TenantRoleAssignment
+
+        user_id = getattr(user, "id", None)
+        tenant_id = scope.get("tenant_id")
+        project_id = scope.get("project_id")
+        if user_id is not None and tenant_id:
+            role_ids.update(db.scalars(select(TenantRoleAssignment.role_id).where(
+                TenantRoleAssignment.tenant_id == str(tenant_id),
+                TenantRoleAssignment.user_id == int(user_id),
+            )).all())
+        if user_id is not None and tenant_id and project_id:
+            role_ids.update(db.scalars(select(ProjectRoleAssignment.role_id).where(
+                ProjectRoleAssignment.tenant_id == str(tenant_id),
+                ProjectRoleAssignment.project_id == str(project_id),
+                ProjectRoleAssignment.user_id == int(user_id),
+            )).all())
+        if role_ids:
+            role_names.update(str(role.name) for role in db.scalars(
+                select(Role).where(Role.id.in_(role_ids))
+            ).all())
+    return sorted(role_ids), sorted(role_names)
+
+
+def _user_actor(user, permissions, db=None, scope=None):
+    role_ids, role_names = _role_values(db, user, scope or {})
     return {
-        "id": getattr(actor, "user_id", None),
+        "id": getattr(user, "id", None),
         "username": getattr(user, "username", ""),
-        "role_ids": [getattr(role, "id", None) for role in roles],
-        "roles": [getattr(role, "name", "") for role in roles],
+        "role_ids": role_ids,
+        "roles": role_names,
         "groups": [],
         "permissions": sorted(set(permissions or ())),
     }
+
+
+def _actor(actor, permissions, db=None, scope=None):
+    return _user_actor(getattr(actor, "user", None), permissions, db, scope)
 
 
 def _number_from(values, keys):
@@ -217,7 +250,7 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
         apmid=apmid_value, environment=environment_value,
     )
     context = {
-        "actor": _actor(actor, permissions),
+        "actor": _actor(actor, permissions, db, scope_context),
         "scope": scope_context,
         "request": {
             "action": "vm.create",
@@ -284,7 +317,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
         apmid=apmid_value, environment=environment_value,
     )
     context = {
-        "actor": _actor(actor, permissions),
+        "actor": _actor(actor, permissions, db, scope_context),
         "scope": scope_context,
         "request": {
             "action": "day2." + str(action_id),
@@ -338,7 +371,6 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
         apmid=apmid_value,
         environment=environment_value,
     )
-    roles = list(getattr(user, "roles", []) or [])
     resource = {
         "type": "vm",
         "id": str(getattr(deployment, "id", "") or ""),
@@ -361,14 +393,7 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
         "variables": copy.deepcopy(variables),
     }
     context = {
-        "actor": {
-            "id": getattr(user, "id", None),
-            "username": getattr(user, "username", ""),
-            "role_ids": [getattr(role, "id", None) for role in roles],
-            "roles": [getattr(role, "name", "") for role in roles],
-            "groups": [],
-            "permissions": sorted(set(permissions or ())),
-        },
+        "actor": _user_actor(user, permissions, db, scope_context),
         "scope": scope_context,
         "request": {
             "action": "vm.create",
@@ -412,16 +437,8 @@ def revalidate_day2_job(db, job, action_request, user, permissions, target):
         apmid=apmid_value,
         environment=environment_value,
     )
-    roles = list(getattr(user, "roles", []) or [])
     context = {
-        "actor": {
-            "id": getattr(user, "id", None),
-            "username": getattr(user, "username", ""),
-            "role_ids": [getattr(role, "id", None) for role in roles],
-            "roles": [getattr(role, "name", "") for role in roles],
-            "groups": [],
-            "permissions": sorted(set(permissions or ())),
-        },
+        "actor": _user_actor(user, permissions, db, scope_context),
         "scope": scope_context,
         "request": {
             "action": "day2." + str(getattr(action_request, "action", "")),
