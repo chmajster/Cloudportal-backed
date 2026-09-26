@@ -529,6 +529,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Dodaj własny playbook Ansible' in script
     assert 'Wczytaj plik .yml / .yaml' in script
     assert 'ansible.manage' in script
+    assert "button('Podgląd', () => showCatalogPlaybookPreview(item))" in script
+    assert 'async function showCatalogPlaybookPreview(item)' in script
+    assert 'async function copySystemPlaybook(item)' in script
+    assert "button('Edytuj kopię', () => copySystemPlaybook(item))" in script
+    assert 'Usuń systemowy playbook z użycia' in script
+    assert "item.enabled === false ? 'Przywróć do użycia' : 'Usuń z użycia'" in script
+    assert "rowActions.push(button('Edytuj'" in script
+    assert "rowActions.push(button('Usuń'" in script
+    assert "dom.modalTitle.textContent = 'Podgląd playbooka Ansible'" in script
     assert "item.custom ? 'Własny' : 'Systemowy'" in script
     assert "item.enabled === false ? 'Włącz' : 'Wyłącz'" in script
     assert "item.enabled !== false" in script
