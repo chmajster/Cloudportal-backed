@@ -592,15 +592,18 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         parsed.variables = validate_template_variables(
             parsed.template, parsed.variables
         ).model_dump(mode='json')
-        # Persist the Policy Engine's effective classification in the immutable
-        # Blueprint job snapshot as well as in deployment variables. Runtime
-        # facts must never expose the pre-policy APMID/environment after placement
-        # or governance effects changed them.
+        # Classification/governance metadata is persisted in the immutable
+        # Blueprint snapshot, never mixed into Terraform/provider variables.
+        effective_context = policy_result.get('effective_context') or {}
+        effective_resource = effective_context.get('resource') or {}
+        effective_scope = effective_context.get('scope') or {}
         for field in ('apmid', 'environment', 'organization', 'project'):
-            value = parsed.variables.get(field)
+            value = effective_resource.get(field)
+            if value in (None, ''):
+                value = effective_scope.get(field)
             if value not in (None, ''):
                 blueprint_variables[field] = value
-        scope_key = parsed.variables.get('resource_scope_key')
+        scope_key = effective_resource.get('scope_key') or effective_scope.get('key')
         if scope_key not in (None, ''):
             blueprint_variables['scope_key'] = scope_key
         provider = find(db, Provider, parsed.provider_id)
