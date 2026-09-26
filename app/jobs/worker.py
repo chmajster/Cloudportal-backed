@@ -2393,7 +2393,7 @@ def _execute_unfenced(job_id):
                 context.deployment = db.get(Deployment, job.deployment_id)
                 context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
                 if (
-                    job.operation in {'terraform.apply', 'terraform.import', 'terraform.destroy'}
+                    job.operation in {'terraform.apply', 'terraform.import', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'}
                     and not (job.payload or {}).get('_quota_checked')
                 ):
                     quota_job = db.get(Job, job.id)
@@ -2401,8 +2401,11 @@ def _execute_unfenced(job_id):
                     db.commit()
                     job.payload = dict(quota_job.payload or {})
                     context.job.payload = dict(quota_job.payload or {})
-                if job.operation == 'terraform.apply':
-                    if ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+                if job.operation in {'terraform.apply', 'proxmox.provision'}:
+                    if (
+                        job.operation == 'terraform.apply'
+                        and ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only')
+                    ):
                         raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
                     if has_released_allocations(db, context.deployment.id):
                         raise ExecutionFailed('Deployment allocations were released; execute the Blueprint again')
@@ -2437,7 +2440,7 @@ def _execute_unfenced(job_id):
                 context.ansible, context.ansible_credential = context.ansible_runs[0]
         if (
             settings().provider_offline_queue_enabled
-            and job.operation in {'terraform.apply', 'terraform.destroy'}
+            and job.operation in {'terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'}
             and context.deployment is not None
             and context.deployment.provider == 'proxmox'
         ):
@@ -2448,7 +2451,7 @@ def _execute_unfenced(job_id):
                     return
                 reason = availability.get('reason') or 'configuration'
                 raise ExecutionFailed(
-                    'Proxmox is reachable but cannot be used for Terraform execution; '
+                    'Proxmox is reachable but cannot be used for infrastructure execution; '
                     f'check credentials, TLS and provider configuration ({reason})'
                 )
             clear_provider_wait(job.id)
@@ -2456,6 +2459,18 @@ def _execute_unfenced(job_id):
         context.stage('job.running')
         if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
             execute_proxmox_clone_template(context)
+        elif job.operation == 'proxmox.provision':
+            run_proxmox_blueprint_workflow(context)
+            if not context.blueprint_workflow_completed:
+                raise ExecutionFailed('Direct Proxmox Blueprint workflow did not complete')
+        elif job.operation == 'proxmox.destroy':
+            proxmox_provision.destroy(context)
+            cleanup_awx_after_destroy(context)
+            with session() as quota_db:
+                quota_job = quota_db.get(Job, job.id)
+                if quota_job is not None:
+                    commit_job_reservation(quota_db, quota_job)
+                    quota_db.commit()
         elif job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             blueprint = (job.payload or {}).get('blueprint') or {}
@@ -2556,7 +2571,7 @@ def _execute_unfenced(job_id):
                 elif context.rollback_destroyed:
                     deployment.status = 'destroyed'
                 else:
-                    deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
+                    deployment.status = 'destroyed' if status == 'successful' and current.operation in {'terraform.destroy', 'proxmox.destroy'} else status
                 if current.operation == 'terraform.import' and status == 'successful':
                     deployment.status = 'imported'
             if owns_deployment and deployment.status == 'destroyed':
