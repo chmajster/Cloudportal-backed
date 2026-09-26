@@ -53,7 +53,7 @@ def test_installer_without_arguments_opens_action_menu():
     assert 'Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację' in INSTALLER
     assert 'Recovery password / konto Administrator — systemd' in INSTALLER
     assert 'Recovery password / konto Administrator — Docker' in INSTALLER
-    assert "Wybierz operację [0-10]:" in INSTALLER
+    assert "Wybierz operację [0-14]:" in INSTALLER
 
 
 def test_installer_without_arguments_requires_tty_in_automation():
@@ -204,3 +204,11 @@ def test_docker_status_and_repair_include_updater_channel():
     assert "Updater: /update-status odpowiada przez reverse proxy." in INSTALLER
     assert "docker_prepare_updater_config ''" in INSTALLER
     assert 'docker_activate_updater "$release"' in INSTALLER
+
+
+def test_default_worker_concurrency_is_ten_and_legacy_auto_update_is_migrated():
+    assert "default_workers=10" in INSTALLER
+    assert "workers=${previous_workers:-$default_workers}" in INSTALLER
+    assert "workers=${previous_docker_workers:-$default_workers}" in INSTALLER
+    assert 'Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers.' in INSTALLER
+    assert '--workers N                 Liczba workerów 1-64; domyślnie 10.' in INSTALLER
