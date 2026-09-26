@@ -107,14 +107,6 @@ function validateWorkflow(state, editingItem) {
     if (step.type === 'terraform_destroy' && !rollbackTargets.has(step.id)) {
       fail('terraform_destroy jest dozwolony wyłącznie jako cel rollbacku.');
     }
-    if (step.type === 'release_ip') fail('release_ip nie jest dozwolony podczas provisioningu VM.');
-  }
-
-  const compileTime = new Set(['generate_hostname', 'allocate_ip']);
-  for (const step of steps) {
-    if (compileTime.has(step.type) && (
-      Object.keys(step.conditions || {}).length || Number(step.retry || 0) || step.rollback
-    )) fail('Kroki compile-time nie mogą mieć conditions, retry ani rollback.');
   }
 
   const approvalSteps = steps.filter(step => step.type === 'approval');
