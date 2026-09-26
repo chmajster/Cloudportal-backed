@@ -171,9 +171,9 @@ def validate_blueprint_template_variables(data: BlueprintInput):
     Proxmox Blueprints created by the step-by-step wizard contain only the generated
     hostname placeholder. Replacing that single placeholder lets the canonical
     template model reject invalid IPv4/DNS/VLAN/CPU/RAM/storage data before a
-    Blueprint can be persisted. Legacy self-service Blueprints may template other
-    values, including placeholders nested inside arrays or dictionaries; those
-    remain execution-time validated because their concrete values do not exist yet.
+    Blueprint can be persisted. Blueprints may template runtime values, including placeholders nested inside
+    arrays or dictionaries; those remain execution-time validated because their
+    concrete values do not exist yet.
     """
     variables = dict(data.deployment.variables or {})
     if data.deployment.template != 'proxmox-vm':
@@ -197,9 +197,6 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     existing_template = existing.deployment.get('template') if existing else None
     existing_playbooks = set()
     if existing:
-        legacy_ansible = existing.deployment.get('ansible') or {}
-        if legacy_ansible.get('playbook'):
-            existing_playbooks.add(legacy_ansible['playbook'])
         existing_playbooks.update(
             row.get('playbook')
             for row in (existing.deployment.get('ansible_runs') or [])
@@ -208,7 +205,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     if data.deployment.template != existing_template:
         require_catalog_item_enabled(db, 'templates', data.deployment.template)
     template_meta, _ = template_definition(data.deployment.template)
-    requested_ansible = ([data.deployment.ansible] if data.deployment.ansible else []) + list(data.deployment.ansible_runs)
+    requested_ansible = list(data.deployment.ansible_runs)
     for ansible_run in requested_ansible:
         if ansible_run.playbook not in existing_playbooks:
             require_catalog_item_enabled(db, 'playbooks', ansible_run.playbook)
@@ -538,8 +535,6 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     required_workflow_permissions = set()
     if 'create_snapshot' in workflow_types:
         required_workflow_permissions.add('snapshots.create')
-    if 'release_ip' in workflow_types:
-        required_workflow_permissions.add('ipam.release')
     if 'terraform_destroy' in workflow_types:
         required_workflow_permissions.add('deployments.destroy')
     missing_workflow_permissions = required_workflow_permissions - request.state.permissions
@@ -581,7 +576,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             raise HTTPException(422, 'Policy-selected provider does not match the Terraform template')
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
-        primary_ansible = parsed.ansible or (ansible_runs[0] if ansible_runs else None)
+        primary_ansible = ansible_runs[0] if ansible_runs else None
         credential_ids = {parsed.credentials_id}
         if primary_ansible:
             credential_ids.add(primary_ansible.credentials_id)
@@ -598,7 +593,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             awx_credential = locked_credential(db, awx.credential_id)
             if awx_credential.type != 'awx':
                 raise HTTPException(422, 'AWX onboarding requires an AWX credential')
-        configured_ansible = ansible_runs or ([parsed.ansible] if parsed.ansible else [])
+        configured_ansible = list(ansible_runs)
         if configured_ansible:
             if provider.type != 'proxmox':
                 raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
@@ -608,8 +603,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                 validate_ansible(db, ansible_run)
         deployment = Deployment(name=parsed.name, provider_id=provider.id, provider=provider.type, template=parsed.template,
                                 credentials_id=parsed.credentials_id, variables=parsed.variables,
-                                workflow={'ansible': primary_ansible.model_dump() if primary_ansible else None,
-                                          'ansible_runs': [run.model_dump() for run in configured_ansible],
+                                workflow={'ansible_runs': [run.model_dump() for run in configured_ansible],
                                           'awx': awx.model_dump() if awx else None,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
                                                         'variables': blueprint_variables, 'steps': row.workflow,
@@ -644,8 +638,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         )
         operation = 'proxmox.provision' if direct_proxmox else 'terraform.apply'
         job = new_job(db, request, actor, operation, deployment,
-                      {'ansible': primary_ansible.model_dump() if primary_ansible else None,
-                       'ansible_runs': [run.model_dump() for run in configured_ansible],
+                      {'ansible_runs': [run.model_dump() for run in configured_ansible],
                        'blueprint': deployment.workflow['blueprint']})
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
