@@ -389,6 +389,110 @@ def test_terraform_failure_and_retry(client,headers,monkeypatch):
     assert retried.json()['current_stage'] is None
 
 
+def test_failed_awx_onboarding_can_be_manually_accepted_and_resumed(client, headers):
+    d = deployment(client, headers)
+    with session() as db:
+        job = db.get(Job, d['job']['id'])
+        dep = db.get(Deployment, d['id'])
+        payload = dict(job.payload or {})
+        payload['blueprint'] = {
+            'steps': [
+                {'id': 'apply', 'type': 'terraform_apply'},
+                {'id': 'awx', 'type': 'register_awx', 'depends_on': ['apply']},
+                {'id': 'after-awx', 'type': 'notification', 'depends_on': ['awx']},
+            ],
+        }
+        payload['_current_stage'] = 'workflow.step.start:awx:register_awx'
+        payload['_workflow_runtime'] = {
+            'completed_steps': ['apply'],
+            'provider_applied': True,
+            'inventory_synced': True,
+            'plan_ready': False,
+            'ansible_ran': False,
+        }
+        payload['_recreate'] = True
+        job.payload = payload
+        job.status = 'failed'
+        job.error = 'AWX onboarding failed: AWX API is unreachable'
+        dep.status = 'failed'
+        dep.active_job_id = None
+        db.add(ManagedVM(
+            provider_id=dep.provider_id,
+            deployment_id=dep.id,
+            node='pve',
+            vm_id=120,
+            name=dep.name,
+            management_mode='terraform',
+            lifecycle_status='active',
+            created_by=dep.created_by,
+            tenant_id=dep.tenant_id,
+            project_id=dep.project_id,
+        ))
+        db.commit()
+
+    response = client.post(
+        '/api/v1/jobs/' + d['job']['id'] + '/accept-awx-onboarding',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    )
+    assert response.status_code == 202, response.text
+    resumed_id = response.json()['id']
+    assert response.json()['retry_of'] == d['job']['id']
+    assert response.json()['current_stage'] is None
+
+    with session() as db:
+        original = db.get(Job, d['job']['id'])
+        resumed = db.get(Job, resumed_id)
+        dep = db.get(Deployment, d['id'])
+        runtime = resumed.payload['_workflow_runtime']
+
+        assert resumed.status == 'queued'
+        assert set(runtime['completed_steps']) == {'apply', 'awx'}
+        assert runtime['provider_applied'] is True
+        assert runtime['inventory_synced'] is True
+        assert runtime['manual_overrides'][-1]['step_id'] == 'awx'
+        assert runtime['manual_overrides'][-1]['source_job_id'] == original.id
+        assert '_recreate' not in resumed.payload
+        assert dep.active_job_id == resumed.id
+        assert dep.status == 'queued'
+        assert any(
+            'workflow.awx.manual_accept:' in row.message
+            for row in db.scalars(select(JobLog).where(JobLog.job_id == original.id)).all()
+        )
+
+
+def test_manual_awx_acceptance_rejects_non_awx_failure(client, headers):
+    d = deployment(client, headers)
+    with session() as db:
+        job = db.get(Job, d['job']['id'])
+        dep = db.get(Deployment, d['id'])
+        payload = dict(job.payload or {})
+        payload['blueprint'] = {
+            'steps': [
+                {'id': 'apply', 'type': 'terraform_apply'},
+                {'id': 'ssh', 'type': 'wait_for_ssh', 'depends_on': ['apply']},
+            ],
+        }
+        payload['_current_stage'] = 'workflow.step.start:ssh:wait_for_ssh'
+        payload['_workflow_runtime'] = {
+            'completed_steps': ['apply'],
+            'provider_applied': True,
+            'inventory_synced': True,
+        }
+        job.payload = payload
+        job.status = 'failed'
+        job.error = 'SSH timeout'
+        dep.status = 'failed'
+        dep.active_job_id = None
+        db.commit()
+
+    response = client.post(
+        '/api/v1/jobs/' + d['job']['id'] + '/accept-awx-onboarding',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    )
+    assert response.status_code == 409, response.text
+    assert 'AWX onboarding' in response.text
+
+
 def test_cancel_before_execution(client,headers,monkeypatch):
     d=deployment(client,headers)
     assert client.post('/api/v1/jobs/'+d['job']['id']+'/cancel',headers=headers).status_code==200

@@ -24,7 +24,7 @@ from app.jobs.approval import gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
 from app.jobs.force_dispatch import ForceDispatchConflict, ForceDispatchUnavailable, force_dispatch_job
 from app.quotas.service import prepare_job_reservation, release_job_reservation
-from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
+from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedVM, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
 from app.projects.models import Project
@@ -704,6 +704,141 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
     audit(db, request, 'blueprint.execution.approved', 'jobs', job.id)
     db.flush()
     return job_public(job)
+
+
+@router.post('/jobs/{id}/accept-awx-onboarding', status_code=202, response_model=JobOutput)
+def accept_awx_onboarding(
+    id: str,
+    request: Request,
+    actor=Depends(require('jobs.execute')),
+    db=Depends(get_db, scope='function'),
+):
+    original = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if original is None:
+        raise HTTPException(404, 'Job not found')
+    if original.status != 'failed':
+        raise HTTPException(409, 'Only a failed AWX onboarding job can be accepted manually')
+    if original.operation != 'terraform.apply' or not original.deployment_id:
+        raise HTTPException(409, 'Manual AWX onboarding acceptance requires a Blueprint terraform.apply job')
+
+    check_job_permissions(request, original.operation)
+    deployment = db.scalar(
+        select(Deployment).where(Deployment.id == original.deployment_id).with_for_update()
+    )
+    if deployment is None:
+        raise HTTPException(404, 'Deployment not found')
+    if deployment.active_job_id:
+        raise HTTPException(409, 'Deployment is busy')
+    if deployment.status in {'destroyed', 'reconciliation_required'}:
+        raise HTTPException(409, 'Deployment cannot resume AWX onboarding in its current state')
+
+    payload = dict(original.payload or {})
+    stage = str(payload.get('_current_stage') or '').strip()
+    prefix = 'workflow.step.start:'
+    if not stage.startswith(prefix):
+        raise HTTPException(409, 'Failed job is not stopped on a Blueprint workflow step')
+    step_id, separator, step_type = stage[len(prefix):].partition(':')
+    if not separator or not step_id or step_type != 'register_awx':
+        raise HTTPException(409, 'Failed job is not stopped on AWX onboarding')
+
+    blueprint = payload.get('blueprint') or ((deployment.workflow or {}).get('blueprint') or {})
+    steps = list(blueprint.get('steps') or []) if isinstance(blueprint, dict) else []
+    matching_step = next(
+        (
+            step for step in steps
+            if str((step or {}).get('id') or '') == step_id
+            and str((step or {}).get('type') or '') == 'register_awx'
+        ),
+        None,
+    )
+    if matching_step is None:
+        raise HTTPException(409, 'AWX onboarding step no longer exists in the Blueprint snapshot')
+
+    runtime = dict(payload.get('_workflow_runtime') or {})
+    if runtime.get('provider_applied') is not True or runtime.get('inventory_synced') is not True:
+        raise HTTPException(
+            409,
+            'AWX onboarding can be accepted manually only after Terraform apply and inventory synchronization',
+        )
+    managed_vm = db.scalar(select(ManagedVM).where(
+        ManagedVM.deployment_id == deployment.id,
+        ManagedVM.lifecycle_status == 'active',
+    ).limit(1))
+    if managed_vm is None:
+        raise HTTPException(409, 'Managed VM is not active; manual AWX onboarding acceptance is unsafe')
+
+    accepted_at = now().isoformat()
+    completed_steps = {
+        str(value) for value in (runtime.get('completed_steps') or [])
+    }
+    completed_steps.add(step_id)
+    runtime['completed_steps'] = sorted(completed_steps)
+    overrides = list(runtime.get('manual_overrides') or [])
+    overrides.append({
+        'step_id': step_id,
+        'step_type': 'register_awx',
+        'accepted_by': actor.user_id,
+        'accepted_at': accepted_at,
+        'source_job_id': original.id,
+    })
+    runtime['manual_overrides'] = overrides[-50:]
+    payload['_workflow_runtime'] = runtime
+
+    for key in (
+        '_approval',
+        '_current_stage',
+        '_provider_wait',
+        '_quota_checked',
+        '_quota_reservation_id',
+        '_state_recovery',
+        '_auto_resume',
+        '_recreate',
+    ):
+        payload.pop(key, None)
+
+    def create():
+        resumed = new_job(
+            db,
+            request,
+            actor,
+            original.operation,
+            deployment,
+            payload,
+            retry_of=original.id,
+            attempt=original.attempt + 1,
+        )
+        db.add(JobLog(
+            job_id=original.id,
+            message=(
+                f'workflow.awx.manual_accept: step={step_id}; user={actor.user_id}; '
+                f'resume_job={resumed.id}'
+            ),
+        ))
+        db.add(JobLog(
+            job_id=resumed.id,
+            message=(
+                f'workflow.awx.manual_accept.resumed: step={step_id}; '
+                f'source_job={original.id}; terraform_apply=checkpoint_reused'
+            ),
+        ))
+        audit(
+            db,
+            request,
+            'workflow.awx.manual_accept',
+            'jobs',
+            original.id,
+            'success',
+        )
+        return job_public(resumed)
+
+    return idempotent(
+        db,
+        request,
+        actor,
+        {'job_id': original.id, 'action': 'accept_awx_onboarding', 'step_id': step_id},
+        create,
+        required=True,
+    )
 
 
 @router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)
