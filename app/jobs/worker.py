@@ -2140,6 +2140,235 @@ def run_blueprint_workflow(context, executor):
     context.stage('workflow.completed')
     return runtime['workspace']
 
+
+def run_proxmox_blueprint_workflow(context):
+    """Execute a Proxmox Blueprint directly through the provider API, without Terraform."""
+    blueprint = (context.job.payload or {}).get('blueprint') or {}
+    steps = blueprint_workflow_order(blueprint.get('steps') or [])
+    if not steps:
+        raise ExecutionFailed('Direct Proxmox Blueprint has no workflow steps')
+
+    unsupported = sorted({str(step.get('type')) for step in steps} - BLUEPRINT_SUPPORTED_STEPS)
+    if unsupported:
+        raise ExecutionFailed('Unsupported Blueprint workflow steps: ' + ', '.join(unsupported))
+    terraform_steps = sorted({
+        str(step.get('type')) for step in steps
+        if str(step.get('type')).startswith('terraform_')
+    })
+    if terraform_steps:
+        raise ExecutionFailed(
+            'Direct Proxmox provisioning cannot execute Terraform steps: '
+            + ', '.join(terraform_steps)
+        )
+
+    saved_runtime = dict((context.job.payload or {}).get('_workflow_runtime') or {})
+    completed_steps = {
+        str(value) for value in (saved_runtime.get('completed_steps') or [])
+    }
+    explicit_ansible_completed = any(
+        str(step.get('type')) == 'run_ansible_playbook'
+        and str(step.get('id')) in completed_steps
+        for step in steps
+    )
+    runtime = {
+        'workspace': None,
+        'inventory_synced': bool(saved_runtime.get('inventory_synced')),
+        'addresses': None,
+        'applied': bool(saved_runtime.get('provider_applied')),
+        'ansible_ran': bool(saved_runtime.get('ansible_ran') or explicit_ansible_completed),
+        'ansible_completed_runs': {
+            int(value) for value in (saved_runtime.get('ansible_completed_runs') or [])
+        },
+        'ansible_inflight_run': saved_runtime.get('ansible_inflight_run'),
+        'awx_launches': dict(saved_runtime.get('awx_launches') or {}),
+        'prepared': [],
+        'step_states': {step_id: 'completed' for step_id in completed_steps},
+        'plan_ready': False,
+        'plan_sha256': None,
+    }
+
+    by_id = {str(step.get('id')): step for step in steps}
+    rollback_targets = {str(step.get('rollback')) for step in steps if step.get('rollback')}
+
+    def sync_direct_inventory():
+        if runtime['inventory_synced']:
+            return
+        proxmox_provision.register_inventory(context)
+        runtime['inventory_synced'] = True
+        with session() as quota_db:
+            quota_job = quota_db.get(Job, context.job.id)
+            if quota_job is not None:
+                commit_job_reservation(quota_db, quota_job)
+                quota_db.commit()
+        persist_workflow_runtime(context, runtime)
+
+    for step in steps:
+        step_id = str(step.get('id'))
+        step_type = str(step.get('type'))
+
+        if runtime['step_states'].get(step_id) == 'completed':
+            context.log(f'workflow.step.resumed: {step_id}:{step_type}: already completed')
+            continue
+        if step_id in rollback_targets:
+            runtime['step_states'][step_id] = 'rollback_only'
+            context.log(f'workflow.step.rollback_only: {step_id}:{step_type}')
+            continue
+
+        dependencies = [str(value) for value in (step.get('depends_on') or [])]
+        blocked = [
+            dependency for dependency in dependencies
+            if runtime['step_states'].get(dependency) != 'completed'
+        ]
+        if blocked:
+            runtime['step_states'][step_id] = 'blocked'
+            context.log(
+                f'workflow.step.blocked: {step_id}:{step_type}: '
+                'dependency not executed: ' + ', '.join(blocked)
+            )
+            continue
+
+        if not blueprint_conditions_match(step, context):
+            runtime['step_states'][step_id] = 'skipped'
+            context.log(f'workflow.step.skipped: {step_id}:{step_type}: condition=false')
+            continue
+
+        retry = int(step.get('retry') or 0)
+        timeout = workflow_step_timeout(step_type, step.get('timeout') or 600)
+        attempts = retry + 1
+
+        for attempt in range(1, attempts + 1):
+            previous_deadline = context.step_deadline
+            context.step_deadline = time.monotonic() + timeout
+            try:
+                context.stage(f'workflow.step.start:{step_id}:{step_type}')
+                context.progress(None, 'Wykonywanie: ' + step_type, phase=step_type)
+
+                if step_type in BLUEPRINT_PRECOMPILED_STEPS:
+                    context.log(
+                        f'workflow.step.precompiled: {step_id}:{step_type}; '
+                        'value was resolved before the job was queued'
+                    )
+                elif step_type in {'clone_vm', 'create_vm'}:
+                    proxmox_provision.clone(context, timeout=timeout)
+                    runtime['applied'] = True
+                    sync_direct_inventory()
+                elif step_type in {'configure_vm', 'set_hostname', 'set_tags'}:
+                    if not runtime['applied']:
+                        raise ExecutionFailed(
+                            f'{step_type} requires a completed direct Proxmox clone'
+                        )
+                    proxmox_provision.configure(context, timeout=timeout)
+                elif step_type == 'cloud_init':
+                    if not runtime['applied']:
+                        raise ExecutionFailed('cloud_init requires a completed direct Proxmox clone')
+                    proxmox_provision.configure_cloud_init(
+                        context,
+                        guest=_guest_target_credential(context),
+                        timeout=timeout,
+                    )
+                elif step_type == 'start_vm':
+                    if not runtime['applied']:
+                        raise ExecutionFailed('start_vm requires a completed direct Proxmox clone')
+                    proxmox_provision.start(context, timeout=timeout)
+                elif step_type == 'wait_for_vm':
+                    wait_for_vm(context, None, timeout=timeout)
+                elif step_type == 'wait_for_agent':
+                    wait_for_agent(context, None, timeout=timeout)
+                elif step_type == 'wait_for_ip':
+                    runtime['addresses'] = wait_for_ip(context, None, timeout=timeout)
+                elif step_type == 'wait_for_ssh':
+                    address = wait_for_ssh(
+                        context, None, timeout, addresses=runtime['addresses']
+                    )
+                    runtime['addresses'] = [address]
+                elif step_type == 'run_ansible_playbook':
+                    runtime['addresses'] = execute_configured_ansible(
+                        context,
+                        runtime,
+                        None,
+                        timeout=timeout,
+                        addresses=runtime['addresses'],
+                    )
+                elif step_type == 'register_awx':
+                    register_awx_host(
+                        context,
+                        runtime,
+                        None,
+                        timeout=timeout,
+                        step_id=step_id,
+                    )
+                elif step_type == 'create_snapshot':
+                    create_blueprint_snapshot(context, None, step)
+                elif step_type == 'health_check':
+                    health_check_vm(context, None)
+                elif step_type == 'condition':
+                    context.log(f'workflow.condition.passed: {step_id}')
+                elif step_type == 'delay':
+                    seconds = float((step.get('conditions') or {}).get('seconds', 1))
+                    if seconds < 0 or seconds > timeout:
+                        raise ExecutionFailed(
+                            'Workflow delay seconds must be between 0 and step timeout'
+                        )
+                    deadline = time.monotonic() + seconds
+                    while time.monotonic() < deadline:
+                        context.check()
+                        time.sleep(min(1, max(0, deadline - time.monotonic())))
+                elif step_type == 'notification':
+                    message = str((step.get('conditions') or {}).get('message') or step_id)
+                    context.log('workflow.notification: ' + message[:1000])
+                elif step_type in {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
+                    raise ExecutionFailed(
+                        f'{step_type} is not allowed with the direct Proxmox executor'
+                    )
+                elif step_type == 'approval':
+                    raise ExecutionFailed(
+                        'Direct Proxmox provisioning uses job-level approval, not an approval workflow step'
+                    )
+                elif step_type == 'release_ip':
+                    raise ExecutionFailed('release_ip is not allowed during VM provisioning')
+                else:
+                    raise ExecutionFailed(f'Unsupported direct Proxmox workflow step: {step_type}')
+
+                runtime['step_states'][step_id] = 'completed'
+                context.stage(f'workflow.step.completed:{step_id}:{step_type}')
+                persist_workflow_runtime(context, runtime)
+                break
+            except Cancelled:
+                raise
+            except Exception as exc:
+                if attempt >= attempts:
+                    if isinstance(exc, ExecutionFailed):
+                        raise
+                    raise ExecutionFailed(
+                        f'Workflow step {step_id} ({step_type}) failed'
+                    ) from None
+                context.log(
+                    f'workflow.step.retry: {step_id}:{step_type} '
+                    f'attempt={attempt}/{attempts} error={str(exc)[:500]}'
+                )
+            finally:
+                context.step_deadline = previous_deadline
+
+    if not runtime['applied']:
+        raise ExecutionFailed('Direct Proxmox workflow did not create a VM')
+    sync_direct_inventory()
+
+    if configured_ansible_runs(context) and not runtime['ansible_ran']:
+        context.log('workflow.compatibility: running configured Ansible after direct Proxmox workflow')
+        runtime['addresses'] = execute_configured_ansible(
+            context,
+            runtime,
+            None,
+            addresses=runtime['addresses'],
+        )
+        persist_workflow_runtime(context, runtime)
+
+    context.blueprint_workflow_completed = True
+    persist_workflow_runtime(context, runtime)
+    context.stage('workflow.completed')
+    context.progress(100, 'Provisioning VM zakończony', phase='completed')
+    return None
+
 def _execute_unfenced(job_id):
     os.umask(0o077)
     with session() as db:
