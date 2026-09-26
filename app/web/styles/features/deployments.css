@@ -1361,9 +1361,10 @@
 
 .my-resource-grid-list .my-resource-provisioning-state {
   grid-area: provisioning;
-  grid-template-columns: minmax(170px, .55fr) minmax(250px, .8fr) minmax(0, 1.65fr);
-  align-items: start;
-  gap: 12px 18px;
+  grid-template-columns: minmax(150px, .7fr) max-content max-content minmax(260px, 2fr);
+  align-items: center;
+  column-gap: 18px;
+  row-gap: 10px;
   margin-top: 1px;
   padding: 12px 14px;
   border-radius: 11px;
@@ -1372,11 +1373,29 @@
 
 .my-resource-grid-list .my-resource-provisioning-head,
 .my-resource-grid-list .my-resource-provisioning-stage {
-  min-width: 0;
+  display: contents;
 }
 
-.my-resource-grid-list .my-resource-provisioning-stage {
-  align-items: center;
+.my-resource-grid-list .my-resource-provisioning-head > strong,
+.my-resource-grid-list .my-resource-provisioning-head > .badge,
+.my-resource-grid-list .my-resource-provisioning-stage > .muted,
+.my-resource-grid-list .my-resource-provisioning-stage > :not(.muted) {
+  align-self: center;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.my-resource-grid-list .my-resource-provisioning-head > .badge {
+  justify-self: start;
+}
+
+.my-resource-grid-list .my-resource-provisioning-stage > .muted {
+  white-space: nowrap;
+}
+
+.my-resource-grid-list .my-resource-provisioning-error,
+.my-resource-grid-list .my-resource-provisioning-state > small {
+  grid-column: 1 / -1;
 }
 
 .my-resource-grid-list .my-resource-provisioning-error {
@@ -1461,9 +1480,22 @@
 
   .my-resource-grid-list .my-resource-provisioning-state {
     grid-template-columns: minmax(170px, .65fr) minmax(220px, 1fr);
+    align-items: center;
   }
 
-  .my-resource-grid-list .my-resource-provisioning-error {
+  .my-resource-grid-list .my-resource-provisioning-head {
+    display: flex;
+    align-items: center;
+  }
+
+  .my-resource-grid-list .my-resource-provisioning-stage {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .my-resource-grid-list .my-resource-provisioning-error,
+  .my-resource-grid-list .my-resource-provisioning-state > small {
     grid-column: 1 / -1;
   }
 
