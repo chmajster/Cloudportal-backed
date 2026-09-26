@@ -501,7 +501,6 @@ def test_blueprint_persists_multiple_ansible_runbooks_in_order(client, headers):
                 **deployment_payload['variables'],
                 'name': 'multi-runbook-vm',
             },
-            'ansible': runs[0],
             'ansible_runs': runs,
         },
         'workflow': [
@@ -525,7 +524,7 @@ def test_blueprint_persists_multiple_ansible_runbooks_in_order(client, headers):
         'bootstrap-linux',
         'linux-system-update',
     ]
-    assert execution.json()['workflow']['ansible']['playbook'] == 'bootstrap-linux'
+    assert 'ansible' not in execution.json()['workflow']
 
     protected = client.delete(
         f"/api/v1/credentials/{second_credential.json()['id']}",
