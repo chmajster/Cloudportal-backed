@@ -1110,3 +1110,13 @@ class ProxmoxProvider(InfrastructureProvider):
         return self._get(
             f'/nodes/{quote(node, safe="")}/tasks/{quote(upid, safe="")}/status'
         )
+
+    def task_log(self, node, upid, *, start=0, limit=500):
+        query = urlencode({
+            'start': max(0, int(start)),
+            'limit': max(1, min(5000, int(limit))),
+        })
+        rows = self._get(
+            f'/nodes/{quote(node, safe="")}/tasks/{quote(upid, safe="")}/log?{query}'
+        )
+        return rows if isinstance(rows, list) else []
