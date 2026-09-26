@@ -578,16 +578,27 @@ def create_action(db, request, actor, target, credential, action_id, params, rea
     )
     db.add(row)
     db.flush()
+    from app.jobs.approval import policy_approval_signature, policy_approval_stages_from_effects
+    policy_approvals = list(policy_result.get('approvals') or [])
+    policy_stages = policy_approval_stages_from_effects(policy_approvals)
     job_payload = {
         'day2_action_request_id': row.id,
         'resource_id': target.resource_id,
         '_policy': {
             'decision_id': policy_result.get('decision_id'),
             'matched_policy_ids': policy_result.get('matched_policy_ids') or [],
-            'approvals': policy_result.get('approvals') or [],
+            'approvals': policy_approvals,
+            'approval_signature': policy_approval_signature(policy_approvals),
             'obligations': policy_result.get('obligations') or [],
         },
     }
+    if policy_stages:
+        job_payload['_policy_approval'] = {
+            'current_stage': 0,
+            'complete': False,
+            'stages': policy_stages,
+            'approvals': [],
+        }
     if action.id == 'run_ansible':
         snapshot_payload = snapshot_ansible_payload(
             db,
@@ -639,12 +650,26 @@ def approve_action(db, request, actor, row, permissions):
         raise failure('PERMISSION_DENIED', status_code=403, details={'permission': 'day2.approve'})
     if row.status != 'WAITING_APPROVAL' or row.approval_state != 'pending':
         raise failure('INVALID_STATE', message='Action is not waiting for approval')
-    target, credential, _ = load_target(db, row.resource_id)
-    validate_action(db, target, credential, row.action, row.parameters or {}, row.reason, permissions | {get_action(row.action).permission})
-    acquire_resource_lock(db, row.resource_id, row.id, day2_settings(db)['resource_lock_timeout'])
     job = db.get(Job, row.job_id)
     if job is None:
         raise failure('RESOURCE_NOT_FOUND', message='Action job no longer exists', status_code=404)
+
+    from app.jobs.approval import approve_policy_stage
+    policy_stage = approve_policy_stage(job, actor, permissions, db=db)
+    if policy_stage is not None and not policy_stage['complete']:
+        db.add(JobLog(job_id=job.id, message=(
+            'day2.policy_approval.stage_approved: '
+            f"user={actor.user_id}; next_stage={(policy_stage.get('next_stage') or {}).get('name')}"
+        )))
+        audit(db, request, 'day2.policy_stage_approved', 'day2_actions', row.id)
+        _event(db, 'day2.approval_required', row, {
+            'next_stage': (policy_stage.get('next_stage') or {}).get('name')
+        })
+        return row
+
+    target, credential, _ = load_target(db, row.resource_id)
+    validate_action(db, target, credential, row.action, row.parameters or {}, row.reason, permissions | {get_action(row.action).permission})
+    acquire_resource_lock(db, row.resource_id, row.id, day2_settings(db)['resource_lock_timeout'])
     quota_current = _current_for_diff(
         row.action, target, day2_provider(credential), get_resource_state(db, target.resource_id),
         row.parameters or {},
@@ -656,7 +681,11 @@ def approve_action(db, request, actor, row, permissions):
     row.status = 'QUEUED'
     job.status = 'queued'
     payload = dict(job.payload or {})
-    payload['_day2_approval'] = {'approved_by': actor.user_id, 'approved_at': row.approved_at.isoformat()}
+    payload['_day2_approval'] = {
+        'approved_by': actor.user_id,
+        'approved_at': row.approved_at.isoformat(),
+        'policy_complete': bool((payload.get('_policy_approval') or {}).get('complete', True)),
+    }
     job.payload = payload
     db.add(JobLog(job_id=job.id, message='day2.approved'))
     audit(db, request, 'day2.approved', 'day2_actions', row.id)
