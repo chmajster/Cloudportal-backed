@@ -7,7 +7,9 @@ from fastapi import HTTPException
 from sqlalchemy import and_, or_, select
 
 from app.models import now
-from app.policy_engine.engine import EFFECT_TYPES, OPERATORS, POLICY_TYPES, evaluate
+from app.policy_engine.engine import (
+    EFFECT_TYPES, OPERATORS, POLICY_TYPES, SCOPE_DIMENSIONS, evaluate,
+)
 from app.policy_engine.models import PolicyDecision, PolicyDefinition, PolicyException, PolicyVersion
 from app.policy_engine.schemas import PolicyInput, PolicyUpdate
 from app.tenancy.authorization import Principal, authorize as authorize_tenant
@@ -452,13 +454,7 @@ def capabilities():
         "enforcements": ["hard", "soft", "advisory"],
         "operators": sorted(OPERATORS),
         "effects": sorted(EFFECT_TYPES),
-        "scope_dimensions": [
-            "user_ids", "users", "role_ids", "roles", "groups", "actions",
-            "resource_types", "organization_ids", "project_ids", "organizations",
-            "organization_slugs", "projects", "project_slugs", "scope_keys",
-            "apmids", "environments", "blueprint_ids",
-            "blueprints", "provider_ids", "provider_types", "tags", "conditions",
-        ],
+        "scope_dimensions": sorted(SCOPE_DIMENSIONS),
         "phases": [
             "pre_request", "pre_approval", "pre_provision", "post_provision",
             "pre_day2", "post_day2", "on_refresh", "on_drift", "on_delete", "scheduled",
