@@ -25,7 +25,7 @@ resource "proxmox_virtual_environment_file" "cloud_init_seed" {
 }
 
 resource "proxmox_virtual_environment_file" "qemu_guest_agent_cloud_init" {
-  count = (
+  count        = (
     var.cloud_init_seed_path == null
     && var.install_qemu_guest_agent
     && !var.qemu_guest_agent_bootstrap
@@ -63,12 +63,8 @@ resource "proxmox_virtual_environment_vm" "vm" {
     node_name    = coalesce(var.template_node, var.node)
     full         = true
   }
-  cpu {
-    cores = var.cpu
-  }
-  memory {
-    dedicated = var.memory
-  }
+  cpu { cores = var.cpu }
+  memory { dedicated = var.memory }
   disk {
     datastore_id = var.storage
     interface    = "scsi0"
@@ -132,9 +128,7 @@ locals {
   configured_primary_ip = var.ipv4_address == null ? null : split("/", var.ipv4_address)[0]
 }
 
-output "vm_id" {
-  value = proxmox_virtual_environment_vm.vm.vm_id
-}
+output "vm_id" { value = proxmox_virtual_environment_vm.vm.vm_id }
 output "primary_ip" {
   # DHCP address selection is performed by the worker using QEMU Guest Agent
   # and the MAC address of net0. The provider can expose unrelated interfaces.
