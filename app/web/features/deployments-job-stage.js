@@ -53,6 +53,7 @@ function jobStageInfo(item) {
     'terraform.plan': 'Terraform plan',
     'terraform.plan.reuse': 'Użycie zapisanego planu Terraform',
     'terraform.apply': 'Terraform apply',
+    'terraform.destroy.force_stop': 'Twarde zatrzymywanie VM',
     'terraform.destroy': 'Terraform destroy',
     'terraform.state.persist': 'Zapisywanie stanu Terraform',
     'inventory.synchronizing': 'Synchronizacja inventory',
