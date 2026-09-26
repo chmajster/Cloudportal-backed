@@ -67,21 +67,21 @@ async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] })
     });
   }
 
-  const latestApplyJobByDeployment = new Map();
+  const latestLifecycleJobByDeployment = new Map();
   allJobs
-    .filter(item => item.deployment_id && item.operation === 'terraform.apply')
+    .filter(item => item.deployment_id && ['terraform.apply', 'terraform.destroy'].includes(item.operation))
     .sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0))
     .forEach(item => {
-      if (!latestApplyJobByDeployment.has(item.deployment_id)) {
-        latestApplyJobByDeployment.set(item.deployment_id, item);
+      if (!latestLifecycleJobByDeployment.has(item.deployment_id)) {
+        latestLifecycleJobByDeployment.set(item.deployment_id, item);
       }
     });
 
   const provisioningJobForDeployment = deployment => {
     if (!deployment) return null;
     const active = deployment.active_job_id ? jobById.get(deployment.active_job_id) : null;
-    if (active?.operation === 'terraform.apply') return active;
-    return latestApplyJobByDeployment.get(deployment.id) || null;
+    if (active && ['terraform.apply', 'terraform.destroy'].includes(active.operation)) return active;
+    return latestLifecycleJobByDeployment.get(deployment.id) || null;
   };
 
   function provisionalBlueprintVm(deployment) {
@@ -213,7 +213,7 @@ function vmMatchesFilters(entry) {
     item.name, item.vm_id, item.node, item.deployment_id,
     meta.apmid, meta.environment, meta.owner, meta.project, meta.tenant,
     meta.provider, meta.status, item.management_mode,
-    item.provisioning_job?.current_stage, item.provisioning_job?.error,
+    item.provisioning_job?.operation, item.provisioning_job?.current_stage, item.provisioning_job?.error,
   ].map(value => String(value || '').toLocaleLowerCase('pl')).join(' ');
   return haystack.includes(query);
 }
@@ -229,22 +229,31 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   const createdAt = deployment?.created_at || item.created_at || '';
   const provisioningJob = item.provisioning_job || null;
+  const destroyJob = provisioningJob?.operation === 'terraform.destroy';
   const provisioningVisible = Boolean(
     item.provisioning_placeholder
     || (provisioningJob && provisioningJob.status !== 'successful')
   );
-  const provisioningFailed = Boolean(
+  const lifecycleFailed = Boolean(
     provisioningJob && ['failed', 'cancelled'].includes(provisioningJob.status)
   );
+  const provisioningFailed = lifecycleFailed && !destroyJob;
+  const destroyFailed = lifecycleFailed && destroyJob;
+  const destroyInProgress = Boolean(
+    destroyJob && !['successful', 'failed', 'cancelled'].includes(provisioningJob.status)
+  );
   const liveStatus = item.live?.status || item.lifecycle_status || 'unknown';
-  const active = item.lifecycle_status === 'active' && !item.provisioning_placeholder;
+  const active = item.lifecycle_status === 'active'
+    && !item.provisioning_placeholder
+    && !destroyInProgress;
   const canOpen = allowed('vms.read') && active && hasCommand('inventory.openVm');
   const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm');
   const actions = [];
 
-  if (provisioningFailed && deployment && !deployment.active_job_id
+  if ((provisioningFailed || destroyFailed) && deployment && !deployment.active_job_id
       && deployment.status !== 'reconciliation_required') {
-    if (allowed('jobs.execute') && allowed('terraform.execute')
+    if (provisioningFailed
+        && allowed('jobs.execute') && allowed('terraform.execute')
         && allowed('deployments.create') && allowed('blueprints.execute')) {
       actions.push(button('Ponów', async () => {
         await api(`/jobs/${provisioningJob.id}/retry`, { method: 'POST', idempotent: true });
@@ -254,12 +263,16 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       }, 'primary'));
     }
     if (allowed('deployments.destroy') && allowed('jobs.execute') && allowed('terraform.execute')) {
-      actions.push(button('Usuń', () => confirmAction(
-        'Usuń nieudany provisioning',
-        'Terraform usunie zasoby utworzone przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.',
+      actions.push(button(destroyFailed ? 'Ponów usuwanie' : 'Usuń', () => confirmAction(
+        destroyFailed ? 'Ponów usuwanie zasobów' : 'Usuń nieudany provisioning',
+        destroyFailed
+          ? 'Terraform ponownie spróbuje usunąć zasoby tego wdrożenia.'
+          : 'Terraform usunie zasoby utworzone przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.',
         async () => {
           await api(`/deployments/${deployment.id}/destroy`, { method: 'POST', body: {}, idempotent: true });
-          toast('Utworzono zadanie usuwania nieudanego provisioningu.');
+          toast(destroyFailed
+            ? 'Utworzono ponowne zadanie usuwania zasobów.'
+            : 'Utworzono zadanie usuwania nieudanego provisioningu.');
           if (typeof onRefresh === 'function') await onRefresh();
           else navigate('my-resources');
         },
@@ -298,11 +311,12 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
         ? window.JobStageUI.cell(provisioningJob)
         : node('span', { text: statusLabel(provisioningJob?.status || deployment?.status || 'queued') }))
     : null;
+  const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';
   const statusText = provisioningVisible
-    ? (provisioningFailed ? 'Provisioning: błąd' : 'Provisioning')
+    ? (lifecycleFailed ? activityTitle + ': błąd' : activityTitle)
     : statusLabel(liveStatus);
   const statusKindValue = provisioningVisible
-    ? (provisioningFailed ? 'danger' : 'warning')
+    ? (lifecycleFailed ? 'danger' : 'warning')
     : statusKind(liveStatus);
   const vmIdLabel = item.vm_id === null || item.vm_id === undefined || item.vm_id === ''
     ? 'oczekuje'
@@ -339,9 +353,9 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       })),
     provisioningVisible ? node('div', { class: 'my-resource-provisioning-state' },
       node('div', { class: 'my-resource-provisioning-head' },
-        node('strong', { text: 'Provisioning' }),
+        node('strong', { text: activityTitle }),
         badge(statusLabel(provisioningJob?.status || deployment?.status || 'queued'),
-          provisioningFailed ? 'danger' : 'warning')),
+          lifecycleFailed ? 'danger' : 'warning')),
       node('div', { class: 'my-resource-provisioning-stage' },
         node('span', { class: 'muted', text: 'Etap' }),
         stage),
@@ -354,7 +368,12 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       : null,
     actions.length
       ? node('div', { class: 'my-resource-card-actions' }, ...actions)
-      : node('small', { class: 'muted', text: provisioningVisible ? 'Provisioning trwa.' : 'Brak uprawnień do sterowania tą VM.' }));
+      : node('small', {
+          class: 'muted',
+          text: provisioningVisible
+            ? (destroyJob ? 'Usuwanie zasobów trwa.' : 'Provisioning trwa.')
+            : 'Brak uprawnień do sterowania tą VM.',
+        }));
 
   if (!item.provisioning_placeholder) {
     window.vmBulkActions?.decorateCard(card, item, onSelectionChange);

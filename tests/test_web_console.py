@@ -233,6 +233,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "document.getElementById(sectionId)?.scrollIntoView" in script
     assert "button('Utwórz VM'" in script
     assert "button('Zarządzaj VM'" in script
+    assert "['terraform.apply', 'terraform.destroy'].includes(item.operation)" in script
+    assert "const destroyJob = provisioningJob?.operation === 'terraform.destroy';" in script
+    assert "const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';" in script
+    assert "destroyFailed ? 'Ponów usuwanie' : 'Usuń'" in script
+    assert "'Usuwanie zasobów trwa.'" in script
     assert "registerExtension('deployments-bulk-vm-actions'" in script
     assert "api('/day2-actions/bulk'" in script
     assert "const DEFAULT_BATCH_SIZE = 25;" in script
