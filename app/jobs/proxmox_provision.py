@@ -80,6 +80,13 @@ def identity(context):
         raise ExecutionFailed('Proxmox VMID is invalid') from None
 
 
+def task_node(upid, fallback):
+    parts = str(upid or '').split(':')
+    if len(parts) > 1 and re.fullmatch(r'[A-Za-z0-9_.-]{1,63}', parts[1] or ''):
+        return parts[1]
+    return fallback
+
+
 def _task_log(adapter, node, upid):
     try:
         return adapter.task_log(node, upid, start=0, limit=2000)
@@ -188,8 +195,8 @@ def clone(context, timeout=7200):
         context.stage('proxmox.provision.clone')
         context.progress(None, 'Klonowanie VM w Proxmox', phase='clone')
         wait_task(
-            context, adapter, source_node, upid, 'Klonowanie VM',
-            phase='clone', timeout=timeout,
+            context, adapter, str(runtime.get('clone_task_node') or task_node(upid, source_node)),
+            upid, 'Klonowanie VM', phase='clone', timeout=timeout,
         )
         _wait_target(context, adapter, target_node, vm_id)
         _persist(context, clone_completed=True)
@@ -225,6 +232,7 @@ def clone(context, timeout=7200):
         clone_requested=True,
         clone_upid=upid,
         clone_source_node=source_node,
+        clone_task_node=task_node(upid, source_node),
         target_node=target_node,
         target_vm_id=vm_id,
     )
@@ -233,7 +241,7 @@ def clone(context, timeout=7200):
         f'target={target_node}/{vm_id} upid={upid}'
     )
     wait_task(
-        context, adapter, source_node, upid, 'Klonowanie VM',
+        context, adapter, task_node(upid, source_node), upid, 'Klonowanie VM',
         phase='clone', timeout=timeout,
     )
     _wait_target(context, adapter, target_node, vm_id)
@@ -299,7 +307,7 @@ def configure(context, timeout=1800):
         task = adapter.update_vm_config(node, vm_id, **values)
         if task:
             wait_task(
-                context, adapter, node, task, 'Konfiguracja VM',
+                context, adapter, task_node(task, node), task, 'Konfiguracja VM',
                 phase='configure', timeout=timeout,
             )
     except HTTPException as exc:
@@ -313,7 +321,7 @@ def configure(context, timeout=1800):
         task = adapter.resize_disk(node, vm_id, disk='scsi0', grow_gib=grow)
         if task:
             wait_task(
-                context, adapter, node, task, 'Powiększanie dysku VM',
+                context, adapter, task_node(task, node), task, 'Powiększanie dysku VM',
                 phase='configure', timeout=timeout,
             )
     elif desired_disk > 0 and current_disk is not None and desired_disk + 0.01 < current_disk:
@@ -364,7 +372,7 @@ def configure_cloud_init(context, guest=None, timeout=1800):
         task = adapter.update_vm_config(node, vm_id, **values)
         if task:
             wait_task(
-                context, adapter, node, task, 'Konfiguracja Cloud-init',
+                context, adapter, task_node(task, node), task, 'Konfiguracja Cloud-init',
                 phase='cloud_init', timeout=timeout,
             )
     except HTTPException as exc:
@@ -395,7 +403,7 @@ def start(context, timeout=600):
     task = adapter.vm_power(node, vm_id, 'start')
     if task:
         wait_task(
-            context, adapter, node, task, 'Uruchamianie VM',
+            context, adapter, task_node(task, node), task, 'Uruchamianie VM',
             phase='start', timeout=timeout,
         )
 
@@ -521,7 +529,7 @@ def destroy(context, timeout=1800):
         task = adapter.vm_power(node, vm_id, 'stop')
         if task:
             wait_task(
-                context, adapter, node, task, 'Twarde zatrzymywanie VM',
+                context, adapter, task_node(task, node), task, 'Twarde zatrzymywanie VM',
                 phase='destroy', timeout=min(timeout, 300),
             )
 
@@ -542,7 +550,7 @@ def destroy(context, timeout=1800):
     context.quota_provider_submitted = True
     if task:
         wait_task(
-            context, adapter, node, task, 'Usuwanie VM',
+            context, adapter, task_node(task, node), task, 'Usuwanie VM',
             phase='destroy', timeout=timeout,
         )
     context.progress(100, 'VM usunięta', phase='destroy')
