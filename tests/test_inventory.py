@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import select
 
 from app.database import session
-from app.models import Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, User
+from app.models import Audit, Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, User
 from app.terraform.state import persist_state
 
 
@@ -134,6 +134,28 @@ def test_vm_history_includes_provisioning_job_stages(client, headers):
             JobLog(job_id=job.id, message='terraform.init'),
             JobLog(job_id=job.id, message='workflow.step.completed:apply:terraform_apply'),
             JobLog(job_id=job.id, message='provider raw secret output must not be exposed'),
+            Audit(
+                user_id=user_id,
+                token_id=None,
+                ip='127.0.0.1',
+                source='API',
+                action='snapshot.created',
+                resource='vms',
+                resource_id=f"{p['id']}:pve01:889:baseline",
+                result='success',
+                request_id=str(uuid.uuid4()),
+            ),
+            Audit(
+                user_id=user_id,
+                token_id=None,
+                ip='127.0.0.1',
+                source='API',
+                action='vm.reboot.wrong-vm',
+                resource='vms',
+                resource_id=f"{p['id']}:pve01:8890",
+                result='success',
+                request_id=str(uuid.uuid4()),
+            ),
         ])
         db.commit()
         vm_id = vm.id
@@ -148,6 +170,8 @@ def test_vm_history_includes_provisioning_job_stages(client, headers):
     assert 'terraform.apply' in titles
     assert 'terraform.init' in titles
     assert 'workflow.step.completed:apply:terraform_apply' in titles
+    assert 'snapshot.created' in titles
+    assert 'vm.reboot.wrong-vm' not in titles
     assert all('raw secret output' not in title for title in titles)
 
 
