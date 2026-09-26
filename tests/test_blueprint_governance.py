@@ -50,8 +50,7 @@ def blueprint_payload(credential, provider, **policy):
             },
         },
         'workflow': [
-            {'id': 'clone', 'type': 'clone_vm'},
-            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
+            {'id': 'apply', 'type': 'terraform_apply'},
         ],
     }
 
@@ -595,7 +594,7 @@ def test_retry_after_provider_checkpoint_resumes_without_recreate(client, header
         payload = dict(job.payload or {})
         payload['_recreate'] = True
         payload['_workflow_runtime'] = {
-            'completed_steps': ['clone', 'apply'],
+            'completed_steps': ['apply'],
             'provider_applied': True,
             'inventory_synced': True,
             'ansible_ran': False,
@@ -622,7 +621,7 @@ def test_retry_after_provider_checkpoint_resumes_without_recreate(client, header
         assert payload['_resume_after_provider_apply'] is True
         assert '_recreate' not in payload
         assert payload['_workflow_runtime']['provider_applied'] is True
-        assert payload['_workflow_runtime']['completed_steps'] == ['clone', 'apply']
+        assert payload['_workflow_runtime']['completed_steps'] == ['apply']
 
 
 def test_waiting_approval_expires_and_removes_plan(client, headers, monkeypatch, tmp_path):
