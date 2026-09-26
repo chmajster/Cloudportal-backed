@@ -754,9 +754,9 @@ class BlueprintVisibility(Input):
 class BlueprintStep(Input):
     id: Slug
     type: Literal['clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
-                  'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
+                  'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
                   'run_ansible_playbook', 'register_awx', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot',
-                  'set_tags', 'health_check', 'condition', 'approval', 'delay', 'notification']
+                  'health_check', 'condition', 'approval', 'delay', 'notification']
     depends_on: Annotated[list[Slug], Field(max_length=50)] = Field(default_factory=list)
     conditions: dict[str, Any] = Field(default_factory=dict)
     retry: int = Field(default=0, ge=0, le=10)
@@ -954,7 +954,7 @@ class BlueprintInput(Input):
             raise ValueError('Workflow can contain at most one terraform_plan step')
 
         direct_proxmox = self.deployment.executor == 'proxmox'
-        direct_only = {'clone_vm', 'configure_vm', 'start_vm', 'set_hostname', 'set_tags'}
+        direct_only = {'clone_vm', 'configure_vm', 'start_vm'}
 
         if direct_proxmox:
             if self.deployment.template != 'proxmox-vm':
@@ -970,7 +970,7 @@ class BlueprintInput(Input):
                 )
             clone_id = clone_steps[0].id
             after_clone_types = {
-                'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
+                'configure_vm', 'cloud_init', 'start_vm',
                 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
                 'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
             }
