@@ -422,7 +422,8 @@ def capabilities():
         "effects": sorted(EFFECT_TYPES),
         "scope_dimensions": [
             "user_ids", "users", "role_ids", "roles", "groups", "actions",
-            "resource_types", "apmids", "environments", "blueprint_ids",
+            "resource_types", "organizations", "organization_slugs", "projects",
+            "project_slugs", "scope_keys", "apmids", "environments", "blueprint_ids",
             "blueprints", "provider_ids", "provider_types", "tags", "conditions",
         ],
         "phases": [
