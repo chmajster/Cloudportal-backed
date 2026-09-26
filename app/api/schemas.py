@@ -662,7 +662,6 @@ class DeploymentInput(Input):
     credentials_id: int = Field(gt=0)
     variables: dict[str, Any]
     executor: Literal['terraform', 'opentofu', 'proxmox'] = 'terraform'
-    ansible: AnsibleInput | None = None
 
     @model_validator(mode='after')
     def derived_inventory(self):
@@ -753,7 +752,7 @@ class BlueprintVisibility(Input):
 
 class BlueprintStep(Input):
     id: Slug
-    type: Literal['generate_hostname', 'allocate_ip', 'release_ip', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
+    type: Literal['clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
                   'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
                   'run_ansible_playbook', 'register_awx', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot',
                   'set_tags', 'health_check', 'condition', 'approval', 'delay', 'notification']
@@ -939,11 +938,6 @@ class BlueprintInput(Input):
         if any(step.type == 'release_ip' for step in self.workflow):
             raise ValueError('release_ip is not allowed during VM provisioning; IP is released by destroy/recovery')
 
-        compile_time_steps = {'generate_hostname', 'allocate_ip'}
-        for step in self.workflow:
-            if step.type in compile_time_steps and (step.conditions or step.retry or step.rollback):
-                raise ValueError('Compile-time workflow steps cannot use conditions, retry or rollback')
-
         from app.automation.cloud_init import validate_cloud_init_workflow
         validate_cloud_init_workflow([step.model_dump() for step in self.workflow])
 
@@ -1022,9 +1016,7 @@ class BlueprintInput(Input):
                     raise ValueError(f'{step.type} must depend on terraform_apply')
 
         ansible_steps = [step for step in self.workflow if step.type == 'run_ansible_playbook']
-        configured_ansible = bool(self.deployment.ansible or self.deployment.ansible_runs)
-        if self.deployment.ansible and self.deployment.ansible_runs:
-            raise ValueError('Use ansible or ansible_runs, not both')
+        configured_ansible = bool(self.deployment.ansible_runs)
         if configured_ansible and len(ansible_steps) != 1:
             raise ValueError(
                 'Configured Ansible requires exactly one explicit run_ansible_playbook workflow step'
