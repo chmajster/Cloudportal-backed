@@ -1166,6 +1166,15 @@ function jobLogVmId(current, deployment = null, logs = []) {
   return '';
 }
 
+function jobLogHostname(deployment = null) {
+  const variables = deployment?.variables || {};
+  const value = deployment?.name
+    ?? variables.hostname
+    ?? variables.name
+    ?? '';
+  return String(value || '').trim();
+}
+
 function jobLogIdFromRoute() {
   const route = String(location.hash.slice(1) || '').split('/page/')[0].replace(/\/+$/, '');
   const match = route.match(/^\/?jobs\/([^/]+)$/);
@@ -1239,6 +1248,7 @@ async function jobLogView() {
         ? await api('/deployments/' + encodeURIComponent(current.deployment_id)).catch(() => null)
         : null;
       const vmId = jobLogVmId(current, deployment, logs.items || []);
+      const hostname = jobLogHostname(deployment);
       pageHost.dataset.vmId = vmId;
       const headingText = 'Logi zadania ' + short(jobId, 18) + (vmId ? ' · VMID ' + vmId : '');
       const headingTextNode = headingHost.querySelector('.page-heading-copy p, p');
@@ -1249,6 +1259,7 @@ async function jobLogView() {
         node('dt', { text: 'ID zadania' }), node('dd', { class: 'mono', text: current.id }),
         node('dt', { text: 'Wdrożenie' }), node('dd', { class: 'mono', text: current.deployment_id || '—' }),
         node('dt', { text: 'Źródło' }), node('dd', { text: current.source || '—' }),
+        node('dt', { text: 'Hostname' }), node('dd', { class: 'mono', text: hostname || '—' }),
         node('dt', { text: 'Numer VM' }), node('dd', { class: 'mono', text: vmId || '—' }),
         node('dt', { text: 'Utworzono' }), node('dd', { text: formatDate(current.created_at) })
       );
