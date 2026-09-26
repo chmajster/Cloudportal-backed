@@ -75,6 +75,37 @@ console.log(JSON.stringify(validate(blueprint, data, {})));
     assert any('Ansible wymaga providera Proxmox' in error for error in result)
 
 
+def test_designer_accepts_direct_proxmox_and_rejects_terraform_direct_step_mix():
+    result = run_designer("""
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{ id: 'proxmox-vm', provider: 'proxmox', enabled: true }],
+};
+const direct = {
+  deployment: { provider_id: 7, credentials_id: 5, template: 'proxmox-vm', executor: 'proxmox' },
+  workflow: [
+    { id: 'clone', type: 'clone_vm', depends_on: [] },
+    { id: 'configure', type: 'configure_vm', depends_on: ['clone'] },
+    { id: 'start', type: 'start_vm', depends_on: ['configure'] },
+  ],
+};
+const terraform = {
+  deployment: { provider_id: 7, credentials_id: 5, template: 'proxmox-vm', executor: 'terraform' },
+  workflow: [
+    { id: 'apply', type: 'terraform_apply', depends_on: [] },
+    { id: 'clone', type: 'clone_vm', depends_on: ['apply'] },
+  ],
+};
+console.log(JSON.stringify({
+  direct: validate(direct, data, {}),
+  terraform: validate(terraform, data, {}),
+}));
+""")
+
+    assert result['direct'] == []
+    assert any('Direct Proxmox' in error or 'jawnego terraform_apply' in error for error in result['terraform'])
+
+
 def test_designer_allows_existing_disabled_template_but_rejects_new_selection():
     result = run_designer("""
 const data = {
