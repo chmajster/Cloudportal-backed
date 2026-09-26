@@ -194,6 +194,7 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
 
 // Policy Engine administration (operations domain)
   let capabilities = null;
+  let policyScopeOptions = null;
 
   const statusLabels = {
     draft: 'Draft',
@@ -235,10 +236,34 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
     return capabilities;
   }
 
-  function scopeLabel(item) {
-    if (item.scope_level === 'global') return 'Global';
-    if (item.scope_level === 'tenant') return 'Tenant';
-    return 'Projekt';
+  async function loadPolicyScopes() {
+    if (!policyScopeOptions) policyScopeOptions = await api('/policies/scopes');
+    return policyScopeOptions;
+  }
+
+  function scopeLabel(item, options = policyScopeOptions) {
+    const scope = item?.scope || {};
+    const tenantId = String(item?.tenant_id || scope.organization_ids?.[0] || '');
+    const projectId = String(item?.project_id || scope.project_ids?.[0] || '');
+    const projects = Array.isArray(options?.projects) ? options.projects : [];
+    const tenants = Array.isArray(options?.tenants) ? options.tenants : [];
+    const project = projects.find(row => String(row.id) === projectId);
+    const tenant = tenants.find(row => String(row.id) === tenantId);
+    const tenantName = tenant?.name || project?.tenant_name || tenantId || 'Organizacja';
+    const projectName = project?.name || projectId || 'Projekt';
+
+    const parts = [];
+    if (item.scope_level === 'global') parts.push('Global');
+    else if (item.scope_level === 'tenant') parts.push(tenantName);
+    else parts.push(tenantName + ' → ' + projectName);
+
+    if (Array.isArray(scope.apmids) && scope.apmids.length) {
+      parts.push('APMID: ' + scope.apmids.join(', '));
+    }
+    if (Array.isArray(scope.environments) && scope.environments.length) {
+      parts.push('ENV: ' + scope.environments.map(value => String(value).toUpperCase()).join(', '));
+    }
+    return parts.join(' · ');
   }
 
   function policyStatus(item) {
@@ -253,7 +278,7 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
   function policyEditor(item = null) {
     Promise.all([
       loadCapabilities(),
-      api('/policies/scopes'),
+      loadPolicyScopes(),
       api('/project-context').catch(() => ({ selected: null })),
       api('/settings/vm-classification').catch(() => ({
         environments: { test: true, dev: true, nonprod: true, prod: true },
@@ -350,7 +375,8 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
       }
 
       const configuredApmids = Array.isArray(classification?.apmids) ? classification.apmids : [];
-      const scopeApmids = Array.isArray(defaultScope.apmids) ? defaultScope.apmids : [];
+      const scopeApmids = (Array.isArray(defaultScope.apmids) ? defaultScope.apmids : [])
+        .map(value => String(value).toUpperCase());
       const apmids = [...new Set([...configuredApmids, ...scopeApmids].map(value => String(value).toUpperCase()).filter(Boolean))]
         .sort((a, b) => a.localeCompare(b, 'pl'));
       const environmentOrder = ['dev', 'test', 'nonprod', 'prod'];
@@ -843,8 +869,12 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
   }
 
   async function policiesView() {
-    await loadCapabilities();
-    const rows = (await api('/policies')).items || [];
+    const [, scopeOptions, policyResult] = await Promise.all([
+      loadCapabilities(),
+      loadPolicyScopes(),
+      api('/policies'),
+    ]);
+    const rows = policyResult.items || [];
     const actions = [];
     if (allowed('policies.manage')) actions.push(button('Nowa polityka', () => policyEditor(), 'primary'));
     if (allowed('policies.simulate')) actions.push(button('Symulator', simulator, 'ghost'));
@@ -859,7 +889,7 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
         { label: 'Typ', value: item => item.policy_type },
-        { label: 'Scope', value: item => scopeLabel(item) },
+        { label: 'Scope', value: item => scopeLabel(item, scopeOptions) },
         { label: 'Status', value: item => policyStatus(item) },
         { label: 'Tryb', value: item => item.enforcement.toUpperCase() },
         { label: 'Priorytet', value: item => item.priority },
