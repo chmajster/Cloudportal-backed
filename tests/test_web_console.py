@@ -458,6 +458,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'awx_project_id'" in script
     assert "'awx_inventory_id'" in script
     assert "'awx_job_template_id'" in script
+    assert 'Pattern nazwy inventory tworzonego automatycznie' in script
+    assert '<Projekt>-<APMID>-<ENV>' in script
     assert "button('Power ON'" in script
     assert "button('Power OFF'" in script
     assert "button('CTRL+ALT+DEL'" in script
