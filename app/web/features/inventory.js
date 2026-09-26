@@ -431,10 +431,26 @@ function vmHardwareContent(item, status) {
 async function vmSnapshotsContent(item) {
   if (!allowed('snapshots.read')) return node('div', { class: 'empty', text: 'Brak uprawnienia snapshots.read.' });
   const base = vmBase(item);
-  const snapshots = (await api(`${base}/snapshots`)).items || [];
+  const snapshotResult = await api(`${base}/snapshots`);
+  const snapshots = snapshotResult.items || [];
+  const capability = snapshotResult.capability || {};
+  const snapshotSupported = capability.supported !== false;
+  const headerActions = [];
+  if (allowed('snapshots.create') && snapshotSupported) {
+    headerActions.push(button('Nowy snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new'), 'primary'));
+  }
+  if (!snapshotSupported && allowed('backups.create')) {
+    headerActions.push(button('Utwórz backup zamiast snapshotu', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new'), 'primary'));
+  }
+  const unavailableNotice = !snapshotSupported
+    ? node('div', { class: 'empty vm-snapshot-unavailable' },
+      node('strong', { text: 'Snapshot niedostępny dla bieżącej konfiguracji VM' }),
+      node('p', { text: capability.message || 'Proxmox nie udostępnia funkcji snapshot dla tej VM.' }))
+    : null;
   return node('section', { class: 'panel' },
     node('div', { class: 'panel-header' }, node('h2', { text: 'Snapshoty' }),
-      allowed('snapshots.create') ? button('Nowy snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new'), 'primary') : ''),
+      node('div', { class: 'action-group' }, ...headerActions)),
+    unavailableNotice,
     table([
       { label: 'Snapshot', value: snap => node('strong', { text: snap.name }) },
       { label: 'Opis', value: snap => snap.description || '—' },

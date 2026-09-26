@@ -83,20 +83,31 @@ class ProxmoxDay2Adapter:
         node, vm_id = self._identity(target)
         config = self.provider.vm_config(node, vm_id) or {}
         hotplug = {item.strip() for item in str(config.get('hotplug') or '').split(',') if item.strip()}
+        snapshot = self.provider.snapshot_capability(node, vm_id)
+        snapshot_supported = snapshot.get('supported') is not False
+        actions = [
+            'power_on', 'power_off', 'shutdown', 'reboot', 'reset', 'suspend', 'resume',
+            'delete_snapshot', 'restore_snapshot',
+            'resize_compute', 'add_disk', 'resize_disk', 'detach_disk', 'delete_disk',
+            'add_nic', 'edit_nic', 'detach_nic', 'update_cloud_init',
+            'update_tags', 'add_tag', 'remove_tag', 'migrate_vm', 'move_storage',
+            'clone_vm', 'delete_vm', 'refresh_state',
+        ]
+        if snapshot_supported:
+            actions.append('create_snapshot')
         return {
             'provider': 'proxmox',
-            'actions': [
-                'power_on', 'power_off', 'shutdown', 'reboot', 'reset', 'suspend', 'resume',
-                'create_snapshot', 'delete_snapshot', 'restore_snapshot',
-                'resize_compute', 'add_disk', 'resize_disk', 'detach_disk', 'delete_disk',
-                'add_nic', 'edit_nic', 'detach_nic', 'update_cloud_init',
-                'update_tags', 'add_tag', 'remove_tag', 'migrate_vm', 'move_storage',
-                'clone_vm', 'delete_vm', 'refresh_state',
-            ],
+            'actions': actions,
             'power': True,
-            'snapshots': True,
-            'snapshot_memory': True,
+            'snapshots': snapshot_supported,
+            'snapshot_memory': snapshot_supported,
             'snapshot_quiesce': False,
+            'snapshot_capability': snapshot,
+            'action_unavailable_reasons': (
+                {}
+                if snapshot_supported
+                else {'create_snapshot': snapshot.get('message') or 'Snapshot nie jest obsługiwany przez tę VM.'}
+            ),
             'resize_cpu': True,
             'resize_memory': True,
             'hot_cpu_supported': 'cpu' in hotplug,

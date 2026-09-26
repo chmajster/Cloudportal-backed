@@ -767,6 +767,57 @@ class ProxmoxProvider(InfrastructureProvider):
             raise HTTPException(422, 'Unsupported VM power action')
         return self._post(f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/status/{action}')
 
+    def vm_feature(self, node, vm_id, feature):
+        if feature not in {'snapshot', 'clone', 'copy'}:
+            raise HTTPException(422, 'Unsupported Proxmox VM feature')
+        query = urlencode({'feature': feature})
+        return self._get(
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/feature?{query}'
+        ) or {}
+
+    def snapshot_capability(self, node, vm_id):
+        """Return Proxmox-native snapshot capability without falsely blocking on probe errors."""
+        try:
+            data = self.vm_feature(node, vm_id, 'snapshot')
+        except HTTPException:
+            return {
+                'supported': None,
+                'check_available': False,
+                'reason': 'capability_check_unavailable',
+                'message': (
+                    'Nie udało się zweryfikować obsługi snapshotów przez Proxmox. '
+                    'Operacja może zostać podjęta, a ostateczny wynik zwróci Proxmox.'
+                ),
+            }
+
+        raw = data.get('hasFeature')
+        supported = (
+            raw is True
+            or raw == 1
+            or str(raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+        )
+        nodes = data.get('nodes')
+        if isinstance(nodes, str):
+            nodes = [item.strip() for item in nodes.split(',') if item.strip()]
+        elif not isinstance(nodes, list):
+            nodes = []
+
+        return {
+            'supported': supported,
+            'check_available': True,
+            'reason': None if supported else 'snapshot_feature_unavailable',
+            'message': (
+                'Snapshot jest obsługiwany przez bieżącą konfigurację VM.'
+                if supported
+                else (
+                    'Proxmox zgłasza, że snapshot nie jest dostępny dla bieżącej konfiguracji VM. '
+                    'Wszystkie dyski VM muszą znajdować się na storage obsługującym snapshoty. '
+                    'Przenieś niezgodny dysk na storage z obsługą snapshotów albo użyj backupu.'
+                )
+            ),
+            'nodes': [str(item) for item in nodes],
+        }
+
     def snapshots(self, node, vm_id):
         return self._get(f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/snapshot')
 
