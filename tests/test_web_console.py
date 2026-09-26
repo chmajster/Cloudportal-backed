@@ -278,6 +278,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert ".my-resource-provisioning-state" in stylesheet
     assert "const MY_RESOURCES_VM_UI_KEY = 'cloudportal.my-resources.vms.ui.v1'" in script
     assert "function vmMetadata(" in script
+    assert "power_on: 'włączanie VM'" in script
+    assert "shutdown: 'wyłączanie VM'" in script
+    assert "power_off: 'wymuszone wyłączanie VM'" in script
+    assert "return { label: 'W toku: ' + activity, kind: 'warning' };" in script
+    assert "running: 'Włączona'" in script
+    assert "stopped: 'Wyłączona'" in script
+    assert "item.active_action?.action" in script
+    assert "const activeDay2 = (vms || []).some" in script
+    assert "myResourcesView(false, true)" in script
     assert "function vmMatchesFilters(" in script
     assert "function createVmBrowser(" in script
     assert "Szukaj VM, VMID, node, APMID" in script

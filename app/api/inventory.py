@@ -116,6 +116,39 @@ def effective_vm_lifecycle(row, present):
     return 'active' if present else 'missing'
 
 
+ACTIVE_DAY2_STATUSES = frozenset({
+    'REQUESTED', 'WAITING_APPROVAL', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED',
+})
+
+
+def active_day2_actions(db, resource_ids):
+    ids = [str(value) for value in resource_ids if value]
+    if not ids:
+        return {}
+    rows = db.scalars(
+        select(Day2ActionRequest)
+        .where(
+            Day2ActionRequest.resource_id.in_(ids),
+            Day2ActionRequest.status.in_(ACTIVE_DAY2_STATUSES),
+        )
+        .order_by(Day2ActionRequest.requested_at.desc())
+    ).all()
+    result = {}
+    for row in rows:
+        key = str(row.resource_id)
+        if key in result:
+            continue
+        result[key] = {
+            'id': row.id,
+            'action': row.action,
+            'status': row.status,
+            'job_id': row.job_id,
+            'requested_at': row.requested_at.isoformat() + 'Z' if row.requested_at else None,
+            'started_at': row.started_at.isoformat() + 'Z' if row.started_at else None,
+        }
+    return result
+
+
 def reconcile_provider_vm_presence(db, request, actor, rows):
     """Persist active/missing state only when a provider inventory read succeeds."""
     by_provider = {}
@@ -262,7 +295,11 @@ def managed_vms(
     if lifecycle_status:
         query = query.where(ManagedVM.lifecycle_status == lifecycle_status)
     rows = db.scalars(query.order_by(ManagedVM.created_at.desc()).offset(offset).limit(limit)).all()
-    result = [public(row) for row in rows]
+    active_actions = active_day2_actions(db, [row.id for row in rows])
+    result = [
+        {**public(row), 'active_action': active_actions.get(str(row.id))}
+        for row in rows
+    ]
     if refresh and rows:
         by_provider = {}
         for row in rows:
@@ -292,7 +329,8 @@ def managed_vm(
     db=Depends(get_db, scope='function'),
 ):
     row = ensure_inventory_vm_access(db, request, actor, find(db, ManagedVM, id))
-    result = public(row)
+    active_action = active_day2_actions(db, [row.id]).get(str(row.id))
+    result = {**public(row), 'active_action': active_action}
     if refresh:
         _, adapter = provider_adapter(db, row.provider_id)
         try:

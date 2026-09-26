@@ -9,7 +9,10 @@ function schedule(deployments, refresh, vms = []) {
   const settlingInventory = (vms || []).some(item =>
     item.provisioning_placeholder
     && item.provisioning_job?.status === 'successful');
-  if (!active && !settlingInventory) return null;
+  const activeDay2 = (vms || []).some(item =>
+    ['REQUESTED', 'WAITING_APPROVAL', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED']
+      .includes(String(item.active_action?.status || '').toUpperCase()));
+  if (!active && !settlingInventory && !activeDay2) return null;
   return window.setTimeout(refresh, 2000);
 }
 

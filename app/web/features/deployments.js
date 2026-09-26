@@ -110,7 +110,7 @@ function managedResourceCard(item, providerNames) {
     node('div', { class: 'my-resource-card-actions' },
       button('Szczegóły', () => navigate('/resources/managed/' + encodeURIComponent(item.id)))));
 }
-async function myResourcesView(repairInventory = true) {
+async function myResourcesView(repairInventory = true, refreshLive = repairInventory) {
   if (myResourcesPollTimer) { clearTimeout(myResourcesPollTimer); myResourcesPollTimer = null; }
   const preserveScroll = Boolean(dom.content.querySelector('.my-resources-page-head'));
   const preservedScrollY = preserveScroll ? window.scrollY : 0;
@@ -127,7 +127,7 @@ async function myResourcesView(repairInventory = true) {
   const optionalItems = path => api(path).then(result => result.items || []).catch(() => []);
   const [deploymentResult, vmResult, resourceResult, providerResult, jobResult, users, projects, tenants] = await Promise.all([
     allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
-    canReadInventory ? api('/inventory/vms?' + (repairInventory ? 'refresh=true&' : '') + 'limit=200') : Promise.resolve({ items: [] }),
+    canReadInventory ? api('/inventory/vms?' + (refreshLive ? 'refresh=true&' : '') + 'limit=200') : Promise.resolve({ items: [] }),
     canReadInventory ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     allowed('providers.read') ? api('/providers?limit=200') : Promise.resolve({ items: [] }),
     allowed('jobs.read') ? api('/jobs?limit=200') : Promise.resolve({ items: [] }),
@@ -181,7 +181,9 @@ async function myResourcesView(repairInventory = true) {
   );
   if (preservedScrollY > 0) requestAnimationFrame(() => window.scrollTo({ top: preservedScrollY, behavior: 'auto' }));
   myResourcesPollTimer = window.DeploymentProvisioningPoll.schedule(deployments, () => {
-    if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) myResourcesView(false).catch(error => toast(error.message, 'error'));
+    if (state.view === 'my-resources' && dom.content.querySelector('.my-resources-page-head')) {
+      myResourcesView(false, true).catch(error => toast(error.message, 'error'));
+    }
   }, vms);
 }
 function deploymentActions(item, returnTo = 'my-resources') {
