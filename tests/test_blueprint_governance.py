@@ -761,7 +761,7 @@ def test_worker_revalidates_blueprint_before_execution(client, headers, monkeypa
 
     disabled = client.put(
         f"/api/v1/blueprints/{created.json()['id']}/enabled",
-        headers=headers,
+        headers={**headers, 'If-Match': str(created.json()['version'])},
         json={'enabled': False},
     )
     assert disabled.status_code == 200, disabled.text
