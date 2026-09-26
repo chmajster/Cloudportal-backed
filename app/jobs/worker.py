@@ -36,6 +36,7 @@ from app.jobs.approval import approval_policy_for_job
 from app.jobs.lifecycle import has_released_allocations
 from app.jobs.proxmox_destroy import force_stop_before_destroy
 from app.jobs.proxmox_clone_template import OPERATION as PROXMOX_CLONE_TEMPLATE_OPERATION, execute as execute_proxmox_clone_template
+from app.jobs import proxmox_provision
 from app.quotas.service import (account_confirmed_absent, commit_job_reservation,
                                 mark_job_reservation_uncertain, prepare_job_reservation,
                                 release_job_reservation)
@@ -103,6 +104,23 @@ class Context:
                          action=action, resource='jobs', resource_id=self.job.id, request_id=self.job.request_id))
             db.commit()
 
+    def progress(self, percent=None, message=None, *, phase=None):
+        self.check()
+        with session() as db:
+            current = db.get(Job, self.job.id)
+            if current is None:
+                return
+            payload = dict(current.payload or {})
+            payload['_progress'] = {
+                'percent': None if percent is None else max(0.0, min(100.0, float(percent))),
+                'message': str(message or '')[:255] or None,
+                'phase': str(phase or '')[:64] or None,
+                'updated_at': now().isoformat(),
+            }
+            current.payload = payload
+            self.job.payload = dict(payload)
+            db.commit()
+
 
 def blueprint_execution_channel(job):
     authorization_source = (
@@ -119,7 +137,7 @@ def blueprint_execution_channel(job):
 
 def _validate_blueprint_authorization(db, job, user, permissions):
     blueprint_snapshot = (job.payload or {}).get('blueprint') or {}
-    if job.operation != 'terraform.apply' or not blueprint_snapshot:
+    if job.operation not in {'terraform.apply', 'proxmox.provision'} or not blueprint_snapshot:
         return
     if 'blueprints.execute' not in permissions:
         raise ExecutionFailed('Blueprint execution permission has been revoked')
@@ -210,7 +228,7 @@ def validate_authorization(db, job):
             credential_id = ansible_run.get('credentials_id')
             if not credential_id or not reference_visible(db, 'credential', credential_id, scope):
                 raise ExecutionFailed('Ansible runbook credential access has been revoked')
-        if job.operation in {'terraform.plan', 'terraform.apply'}:
+        if job.operation in {'terraform.plan', 'terraform.apply', 'proxmox.provision'}:
             blueprint = (job.payload or {}).get('blueprint') or {}
             guest_credential_id = blueprint.get('guest_credential_id')
             if not guest_credential_id and target is not None:
@@ -238,9 +256,19 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job project authorization has been revoked') from None
     if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
         needed = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+    elif job.operation == 'proxmox.provision':
+        needed = {
+            'jobs.execute', 'deployments.create',
+            'vms.read', 'vms.clone', 'vms.update', 'vms.power',
+        }
+    elif job.operation == 'proxmox.destroy':
+        needed = {
+            'jobs.execute', 'deployments.destroy',
+            'vms.read', 'vms.delete', 'vms.power',
+        }
     else:
         needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
-    if job.operation == 'terraform.apply':
+    if job.operation in {'terraform.apply', 'proxmox.provision'}:
         needed.add('deployments.create')
         blueprint = job.payload.get('blueprint') or {}
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
@@ -252,7 +280,7 @@ def validate_authorization(db, job):
             needed.add('ipam.release')
         if 'terraform_destroy' in workflow_types:
             needed.add('deployments.destroy')
-    if job.operation == 'terraform.destroy':
+    if job.operation in {'terraform.destroy', 'proxmox.destroy'}:
         needed.add('deployments.destroy')
     if job.operation == 'terraform.import':
         needed.add('deployments.adopt')
@@ -362,6 +390,11 @@ def _workflow_vm_identity(context, workspace):
     node = str((context.deployment.variables or {}).get('node') or '')
     if not node:
         raise ExecutionFailed('Proxmox node missing from deployment variables')
+    if context.deployment.executor == 'proxmox':
+        vm_id = (context.deployment.variables or {}).get('vm_id')
+        if vm_id in {None, ''}:
+            raise ExecutionFailed('Proxmox VMID missing from direct deployment variables')
+        return node, int(vm_id), provider_for(context.credential)
     return node, vm_id_from_state(workspace), provider_for(context.credential)
 
 
