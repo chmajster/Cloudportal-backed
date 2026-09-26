@@ -1139,7 +1139,7 @@ def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, 
         ],
     })
     assert duplicate_apply.status_code == 422
-    assert 'exactly one terraform_apply' in duplicate_apply.text
+    assert 'exactly one explicit terraform_apply' in duplicate_apply.text
 
     vm_before_apply = client.post('/api/v1/blueprints', headers=headers, json={
         **base,
