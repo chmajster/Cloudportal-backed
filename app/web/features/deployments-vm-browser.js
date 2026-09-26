@@ -331,6 +331,44 @@ function emptyVmState(title, description) {
     node('span', { class: 'muted', text: description }));
 }
 
+async function deleteVmFromCard(item, deployment, onRefresh = null) {
+  const name = String(item?.name || ('VM ' + (item?.vm_id ?? '')));
+  const terraformManaged = item?.management_mode === 'terraform' && Boolean(deployment?.id);
+
+  confirmAction(
+    'Usuń VM',
+    terraformManaged
+      ? 'Terraform usunie VM „' + name + '” oraz powiązane zasoby tego wdrożenia. Operacji nie można cofnąć.'
+      : 'VM „' + name + '” zostanie trwale usunięta u providera. Operacji nie można cofnąć.',
+    async () => {
+      if (terraformManaged) {
+        await api('/deployments/' + encodeURIComponent(deployment.id) + '/destroy', {
+          method: 'POST',
+          body: {},
+          idempotent: true,
+        });
+        toast('Utworzono zadanie usuwania VM.');
+      } else {
+        await api('/resources/' + encodeURIComponent(item.id) + '/actions/delete_vm', {
+          method: 'POST',
+          idempotent: true,
+          body: {
+            parameters: {
+              confirmation: name,
+              purge: false,
+              destroy_unreferenced_disks: false,
+            },
+            reason: 'Usunięcie VM z widoku Moje zasoby',
+          },
+        });
+        toast('Utworzono zadanie usuwania VM.');
+      }
+      if (typeof onRefresh === 'function') await onRefresh();
+      else navigate('my-resources');
+    },
+  );
+}
+
 function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSelectionChange = null, onRefresh = null) {
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   const createdAt = deployment?.created_at || item.created_at || '';
@@ -422,8 +460,20 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
   if (canRecreate) {
     actions.push(button('Odtwórz od zera', () => runCommand('inventory.recreateVm', item), 'danger'));
   }
-  if (deployment && hasCommand('deployments.open')) {
-    actions.push(button('Wdrożenie', () => runCommand('deployments.open', deployment), 'ghost'));
+  const canDeleteTerraform = !provisioningVisible
+    && item.management_mode === 'terraform'
+    && Boolean(deployment?.id)
+    && deployment?.status !== 'reconciliation_required'
+    && allowed('deployments.destroy')
+    && allowed('jobs.execute')
+    && allowed('terraform.execute');
+  const canDeleteExternal = !provisioningVisible
+    && item.management_mode !== 'terraform'
+    && item.lifecycle_status === 'active'
+    && allowed('day2.view')
+    && allowed('day2.delete');
+  if (canDeleteTerraform || canDeleteExternal) {
+    actions.push(button('Usuń', () => deleteVmFromCard(item, deployment, onRefresh), 'danger'));
   }
 
   const stage = provisioningVisible

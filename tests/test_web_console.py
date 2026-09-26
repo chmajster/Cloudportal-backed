@@ -905,6 +905,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Snapshot'" in script
     assert "button('Backup'" in script
     assert "button('Odtwórz od zera'" in script
+    assert "async function deleteVmFromCard(item, deployment, onRefresh = null)" in script
+    assert "button('Usuń', () => deleteVmFromCard(item, deployment, onRefresh), 'danger')" in script
+    assert "'/actions/delete_vm'" in script
+    assert "'/deployments/' + encodeURIComponent(deployment.id) + '/destroy'" in script
     assert "function recreateVm(item)" in script
     assert "registerCommand('inventory.recreateVm', recreateVm)" in script
     assert "runCommand('inventory.recreateVm', item)" in script
