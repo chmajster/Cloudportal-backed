@@ -113,10 +113,26 @@ def reconcile_cancelled_jobs(db):
         mark_job_reservation_uncertain(db, job)
         job.status = 'cancelled'
         job.error = 'Cancellation requested; worker no longer owns an active execution'
+        uncertain_terraform_mutation = job.operation in {
+            'terraform.apply', 'terraform.destroy', 'terraform.import',
+        }
         if deployment is not None and deployment.active_job_id == job.id:
             deployment.active_job_id = None
-            deployment.status = 'cancelled'
-        db.add(JobLog(job_id=job.id, message='job.cancelled: anulowanie zakończone przez dispatcher'))
+            deployment.status = (
+                'reconciliation_required'
+                if uncertain_terraform_mutation
+                else 'cancelled'
+            )
+        if uncertain_terraform_mutation:
+            db.add(JobLog(
+                job_id=job.id,
+                message=(
+                    'job.cancelled.reconciliation_required: worker ownership was lost during '
+                    'a Terraform mutation; provider state must be reconciled before retry'
+                ),
+            ))
+        else:
+            db.add(JobLog(job_id=job.id, message='job.cancelled: anulowanie zakończone przez dispatcher'))
         queue_job_webhooks(db, job)
 
 
@@ -194,7 +210,12 @@ def expire_waiting_approvals(db):
     current_time = now()
     for job in rows:
         payload = dict(job.payload or {})
-        approval = dict(payload.get('_approval') or {})
+        workflow_approval = dict(payload.get('_workflow_approval') or {})
+        approval = (
+            workflow_approval
+            if workflow_approval.get('status') == 'pending'
+            else dict(payload.get('_approval') or {})
+        )
         raw_expiry = approval.get('expires_at')
         if raw_expiry:
             try:

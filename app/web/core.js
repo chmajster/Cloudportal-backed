@@ -1,5 +1,4 @@
 'use strict';
-
 const API = '/api/v1';
 const SESSION_KEY = 'cloudportal.console.session';
 const THEME_KEY = 'cloudportal.console.theme';
@@ -30,12 +29,10 @@ const dom = {
   modalActions: document.querySelector('#modal-actions'),
   toastRegion: document.querySelector('#toast-region'),
 };
-
 const routes = [];
 const views = Object.create(null);
 const commands = Object.create(null);
 const extensions = new Set();
-
 function registerView(route, handler) {
   if (!route?.id || typeof handler !== 'function') throw new Error('Invalid UI feature registration');
   if (views[route.id]) throw new Error('Duplicate UI feature: ' + route.id);

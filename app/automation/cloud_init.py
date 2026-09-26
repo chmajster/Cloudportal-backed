@@ -65,6 +65,13 @@ def validate_cloud_init_workflow(steps: Sequence[Mapping[str, Any]]) -> bool:
                 pending.extend(graph[parent])
         return result
 
+    # A VM must never be started before its Cloud-init declaration has been
+    # materialized. This also protects the direct Proxmox executor from accepting
+    # a DAG that boots the guest and only then changes first-boot settings.
+    for step in steps:
+        if step.get('type') == 'start_vm' and cloud_id not in ancestors(step.get('id')):
+            raise ValueError('start_vm must depend on cloud_init when Cloud-init is enabled')
+
     # Approved plans already contain Cloud-init. Preparing it after plan would
     # silently make the preview differ from the plan that is actually applied.
     for step in steps:

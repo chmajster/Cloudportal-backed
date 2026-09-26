@@ -204,10 +204,12 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     if direct_proxmox:
         if provider.type != 'proxmox' or data.deployment.template != 'proxmox-vm':
             raise HTTPException(422, 'Direct Proxmox provisioning requires a Proxmox provider and proxmox-vm template')
-        if workflow_types & {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
-            raise HTTPException(422, 'Direct Proxmox provisioning cannot contain Terraform workflow steps')
-        if len(workflow_types & {'clone_vm', 'create_vm'}) != 1:
-            raise HTTPException(422, 'Direct Proxmox provisioning requires clone_vm or create_vm')
+        if workflow_types & {'terraform_plan', 'terraform_apply'}:
+            raise HTTPException(422, 'Direct Proxmox provisioning cannot contain Terraform plan/apply steps')
+        if 'create_vm' in workflow_types:
+            raise HTTPException(422, 'Direct Proxmox create_vm is not implemented; use clone_vm')
+        if 'clone_vm' not in workflow_types:
+            raise HTTPException(422, 'Direct Proxmox provisioning requires clone_vm')
     elif blueprint_id is None and 'terraform_apply' not in workflow_types:
         raise HTTPException(422, 'New Terraform/OpenTofu Blueprints must contain an explicit terraform_apply step')
 
@@ -518,6 +520,17 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         parsed.variables = validate_template_variables(
             parsed.template, parsed.variables
         ).model_dump(mode='json')
+        # Persist the Policy Engine's effective classification in the immutable
+        # Blueprint job snapshot as well as in deployment variables. Runtime
+        # facts must never expose the pre-policy APMID/environment after placement
+        # or governance effects changed them.
+        for field in ('apmid', 'environment', 'organization', 'project'):
+            value = parsed.variables.get(field)
+            if value not in (None, ''):
+                blueprint_variables[field] = value
+        scope_key = parsed.variables.get('resource_scope_key')
+        if scope_key not in (None, ''):
+            blueprint_variables['scope_key'] = scope_key
         provider = find(db, Provider, parsed.provider_id)
         template_meta, _ = template_definition(parsed.template)
         if provider.type != template_meta['provider']:

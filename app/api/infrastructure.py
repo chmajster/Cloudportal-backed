@@ -52,7 +52,16 @@ def _job_workflow_progress(j):
     if not steps:
         return None, 0
 
-    step_ids = [str(step.get('id') or '') for step in steps]
+    rollback_targets = {
+        str(step.get('rollback'))
+        for step in steps
+        if step.get('rollback')
+    }
+    active_steps = [
+        step for step in steps
+        if str(step.get('id') or '') not in rollback_targets
+    ]
+    step_ids = [str(step.get('id') or '') for step in active_steps]
     stage = str(payload.get('_current_stage') or '').strip()
     current_step_id = None
     for prefix in ('workflow.step.start:', 'workflow.step.completed:'):
@@ -62,24 +71,20 @@ def _job_workflow_progress(j):
 
     runtime = dict(payload.get('_workflow_runtime') or {})
     completed = {str(value) for value in (runtime.get('completed_steps') or [])}
-    rollback_targets = {
-        str(step.get('rollback'))
-        for step in steps
-        if step.get('rollback')
-    }
 
     if current_step_id not in step_ids:
         pending = [
             step_id for step_id in step_ids
-            if step_id and step_id not in completed and step_id not in rollback_targets
+            if step_id and step_id not in completed
         ]
         current_step_id = pending[0] if pending else None
 
+    total = len(step_ids)
     if current_step_id in step_ids:
-        return step_ids.index(current_step_id) + 1, len(steps)
+        return step_ids.index(current_step_id) + 1, total
     if str(j.status or '').lower() == 'successful':
-        return len(steps), len(steps)
-    return None, len(steps)
+        return total, total
+    return None, total
 
 
 def job_public(j):
@@ -753,6 +758,44 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
         raise HTTPException(409, 'Job does not require Blueprint approval')
 
     payload = dict(job.payload or {})
+    workflow_approval = dict(payload.get('_workflow_approval') or {})
+    if workflow_approval.get('status') == 'pending':
+        expires_at = workflow_approval.get('expires_at')
+        if expires_at:
+            try:
+                if datetime.fromisoformat(expires_at) <= now():
+                    raise HTTPException(409, 'Workflow approval request has expired')
+            except ValueError:
+                raise HTTPException(409, 'Workflow approval request expiry is invalid') from None
+        step_id = str(workflow_approval.get('step_id') or '').strip()
+        runtime = dict(payload.get('_workflow_runtime') or {})
+        plan_sha256 = str(runtime.get('plan_sha256') or '')
+        expected_plan_sha256 = str(workflow_approval.get('plan_sha256') or '')
+        if not step_id:
+            raise HTTPException(409, 'Workflow approval step is missing')
+        if expected_plan_sha256 and expected_plan_sha256 != plan_sha256:
+            raise HTTPException(409, 'Terraform plan changed after the approval request was created')
+        workflow_approval.update({
+            'status': 'approved',
+            'approved_by': actor.user_id,
+            'approved_at': now().isoformat(),
+            'approved_plan_sha256': plan_sha256 or None,
+        })
+        payload['_workflow_approval'] = workflow_approval
+        job.payload = payload
+        deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
+        prepare_job_reservation(db, job, deployment)
+        job.status = 'queued'
+        if deployment is not None and deployment.active_job_id == job.id:
+            deployment.status = 'queued'
+        db.add(JobLog(
+            job_id=job.id,
+            message=f'workflow.approval.step_approved: step={step_id}; user={actor.user_id}',
+        ))
+        audit(db, request, 'blueprint.workflow_step.approved', 'jobs', job.id)
+        db.flush()
+        return job_public(job)
+
     approval = dict(payload.get('_approval') or {})
     expires_at = approval.get('expires_at')
     if expires_at:
@@ -890,6 +933,7 @@ def accept_awx_onboarding(
 
     for key in (
         '_approval',
+        '_workflow_approval',
         '_current_stage',
         '_provider_wait',
         '_quota_checked',
@@ -954,14 +998,44 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
         raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
     check_job_permissions(request, original.operation)
     payload = dict(original.payload or {})
+    workflow_runtime = dict(payload.get('_workflow_runtime') or {})
+    proxmox_runtime = dict(payload.get('_proxmox_runtime') or {})
+    provider_checkpointed = (
+        workflow_runtime.get('provider_applied') is True
+        or (
+            original.operation == 'proxmox.provision'
+            and (
+                proxmox_runtime.get('clone_completed') is True
+                or bool(proxmox_runtime.get('clone_upid'))
+                or bool(proxmox_runtime.get('target_vm_id'))
+            )
+        )
+    )
+    safe_workflow_resume = (
+        original.operation in {'terraform.apply', 'proxmox.provision'}
+        and provider_checkpointed
+    )
+
     payload.pop('_approval', None)
-    payload.pop('_workflow_runtime', None)
+    payload.pop('_workflow_approval', None)
     payload.pop('_current_stage', None)
     payload.pop('_provider_wait', None)
     payload.pop('_quota_checked', None)
     payload.pop('_quota_reservation_id', None)
     payload.pop('_state_recovery', None)
     payload.pop('_auto_resume', None)
+
+    if safe_workflow_resume:
+        # Provider-side mutation has already happened. Preserve durable workflow
+        # checkpoints so post-provisioning retry cannot recreate/replace the VM
+        # or repeat completed Ansible/AWX steps.
+        payload['_resume_after_provider_apply'] = True
+        payload.pop('_recreate', None)
+    else:
+        payload.pop('_resume_after_provider_apply', None)
+        payload.pop('_workflow_runtime', None)
+        if original.operation == 'proxmox.provision':
+            payload.pop('_proxmox_runtime', None)
     if original.operation == 'ansible.execute' and payload.get('ansible'):
         from app.api.schemas import AnsibleInput
         validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))
@@ -972,7 +1046,8 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
             deployment = db.scalar(select(Deployment).where(Deployment.id == original.deployment_id).with_for_update())
             if deployment is None:
                 raise HTTPException(404, 'Deployment not found')
-            delete_plan(deployment.id)
+            if not safe_workflow_resume:
+                delete_plan(deployment.id)
         new = new_job(
             db,
             request,
@@ -983,7 +1058,15 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
             retry_of=original.id,
             attempt=original.attempt + 1,
         )
-        audit(db, request, 'job.retried', 'jobs', new.id)
+        db.add(JobLog(
+            job_id=new.id,
+            message=(
+                'job.resumed_from_checkpoint: provider mutation checkpoint preserved'
+                if safe_workflow_resume
+                else 'job.retry_from_start: no provider mutation checkpoint'
+            ),
+        ))
+        audit(db, request, 'job.resumed' if safe_workflow_resume else 'job.retried', 'jobs', new.id)
         return job_public(new)
 
     return idempotent(

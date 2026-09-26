@@ -940,7 +940,7 @@ class BlueprintInput(Input):
             raise ValueError('Workflow can contain exactly one terraform_apply step')
         legacy_provisioning = any(step.type in legacy_markers for step in self.workflow)
         if not apply_steps and not legacy_provisioning:
-            raise ValueError('Workflow must contain terraform_apply or a provisioning marker')
+            raise ValueError('Workflow must contain terraform_apply or a legacy provisioning marker')
 
         plan_steps = [step for step in self.workflow if step.type == 'terraform_plan']
         if len(plan_steps) > 1:
@@ -953,22 +953,34 @@ class BlueprintInput(Input):
         if direct_proxmox:
             if self.deployment.template != 'proxmox-vm':
                 raise ValueError('Direct Proxmox provisioning requires the proxmox-vm template')
-            if apply_steps or plan_steps or any(step.type == 'terraform_destroy' for step in self.workflow):
-                raise ValueError('Direct Proxmox provisioning cannot contain Terraform plan/apply/destroy steps')
-            if len(direct_create_steps) != 1:
-                raise ValueError('Direct Proxmox provisioning requires exactly one clone_vm or create_vm step')
+            if apply_steps or plan_steps:
+                raise ValueError('Direct Proxmox provisioning cannot contain Terraform plan/apply steps')
+            clone_steps = [step for step in self.workflow if step.type == 'clone_vm']
+            create_steps = [step for step in self.workflow if step.type == 'create_vm']
+            if create_steps:
+                raise ValueError('Direct Proxmox create_vm is not implemented; use clone_vm')
+            if len(clone_steps) != 1:
+                raise ValueError('Direct Proxmox provisioning requires exactly one clone_vm step')
             if approval_steps:
                 raise ValueError(
                     'Direct Proxmox provisioning uses job-level approval; an explicit approval workflow step is not supported'
                 )
-            create_id = direct_create_steps[0].id
-            vm_runtime_types = {
+            create_id = clone_steps[0].id
+            after_create_types = {
+                'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
                 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
                 'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
             }
             for step in self.workflow:
-                if step.type in vm_runtime_types and create_id not in ancestors(step.id):
-                    raise ValueError(f'{step.type} must depend on the direct Proxmox VM creation step')
+                if step.type in after_create_types and create_id not in ancestors(step.id):
+                    raise ValueError(f'{step.type} must depend on the direct Proxmox clone_vm step')
+            cloud_steps = [step for step in self.workflow if step.type == 'cloud_init']
+            start_steps = [step for step in self.workflow if step.type == 'start_vm']
+            if cloud_steps and start_steps:
+                cloud_id = cloud_steps[0].id
+                for step in start_steps:
+                    if cloud_id not in ancestors(step.id):
+                        raise ValueError('Direct Proxmox start_vm must depend on cloud_init')
         else:
             if plan_steps and not apply_steps:
                 raise ValueError('terraform_plan requires an explicit terraform_apply step')

@@ -210,6 +210,12 @@ def gate_job_for_approval(db, job, deployment=None):
         blueprint=blueprint,
     )
     payload = dict(job.payload or {})
+    if payload.get('_resume_after_provider_apply') is True:
+        db.add(JobLog(
+            job_id=job.id,
+            message='workflow.approval.resume_skipped: provider mutation already checkpointed',
+        ))
+        return False
     policy_stages = policy_approval_stages(job, deployment)
     if policy_stages:
         # Policy approval is an explicit governance decision and cannot be

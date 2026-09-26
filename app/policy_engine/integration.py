@@ -233,7 +233,6 @@ def _write_aliases(db, rendered, effective_resource, effective_scope=None):
             selected_provider = None
         if selected_provider is not None:
             rendered["credentials_id"] = selected_provider.credentials_id
-            rendered["provider"] = selected_provider.type
     if effective_resource.get("template"):
         rendered["template"] = effective_resource["template"]
 
@@ -353,7 +352,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
 
 def revalidate_blueprint_job(db, job, user, permissions, deployment):
     """Re-evaluate current policy immediately before a persisted Blueprint job executes."""
-    if getattr(job, "operation", None) != "terraform.apply":
+    if getattr(job, "operation", None) not in {"terraform.apply", "proxmox.provision"}:
         return None
     blueprint = dict((getattr(job, "payload", {}) or {}).get("blueprint") or {})
     if not blueprint or deployment is None:

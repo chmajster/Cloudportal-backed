@@ -1,3 +1,4 @@
+import pytest
 import uuid
 
 from app.database import session
