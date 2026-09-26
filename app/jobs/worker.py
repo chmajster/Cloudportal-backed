@@ -1849,10 +1849,8 @@ def run_blueprint_workflow(context, executor):
         if not expected or actual != expected:
             raise ExecutionFailed('Approved Terraform plan checksum mismatch; generate and approve a new plan')
 
-    def apply_and_sync(reason='explicit'):
+    def apply_and_sync():
         context.stage('workflow.terraform_apply')
-        if reason != 'explicit':
-            context.log(f'workflow.compatibility: implicit terraform_apply before {reason}')
         verify_saved_plan()
         context.apply_saved_terraform_plan = bool(runtime['plan_ready'])
         try:
