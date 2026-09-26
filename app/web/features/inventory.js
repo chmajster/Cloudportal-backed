@@ -640,7 +640,7 @@ function vmHistoryKindTone(kind) {
   if (kind === 'provisioning' || kind === 'job') return 'info';
   if (kind === 'day2') return 'warning';
   if (kind === 'lifecycle' || kind === 'deployment') return 'ok';
-  return 'neutral';
+  return 'info';
 }
 
 function vmHistoryStatusTone(status) {
