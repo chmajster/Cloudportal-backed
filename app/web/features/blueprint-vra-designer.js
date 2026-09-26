@@ -222,7 +222,7 @@
         if (dep === step.id) errors.push(step.id + ': krok nie może zależeć od siebie.');
       }
       if (step.rollback && !known.has(step.rollback)) errors.push(step.id + ': nieznany rollback ' + step.rollback + '.');
-      if (step.type === 'create_vm') errors.push('create_vm nie jest obsługiwanym krokiem workflow.');
+      if (!STEP_TYPES.includes(step.type)) errors.push(step.id + ': nieobsługiwany typ kroku ' + step.type + '.');
     }
 
     const visiting = new Set();
@@ -950,7 +950,6 @@
 
       body.append(textField('ID kroku', step.id, value => renameStep(step, value)));
       const typeChoices = STEP_TYPES.map(type => ({ value: type, label: TYPE_META.get(type)?.label || type }));
-      if (!STEP_TYPES.includes(step.type)) typeChoices.unshift({ value: step.type, label: 'Legacy / YAML: ' + step.type });
       body.append(selectField('Typ', step.type, typeChoices, value => mutate(() => {
         const previousType = step.type;
         const previousDefaultTimeout = defaultStepTimeout(previousType);
