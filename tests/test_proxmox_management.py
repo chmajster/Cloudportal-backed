@@ -43,6 +43,20 @@ def test_proxmox_vm_lifecycle_routes(client, headers, monkeypatch):
         'vmid': vmid, 'name': 'vm01', 'status': 'running', 'secret': 'never-return'
     })
     monkeypatch.setattr(ProxmoxProvider, 'guest_addresses', lambda self, node, vmid: ['192.0.2.101'])
+    monkeypatch.setattr(ProxmoxProvider, 'vm_rrddata', lambda self, node, vmid, timeframe='hour': [
+        {
+            'time': 1,
+            'cpu': 0.25,
+            'maxcpu': 4,
+            'mem': 1024,
+            'maxmem': 4096,
+            'netin': 128,
+            'netout': 64,
+            'diskread': 32,
+            'diskwrite': 16,
+            'secret': 'never-return',
+        }
+    ])
     monkeypatch.setattr(ProxmoxProvider, 'vm_power', lambda self, node, vmid, action: calls.append(('power', node, vmid, action)) or 'UPID:power')
     monkeypatch.setattr(ProxmoxProvider, 'snapshots', lambda self, node, vmid: [
         {'name': 'baseline', 'description': 'safe', 'snaptime': 1, 'secret': 'never-return'}
@@ -66,6 +80,13 @@ def test_proxmox_vm_lifecycle_routes(client, headers, monkeypatch):
     assert status.status_code == 200 and status.json()['status'] == 'running'
     assert status.json()['primary_ip'] == '192.0.2.101'
     assert 'secret' not in status.json()
+
+    monitor = client.get(base + '/monitor?timeframe=day', headers=headers)
+    assert monitor.status_code == 200, monitor.text
+    assert monitor.json()['source'] == 'proxmox'
+    assert monitor.json()['timeframe'] == 'day'
+    assert monitor.json()['series'][0]['cpu'] == 0.25
+    assert 'secret' not in monitor.text
 
     power = client.post(base + '/power', headers=headers, json={'action': 'reboot'})
     assert power.status_code == 200 and power.json()['task'] == 'UPID:power'
@@ -140,7 +161,9 @@ def test_vm_rbac_separates_read_from_power(client, headers, monkeypatch):
     monkeypatch.setattr(ProxmoxProvider, 'vm_power', lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('must not execute')))
 
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
+    monkeypatch.setattr(ProxmoxProvider, 'vm_rrddata', lambda self, node, vmid, timeframe='hour': [])
     assert client.get(base + '/status', headers=viewer).status_code == 200
+    assert client.get(base + '/monitor', headers=viewer).status_code == 200
     assert client.post(base + '/power', headers=viewer, json={'action': 'start'}).status_code == 403
 
 
