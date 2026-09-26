@@ -42,10 +42,53 @@ def deployment_public(d):
     return public(d, DEPLOYMENT_FIELDS)
 
 
+def _job_workflow_progress(j):
+    payload = dict(j.payload or {})
+    blueprint = payload.get('blueprint') or {}
+    if not isinstance(blueprint, dict):
+        return None, 0
+
+    steps = [step for step in (blueprint.get('steps') or []) if isinstance(step, dict)]
+    if not steps:
+        return None, 0
+
+    step_ids = [str(step.get('id') or '') for step in steps]
+    stage = str(payload.get('_current_stage') or '').strip()
+    current_step_id = None
+    for prefix in ('workflow.step.start:', 'workflow.step.completed:'):
+        if stage.startswith(prefix):
+            current_step_id = stage[len(prefix):].split(':', 1)[0].strip() or None
+            break
+
+    runtime = dict(payload.get('_workflow_runtime') or {})
+    completed = {str(value) for value in (runtime.get('completed_steps') or [])}
+    rollback_targets = {
+        str(step.get('rollback'))
+        for step in steps
+        if step.get('rollback')
+    }
+
+    if current_step_id not in step_ids:
+        pending = [
+            step_id for step_id in step_ids
+            if step_id and step_id not in completed and step_id not in rollback_targets
+        ]
+        current_step_id = pending[0] if pending else None
+
+    if current_step_id in step_ids:
+        return step_ids.index(current_step_id) + 1, len(steps)
+    if str(j.status or '').lower() == 'successful':
+        return len(steps), len(steps)
+    return None, len(steps)
+
+
 def job_public(j):
     result = public(j, JOB_FIELDS)
     stage = (j.payload or {}).get('_current_stage')
     result['current_stage'] = str(stage)[:255] if stage else None
+    workflow_step_index, workflow_step_total = _job_workflow_progress(j)
+    result['workflow_step_index'] = workflow_step_index
+    result['workflow_step_total'] = workflow_step_total
     wait = (j.payload or {}).get('_provider_wait') or {}
     result['provider_waiting'] = bool(wait)
     result['provider_retry_attempts'] = int(wait.get('attempts') or 0)
