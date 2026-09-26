@@ -9,8 +9,6 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
   const awxCredentials = credentials.filter(value => value.type === 'awx');
   const selection = {
     credential: String(config.credential_id || ''),
-    organization: String(config.organization_id || ''),
-    project: String(config.project_id || ''),
     inventory: String(config.inventory_id || ''),
     jobTemplate: String(config.job_template_id || ''),
   };
@@ -28,13 +26,9 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     selection.credential,
     { wide: true }
   );
-  const organizationField = selectField(
-    'Organizacja AWX', 'awx_organization_id', [], selection.organization,
-    { wide: true, placeholder: 'Automatycznie / bez ograniczenia do organizacji' }
-  );
-  const projectField = selectField(
-    'Projekt AWX', 'awx_project_id', [], selection.project,
-    { wide: true, placeholder: 'Bez przypisanego projektu / nie filtruj Job Template' }
+  const scopeInfo = node('div', { class: 'blueprint-wizard-info wide' },
+    node('strong', { text: 'Scope AWX jest dziedziczony z CloudPortal' }),
+    node('span', { text: 'Tenant CloudPortal = Organization AWX, Project CloudPortal = Project AWX. Tych wartości nie wybiera się ręcznie w Blueprintcie.' })
   );
   const inventoryField = selectField(
     'Inventory AWX', 'awx_inventory_id', [], selection.inventory,
@@ -44,7 +38,7 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     value: config.inventory_name || '<Projekt>-<APMID>-<ENV>',
     wide: true,
     placeholder: '<Projekt>-<APMID>-<ENV>',
-    help: 'Dostępne tokeny: <Projekt>, <APMID>, <ENV>. <Projekt> używa wybranego projektu AWX, a bez wyboru bieżącego projektu CloudPortal. APMID i ENV są rozwiązywane podczas tworzenia VM.',
+    help: 'Dostępne tokeny: <Projekt>, <APMID>, <ENV>. <Projekt> zawsze oznacza Project AWX mapowany z bieżącego Projectu CloudPortal. APMID i ENV są rozwiązywane podczas tworzenia VM.',
   });
   const groupEnvironmentField = checkboxField(
     'Twórz/przypisuj grupę env-<environment>',
@@ -81,8 +75,7 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
   const status = node('div', { class: 'blueprint-wizard-info wide', hidden: true });
   const controls = node('div', { class: 'form-grid wide' },
     credentialField,
-    organizationField,
-    projectField,
+    scopeInfo,
     inventoryField,
     inventoryNameField,
     groupEnvironmentField,
@@ -110,8 +103,6 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
   );
 
   const credentialSelect = credentialField.querySelector('select');
-  const organizationSelect = organizationField.querySelector('select');
-  const projectSelect = projectField.querySelector('select');
   const inventorySelect = inventoryField.querySelector('select');
   const jobTemplateSelect = jobTemplateField.querySelector('select');
   const toggleControl = toggle.querySelector('input');
@@ -129,63 +120,30 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     return result;
   };
   const refreshChoices = () => {
-    const organizations = discovery?.organizations || [];
-    const projects = discovery?.projects || [];
     const inventories = discovery?.inventories || [];
     const templates = discovery?.job_templates || [];
 
-    if (discovery && selection.organization
-        && !organizations.some(row => String(row.id) === selection.organization)) {
-      selection.organization = '';
-    }
-    const filteredProjects = projects.filter(row =>
-      !selection.organization || String(row.organization || '') === selection.organization);
-    if (discovery && selection.project
-        && !filteredProjects.some(row => String(row.id) === selection.project)) {
-      selection.project = '';
-      selection.jobTemplate = '';
-    }
-    const filteredInventories = inventories.filter(row =>
-      !selection.organization || String(row.organization || '') === selection.organization);
     if (discovery && selection.inventory
-        && !filteredInventories.some(row => String(row.id) === selection.inventory)) {
+        && !inventories.some(row => String(row.id) === selection.inventory)) {
       selection.inventory = '';
     }
-    const projectById = new Map(projects.map(row => [String(row.id), row]));
-    const filteredTemplates = templates.filter(row => {
-      if (selection.project) return String(row.project || '') === selection.project;
-      if (!selection.organization || !row.project) return true;
-      return String(projectById.get(String(row.project))?.organization || '') === selection.organization;
-    });
     if (discovery && selection.jobTemplate
-        && !filteredTemplates.some(row => String(row.id) === selection.jobTemplate)) {
+        && !templates.some(row => String(row.id) === selection.jobTemplate)) {
       selection.jobTemplate = '';
     }
 
     window.BlueprintFormUtils.setSelectChoices(
-      organizationSelect,
-      withSaved(organizations, selection.organization, row => ({ value: row.id, label: row.name }), 'organizacja'),
-      selection.organization,
-      'Automatycznie / bez ograniczenia do organizacji'
-    );
-    window.BlueprintFormUtils.setSelectChoices(
-      projectSelect,
-      withSaved(filteredProjects, selection.project, row => ({
-        value: row.id,
-        label: row.name + (row.scm_type ? ' · SCM: ' + row.scm_type : ''),
-      }), 'projekt'),
-      selection.project,
-      'Bez przypisanego projektu / nie filtruj Job Template'
-    );
-    window.BlueprintFormUtils.setSelectChoices(
       inventorySelect,
-      withSaved(filteredInventories, selection.inventory, row => ({ value: row.id, label: row.name }), 'inventory'),
+      withSaved(inventories, selection.inventory, row => ({
+        value: row.id,
+        label: row.name,
+      }), 'inventory'),
       selection.inventory,
-      'Automatycznie — użyj lub utwórz inventory'
+      'Automatycznie — użyj lub utwórz inventory w Organization mapowanej z Tenanta'
     );
     window.BlueprintFormUtils.setSelectChoices(
       jobTemplateSelect,
-      withSaved(filteredTemplates, selection.jobTemplate, row => ({
+      withSaved(templates, selection.jobTemplate, row => ({
         value: row.id,
         label: row.name + (row.playbook ? ' · playbook: ' + row.playbook : ''),
       }), 'Job Template'),
@@ -204,8 +162,6 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
   const loadDiscovery = async (reset = false) => {
     selection.credential = String(credentialSelect.value || '');
     if (reset) {
-      selection.organization = '';
-      selection.project = '';
       selection.inventory = '';
       selection.jobTemplate = '';
     }
@@ -214,7 +170,7 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     if (!selection.credential) {
       if (toggleControl.checked) {
         setStatus(awxCredentials.length
-          ? 'Wybierz połączenie AWX, aby pobrać organizacje, projekty, inventory i Job Template.'
+          ? 'Wybierz połączenie AWX, aby pobrać inventory i Job Template. Organization/Project wynikają ze scope CloudPortal.'
           : 'Brak Credentiala typu AWX. Dodaj połączenie AWX w sekcji Dane dostępowe.', true);
       }
       return;
@@ -244,16 +200,6 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     await loadDiscovery(true);
     onChange();
   });
-  organizationSelect.addEventListener('change', () => {
-    selection.organization = String(organizationSelect.value || '');
-    refreshChoices();
-    onChange();
-  });
-  projectSelect.addEventListener('change', () => {
-    selection.project = String(projectSelect.value || '');
-    refreshChoices();
-    onChange();
-  });
   inventorySelect.addEventListener('change', () => {
     selection.inventory = String(inventorySelect.value || '');
     onChange();
@@ -280,8 +226,6 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
       if (!credentialId) throw new Error('Wybierz połączenie AWX dla tego Blueprintu.');
       return {
         credential_id: credentialId,
-        organization_id: organizationSelect.value ? Number(organizationSelect.value) : null,
-        project_id: projectSelect.value ? Number(projectSelect.value) : null,
         inventory_id: inventorySelect.value ? Number(inventorySelect.value) : null,
         inventory_name: String(inventoryNameField.querySelector('input').value || '<Projekt>-<APMID>-<ENV>').trim() || '<Projekt>-<APMID>-<ENV>',
         group_by_environment: runtimeEnvironmentSync || groupEnvironmentControl.checked,

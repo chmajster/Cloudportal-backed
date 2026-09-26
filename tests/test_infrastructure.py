@@ -25,6 +25,7 @@ from app.terraform.identity import reserve_proxmox_vm_id
 from app.terraform.state import persist_state
 from app.inventory_sync import sync_deployment_inventory
 from app.providers.proxmox import ProxmoxProvider
+from app.awx import AwxClient
 
 
 def terraform_state_workspace(tmp_path, vm_id=101):
@@ -1497,3 +1498,55 @@ def test_worker_admits_queued_job_missing_quota_rollout_marker(client, headers, 
         assert job.payload['_quota_checked'] is True
         assert reservation.status == 'committed'
         assert allocation.dimensions['vm_count'] == 1
+
+
+
+def test_awx_scope_endpoint_maps_bound_cloudportal_tenant_and_project(client, headers, monkeypatch):
+    credential = client.post(
+        '/api/v1/credentials',
+        headers=headers,
+        json={
+            'name': 'AWX',
+            'type': 'awx',
+            'endpoint': 'https://awx.example.com',
+            'username': 'admin',
+            'secrets': {'token': 'test-awx-token'},
+        },
+    )
+    assert credential.status_code == 201, credential.text
+
+    seen = {}
+
+    def ensure_organization(self, *, name):
+        seen['tenant_name'] = name
+        return {'id': 7, 'name': name}
+
+    def project_for_organization(self, *, name, organization_id):
+        seen['project_name'] = name
+        seen['organization_id'] = organization_id
+        return {
+            'id': 21,
+            'name': name,
+            'organization': organization_id,
+            'scm_type': 'git',
+            'status': 'successful',
+        }
+
+    monkeypatch.setattr(AwxClient, 'ensure_organization', ensure_organization)
+    monkeypatch.setattr(AwxClient, 'project_for_organization', project_for_organization)
+
+    response = client.post(
+        f"/api/v1/credentials/{credential.json()['id']}/awx/scope",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert seen == {
+        'tenant_name': payload['tenant']['name'],
+        'project_name': payload['project']['name'],
+        'organization_id': 7,
+    }
+    assert payload['organization']['id'] == 7
+    assert payload['awx_project']['id'] == 21
+    assert payload['awx_project']['organization'] == 7

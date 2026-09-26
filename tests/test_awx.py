@@ -337,3 +337,98 @@ def test_ensure_host_preserves_non_cloudportal_variables():
     assert variables['custom_flag'] is True
     assert variables['ansible_host'] == '10.20.30.40'
     assert variables['cloudportal_deployment_id'] == 'dep-123'
+
+
+
+class FakeScopeMappingAwxClient(AwxClient):
+    def __init__(self, *, organizations=None, projects=None):
+        self.organizations = list(organizations or [])
+        self.projects = list(projects or [])
+        self.created = []
+
+    def list_resource(self, resource, *, params=None):
+        params = dict(params or {})
+        if resource == 'organizations':
+            rows = self.organizations
+        elif resource == 'projects':
+            rows = self.projects
+        else:
+            return []
+        if params.get('name') is not None:
+            rows = [row for row in rows if row.get('name') == params['name']]
+        if params.get('organization') is not None:
+            rows = [row for row in rows if int(row.get('organization') or 0) == int(params['organization'])]
+        return list(rows)
+
+    def request(self, method, path, **kwargs):
+        assert method == 'POST'
+        assert path == 'organizations/'
+        payload = dict(kwargs['json'])
+        self.created.append(payload)
+
+        class Response:
+            @staticmethod
+            def json():
+                return {'id': 7, 'name': payload['name']}
+
+        return Response()
+
+
+def test_awx_scope_mapping_creates_tenant_organization_when_missing():
+    client = FakeScopeMappingAwxClient()
+
+    organization = client.ensure_organization(name='Acme')
+
+    assert organization == {'id': 7, 'name': 'Acme'}
+    assert client.created == [{
+        'name': 'Acme',
+        'description': 'Managed automatically from CloudPortal Tenant',
+    }]
+
+
+def test_awx_scope_mapping_reuses_existing_tenant_organization():
+    client = FakeScopeMappingAwxClient(
+        organizations=[{'id': 7, 'name': 'Acme'}],
+    )
+
+    organization = client.ensure_organization(name='Acme')
+
+    assert organization == {'id': 7, 'name': 'Acme'}
+    assert client.created == []
+
+
+def test_awx_scope_mapping_reuses_case_insensitive_names():
+    client = FakeScopeMappingAwxClient(
+        organizations=[{'id': 7, 'name': 'ACME'}],
+        projects=[{'id': 21, 'name': 'PAYMENTS', 'organization': 7}],
+    )
+
+    organization = client.ensure_organization(name='Acme')
+    project = client.project_for_organization(name='Payments', organization_id=7)
+
+    assert organization['id'] == 7
+    assert project['id'] == 21
+    assert client.created == []
+
+
+def test_awx_scope_mapping_resolves_project_only_inside_mapped_organization():
+    client = FakeScopeMappingAwxClient(
+        projects=[
+            {'id': 20, 'name': 'Payments', 'organization': 8},
+            {'id': 21, 'name': 'Payments', 'organization': 7, 'scm_type': 'git'},
+        ],
+    )
+
+    project = client.project_for_organization(name='Payments', organization_id=7)
+
+    assert project['id'] == 21
+    assert project['organization'] == 7
+
+
+def test_awx_scope_mapping_rejects_missing_project():
+    client = FakeScopeMappingAwxClient(
+        projects=[{'id': 20, 'name': 'Payments', 'organization': 8}],
+    )
+
+    with pytest.raises(AwxError, match='does not exist in mapped organization'):
+        client.project_for_organization(name='Payments', organization_id=7)

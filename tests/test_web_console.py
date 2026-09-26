@@ -459,9 +459,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'resume', 'Wznów'" in script
     assert "'reset', 'Twardy reset'" in script
     assert "'awx_credential_id'" in script
-    assert "'awx_organization_id'" in script
-    assert "'awx_project_id'" in script
+    assert "'awx_organization_id'" not in script
+    assert "'awx_project_id'" not in script
     assert "'awx_inventory_id'" in script
+    assert 'Tenant CloudPortal = Organization AWX' in script
+    assert '/awx/scope' in script
     assert "'awx_job_template_id'" in script
     assert 'Pattern nazwy inventory tworzonego automatycznie' in script
     assert '<Projekt>-<APMID>-<ENV>' in script
