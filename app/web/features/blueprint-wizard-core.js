@@ -363,7 +363,7 @@
     state.awxEnabled = Boolean(deployment.awx || workflowTypes.has('register_awx'));
     state.awxCredentialId = awx.credential_id == null ? '' : String(awx.credential_id);
     // Organization/Project are derived from the immutable CloudPortal Tenant/Project scope.
-    // Keep legacy fields empty so saving an old Blueprint removes manual AWX scope overrides.
+    // Manual AWX scope overrides are intentionally not part of the Blueprint model.
     state.awxOrganizationId = '';
     state.awxProjectId = '';
     state.awxInventoryId = awx.inventory_id == null ? '' : String(awx.inventory_id);
