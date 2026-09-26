@@ -1288,6 +1288,42 @@ def test_blueprint_edit_rejects_missing_explicit_apply(client, headers):
     assert 'version conflict' in stale.text.lower()
 
 
+def test_execute_rejects_persisted_obsolete_workflow_contract(client, headers):
+    from app.database import session
+    from app.models import Blueprint, Deployment
+
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'obsolete-persisted-workflow',
+        'name': 'Obsolete persisted workflow',
+        'deployment': {
+            'name': 'obsolete-persisted-workflow',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': deployment_payload['variables'],
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    with session() as db:
+        row = db.get(Blueprint, created.json()['id'])
+        row.workflow = [{'id': 'clone', 'type': 'clone_vm'}]
+        db.commit()
+        before = db.query(Deployment).count()
+
+    executed = client.post(
+        '/api/v1/blueprints/' + str(created.json()['id']) + '/execute',
+        headers=key(headers),
+        json={},
+    )
+    assert executed.status_code == 409
+    assert 'incompatible with the current workflow contract' in executed.text
+
+    with session() as db:
+        assert db.query(Deployment).count() == before
+
+
 def test_blueprint_approval_step_must_be_between_plan_and_apply(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     base = {
