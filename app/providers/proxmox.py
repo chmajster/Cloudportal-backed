@@ -751,6 +751,14 @@ class ProxmoxProvider(InfrastructureProvider):
     def vm_status(self, node, vm_id):
         return self._get(f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/status/current')
 
+    def vm_rrddata(self, node, vm_id, timeframe='hour'):
+        if timeframe not in {'hour', 'day', 'week', 'month', 'year'}:
+            raise HTTPException(422, 'Unsupported Proxmox monitoring timeframe')
+        return self._get(
+            f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/rrddata'
+            f'?timeframe={timeframe}&cf=AVERAGE'
+        )
+
     def vm_config(self, node, vm_id):
         return self._get(f'/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/config')
 
