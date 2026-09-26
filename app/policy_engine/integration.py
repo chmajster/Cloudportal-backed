@@ -205,3 +205,74 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
     if isinstance(effective_params, dict):
         params = copy.deepcopy(effective_params)
     return params, result
+
+
+def revalidate_blueprint_job(db, job, user, permissions, deployment):
+    """Re-evaluate current policy immediately before a persisted Blueprint job executes."""
+    if getattr(job, "operation", None) != "terraform.apply":
+        return None
+    blueprint = dict((getattr(job, "payload", {}) or {}).get("blueprint") or {})
+    if not blueprint or deployment is None:
+        return None
+
+    variables = dict(getattr(deployment, "variables", {}) or {})
+    tags = _tags(variables)
+    tagged_apmid, tagged_environment = _classification_from_tags(tags)
+    roles = list(getattr(user, "roles", []) or [])
+    resource = {
+        "type": "vm",
+        "id": str(getattr(deployment, "id", "") or ""),
+        "apmid": tagged_apmid,
+        "environment": tagged_environment,
+        "provider_id": getattr(deployment, "provider_id", None),
+        "provider_type": getattr(deployment, "provider", None),
+        "template": getattr(deployment, "template", None),
+        "cpu": _number_from(variables, ("cores", "cpu", "vcpu", "cpu_cores")),
+        "memory_mb": _number_from(variables, ("memory", "memory_mb", "ram_mb")),
+        "disk_gb": _number_from(variables, ("disk_size_gb", "disk_gb", "disk_size")),
+        "storage": variables.get("storage") or variables.get("datastore") or variables.get("datastore_id"),
+        "network": variables.get("network") or variables.get("bridge") or variables.get("network_id"),
+        "node": variables.get("node") or variables.get("host") or variables.get("target_node"),
+        "cluster": variables.get("cluster") or variables.get("cluster_id"),
+        "tags": tags,
+        "variables": copy.deepcopy(variables),
+    }
+    context = {
+        "actor": {
+            "id": getattr(user, "id", None),
+            "username": getattr(user, "username", ""),
+            "role_ids": [getattr(role, "id", None) for role in roles],
+            "roles": [getattr(role, "name", "") for role in roles],
+            "groups": [],
+            "permissions": sorted(set(permissions or ())),
+        },
+        "scope": {
+            "tenant_id": str(getattr(job, "tenant_id", "") or ""),
+            "project_id": str(getattr(job, "project_id", "") or ""),
+        },
+        "request": {
+            "action": "vm.create",
+            "source": getattr(job, "source", "Worker"),
+            "phase": "worker_revalidate",
+        },
+        "blueprint": {
+            "id": blueprint.get("id"),
+            "slug": blueprint.get("slug"),
+            "version": blueprint.get("version"),
+        },
+        "resource": resource,
+    }
+    result = evaluate_context(db, context, persist=True)
+
+    effective_resource = (result.get("effective_context") or {}).get("resource") or {}
+    protected = (
+        "cpu", "memory_mb", "disk_gb", "storage", "network", "node",
+        "cluster", "provider_id", "template",
+    )
+    drift = {
+        field: {"queued": resource.get(field), "policy_now": effective_resource.get(field)}
+        for field in protected
+        if effective_resource.get(field) != resource.get(field)
+    }
+    result["input_policy_drift"] = drift
+    return result
