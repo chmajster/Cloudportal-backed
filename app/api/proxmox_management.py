@@ -274,18 +274,18 @@ def snapshots(provider_id: int, node: NODE, vmid: VMID, actor=Depends(require('s
 def create_snapshot(provider_id: int, node: NODE, vmid: VMID, data: SnapshotInput, request: Request,
                     actor=Depends(require('snapshots.create')), db=Depends(get_db, scope='function')):
     provider = adapter(db, provider_id)
-    capability = provider.snapshot_capability(node, vmid)
-    if capability.get('supported') is False:
-        raise HTTPException(
-            409,
-            {
-                'code': 'SNAPSHOT_NOT_SUPPORTED',
-                'message': capability.get('message') or 'Snapshot nie jest obsługiwany przez tę VM.',
-                'capability': capability,
-            },
-        )
 
     def execute():
+        capability = provider.snapshot_capability(node, vmid)
+        if capability.get('supported') is False:
+            raise HTTPException(
+                409,
+                {
+                    'code': 'SNAPSHOT_NOT_SUPPORTED',
+                    'message': capability.get('message') or 'Snapshot nie jest obsługiwany przez tę VM.',
+                    'capability': capability,
+                },
+            )
         task = provider.create_snapshot(
             node, vmid, data.snapname, data.description, data.include_ram
         )
