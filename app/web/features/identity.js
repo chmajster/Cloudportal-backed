@@ -139,7 +139,9 @@ async function tokensView() {
   ]);
   const tokens = tokenResult.items;
   const users = new Map(userResult.items.map(user => [Number(user.id), user.username]));
-  const actions = allowed('tokens.create') ? [button('Utwórz token', () => navigate('/access/tokens/new'), 'primary')] : [];
+  const actions = [];
+  if (allowed('tokens.create')) actions.push(button('Utwórz token', () => navigate('/access/tokens/new'), 'primary'));
+  actions.push(button('Dokumentacja OpenAPI', () => window.open('/docs', '_blank', 'noopener,noreferrer')));
   dom.content.replaceChildren(heading('Tokeny API mają jawny, ograniczony zakres. Sekret jest dostępny wyłącznie po utworzeniu.', actions),
     table([
       { label: 'Nazwa', value: token => node('div', {}, node('strong', { text: token.name }), node('div', { class: 'mono muted', text: token.token_prefix })) },
