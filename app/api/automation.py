@@ -555,7 +555,11 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                                         'policy_approvals': policy_result.get('approvals') or [],
                                                         'policy_obligations': policy_result.get('obligations') or [],
                                                         'policy_warnings': policy_result.get('warnings') or [],
-                                                        'auto_approve_for_executors': row.auto_approve_for_executors,
+                                                        'auto_approve_for_executors': (
+                                                            False
+                                                            if policy_result.get('decision') == 'approval_required'
+                                                            else row.auto_approve_for_executors
+                                                        ),
                                                         'approval_timeout_hours': row.approval_timeout_hours,
                                                         'recovery_policy': row.recovery_policy}},
                                 created_by=actor.user_id, executor=parsed.executor)
