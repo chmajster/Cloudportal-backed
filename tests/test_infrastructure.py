@@ -16,7 +16,7 @@ from app.security.core import decrypt_secret
 from app.executors.base import Cancelled, ExecutionFailed, run_process
 from app.executors.terraform import (TerraformExecutor, cleanup_qemu_bootstrap, load_qemu_bootstrap,
                                      prepare_qemu_bootstrap, proxmox_ssh_preflight,
-                                     terraform_plan_command, workspace_lock)
+                                     terraform_plan_command, terraform_state_resource_attribute, workspace_lock)
 from app.deployments.recreate import recreate_resource_address
 from app.jobs.worker import execute
 from app.jobs.queue import (reconcile_cancelled_jobs, reconcile_deployment_job_statuses,
@@ -160,6 +160,31 @@ def test_terraform_invocations_use_independent_process_groups(tmp_path):
     pids = [int(line.split('pid=', 1)[1].split()[0]) for line in starts]
     assert pids[0] != pids[1]
     assert all('process_group=' in line for line in starts)
+
+
+def test_terraform_state_recovers_legacy_qemu_snippet_storage(tmp_path):
+    workspace = tmp_path / 'legacy-snippet-state'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(json.dumps({
+        'version': 4,
+        'resources': [{
+            'type': 'proxmox_virtual_environment_file',
+            'name': 'qemu_guest_agent_cloud_init',
+            'instances': [{
+                'attributes': {
+                    'datastore_id': 'local',
+                    'id': 'local:snippets/cloudportal-old-qemu-agent.yaml',
+                },
+            }],
+        }],
+    }))
+
+    assert terraform_state_resource_attribute(
+        workspace,
+        'proxmox_virtual_environment_file',
+        'qemu_guest_agent_cloud_init',
+        'datastore_id',
+    ) == 'local'
 
 
 def test_encryption_masking_and_destination_change(client,headers):
