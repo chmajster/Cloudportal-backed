@@ -24,6 +24,7 @@ def test_tools_exposes_clone_vm_to_template_workflow():
     assert "field('Szukaj VM', 'source_vm_filter'" in feature
     assert "sourceVmSearchText(item)" in feature
     assert "sourceSearchInput.addEventListener('input'" in feature
+    assert ".sort((left, right) => Number(left.vmid) - Number(right.vmid))" in feature
     assert "Brak VM pasujących do wyszukiwania" in feature
     assert "String(item.vmid)" in feature
     assert "item.name || ('vm-' + item.vmid)" in feature
