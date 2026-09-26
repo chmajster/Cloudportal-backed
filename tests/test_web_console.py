@@ -1,3 +1,5 @@
+from pathlib import Path
+
 def test_root_redirects_to_local_web_console(client):
     response = client.get('/', follow_redirects=False)
 
