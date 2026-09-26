@@ -36,6 +36,9 @@ class ProxmoxTerraformAgentWaitTests(unittest.TestCase):
     def test_qemu_agent_channel_remains_enabled(self):
         self.assertRegex(self.vm, r'(?m)^  agent\s*\{\s*enabled\s*=\s*true\s*(?:\}|$)')
 
+    def test_destroy_never_waits_for_guest_shutdown(self):
+        self.assertRegex(self.vm, r'(?m)^  stop_on_destroy\s*=\s*true\s*$')
+
     def test_provider_ip_wait_is_unconditionally_disabled(self):
         # A conditional based on bootstrap/install flags would still block
         # refresh or deployments that intentionally do not install the agent.

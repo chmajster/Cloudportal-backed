@@ -55,8 +55,9 @@ resource "proxmox_virtual_environment_vm" "vm" {
   name      = var.name
   node_name = var.node
   vm_id     = var.vm_id
-  started   = true
-  tags      = sort(var.tags)
+  started         = true
+  stop_on_destroy = true
+  tags            = sort(var.tags)
   clone {
     vm_id        = var.template_id
     datastore_id = var.storage
