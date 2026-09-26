@@ -5,8 +5,9 @@ from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition, validate_template_variables
 from app.catalog_control import require_catalog_item_enabled
-from app.api.outputs import (BlueprintCreationScopeOutput, BlueprintOutput, CreatedDeploymentOutput, DeletedOutput,
-                             GeneratedHostnameOutput, HostnameReservationOutput, HostnameSchemeOutput, Items,
+from app.api.outputs import (BlueprintAvatarOutput, BlueprintCreationScopeOutput, BlueprintOutput,
+                             CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
+                             HostnameReservationOutput, HostnameSchemeOutput, Items,
                              VMClassificationSettingsOutput)
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput,
                              DeploymentInput, HostnameGenerateInput, HostnameSchemeInput)
@@ -14,7 +15,7 @@ from app.automation.schemas import BlueprintBundleInput
 from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
                                     generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
-from app.blueprint_avatars import blueprint_avatar
+from app.blueprint_avatars import blueprint_avatar, list_blueprint_avatars
 from app.database import get_db
 from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
@@ -44,6 +45,11 @@ def scheme_public(row):
 
 def portal_source(value):
     return {'CloudPortal': 'cloudportal', 'Cloudportal-backed': 'backend', 'API': 'api'}.get(value, 'api')
+
+
+@router.get('/blueprint-avatars', response_model=Items[BlueprintAvatarOutput])
+def blueprint_avatars(actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    return {'items': list_blueprint_avatars(db)}
 
 
 @router.get('/vm-classification/options', response_model=VMClassificationSettingsOutput)
