@@ -1,6 +1,40 @@
 import pytest
 
-from app.awx import AwxClient, AwxError, normalize_awx_endpoint
+from app.awx import (AwxClient, AwxError, DEFAULT_AWX_INVENTORY_PATTERN,
+                     normalize_awx_endpoint, render_awx_inventory_name)
+
+
+def test_inventory_pattern_defaults_to_project_apmid_environment():
+    assert DEFAULT_AWX_INVENTORY_PATTERN == '<Projekt>-<APMID>-<ENV>'
+    assert render_awx_inventory_name(
+        DEFAULT_AWX_INVENTORY_PATTERN,
+        project='Linux Automation',
+        apmid='leo',
+        environment='prod',
+    ) == 'Linux Automation-LEO-PROD'
+    assert render_awx_inventory_name(
+        'static-inventory',
+        project=None,
+        apmid=None,
+        environment=None,
+    ) == 'static-inventory'
+
+
+def test_inventory_pattern_rejects_missing_or_unknown_tokens():
+    with pytest.raises(AwxError, match='requires values'):
+        render_awx_inventory_name(
+            '<Projekt>-<APMID>-<ENV>',
+            project='Linux Automation',
+            apmid='LEO',
+            environment=None,
+        )
+    with pytest.raises(AwxError, match='Unsupported'):
+        render_awx_inventory_name(
+            '<Projekt>-<REGION>',
+            project='Linux Automation',
+            apmid='LEO',
+            environment='prod',
+        )
 
 
 def test_normalize_awx_endpoint_accepts_host_and_known_api_paths():
