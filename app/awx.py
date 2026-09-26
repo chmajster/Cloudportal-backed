@@ -12,6 +12,7 @@ No AWX secret is ever embedded in Terraform state or cloud-init user-data.
 from __future__ import annotations
 
 import json
+import re
 import yaml
 from urllib.parse import urlsplit, urlunsplit
 
@@ -20,6 +21,62 @@ import httpx
 
 class AwxError(RuntimeError):
     pass
+
+
+DEFAULT_AWX_INVENTORY_PATTERN = '<Projekt>-<APMID>-<ENV>'
+_AWX_INVENTORY_TOKEN_RE = re.compile(r'<([^<>]+)>')
+
+
+def render_awx_inventory_name(
+    pattern: str | None,
+    *,
+    project: str | None = None,
+    apmid: str | None = None,
+    environment: str | None = None,
+) -> str:
+    template = str(pattern or DEFAULT_AWX_INVENTORY_PATTERN).strip()
+    if not template:
+        template = DEFAULT_AWX_INVENTORY_PATTERN
+
+    values = {
+        'projekt': str(project or '').strip(),
+        'project': str(project or '').strip(),
+        'apmid': str(apmid or '').strip().upper(),
+        'env': str(environment or '').strip().upper(),
+        'environment': str(environment or '').strip().upper(),
+    }
+    missing = []
+    unknown = []
+
+    def replace(match):
+        token = str(match.group(1) or '').strip()
+        key = token.lower()
+        if key not in values:
+            unknown.append('<' + token + '>')
+            return ''
+        value = values[key]
+        if not value:
+            missing.append('<' + token + '>')
+            return ''
+        return value
+
+    rendered = _AWX_INVENTORY_TOKEN_RE.sub(replace, template)
+    if unknown:
+        raise AwxError(
+            'Unsupported AWX inventory pattern token(s): ' + ', '.join(sorted(set(unknown)))
+        )
+    if missing:
+        raise AwxError(
+            'AWX inventory pattern requires values for: ' + ', '.join(sorted(set(missing)))
+        )
+    if '<' in rendered or '>' in rendered:
+        raise AwxError('AWX inventory pattern contains an invalid token')
+    rendered = re.sub(r'\s+', ' ', rendered).strip().strip('-_.')
+    if not rendered:
+        raise AwxError('AWX inventory pattern rendered an empty name')
+    if len(rendered) > 100:
+        raise AwxError('Rendered AWX inventory name exceeds 100 characters')
+    return rendered
 
 
 def normalize_awx_endpoint(value: str) -> str:
