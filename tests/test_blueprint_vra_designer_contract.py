@@ -93,3 +93,14 @@ console.log(JSON.stringify({
 
     assert not any('wyłączonego template' in error for error in result['existing'])
     assert any('wyłączonego template' in error for error in result['changed'])
+
+
+def test_designer_canvas_geometry_does_not_use_csp_blocked_style_attributes():
+    source = DESIGNER.read_text()
+    assert "style: \`width:" not in source
+    assert "style: \`left:" not in source
+    assert "viewport.style.width = extents.width + 'px'" in source
+    assert "viewport.style.height = extents.height + 'px'" in source
+    assert "viewport.style.transform = 'scale(' + state.zoom + ')'" in source
+    assert "card.style.left = pos.x + 'px'" in source
+    assert "card.style.top = pos.y + 'px'" in source
