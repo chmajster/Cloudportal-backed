@@ -77,6 +77,7 @@ class PolicyDecision(Base):
     resource_id: Mapped[str | None] = mapped_column(String(160), index=True)
     decision: Mapped[str] = mapped_column(String(24), index=True)
     matched_policy_ids: Mapped[list] = mapped_column(JSON, default=list)
+    matched_policy_versions: Mapped[list] = mapped_column(JSON, default=list)
     effects: Mapped[list] = mapped_column(JSON, default=list)
     trace: Mapped[list] = mapped_column(JSON, default=list)
     context_summary: Mapped[dict] = mapped_column(JSON, default=dict)
