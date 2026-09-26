@@ -786,7 +786,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "executor: state.executor" in script
     assert 'Tagi Proxmox' in script
     assert 'Serwery DNS' in script
-    assert "'set_tags'" not in script
+    assert "set_tags: 'Tagi'" in script
     assert 'function multiCheckboxField(' in script
     assert 'function toDateTimeLocal(' in script
     assert "item.dataset.toastMessage === text" in script
