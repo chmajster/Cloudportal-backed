@@ -613,14 +613,30 @@ def prepare_job_reservation(db, job: Job, deployment: Deployment | None = None):
     deployment = deployment or db.get(Deployment, job.deployment_id)
     if deployment is None:
         return None
+
+    payload = dict(job.payload or {})
+    if job.operation == 'terraform.destroy':
+        # A new destroy supersedes stale/uncertain quota work for the same
+        # deployment. new_job() already rejects deployments with active jobs,
+        # so any remaining active reservation here belongs to a terminal,
+        # interrupted or otherwise orphaned operation. Release it before
+        # reserving the destroy delta; committed usage is NOT released until
+        # Terraform/provider absence is confirmed.
+        superseded = release_active_for_subject(
+            db,
+            Scope(job.tenant_id, job.project_id),
+            'deployment',
+            deployment.id,
+        )
+        if superseded:
+            payload['_quota_superseded_reservations'] = superseded
+
     quota = _job_quota(db, job, deployment)
     if quota is None or not quota.deltas:
-        payload = dict(job.payload or {})
         payload['_quota_checked'] = True
         job.payload = payload
         return None
     reservation = reserve(db, quota, f'job:{job.id}', job.created_by)
-    payload = dict(job.payload or {})
     payload['_quota_checked'] = True
     payload['_quota_reservation_id'] = reservation.id
     job.payload = payload

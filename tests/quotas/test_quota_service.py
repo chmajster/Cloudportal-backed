@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 
 from app.database import session
-from app.models import Deployment
+from app.models import Deployment, Job
 from app.projects.permissions import DEFAULT_PROJECT_ID
 from app.quotas.models import ProjectQuotaUsage, QuotaAllocation, QuotaReservation
 from app.quotas.service import (
@@ -10,6 +10,7 @@ from app.quotas.service import (
     deployment_dimensions,
     deployment_unresolved_dimensions,
     mark_uncertain,
+    prepare_job_reservation,
     quota_snapshot,
     reconcile_reservation,
     release_reservation,
@@ -49,6 +50,59 @@ def test_reservation_commit_and_confirmed_release(system):
         commit_reservation(db, destroy.id)
         assert item(quota_snapshot(db, SCOPE), 'vm_count')['project_used'] == 0
         assert db.query(QuotaAllocation).filter_by(subject_id='quota-test-vm').one_or_none() is None
+        db.commit()
+
+
+def test_destroy_supersedes_stale_or_uncertain_reservation_without_releasing_committed_usage(system):
+    subject_id = 'force-destroy-vm'
+    with session() as db:
+        committed = reserve(
+            db,
+            QuotaDelta(SCOPE, 'deployment', subject_id, 'terraform.apply', {'vm_count': 1}),
+            'quota-create-force-destroy',
+            1,
+        )
+        commit_reservation(db, committed.id)
+
+        stale = reserve(
+            db,
+            QuotaDelta(SCOPE, 'deployment', subject_id, 'terraform.apply', {'vcpu': 1}),
+            'quota-stale-force-destroy',
+            1,
+        )
+        mark_uncertain(db, stale.id)
+
+        deployment = Deployment(
+            id=subject_id,
+            tenant_id=SCOPE.tenant_id,
+            project_id=SCOPE.project_id,
+            provider='proxmox',
+            variables={'cpu': 1, 'memory': 1024, 'disk': 10},
+        )
+        destroy_job = Job(
+            id='force-destroy-job',
+            tenant_id=SCOPE.tenant_id,
+            project_id=SCOPE.project_id,
+            deployment_id=subject_id,
+            operation='terraform.destroy',
+            status='queued',
+            payload={},
+            created_by=1,
+            request_id='00000000-0000-0000-0000-000000000002',
+            source='API',
+        )
+
+        destroy = prepare_job_reservation(db, destroy_job, deployment)
+
+        assert db.get(QuotaReservation, stale.id).status == 'released'
+        assert destroy is not None
+        assert destroy.operation == 'terraform.destroy'
+        assert destroy.deltas == {'vm_count': -1}
+        assert destroy_job.payload['_quota_superseded_reservations'] == 1
+
+        snapshot = quota_snapshot(db, SCOPE)
+        assert item(snapshot, 'vm_count')['project_used'] == 1
+        assert item(snapshot, 'vm_count')['project_reserved'] == 0
         db.commit()
 
 
