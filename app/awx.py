@@ -284,6 +284,50 @@ class AwxClient:
                 return {'token': token, 'token_id': str(data.get('id') or '') or None}
         raise last_error or AwxError('AWX did not issue an OAuth token')
 
+    def ensure_organization(self, *, name: str) -> dict:
+        """Return the AWX Organization mapped from a CloudPortal Tenant, creating it if needed."""
+        normalized = str(name or '').strip()
+        if not normalized:
+            raise AwxError('CloudPortal Tenant has no name for AWX organization mapping')
+        matches = self.list_resource('organizations', params={'name': normalized})
+        exact = next(
+            (row for row in matches if str(row.get('name') or '').strip().casefold() == normalized.casefold()),
+            None,
+        )
+        if exact:
+            return exact
+        data = self.request('POST', 'organizations/', json={
+            'name': normalized,
+            'description': 'Managed automatically from CloudPortal Tenant',
+        }).json()
+        if not isinstance(data, dict) or not data.get('id'):
+            raise AwxError('AWX organization creation did not return an organization')
+        return data
+
+    def project_for_organization(self, *, name: str, organization_id: int) -> dict:
+        """Resolve the AWX Project that represents one CloudPortal Project."""
+        normalized = str(name or '').strip()
+        if not normalized:
+            raise AwxError('CloudPortal Project has no name for AWX project mapping')
+        matches = self.list_resource('projects', params={
+            'name': normalized,
+            'organization': int(organization_id),
+        })
+        exact = next(
+            (
+                row for row in matches
+                if str(row.get('name') or '').strip().casefold() == normalized.casefold()
+                and int(row.get('organization') or 0) == int(organization_id)
+            ),
+            None,
+        )
+        if exact:
+            return exact
+        raise AwxError(
+            f'AWX Project "{normalized}" does not exist in mapped organization; '
+            'create/configure that project in AWX first'
+        )
+
     def _organization_for_inventory(self) -> int:
         organizations = self.list_resource('organizations')
         if not organizations:
