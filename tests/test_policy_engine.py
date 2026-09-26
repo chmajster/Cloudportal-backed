@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from app.jobs.approval import approve_policy_stage, gate_job_for_approval
 
 from app.policy_engine.engine import evaluate
 
@@ -217,3 +220,108 @@ def test_policy_api_versions_simulator_and_whitelist(client, headers):
     versions = client.get('/api/v1/policies/' + item['id'] + '/versions', headers=headers)
     assert versions.status_code == 200, versions.text
     assert [row['version'] for row in versions.json()['items']] == [2, 1]
+
+
+class _ApprovalDb:
+    def __init__(self):
+        self.added = []
+
+    def get(self, _model, _key):
+        return None
+
+    def add(self, value):
+        self.added.append(value)
+
+
+def _approval_actor(user_id, role_name):
+    return SimpleNamespace(
+        user_id=user_id,
+        user=SimpleNamespace(
+            username='approver-' + str(user_id),
+            roles=[SimpleNamespace(id=user_id, name=role_name)],
+        ),
+    )
+
+
+def test_policy_approval_cannot_be_auto_approved_and_supports_stages():
+    db = _ApprovalDb()
+    job = SimpleNamespace(
+        id='job-1',
+        operation='terraform.apply',
+        project_id=None,
+        created_by=1,
+        status='queued',
+        payload={
+            'blueprint': {
+                'requires_approval': True,
+                'auto_approve_for_executors': True,
+                'policy_approvals': [{
+                    'policy_id': 'prod-approval',
+                    'type': 'require_approval',
+                    'stages': [
+                        {
+                            'name': 'Infrastructure',
+                            'approver': {'type': 'role', 'role': 'Infrastructure Approver'},
+                        },
+                        {
+                            'name': 'Security',
+                            'approver': {'type': 'permission', 'permission': 'policies.audit'},
+                            'timeout_hours': 3,
+                        },
+                    ],
+                }],
+            },
+        },
+    )
+
+    assert gate_job_for_approval(db, job) is True
+    assert job.status == 'waiting_approval'
+    assert job.payload['_approval_policy']['auto_approve_for_executors'] is False
+    assert job.payload['_approval_policy']['auto_approve_source'] == 'policy'
+    assert job.payload['_policy_approval']['current_stage'] == 0
+    assert len(job.payload['_policy_approval']['stages']) == 2
+
+    first = approve_policy_stage(
+        job,
+        _approval_actor(2, 'Infrastructure Approver'),
+        {'blueprints.approve'},
+    )
+    assert first['complete'] is False
+    assert job.payload['_policy_approval']['current_stage'] == 1
+
+    second = approve_policy_stage(
+        job,
+        _approval_actor(3, 'Security Approver'),
+        {'blueprints.approve', 'policies.audit'},
+    )
+    assert second['complete'] is True
+    assert job.payload['_policy_approval']['current_stage'] == 2
+    assert [row['name'] for row in job.payload['_policy_approval']['approvals']] == [
+        'Infrastructure',
+        'Security',
+    ]
+
+
+def test_policy_stage_rejects_wrong_approver():
+    from fastapi import HTTPException
+
+    job = SimpleNamespace(
+        payload={
+            '_policy_approval': {
+                'current_stage': 0,
+                'complete': False,
+                'approvals': [],
+                'stages': [{
+                    'name': 'Security',
+                    'approver': {'type': 'role', 'role': 'Security'},
+                }],
+            }
+        }
+    )
+
+    try:
+        approve_policy_stage(job, _approval_actor(4, 'Developer'), {'blueprints.approve'})
+    except HTTPException as exc:
+        assert exc.status_code == 403
+    else:
+        raise AssertionError('Wrong approver must be rejected')
