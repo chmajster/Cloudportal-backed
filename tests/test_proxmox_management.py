@@ -1,6 +1,7 @@
 import pytest
 import uuid
 
+from fastapi import HTTPException
 from app.database import session
 from app.models import Job, ManagedVM
 from app.projects.permissions import DEFAULT_PROJECT_ID
