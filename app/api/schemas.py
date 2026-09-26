@@ -940,7 +940,7 @@ class BlueprintInput(Input):
             raise ValueError('Workflow can contain exactly one terraform_apply step')
         legacy_provisioning = any(step.type in legacy_markers for step in self.workflow)
         if not apply_steps and not legacy_provisioning:
-            raise ValueError('Workflow must contain terraform_apply or a provisioning marker')
+            raise ValueError('Workflow must contain terraform_apply or a legacy provisioning marker')
 
         plan_steps = [step for step in self.workflow if step.type == 'terraform_plan']
         if len(plan_steps) > 1:
