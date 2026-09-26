@@ -430,6 +430,11 @@ def test_failed_awx_onboarding_can_be_manually_accepted_and_resumed(client, head
         ))
         db.commit()
 
+    failed = client.get('/api/v1/jobs/' + d['job']['id'], headers=headers)
+    assert failed.status_code == 200, failed.text
+    assert failed.json()['workflow_step_index'] == 2
+    assert failed.json()['workflow_step_total'] == 3
+
     response = client.post(
         '/api/v1/jobs/' + d['job']['id'] + '/accept-awx-onboarding',
         headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
@@ -438,6 +443,8 @@ def test_failed_awx_onboarding_can_be_manually_accepted_and_resumed(client, head
     resumed_id = response.json()['id']
     assert response.json()['retry_of'] == d['job']['id']
     assert response.json()['current_stage'] is None
+    assert response.json()['workflow_step_index'] == 3
+    assert response.json()['workflow_step_total'] == 3
 
     with session() as db:
         original = db.get(Job, d['job']['id'])
