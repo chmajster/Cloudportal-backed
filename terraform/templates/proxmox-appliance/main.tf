@@ -14,8 +14,9 @@ resource "proxmox_virtual_environment_vm" "vm" {
   name       = var.name
   node_name  = var.node
   vm_id      = var.vm_id
-  started    = var.started
-  tags       = sort(var.tags)
+  started         = var.started
+  stop_on_destroy = true
+  tags            = sort(var.tags)
   boot_order = ["${var.disk_bus}0"]
 
   cpu {
