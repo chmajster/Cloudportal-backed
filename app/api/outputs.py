@@ -135,6 +135,7 @@ class JobOutput(Output):
     source: str
     created_at: datetime
     updated_at: datetime
+    dispatched_at: datetime | None = None
     cancel_requested: bool
     error: str | None
     retry_of: str | None

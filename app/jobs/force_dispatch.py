@@ -44,7 +44,13 @@ def force_dispatch_job(db, job):
         raise ForceDispatchUnavailable('Job queue is temporarily unavailable') from exc
 
     if rq_status in ACTIVE_RQ_STATUSES:
-        raise ForceDispatchConflict('Job is already dispatched to the worker queue')
+        if job.dispatched_at is None:
+            job.dispatched_at = now()
+        db.add(JobLog(
+            job_id=job.id,
+            message='job.force_dispatch.noop: zadanie jest już w kolejce workera',
+        ))
+        return job
 
     if existing is not None:
         try:
