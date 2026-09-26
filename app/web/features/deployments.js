@@ -41,21 +41,109 @@ function productCard(item, avatarById = new Map()) {
     node('div', { class: 'product-card-actions' },
       button('Utwórz VM', () => launchProductBlueprint(item), 'primary')));
 }
-function productsPanel(blueprints, canUseProducts, avatarById = new Map()) {
-  const body = node('div', { class: 'product-grid' });
-  if (!canUseProducts) {
-    body.append(node('div', {
-      class: 'product-catalog-empty',
-      text: 'Brak uprawnień do uruchamiania produktów.',
-    }));
-  } else if (!blueprints.length) {
-    body.append(node('div', {
-      class: 'product-catalog-empty',
-      text: 'Brak gotowych Blueprintów. Aktywuj Blueprint widoczny w panelu backendu, aby pojawił się jako produkt.',
-    }));
-  } else {
-    blueprints.forEach(item => body.append(productCard(item, avatarById)));
+const PRODUCT_VIEW_STORAGE_KEY = 'cloudportal.products.view';
+
+function readProductView() {
+  try {
+    return localStorage.getItem(PRODUCT_VIEW_STORAGE_KEY) === 'list' ? 'list' : 'grid';
+  } catch {
+    return 'grid';
   }
+}
+
+function writeProductView(view) {
+  try { localStorage.setItem(PRODUCT_VIEW_STORAGE_KEY, view); } catch { /* Storage may be unavailable. */ }
+}
+
+function productList(blueprints, avatarById = new Map()) {
+  return node('div', { class: 'product-list' },
+    table([
+      {
+        label: 'Produkt',
+        value: item => {
+          const avatar = item.avatar_id ? avatarById.get(String(item.avatar_id)) : null;
+          return node('div', { class: 'product-list-product' },
+            node('span', { class: 'product-list-icon', 'aria-hidden': 'true' },
+              avatar?.data_uri
+                ? node('img', { src: avatar.data_uri, alt: '', loading: 'lazy', decoding: 'async' })
+                : appIcon('box')),
+            node('div', { class: 'product-list-copy' },
+              node('strong', { text: item.name }),
+              node('small', { class: 'mono muted', text: item.slug })));
+        },
+      },
+      {
+        label: 'Opis',
+        value: item => node('span', {
+          class: 'product-list-description',
+          text: item.description || 'Gotowy Blueprint do utworzenia maszyny wirtualnej.',
+        }),
+      },
+      { label: 'Wersja', value: item => 'v' + item.version },
+      { label: 'Template', value: item => item.deployment?.template || 'VM' },
+      { label: 'Provider', value: item => item.deployment?.provider || '—' },
+      {
+        label: 'Approval',
+        value: item => item.requires_approval
+          ? badge('Wymagany', 'warning')
+          : badge('Nie', ''),
+      },
+    ], blueprints, item => [
+      button('Utwórz VM', () => launchProductBlueprint(item), 'primary'),
+    ]));
+}
+
+function productsPanel(blueprints, canUseProducts, avatarById = new Map()) {
+  let currentView = readProductView();
+  const body = node('div', { class: 'product-catalog-body' });
+  const gridButton = button('Kafelki', () => setView('grid'));
+  const listButton = button('Lista', () => setView('list'));
+  const viewToggle = node('div', {
+    class: 'product-view-toggle',
+    role: 'group',
+    'aria-label': 'Sposób wyświetlania produktów',
+  }, gridButton, listButton);
+
+  function renderBody() {
+    body.replaceChildren();
+    if (!canUseProducts) {
+      body.append(node('div', {
+        class: 'product-catalog-empty',
+        text: 'Brak uprawnień do uruchamiania produktów.',
+      }));
+      return;
+    }
+    if (!blueprints.length) {
+      body.append(node('div', {
+        class: 'product-catalog-empty',
+        text: 'Brak gotowych Blueprintów. Aktywuj Blueprint widoczny w panelu backendu, aby pojawił się jako produkt.',
+      }));
+      return;
+    }
+    if (currentView === 'list') {
+      body.append(productList(blueprints, avatarById));
+    } else {
+      body.append(node('div', { class: 'product-grid' },
+        ...blueprints.map(item => productCard(item, avatarById))));
+    }
+  }
+
+  function refreshToggle() {
+    gridButton.classList.toggle('active', currentView === 'grid');
+    listButton.classList.toggle('active', currentView === 'list');
+    gridButton.setAttribute('aria-pressed', currentView === 'grid' ? 'true' : 'false');
+    listButton.setAttribute('aria-pressed', currentView === 'list' ? 'true' : 'false');
+  }
+
+  function setView(view) {
+    currentView = view === 'list' ? 'list' : 'grid';
+    writeProductView(currentView);
+    refreshToggle();
+    renderBody();
+  }
+
+  refreshToggle();
+  renderBody();
 
   return node('section', { class: 'panel product-catalog-panel' },
     node('div', { class: 'product-catalog-header' },
@@ -63,7 +151,9 @@ function productsPanel(blueprints, canUseProducts, avatarById = new Map()) {
         node('span', { class: 'product-catalog-kicker', text: 'Self-service' }),
         node('h2', { text: 'Produkty' }),
         node('p', { class: 'muted', text: 'Wybierz gotowy Blueprint. Formularz pokaże tylko parametry wymagane do utworzenia VM.' })),
-      badge(String(blueprints.length) + ' dostępnych', blueprints.length ? 'ok' : '')),
+      node('div', { class: 'product-catalog-header-actions' },
+        badge(String(blueprints.length) + ' dostępnych', blueprints.length ? 'ok' : ''),
+        blueprints.length ? viewToggle : null)),
     body);
 }
 async function deploymentsView() {
