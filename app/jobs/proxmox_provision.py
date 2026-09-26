@@ -502,7 +502,25 @@ def register_inventory(context):
         resource = db.scalar(select(ManagedResource).where(
             ManagedResource.deployment_id == row.id,
         ))
-        metadata = {'node': node, 'vm_id': vm_id, 'management_mode': 'proxmox'}
+        blueprint_variables = dict((((row.workflow or {}).get('blueprint') or {}).get('variables') or {}))
+        raw_tags = variables.get('tags') or []
+        tags = list(raw_tags) if isinstance(raw_tags, list) else [
+            item for item in str(raw_tags).replace(',', ';').split(';') if item
+        ]
+        metadata = {
+            key: value for key, value in {
+                'node': node,
+                'vm_id': vm_id,
+                'management_mode': 'proxmox',
+                'apmid': blueprint_variables.get('apmid'),
+                'environment': blueprint_variables.get('environment'),
+                'organization': blueprint_variables.get('organization'),
+                'project': blueprint_variables.get('project'),
+                'resource_scope_key': blueprint_variables.get('scope_key'),
+                'tags': tags,
+            }.items()
+            if value not in (None, '', [])
+        }
         if resource is None:
             resource = ManagedResource(
                 tenant_id=row.tenant_id,
