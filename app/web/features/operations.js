@@ -251,7 +251,15 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
   }
 
   function policyEditor(item = null) {
-    loadCapabilities().then(caps => {
+    Promise.all([
+      loadCapabilities(),
+      api('/policies/scopes'),
+      api('/project-context').catch(() => ({ selected: null })),
+      api('/settings/vm-classification').catch(() => ({
+        environments: { test: true, dev: true, nonprod: true, prod: true },
+        apmids: [],
+      })),
+    ]).then(([caps, scopeOptions, projectContext, classification]) => {
       const defaultScope = item?.scope || {
         actions: ['vm.create'],
         resource_types: ['vm'],
@@ -262,44 +270,279 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
       const defaultEffects = item?.effects || [
         { type: 'allow', mode: 'whitelist', message: 'Dozwolony deployment w wybranym APMID/ENV' },
       ];
-      const body = node('div', { class: 'policy-form form-grid' },
-        field('Nazwa', 'name', { required: true, maxlength: 160, value: item?.name || '' }),
-        selectField('Typ', 'policy_type',
-          caps.policy_types.map(value => ({ value, label: value })),
-          item?.policy_type || 'access'),
-        selectField('Scope', 'scope_level', [
-          { value: 'project', label: 'Projekt' },
-          { value: 'tenant', label: 'Tenant' },
-          { value: 'global', label: 'Global' },
-        ], item?.scope_level || 'project'),
-        selectField('Status', 'status', caps.statuses.map(value => ({
-          value, label: statusLabels[value] || value,
-        })), item?.status || 'draft'),
-        selectField('Enforcement', 'enforcement', [
-          { value: 'hard', label: 'HARD' },
-          { value: 'soft', label: 'SOFT' },
-          { value: 'advisory', label: 'ADVISORY' },
-        ], item?.enforcement || 'hard'),
-        field('Priorytet', 'priority', {
-          type: 'number', min: 0, max: 10000, required: true,
-          value: item?.priority ?? 5000,
-        }),
-        field('Opis', 'description', {
-          tag: 'textarea', maxlength: 8000, value: item?.description || '', wide: true,
-        }),
-        field('Scope / selektory — JSON', 'scope', {
-          tag: 'textarea', value: pretty(defaultScope), wide: true,
-          help: 'Np. organization_ids, project_ids, organizations, projects, apmids, environments, scope_keys. Pełny scope VM: Organizacja-LEO-131-IAASTEAM-PROD.',
-        }),
-        field('Warunek — JSON', 'condition', {
-          tag: 'textarea', value: pretty(defaultCondition), wide: true,
-          help: 'Drzewo all/any/not lub leaf: {"field":"resource.cpu","operator":"lte","value":8}.',
-        }),
-        field('Efekty — JSON', 'effects', {
-          tag: 'textarea', value: pretty(defaultEffects), wide: true,
-          help: 'Np. allow/deny/require_approval/limit_value/force_value/set_default/add_tag/select_storage.',
+
+      const projects = Array.isArray(scopeOptions?.projects) ? scopeOptions.projects : [];
+      const tenantWide = Array.isArray(scopeOptions?.tenants) ? scopeOptions.tenants : [];
+      const tenantMap = new Map();
+      tenantWide.forEach(row => tenantMap.set(String(row.id), row));
+      projects.forEach(row => {
+        const id = String(row.tenant_id);
+        if (!tenantMap.has(id)) {
+          tenantMap.set(id, {
+            id,
+            name: row.tenant_name || id,
+            slug: row.tenant_slug || '',
+          });
+        }
+      });
+      const allTenants = [...tenantMap.values()].sort((a, b) =>
+        String(a.name || a.id).localeCompare(String(b.name || b.id), 'pl'));
+      const tenantWideIds = new Set(tenantWide.map(row => String(row.id)));
+      const contextProjectId = String(projectContext?.selected?.id || '');
+      const contextProject = projects.find(row => String(row.id) === contextProjectId) || null;
+
+      let selectedLevel = item?.scope_level || (projects.length ? 'project' : tenantWide.length ? 'tenant' : 'global');
+      let selectedTenantId = String(
+        item?.tenant_id
+        || contextProject?.tenant_id
+        || projects[0]?.tenant_id
+        || tenantWide[0]?.id
+        || ''
+      );
+      let selectedProjectId = String(
+        item?.project_id
+        || (contextProject && String(contextProject.tenant_id) === selectedTenantId ? contextProject.id : '')
+        || projects.find(row => String(row.tenant_id) === selectedTenantId)?.id
+        || projects[0]?.id
+        || ''
+      );
+
+      const levelChoices = [];
+      if (scopeOptions?.global_allowed || selectedLevel === 'global') {
+        levelChoices.push({ value: 'global', label: 'Global — wszystkie organizacje i projekty' });
+      }
+      if (tenantWide.length || selectedLevel === 'tenant') {
+        levelChoices.push({ value: 'tenant', label: 'Organizacja — wszystkie projekty organizacji' });
+      }
+      if (projects.length || selectedLevel === 'project') {
+        levelChoices.push({ value: 'project', label: 'Projekt — dokładnie jeden projekt' });
+      }
+      if (!levelChoices.some(row => row.value === selectedLevel)) {
+        selectedLevel = levelChoices[0]?.value || 'project';
+      }
+
+      const levelField = selectField('Poziom przypisania', 'scope_level', levelChoices, selectedLevel, {
+        required: true,
+        wide: true,
+      });
+      levelField.append(node('span', { class: 'field-help',
+        text: 'Określa gdzie polityka jest przechowywana i dziedziczona. Dodatkowe APMID/ENV zawężają jej działanie.' }));
+
+      const tenantField = selectField('Organizacja', 'target_tenant_id', [], selectedTenantId, {
+        required: true,
+        wide: true,
+      });
+      const projectField = selectField('Projekt', 'target_project_id', [], selectedProjectId, {
+        required: true,
+        wide: true,
+      });
+      const tenantSelect = tenantField.querySelector('select');
+      const projectSelect = projectField.querySelector('select');
+
+      const configuredApmids = Array.isArray(classification?.apmids) ? classification.apmids : [];
+      const scopeApmids = Array.isArray(defaultScope.apmids) ? defaultScope.apmids : [];
+      const apmids = [...new Set([...configuredApmids, ...scopeApmids].map(value => String(value).toUpperCase()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, 'pl'));
+      const environmentOrder = ['dev', 'test', 'nonprod', 'prod'];
+      const scopeEnvironments = Array.isArray(defaultScope.environments) ? defaultScope.environments : [];
+      const environments = [...new Set([
+        ...environmentOrder.filter(name => classification?.environments?.[name] !== false),
+        ...scopeEnvironments.map(value => String(value).toLowerCase()),
+      ])];
+
+      const apmidField = multiCheckboxField(
+        'APMID',
+        'scope_apmids',
+        apmids.map(value => ({ value, label: value })),
+        scopeApmids,
+        {
+          wide: true,
+          empty: 'Brak skonfigurowanych APMID. Dodaj APMID w Narzędziach albo użyj trybu zaawansowanego.',
+          help: 'Brak zaznaczenia = polityka dotyczy każdego APMID w wybranym zakresie.',
+        }
+      );
+      const environmentField = multiCheckboxField(
+        'Środowiska / ENV',
+        'scope_environments',
+        environments.map(value => ({ value, label: value.toUpperCase() })),
+        scopeEnvironments,
+        {
+          wide: true,
+          empty: 'Brak dostępnych środowisk.',
+          help: 'Możesz zaznaczyć DEV, TEST, NONPROD, PROD lub dowolną ich kombinację.',
+        }
+      );
+
+      const actionsField = field('Akcje', 'scope_actions', {
+        value: (Array.isArray(defaultScope.actions) ? defaultScope.actions : []).join(', '),
+        wide: true,
+        help: 'Lista po przecinku, np. vm.create, vm.power, vm.delete. Puste = wszystkie akcje.',
+      });
+      const resourceTypesField = field('Typy zasobów', 'scope_resource_types', {
+        value: (Array.isArray(defaultScope.resource_types) ? defaultScope.resource_types : []).join(', '),
+        wide: true,
+        help: 'Lista po przecinku, np. vm, blueprint. Puste = wszystkie typy zasobów.',
+      });
+      const scopeKeysField = field('Pełny scope key — opcjonalnie', 'scope_keys', {
+        tag: 'textarea',
+        value: (Array.isArray(defaultScope.scope_keys) ? defaultScope.scope_keys : []).join('\n'),
+        wide: true,
+        help: 'Jeden wpis na linię. Przykład: Organizacja-LEO-131-IAASTEAM-PROD.',
+      });
+
+      const scopePreview = node('div', { class: 'wide' },
+        node('span', { class: 'muted', text: 'Efektywny zakres: ' }),
+        node('strong', { text: '—' })
+      );
+      const scopePreviewValue = scopePreview.querySelector('strong');
+
+      const advancedScope = node('details', { class: 'policy-json-details wide' },
+        node('summary', { text: 'Zaawansowane selektory scope — JSON' }),
+        field('Scope JSON', 'scope_advanced', {
+          tag: 'textarea',
+          value: pretty(defaultScope),
+          wide: true,
+          help: 'Dla users/roles/groups/blueprints/providers/tags/conditions. Pola Organizacja/Projekt/APMID/ENV/Akcje/Typ zasobu z formularza mają pierwszeństwo.',
         })
       );
+
+      const projectsForTenant = tenantId => projects.filter(row =>
+        String(row.tenant_id) === String(tenantId));
+
+      function setSelectOptions(select, rows, value, placeholder = null) {
+        const options = [];
+        if (placeholder) options.push(node('option', { value: '', text: placeholder }));
+        rows.forEach(row => options.push(node('option', {
+          value: String(row.id),
+          text: row.slug ? String(row.name || row.id) + ' (' + row.slug + ')' : String(row.name || row.id),
+          selected: String(row.id) === String(value),
+        })));
+        select.replaceChildren(...options);
+      }
+
+      function selectedValues(name) {
+        return [...body.querySelectorAll('input[name="' + name + '"]:checked')]
+          .map(input => String(input.value));
+      }
+
+      function refreshPreview() {
+        const tenant = allTenants.find(row => String(row.id) === String(selectedTenantId));
+        const project = projects.find(row => String(row.id) === String(selectedProjectId));
+        const apmidValues = selectedValues('scope_apmids');
+        const environmentValues = selectedValues('scope_environments').map(value => value.toUpperCase());
+        const parts = [];
+        if (selectedLevel === 'global') {
+          parts.push('GLOBAL');
+        } else {
+          parts.push(tenant?.name || selectedTenantId || 'Organizacja');
+          if (selectedLevel === 'project') parts.push(project?.name || selectedProjectId || 'Projekt');
+        }
+        if (apmidValues.length) parts.push('APMID: ' + apmidValues.join(', '));
+        if (environmentValues.length) parts.push('ENV: ' + environmentValues.join(', '));
+        scopePreviewValue.textContent = parts.join(' → ') || '—';
+      }
+
+      function refreshTargetFields() {
+        const tenantRows = selectedLevel === 'tenant'
+          ? allTenants.filter(row => tenantWideIds.has(String(row.id)))
+          : allTenants.filter(row => projects.some(project => String(project.tenant_id) === String(row.id)));
+
+        if (selectedLevel !== 'global') {
+          if (!tenantRows.some(row => String(row.id) === String(selectedTenantId))) {
+            selectedTenantId = String(tenantRows[0]?.id || '');
+          }
+          setSelectOptions(tenantSelect, tenantRows, selectedTenantId, tenantRows.length ? null : 'Brak organizacji');
+        }
+
+        const matchingProjects = projectsForTenant(selectedTenantId);
+        if (!matchingProjects.some(row => String(row.id) === String(selectedProjectId))) {
+          selectedProjectId = String(matchingProjects[0]?.id || '');
+        }
+        setSelectOptions(projectSelect, matchingProjects, selectedProjectId, matchingProjects.length ? null : 'Brak projektów');
+
+        tenantField.hidden = selectedLevel === 'global';
+        projectField.hidden = selectedLevel !== 'project';
+        tenantSelect.required = selectedLevel !== 'global';
+        projectSelect.required = selectedLevel === 'project';
+
+        if (item?.tenant_id) {
+          tenantSelect.disabled = true;
+          tenantField.append(node('span', { class: 'field-help',
+            text: 'Podczas edycji organizacja istniejącej polityki pozostaje bez zmian.' }));
+        }
+        if (item?.project_id) {
+          projectSelect.disabled = true;
+          projectField.append(node('span', { class: 'field-help',
+            text: 'Podczas edycji projekt istniejącej polityki pozostaje bez zmian.' }));
+        }
+        refreshPreview();
+      }
+
+      const body = node('div', { class: 'policy-form form-grid' },
+        formSection('Podstawowe informacje', 'Nazwa, typ i sposób egzekwowania polityki.',
+          field('Nazwa', 'name', { required: true, maxlength: 160, value: item?.name || '' }),
+          selectField('Typ', 'policy_type',
+            caps.policy_types.map(value => ({ value, label: value })),
+            item?.policy_type || 'access'),
+          selectField('Status', 'status', caps.statuses.map(value => ({
+            value, label: statusLabels[value] || value,
+          })), item?.status || 'draft'),
+          selectField('Enforcement', 'enforcement', [
+            { value: 'hard', label: 'HARD' },
+            { value: 'soft', label: 'SOFT' },
+            { value: 'advisory', label: 'ADVISORY' },
+          ], item?.enforcement || 'hard'),
+          field('Priorytet', 'priority', {
+            type: 'number', min: 0, max: 10000, required: true,
+            value: item?.priority ?? 5000,
+          }),
+          field('Opis', 'description', {
+            tag: 'textarea', maxlength: 8000, value: item?.description || '', wide: true,
+          })
+        ),
+        formSection('Zakres przypisania', 'Wybierz zakres hierarchicznie. Nie trzeba wpisywać identyfikatorów ani JSON.',
+          levelField,
+          tenantField,
+          projectField,
+          apmidField,
+          environmentField,
+          actionsField,
+          resourceTypesField,
+          scopeKeysField,
+          scopePreview,
+          advancedScope
+        ),
+        formSection('Warunki i efekty', 'Zaawansowana logika warunkowa i wynik działania polityki.',
+          field('Warunek — JSON', 'condition', {
+            tag: 'textarea', value: pretty(defaultCondition), wide: true,
+            help: 'Drzewo all/any/not lub leaf: {"field":"resource.cpu","operator":"lte","value":8}.',
+          }),
+          field('Efekty — JSON', 'effects', {
+            tag: 'textarea', value: pretty(defaultEffects), wide: true,
+            help: 'Np. allow/deny/require_approval/limit_value/force_value/set_default/add_tag/select_storage.',
+          })
+        )
+      );
+
+      levelField.querySelector('select').addEventListener('change', event => {
+        selectedLevel = String(event.currentTarget.value);
+        refreshTargetFields();
+      });
+      tenantSelect.addEventListener('change', event => {
+        selectedTenantId = String(event.currentTarget.value);
+        selectedProjectId = String(projectsForTenant(selectedTenantId)[0]?.id || '');
+        refreshTargetFields();
+      });
+      projectSelect.addEventListener('change', event => {
+        selectedProjectId = String(event.currentTarget.value);
+        refreshPreview();
+      });
+      apmidField.querySelectorAll('input[type="checkbox"]').forEach(input =>
+        input.addEventListener('change', refreshPreview));
+      environmentField.querySelectorAll('input[type="checkbox"]').forEach(input =>
+        input.addEventListener('change', refreshPreview));
+
+      refreshTargetFields();
 
       openModal({
         title: item ? 'Edytuj politykę' : 'Nowa polityka',
@@ -308,6 +551,51 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
         wide: true,
         submitLabel: item ? 'Zapisz nową wersję' : 'Utwórz politykę',
         onSubmit: async data => {
+          const splitValues = value => String(value || '')
+            .split(/[\n,;]/)
+            .map(row => row.trim())
+            .filter(Boolean);
+
+          const scope = jsonObject(data.get('scope_advanced'), 'Scope');
+          [
+            'organization_ids', 'organizations', 'organization_slugs',
+            'project_ids', 'projects', 'project_slugs',
+            'apmids', 'environments', 'scope_keys', 'actions', 'resource_types',
+          ].forEach(key => delete scope[key]);
+
+          const level = String(data.get('scope_level') || selectedLevel);
+          let targetTenantId = selectedTenantId;
+          let targetProjectId = selectedProjectId;
+
+          if (item?.tenant_id) targetTenantId = String(item.tenant_id);
+          if (item?.project_id) targetProjectId = String(item.project_id);
+
+          if (level === 'tenant' && !targetTenantId) {
+            throw new Error('Wybierz organizację dla polityki.');
+          }
+          if (level === 'project' && (!targetTenantId || !targetProjectId)) {
+            throw new Error('Wybierz organizację i projekt dla polityki.');
+          }
+
+          if (level === 'tenant' || level === 'project') {
+            scope.organization_ids = [targetTenantId];
+          }
+          if (level === 'project') {
+            scope.project_ids = [targetProjectId];
+          }
+
+          const apmidValues = data.getAll('scope_apmids').map(value => String(value));
+          const environmentValues = data.getAll('scope_environments').map(value => String(value));
+          const actionValues = splitValues(data.get('scope_actions'));
+          const resourceTypeValues = splitValues(data.get('scope_resource_types'));
+          const scopeKeyValues = splitValues(data.get('scope_keys'));
+
+          if (apmidValues.length) scope.apmids = apmidValues;
+          if (environmentValues.length) scope.environments = environmentValues;
+          if (actionValues.length) scope.actions = actionValues;
+          if (resourceTypeValues.length) scope.resource_types = resourceTypeValues;
+          if (scopeKeyValues.length) scope.scope_keys = scopeKeyValues;
+
           const payload = {
             name: String(data.get('name') || '').trim(),
             description: String(data.get('description') || ''),
@@ -315,16 +603,29 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
             priority: Number(data.get('priority')),
             enforcement: String(data.get('enforcement')),
             status: String(data.get('status')),
-            scope_level: String(data.get('scope_level')),
-            scope: jsonObject(data.get('scope'), 'Scope'),
+            scope_level: level,
+            scope,
             condition: jsonObject(data.get('condition'), 'Warunek'),
             effects: jsonArray(data.get('effects'), 'Efekty'),
           };
           if (item) payload.expected_version = item.version;
-          await api(item ? '/policies/' + encodeURIComponent(item.id) : '/policies', {
+
+          let requestProjectId = targetProjectId;
+          if (level === 'tenant' && targetTenantId) {
+            requestProjectId = String(projectsForTenant(targetTenantId)[0]?.id || '');
+          }
+          const requestOptions = {
             method: item ? 'PUT' : 'POST',
             body: payload,
-          });
+          };
+          if (level !== 'global' && targetTenantId && requestProjectId) {
+            requestOptions.headers = {
+              'X-Tenant-ID': targetTenantId,
+              'X-Project-ID': requestProjectId,
+            };
+          }
+
+          await api(item ? '/policies/' + encodeURIComponent(item.id) : '/policies', requestOptions);
           toast(item ? 'Polityka zapisana jako nowa wersja.' : 'Polityka utworzona.');
           await navigate('policies');
           return false;
