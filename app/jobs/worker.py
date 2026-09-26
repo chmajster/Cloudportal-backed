@@ -290,7 +290,7 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job permissions have been revoked')
     _validate_blueprint_authorization(db, job, user, permissions)
 
-    if job.operation == 'terraform.apply' and target is not None:
+    if job.operation in {'terraform.apply', 'proxmox.provision'} and target is not None:
         from app.policy_engine.integration import revalidate_blueprint_job
         policy_result = revalidate_blueprint_job(db, job, user, permissions, target)
         if policy_result:
@@ -312,17 +312,31 @@ def validate_authorization(db, job):
                 from app.jobs.approval import policy_approval_signature
 
                 payload = dict(job.payload or {})
-                current_signature = policy_approval_signature(policy_result.get('approvals') or [])
-                original_signature = policy_approval_signature(
-                    ((payload.get('blueprint') or {}).get('policy_approvals')) or []
+                workflow_runtime = dict(payload.get('_workflow_runtime') or {})
+                proxmox_runtime = dict(payload.get('_proxmox_runtime') or {})
+                provider_checkpointed = (
+                    workflow_runtime.get('provider_applied') is True
+                    or (
+                        job.operation == 'proxmox.provision'
+                        and (
+                            proxmox_runtime.get('clone_completed') is True
+                            or bool(proxmox_runtime.get('clone_upid'))
+                            or bool(proxmox_runtime.get('target_vm_id'))
+                        )
+                    )
                 )
-                approval = dict(payload.get('_approval') or {})
-                policy_approval = dict(payload.get('_policy_approval') or {})
-                approved = approval.get('status') == 'approved'
-                if policy_approval:
-                    approved = approved and bool(policy_approval.get('complete'))
-                if not approved or current_signature != original_signature:
-                    raise ExecutionFailed('Current Policy Engine approval definition requires a new approval')
+                if not provider_checkpointed:
+                    current_signature = policy_approval_signature(policy_result.get('approvals') or [])
+                    original_signature = policy_approval_signature(
+                        ((payload.get('blueprint') or {}).get('policy_approvals')) or []
+                    )
+                    approval = dict(payload.get('_approval') or {})
+                    policy_approval = dict(payload.get('_policy_approval') or {})
+                    approved = approval.get('status') == 'approved'
+                    if policy_approval:
+                        approved = approved and bool(policy_approval.get('complete'))
+                    if not approved or current_signature != original_signature:
+                        raise ExecutionFailed('Current Policy Engine approval definition requires a new approval')
 
 
 def ensure_runtime_credential(credential):
@@ -1919,11 +1933,12 @@ def run_blueprint_workflow(context, executor):
             config = approval_policy_for_job(db, current)
             expires_at = now() + timedelta(hours=config['approval_timeout_hours'])
             payload = dict(current.payload or {})
-            payload['_approval'] = {
+            payload['_workflow_approval'] = {
                 'status': 'pending',
                 'step_id': step_id,
                 'requested_at': now().isoformat(),
                 'expires_at': expires_at.isoformat(),
+                'plan_sha256': plan_sha256,
             }
             payload['_workflow_runtime'] = {
                 'completed_steps': sorted(
@@ -2086,12 +2101,16 @@ def run_blueprint_workflow(context, executor):
                         raise ExecutionFailed(
                             'Workflow approval step requires Blueprint requires_approval=true'
                         )
-                    approval = (context.job.payload or {}).get('_approval') or {}
+                    approval = (context.job.payload or {}).get('_workflow_approval') or {}
                     if approval.get('status') != 'approved':
                         pause_for_approval(step_id)
                     approved_step = approval.get('step_id')
-                    if approved_step and approved_step != step_id:
+                    if approved_step != step_id:
                         raise ExecutionFailed('Blueprint approval belongs to a different workflow step')
+                    expected_plan_sha256 = str(approval.get('approved_plan_sha256') or '')
+                    current_plan_sha256 = str(runtime.get('plan_sha256') or '')
+                    if current_plan_sha256 and expected_plan_sha256 != current_plan_sha256:
+                        raise ExecutionFailed('Approved Terraform plan does not match the current workflow plan')
                     context.log(
                         f"workflow.approval.satisfied: {step_id} "
                         f"approved_by={approval.get('approved_by')}"
@@ -2187,7 +2206,7 @@ def run_proxmox_blueprint_workflow(context):
         raise ExecutionFailed('Unsupported Blueprint workflow steps: ' + ', '.join(unsupported))
     terraform_steps = sorted({
         str(step.get('type')) for step in steps
-        if str(step.get('type')).startswith('terraform_')
+        if str(step.get('type')) in {'terraform_plan', 'terraform_apply'}
     })
     if terraform_steps:
         raise ExecutionFailed(
@@ -2236,6 +2255,40 @@ def run_proxmox_blueprint_workflow(context):
                 quota_db.commit()
         persist_workflow_runtime(context, runtime)
 
+    def execute_direct_rollback(target_id, failed_step_id):
+        rollback_step = by_id.get(str(target_id))
+        if rollback_step is None:
+            raise ExecutionFailed(f'Rollback target {target_id} does not exist')
+        rollback_type = str(rollback_step.get('type'))
+        rollback_timeout = workflow_step_timeout(
+            rollback_type, rollback_step.get('timeout') or 600
+        )
+        previous_deadline = context.step_deadline
+        context.step_deadline = time.monotonic() + rollback_timeout
+        try:
+            context.stage(f'workflow.rollback.start:{failed_step_id}:{target_id}:{rollback_type}')
+            if rollback_type == 'terraform_destroy':
+                # terraform_destroy is the portable Blueprint rollback marker.
+                # Direct Proxmox execution maps it to the native provider delete.
+                proxmox_provision.destroy(context, timeout=rollback_timeout)
+                context.rollback_destroyed = True
+            elif rollback_type == 'notification':
+                message = str((rollback_step.get('conditions') or {}).get('message') or target_id)
+                context.log('workflow.rollback.notification: ' + message[:1000])
+            elif rollback_type == 'delay':
+                seconds = float((rollback_step.get('conditions') or {}).get('seconds', 1))
+                if seconds < 0 or seconds > rollback_timeout:
+                    raise ExecutionFailed('Rollback delay seconds must be between 0 and rollback timeout')
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    context.check()
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
+            else:
+                raise ExecutionFailed(f'Unsupported rollback step type: {rollback_type}')
+            context.stage(f'workflow.rollback.completed:{failed_step_id}:{target_id}:{rollback_type}')
+        finally:
+            context.step_deadline = previous_deadline
+
     for step in steps:
         step_id = str(step.get('id'))
         step_type = str(step.get('type'))
@@ -2282,10 +2335,14 @@ def run_proxmox_blueprint_workflow(context):
                         f'workflow.step.precompiled: {step_id}:{step_type}; '
                         'value was resolved before the job was queued'
                     )
-                elif step_type in {'clone_vm', 'create_vm'}:
+                elif step_type == 'clone_vm':
                     proxmox_provision.clone(context, timeout=timeout)
                     runtime['applied'] = True
                     sync_direct_inventory()
+                elif step_type == 'create_vm':
+                    raise ExecutionFailed(
+                        'create_vm is not supported by the direct Proxmox executor; use clone_vm'
+                    )
                 elif step_type in {'configure_vm', 'set_hostname', 'set_tags'}:
                     if not runtime['applied']:
                         raise ExecutionFailed(
@@ -2350,10 +2407,12 @@ def run_proxmox_blueprint_workflow(context):
                 elif step_type == 'notification':
                     message = str((step.get('conditions') or {}).get('message') or step_id)
                     context.log('workflow.notification: ' + message[:1000])
-                elif step_type in {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
+                elif step_type in {'terraform_plan', 'terraform_apply'}:
                     raise ExecutionFailed(
                         f'{step_type} is not allowed with the direct Proxmox executor'
                     )
+                elif step_type == 'terraform_destroy':
+                    raise ExecutionFailed('terraform_destroy is rollback-only')
                 elif step_type == 'approval':
                     raise ExecutionFailed(
                         'Direct Proxmox provisioning uses job-level approval, not an approval workflow step'
@@ -2371,11 +2430,19 @@ def run_proxmox_blueprint_workflow(context):
                 raise
             except Exception as exc:
                 if attempt >= attempts:
-                    if isinstance(exc, ExecutionFailed):
-                        raise
-                    raise ExecutionFailed(
+                    terminal = exc if isinstance(exc, ExecutionFailed) else ExecutionFailed(
                         f'Workflow step {step_id} ({step_type}) failed'
-                    ) from None
+                    )
+                    rollback_id = step.get('rollback')
+                    if rollback_id:
+                        try:
+                            execute_direct_rollback(rollback_id, step_id)
+                        except Exception as rollback_exc:
+                            raise ExecutionFailed(
+                                f'{terminal}; rollback {rollback_id} failed: '
+                                f'{str(rollback_exc)[:200]}'
+                            ) from None
+                    raise terminal
                 context.log(
                     f'workflow.step.retry: {step_id}:{step_type} '
                     f'attempt={attempt}/{attempts} error={str(exc)[:500]}'
