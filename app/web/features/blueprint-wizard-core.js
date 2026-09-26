@@ -159,6 +159,7 @@
       slug: '',
       slugTouched: false,
       description: '',
+      avatarId: '',
       active: true,
       providerId: '',
       providerType: '',
@@ -275,6 +276,7 @@
     state.slug = blueprint.slug || '';
     state.slugTouched = true;
     state.description = blueprint.description || '';
+    state.avatarId = blueprint.avatar_id == null ? '' : String(blueprint.avatar_id);
     state.active = blueprint.is_active !== false;
     state.variablesSchema = { ...(blueprint.variables_schema || {}) };
 
@@ -550,6 +552,7 @@
       slug: state.slug,
       name: state.name,
       description: state.description,
+      avatar_id: state.avatarId || null,
       is_active: state.active,
       visibility: {
         backend: state.visibilityBackend,
