@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from app.database import session
 from app.models import Deployment, ManagedResource, ManagedVM, Provider, User
+from app.terraform.state import persist_state
 
 
 def key(headers):
@@ -104,7 +105,9 @@ def test_inventory_list_can_refresh_live_state(client, headers, monkeypatch):
     assert rows.json()['items'][0]['live']['status'] == 'stopped'
 
 
-def test_missing_terraform_vm_can_be_removed_only_after_provider_confirms_absence(client, headers, monkeypatch):
+def test_missing_terraform_vm_can_be_removed_only_after_provider_confirms_absence(
+    client, headers, monkeypatch, tmp_path
+):
     from app.providers.proxmox import ProxmoxProvider
 
     p = provider(client, headers)
@@ -150,6 +153,13 @@ def test_missing_terraform_vm_can_be_removed_only_after_provider_confirms_absenc
         vm_id = vm.id
         deployment_id = deployment.id
 
+    workspace = tmp_path / 'stale-terraform-state'
+    workspace.mkdir()
+    (workspace / 'terraform.tfstate').write_text(
+        '{"version":4,"outputs":{"vm_id":{"value":901},"primary_ip":{"value":null}}}'
+    )
+    assert persist_state(deployment_id, workspace) is True
+
     monkeypatch.setattr(
         ProxmoxProvider,
         'discover',
@@ -184,11 +194,16 @@ def test_missing_terraform_vm_can_be_removed_only_after_provider_confirms_absenc
         ))
         assert vm is None
         assert resource is None
-        assert deployment.status == 'reconciliation_required'
+        assert deployment.status == 'destroyed'
+        assert deployment.destroyed_at is not None
+        assert deployment.active_job_id is None
 
     repaired = client.post('/api/v1/inventory/reconcile', headers=headers, json={})
     assert repaired.status_code == 200, repaired.text
     assert repaired.json()['repaired_count'] == 0
+    with session() as db:
+        assert db.get(ManagedVM, vm_id) is None
+        assert db.get(Deployment, deployment_id).status == 'destroyed'
 
 
 
