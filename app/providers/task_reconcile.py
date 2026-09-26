@@ -143,10 +143,10 @@ def _queue_clone_template_follow_up(adapter, item):
         vm_id=int(target_vm_id),
         name=item.get('name'),
     )
-    if not tracked:
-        raise RuntimeError(
-            'Template conversion started but its Proxmox task could not be tracked'
-        )
+    # The provider mutation has already started. Never retry the conversion only
+    # because Redis tracking failed, otherwise the same clone could receive the
+    # template action twice. A later provider/inventory refresh will reconcile
+    # the resulting object even without this transient task metadata.
     return None
 
 
