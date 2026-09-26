@@ -27,6 +27,8 @@ from app.quotas.service import prepare_job_reservation, release_job_reservation
 from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
+from app.projects.models import Project
+from app.tenancy.models import Tenant
 from app.security.core import audit, decrypt_secret
 from app.resource_scope.http import require
 from app.terraform.state import delete_plan
@@ -243,6 +245,55 @@ def discover_awx_credential(id: int, request: Request,
         raise HTTPException(502, str(exc)) from None
     audit(db, request, 'credential.awx_discovered', 'credentials', id)
     return result
+
+
+@router.post('/credentials/{id}/awx/scope')
+def sync_awx_scope(id: int, request: Request,
+                   actor=Depends(require('credentials.test')), db=Depends(get_db, scope='function')):
+    """Materialize Tenant->Organization and resolve Project->AWX Project for the bound CloudPortal scope."""
+    credential = find(db, Credential, id)
+    if credential.type != 'awx':
+        raise HTTPException(422, 'Credential is not an AWX credential')
+    scope = db.info.get('resource_scope')
+    if scope is None:
+        raise HTTPException(400, 'CloudPortal project scope is required for AWX mapping')
+    tenant = db.get(Tenant, scope.tenant_id)
+    project = db.get(Project, scope.project_id)
+    if tenant is None or tenant.deleted_at is not None:
+        raise HTTPException(404, 'CloudPortal Tenant is unavailable')
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(404, 'CloudPortal Project is unavailable')
+    try:
+        secret = decrypt_secret(credential)
+        client = AwxClient(
+            credential.endpoint,
+            verify_ssl=credential.verify_ssl,
+            token=secret.get('token'),
+            username=credential.username,
+            password=secret.get('password'),
+        )
+        organization = client.ensure_organization(name=tenant.name)
+        awx_project = client.project_for_organization(
+            name=project.name,
+            organization_id=int(organization['id']),
+        )
+    except AwxError as exc:
+        audit(db, request, 'credential.awx_scope_synced', 'credentials', id, 'failure')
+        db.commit()
+        raise HTTPException(409, str(exc)) from None
+    audit(db, request, 'credential.awx_scope_synced', 'credentials', id)
+    return {
+        'tenant': {'id': tenant.id, 'name': tenant.name, 'slug': tenant.slug},
+        'project': {'id': project.id, 'name': project.name, 'slug': project.slug},
+        'organization': {'id': int(organization['id']), 'name': organization.get('name') or tenant.name},
+        'awx_project': {
+            'id': int(awx_project['id']),
+            'name': awx_project.get('name') or project.name,
+            'organization': int(awx_project.get('organization') or organization['id']),
+            'scm_type': awx_project.get('scm_type'),
+            'status': awx_project.get('status'),
+        },
+    }
 
 
 @router.get('/credentials/{id}', response_model=CredentialOutput)
