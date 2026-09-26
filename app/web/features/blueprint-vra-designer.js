@@ -135,7 +135,7 @@
     if (item) {
       const result = {};
       for (const key of [
-        'slug', 'name', 'description', 'is_active', 'visibility',
+        'slug', 'name', 'description', 'avatar_id', 'is_active', 'visibility',
         'allowed_role_ids', 'allowed_user_ids', 'manager_role_ids',
         'variables_schema', 'deployment', 'workflow',
         'requires_approval', 'recovery_policy',
@@ -156,6 +156,7 @@
       slug: 'new-blueprint',
       name: 'New Blueprint',
       description: '',
+      avatar_id: null,
       is_active: true,
       visibility: { backend: true, cloudportal: false, api: true },
       allowed_role_ids: [],
