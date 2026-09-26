@@ -173,64 +173,11 @@ async function handleVmProviderFailure(item, error, returnView = 'inventory') {
 }
 
 async function showProxmoxTask(item, result, title) {
-  if (!result?.task) {
-    toast(`${title}: operacja została przyjęta.`);
+  if (!window.InventoryTaskModal?.show) {
+    toast('Nie udało się załadować widoku zadania Proxmox.', 'error');
     return;
   }
-
-  stopTaskPolling();
-  const nonce = state.taskPollNonce;
-  const statusValue = node('strong', { text: 'Uruchamianie…' });
-  const exitValue = node('strong', { text: '—' });
-  const typeValue = node('strong', { text: '—' });
-  const startedValue = node('strong', { text: '—' });
-  const progress = node('div', { class: 'task-progress' },
-    node('div', { class: 'spinner', 'aria-hidden': 'true' }),
-    node('span', { text: 'Oczekiwanie na status zadania Proxmox…' }));
-
-  dom.modal.classList.remove('modal-console');
-  dom.modalTitle.textContent = title;
-  dom.modalEyebrow.textContent = item.name || `${item.node} / VMID ${item.vm_id}`;
-  dom.modalBody.replaceChildren(
-    progress,
-    node('div', { class: 'checks task-checks' },
-      node('div', { class: 'check' }, node('span', { text: 'Status' }), statusValue),
-      node('div', { class: 'check' }, node('span', { text: 'Wynik' }), exitValue),
-      node('div', { class: 'check' }, node('span', { text: 'Typ operacji' }), typeValue),
-      node('div', { class: 'check' }, node('span', { text: 'Start' }), startedValue)),
-    node('details', { class: 'task-id-details' },
-      node('summary', { text: 'Identyfikator zadania' }),
-      node('div', { class: 'secret-box mono', text: String(result.task) })));
-  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-  if (!(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) dom.modal.showModal();
-
-  const poll = async () => {
-    if (nonce !== state.taskPollNonce || !(typeof window.modalSurfaceOpen === 'function' ? window.modalSurfaceOpen() : dom.modal.open)) return;
-    try {
-      const task = await api(`/providers/${item.provider_id}/tasks/${encodeURIComponent(item.node)}/${encodeURIComponent(String(result.task))}`);
-      const stopped = task.status === 'stopped' || Boolean(task.exitstatus);
-      statusValue.textContent = stopped ? 'Zakończone' : statusLabel(task.status || 'running');
-      exitValue.textContent = task.exitstatus || (stopped ? '—' : 'W trakcie');
-      typeValue.textContent = task.type || '—';
-      startedValue.textContent = task.starttime ? new Date(task.starttime * 1000).toLocaleString('pl-PL') : '—';
-
-      if (stopped) {
-        const success = !task.exitstatus || task.exitstatus === 'OK';
-        progress.replaceChildren(
-          badge(success ? 'Zakończono pomyślnie' : 'Operacja zakończona błędem', success ? 'ok' : 'danger'));
-        if (success) toast(`${title}: zakończono.`);
-        else toast(`${title}: ${task.exitstatus || 'błąd operacji'}.`, 'error');
-        state.taskPollTimer = null;
-        return;
-      }
-      state.taskPollTimer = window.setTimeout(poll, 1500);
-    } catch (error) {
-      progress.replaceChildren(node('span', { class: 'form-error', text: 'Nie udało się odświeżyć statusu: ' + error.message }));
-      state.taskPollTimer = window.setTimeout(poll, 4000);
-    }
-  };
-
-  await poll();
+  return window.InventoryTaskModal.show(item, result, title);
 }
 
 async function discoverVmOptions(item, resource, node = null) {
