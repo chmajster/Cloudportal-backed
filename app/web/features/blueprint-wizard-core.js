@@ -16,7 +16,7 @@
     site: 'Site',
   };
   const WORKFLOW_TYPES = [
-    'clone_vm', 'create_vm', 'configure_vm', 'cloud_init', 'start_vm',
+    'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
     'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
     'wait_for_ip', 'wait_for_ssh', 'run_ansible_playbook', 'register_awx', 'create_snapshot',
     'health_check', 'condition', 'approval', 'delay', 'notification',
@@ -96,7 +96,6 @@
     return ({
       generate_hostname: 'Hostname',
       allocate_ip: 'IPAM',
-      create_vm: 'Utwórz VM',
       clone_vm: 'Clone VM',
       configure_vm: 'Konfiguracja VM',
       cloud_init: 'Cloud-init',
