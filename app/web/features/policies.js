@@ -97,7 +97,7 @@
         }),
         field('Scope / selektory — JSON', 'scope', {
           tag: 'textarea', value: pretty(defaultScope), wide: true,
-          help: 'Np. organizations, projects, apmids, environments, scope_keys. Pełny scope VM: Organizacja-LEO-131-IAASTEAM-PROD.',
+          help: 'Np. organization_ids, project_ids, organizations, projects, apmids, environments, scope_keys. Pełny scope VM: Organizacja-LEO-131-IAASTEAM-PROD.',
         }),
         field('Warunek — JSON', 'condition', {
           tag: 'textarea', value: pretty(defaultCondition), wide: true,
