@@ -80,7 +80,7 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
     if not cfg.worker_auto_resume_enabled or cfg.worker_auto_resume_max_attempts <= 0:
         return None
     if (
-        job.operation != 'terraform.apply'
+        job.operation not in {'terraform.apply', 'proxmox.provision'}
         or job.cancel_requested
         or not job.deployment_id
         or deployment is None
@@ -147,7 +147,11 @@ def queue_automatic_resume(db, job: Job, deployment: Deployment | None) -> Job |
         message=(
             f'recovery.auto_resume.queued: previous_job={job.id}; '
             f'attempt={resume_count + 1}/{cfg.worker_auto_resume_max_attempts}; '
-            'terraform_apply=retry_with_restored_state'
+            + (
+                'provisioning=resume_direct_proxmox'
+                if job.operation == 'proxmox.provision'
+                else 'terraform_apply=retry_with_restored_state'
+            )
         ),
     ))
     db.add(Audit(

@@ -36,6 +36,7 @@ from app.jobs.approval import approval_policy_for_job
 from app.jobs.lifecycle import has_released_allocations
 from app.jobs.proxmox_destroy import force_stop_before_destroy
 from app.jobs.proxmox_clone_template import OPERATION as PROXMOX_CLONE_TEMPLATE_OPERATION, execute as execute_proxmox_clone_template
+from app.jobs import proxmox_provision
 from app.quotas.service import (account_confirmed_absent, commit_job_reservation,
                                 mark_job_reservation_uncertain, prepare_job_reservation,
                                 release_job_reservation)
@@ -103,6 +104,23 @@ class Context:
                          action=action, resource='jobs', resource_id=self.job.id, request_id=self.job.request_id))
             db.commit()
 
+    def progress(self, percent=None, message=None, *, phase=None):
+        self.check()
+        with session() as db:
+            current = db.get(Job, self.job.id)
+            if current is None:
+                return
+            payload = dict(current.payload or {})
+            payload['_progress'] = {
+                'percent': None if percent is None else max(0.0, min(100.0, float(percent))),
+                'message': str(message or '')[:255] or None,
+                'phase': str(phase or '')[:64] or None,
+                'updated_at': now().isoformat(),
+            }
+            current.payload = payload
+            self.job.payload = dict(payload)
+            db.commit()
+
 
 def blueprint_execution_channel(job):
     authorization_source = (
@@ -119,7 +137,7 @@ def blueprint_execution_channel(job):
 
 def _validate_blueprint_authorization(db, job, user, permissions):
     blueprint_snapshot = (job.payload or {}).get('blueprint') or {}
-    if job.operation != 'terraform.apply' or not blueprint_snapshot:
+    if job.operation not in {'terraform.apply', 'proxmox.provision'} or not blueprint_snapshot:
         return
     if 'blueprints.execute' not in permissions:
         raise ExecutionFailed('Blueprint execution permission has been revoked')
@@ -210,7 +228,7 @@ def validate_authorization(db, job):
             credential_id = ansible_run.get('credentials_id')
             if not credential_id or not reference_visible(db, 'credential', credential_id, scope):
                 raise ExecutionFailed('Ansible runbook credential access has been revoked')
-        if job.operation in {'terraform.plan', 'terraform.apply'}:
+        if job.operation in {'terraform.plan', 'terraform.apply', 'proxmox.provision'}:
             blueprint = (job.payload or {}).get('blueprint') or {}
             guest_credential_id = blueprint.get('guest_credential_id')
             if not guest_credential_id and target is not None:
@@ -238,9 +256,19 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job project authorization has been revoked') from None
     if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
         needed = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+    elif job.operation == 'proxmox.provision':
+        needed = {
+            'jobs.execute', 'deployments.create',
+            'vms.read', 'vms.clone', 'vms.update', 'vms.power',
+        }
+    elif job.operation == 'proxmox.destroy':
+        needed = {
+            'jobs.execute', 'deployments.destroy',
+            'vms.read', 'vms.delete', 'vms.power',
+        }
     else:
         needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
-    if job.operation == 'terraform.apply':
+    if job.operation in {'terraform.apply', 'proxmox.provision'}:
         needed.add('deployments.create')
         blueprint = job.payload.get('blueprint') or {}
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
@@ -252,7 +280,7 @@ def validate_authorization(db, job):
             needed.add('ipam.release')
         if 'terraform_destroy' in workflow_types:
             needed.add('deployments.destroy')
-    if job.operation == 'terraform.destroy':
+    if job.operation in {'terraform.destroy', 'proxmox.destroy'}:
         needed.add('deployments.destroy')
     if job.operation == 'terraform.import':
         needed.add('deployments.adopt')
@@ -396,6 +424,11 @@ def _workflow_vm_identity(context, workspace):
     node = str((context.deployment.variables or {}).get('node') or '')
     if not node:
         raise ExecutionFailed('Proxmox node missing from deployment variables')
+    if context.deployment.executor == 'proxmox':
+        vm_id = (context.deployment.variables or {}).get('vm_id')
+        if vm_id in {None, ''}:
+            raise ExecutionFailed('Proxmox VMID missing from direct deployment variables')
+        return node, int(vm_id), provider_for(context.credential)
     return node, vm_id_from_state(workspace), provider_for(context.credential)
 
 
@@ -1659,12 +1692,8 @@ def health_check_vm(context, workspace):
 def create_blueprint_snapshot(context, workspace, step):
     if context.deployment.provider != 'proxmox':
         raise ExecutionFailed('create_snapshot is supported only for Proxmox deployments')
-    vm_id = vm_id_from_state(workspace)
-    node = str((context.deployment.variables or {}).get('node') or '')
-    if not node:
-        raise ExecutionFailed('Proxmox node missing from deployment variables')
+    node, vm_id, provider = _workflow_vm_identity(context, workspace)
     snapname = ('bp-' + context.job.id[:8] + '-' + str(step.get('id') or 'snapshot'))[:40]
-    provider = provider_for(context.credential)
     try:
         existing = provider.snapshots(node, vm_id) or []
     except Exception:
@@ -2145,6 +2174,235 @@ def run_blueprint_workflow(context, executor):
     context.stage('workflow.completed')
     return runtime['workspace']
 
+
+def run_proxmox_blueprint_workflow(context):
+    """Execute a Proxmox Blueprint directly through the provider API, without Terraform."""
+    blueprint = (context.job.payload or {}).get('blueprint') or {}
+    steps = blueprint_workflow_order(blueprint.get('steps') or [])
+    if not steps:
+        raise ExecutionFailed('Direct Proxmox Blueprint has no workflow steps')
+
+    unsupported = sorted({str(step.get('type')) for step in steps} - BLUEPRINT_SUPPORTED_STEPS)
+    if unsupported:
+        raise ExecutionFailed('Unsupported Blueprint workflow steps: ' + ', '.join(unsupported))
+    terraform_steps = sorted({
+        str(step.get('type')) for step in steps
+        if str(step.get('type')).startswith('terraform_')
+    })
+    if terraform_steps:
+        raise ExecutionFailed(
+            'Direct Proxmox provisioning cannot execute Terraform steps: '
+            + ', '.join(terraform_steps)
+        )
+
+    saved_runtime = dict((context.job.payload or {}).get('_workflow_runtime') or {})
+    completed_steps = {
+        str(value) for value in (saved_runtime.get('completed_steps') or [])
+    }
+    explicit_ansible_completed = any(
+        str(step.get('type')) == 'run_ansible_playbook'
+        and str(step.get('id')) in completed_steps
+        for step in steps
+    )
+    runtime = {
+        'workspace': None,
+        'inventory_synced': bool(saved_runtime.get('inventory_synced')),
+        'addresses': None,
+        'applied': bool(saved_runtime.get('provider_applied')),
+        'ansible_ran': bool(saved_runtime.get('ansible_ran') or explicit_ansible_completed),
+        'ansible_completed_runs': {
+            int(value) for value in (saved_runtime.get('ansible_completed_runs') or [])
+        },
+        'ansible_inflight_run': saved_runtime.get('ansible_inflight_run'),
+        'awx_launches': dict(saved_runtime.get('awx_launches') or {}),
+        'prepared': [],
+        'step_states': {step_id: 'completed' for step_id in completed_steps},
+        'plan_ready': False,
+        'plan_sha256': None,
+    }
+
+    by_id = {str(step.get('id')): step for step in steps}
+    rollback_targets = {str(step.get('rollback')) for step in steps if step.get('rollback')}
+
+    def sync_direct_inventory():
+        if runtime['inventory_synced']:
+            return
+        proxmox_provision.register_inventory(context)
+        runtime['inventory_synced'] = True
+        with session() as quota_db:
+            quota_job = quota_db.get(Job, context.job.id)
+            if quota_job is not None:
+                commit_job_reservation(quota_db, quota_job)
+                quota_db.commit()
+        persist_workflow_runtime(context, runtime)
+
+    for step in steps:
+        step_id = str(step.get('id'))
+        step_type = str(step.get('type'))
+
+        if runtime['step_states'].get(step_id) == 'completed':
+            context.log(f'workflow.step.resumed: {step_id}:{step_type}: already completed')
+            continue
+        if step_id in rollback_targets:
+            runtime['step_states'][step_id] = 'rollback_only'
+            context.log(f'workflow.step.rollback_only: {step_id}:{step_type}')
+            continue
+
+        dependencies = [str(value) for value in (step.get('depends_on') or [])]
+        blocked = [
+            dependency for dependency in dependencies
+            if runtime['step_states'].get(dependency) != 'completed'
+        ]
+        if blocked:
+            runtime['step_states'][step_id] = 'blocked'
+            context.log(
+                f'workflow.step.blocked: {step_id}:{step_type}: '
+                'dependency not executed: ' + ', '.join(blocked)
+            )
+            continue
+
+        if not blueprint_conditions_match(step, context):
+            runtime['step_states'][step_id] = 'skipped'
+            context.log(f'workflow.step.skipped: {step_id}:{step_type}: condition=false')
+            continue
+
+        retry = int(step.get('retry') or 0)
+        timeout = workflow_step_timeout(step_type, step.get('timeout') or 600)
+        attempts = retry + 1
+
+        for attempt in range(1, attempts + 1):
+            previous_deadline = context.step_deadline
+            context.step_deadline = time.monotonic() + timeout
+            try:
+                context.stage(f'workflow.step.start:{step_id}:{step_type}')
+                context.progress(None, 'Wykonywanie: ' + step_type, phase=step_type)
+
+                if step_type in BLUEPRINT_PRECOMPILED_STEPS:
+                    context.log(
+                        f'workflow.step.precompiled: {step_id}:{step_type}; '
+                        'value was resolved before the job was queued'
+                    )
+                elif step_type in {'clone_vm', 'create_vm'}:
+                    proxmox_provision.clone(context, timeout=timeout)
+                    runtime['applied'] = True
+                    sync_direct_inventory()
+                elif step_type in {'configure_vm', 'set_hostname', 'set_tags'}:
+                    if not runtime['applied']:
+                        raise ExecutionFailed(
+                            f'{step_type} requires a completed direct Proxmox clone'
+                        )
+                    proxmox_provision.configure(context, timeout=timeout)
+                elif step_type == 'cloud_init':
+                    if not runtime['applied']:
+                        raise ExecutionFailed('cloud_init requires a completed direct Proxmox clone')
+                    proxmox_provision.configure_cloud_init(
+                        context,
+                        guest=_guest_target_credential(context),
+                        timeout=timeout,
+                    )
+                elif step_type == 'start_vm':
+                    if not runtime['applied']:
+                        raise ExecutionFailed('start_vm requires a completed direct Proxmox clone')
+                    proxmox_provision.start(context, timeout=timeout)
+                elif step_type == 'wait_for_vm':
+                    wait_for_vm(context, None, timeout=timeout)
+                elif step_type == 'wait_for_agent':
+                    wait_for_agent(context, None, timeout=timeout)
+                elif step_type == 'wait_for_ip':
+                    runtime['addresses'] = wait_for_ip(context, None, timeout=timeout)
+                elif step_type == 'wait_for_ssh':
+                    address = wait_for_ssh(
+                        context, None, timeout, addresses=runtime['addresses']
+                    )
+                    runtime['addresses'] = [address]
+                elif step_type == 'run_ansible_playbook':
+                    runtime['addresses'] = execute_configured_ansible(
+                        context,
+                        runtime,
+                        None,
+                        timeout=timeout,
+                        addresses=runtime['addresses'],
+                    )
+                elif step_type == 'register_awx':
+                    register_awx_host(
+                        context,
+                        runtime,
+                        None,
+                        timeout=timeout,
+                        step_id=step_id,
+                    )
+                elif step_type == 'create_snapshot':
+                    create_blueprint_snapshot(context, None, step)
+                elif step_type == 'health_check':
+                    health_check_vm(context, None)
+                elif step_type == 'condition':
+                    context.log(f'workflow.condition.passed: {step_id}')
+                elif step_type == 'delay':
+                    seconds = float((step.get('conditions') or {}).get('seconds', 1))
+                    if seconds < 0 or seconds > timeout:
+                        raise ExecutionFailed(
+                            'Workflow delay seconds must be between 0 and step timeout'
+                        )
+                    deadline = time.monotonic() + seconds
+                    while time.monotonic() < deadline:
+                        context.check()
+                        time.sleep(min(1, max(0, deadline - time.monotonic())))
+                elif step_type == 'notification':
+                    message = str((step.get('conditions') or {}).get('message') or step_id)
+                    context.log('workflow.notification: ' + message[:1000])
+                elif step_type in {'terraform_plan', 'terraform_apply', 'terraform_destroy'}:
+                    raise ExecutionFailed(
+                        f'{step_type} is not allowed with the direct Proxmox executor'
+                    )
+                elif step_type == 'approval':
+                    raise ExecutionFailed(
+                        'Direct Proxmox provisioning uses job-level approval, not an approval workflow step'
+                    )
+                elif step_type == 'release_ip':
+                    raise ExecutionFailed('release_ip is not allowed during VM provisioning')
+                else:
+                    raise ExecutionFailed(f'Unsupported direct Proxmox workflow step: {step_type}')
+
+                runtime['step_states'][step_id] = 'completed'
+                context.stage(f'workflow.step.completed:{step_id}:{step_type}')
+                persist_workflow_runtime(context, runtime)
+                break
+            except Cancelled:
+                raise
+            except Exception as exc:
+                if attempt >= attempts:
+                    if isinstance(exc, ExecutionFailed):
+                        raise
+                    raise ExecutionFailed(
+                        f'Workflow step {step_id} ({step_type}) failed'
+                    ) from None
+                context.log(
+                    f'workflow.step.retry: {step_id}:{step_type} '
+                    f'attempt={attempt}/{attempts} error={str(exc)[:500]}'
+                )
+            finally:
+                context.step_deadline = previous_deadline
+
+    if not runtime['applied']:
+        raise ExecutionFailed('Direct Proxmox workflow did not create a VM')
+    sync_direct_inventory()
+
+    if configured_ansible_runs(context) and not runtime['ansible_ran']:
+        context.log('workflow.compatibility: running configured Ansible after direct Proxmox workflow')
+        runtime['addresses'] = execute_configured_ansible(
+            context,
+            runtime,
+            None,
+            addresses=runtime['addresses'],
+        )
+        persist_workflow_runtime(context, runtime)
+
+    context.blueprint_workflow_completed = True
+    persist_workflow_runtime(context, runtime)
+    context.stage('workflow.completed')
+    context.progress(100, 'Provisioning VM zakończony', phase='completed')
+    return None
+
 def _execute_unfenced(job_id):
     os.umask(0o077)
     with session() as db:
@@ -2169,7 +2427,7 @@ def _execute_unfenced(job_id):
                 context.deployment = db.get(Deployment, job.deployment_id)
                 context.credential = ensure_runtime_credential(db.get(Credential, context.deployment.credentials_id))
                 if (
-                    job.operation in {'terraform.apply', 'terraform.import', 'terraform.destroy'}
+                    job.operation in {'terraform.apply', 'terraform.import', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'}
                     and not (job.payload or {}).get('_quota_checked')
                 ):
                     quota_job = db.get(Job, job.id)
@@ -2177,8 +2435,11 @@ def _execute_unfenced(job_id):
                     db.commit()
                     job.payload = dict(quota_job.payload or {})
                     context.job.payload = dict(quota_job.payload or {})
-                if job.operation == 'terraform.apply':
-                    if ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+                if job.operation in {'terraform.apply', 'proxmox.provision'}:
+                    if (
+                        job.operation == 'terraform.apply'
+                        and ((context.deployment.workflow or {}).get('adoption') or {}).get('plan_only')
+                    ):
                         raise ExecutionFailed('Adopted deployment is plan-only; terraform.apply is disabled')
                     if has_released_allocations(db, context.deployment.id):
                         raise ExecutionFailed('Deployment allocations were released; execute the Blueprint again')
@@ -2213,7 +2474,7 @@ def _execute_unfenced(job_id):
                 context.ansible, context.ansible_credential = context.ansible_runs[0]
         if (
             settings().provider_offline_queue_enabled
-            and job.operation in {'terraform.apply', 'terraform.destroy'}
+            and job.operation in {'terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'}
             and context.deployment is not None
             and context.deployment.provider == 'proxmox'
         ):
@@ -2224,7 +2485,7 @@ def _execute_unfenced(job_id):
                     return
                 reason = availability.get('reason') or 'configuration'
                 raise ExecutionFailed(
-                    'Proxmox is reachable but cannot be used for Terraform execution; '
+                    'Proxmox is reachable but cannot be used for infrastructure execution; '
                     f'check credentials, TLS and provider configuration ({reason})'
                 )
             clear_provider_wait(job.id)
@@ -2232,6 +2493,18 @@ def _execute_unfenced(job_id):
         context.stage('job.running')
         if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
             execute_proxmox_clone_template(context)
+        elif job.operation == 'proxmox.provision':
+            run_proxmox_blueprint_workflow(context)
+            if not context.blueprint_workflow_completed:
+                raise ExecutionFailed('Direct Proxmox Blueprint workflow did not complete')
+        elif job.operation == 'proxmox.destroy':
+            proxmox_provision.destroy(context)
+            cleanup_awx_after_destroy(context)
+            with session() as quota_db:
+                quota_job = quota_db.get(Job, job.id)
+                if quota_job is not None:
+                    commit_job_reservation(quota_db, quota_job)
+                    quota_db.commit()
         elif job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             blueprint = (job.payload or {}).get('blueprint') or {}
@@ -2332,7 +2605,7 @@ def _execute_unfenced(job_id):
                 elif context.rollback_destroyed:
                     deployment.status = 'destroyed'
                 else:
-                    deployment.status = 'destroyed' if status == 'successful' and current.operation == 'terraform.destroy' else status
+                    deployment.status = 'destroyed' if status == 'successful' and current.operation in {'terraform.destroy', 'proxmox.destroy'} else status
                 if current.operation == 'terraform.import' and status == 'successful':
                     deployment.status = 'imported'
             if owns_deployment and deployment.status == 'destroyed':
@@ -2361,7 +2634,7 @@ def _execute_unfenced(job_id):
         blueprint = (current.payload or {}).get('blueprint') or {}
         if (
             status == 'failed'
-            and current.operation == 'terraform.apply'
+            and current.operation in {'terraform.apply', 'proxmox.provision'}
             and current.source != 'Recovery'
             and current.deployment_id
             and blueprint.get('recovery_policy') == 'destroy_on_failure'
@@ -2369,9 +2642,14 @@ def _execute_unfenced(job_id):
         ):
             deployment = db.get(Deployment, current.deployment_id)
             if owns_deployment and deployment is not None and deployment.active_job_id is None:
+                recovery_operation = (
+                    'proxmox.destroy'
+                    if current.operation == 'proxmox.provision'
+                    else 'terraform.destroy'
+                )
                 recovery = Job(
                     id=str(uuid.uuid4()),
-                    operation='terraform.destroy',
+                    operation=recovery_operation,
                     deployment_id=deployment.id,
                     payload={'previous_status': 'failed', 'recovery_of': current.id},
                     created_by=current.created_by,

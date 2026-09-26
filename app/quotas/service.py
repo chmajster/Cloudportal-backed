@@ -24,7 +24,7 @@ from app.quotas.models import (
 
 DIMENSIONS = ('vm_count', 'vcpu', 'memory_mb', 'disk_gib')
 ACTIVE_RESERVATION_STATES = ('reserved', 'uncertain')
-MUTATING_TERRAFORM = {'terraform.apply', 'terraform.import', 'terraform.destroy'}
+MUTATING_TERRAFORM = {'terraform.apply', 'terraform.import', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'}
 
 
 @dataclass(frozen=True, slots=True)
@@ -572,7 +572,7 @@ def _ensure_limit_accountable(db, scope: Scope, dimension: str, *, tenant_wide: 
 def _job_quota(db, job: Job, deployment: Deployment):
     scope = Scope(job.tenant_id, job.project_id)
     current = allocation_dimensions(db, scope, 'deployment', deployment.id)
-    if job.operation == 'terraform.apply':
+    if job.operation in {'terraform.apply', 'proxmox.provision'}:
         unresolved = active_limit_dimensions(db, scope) & deployment_unresolved_dimensions(deployment)
         if unresolved:
             fail(
@@ -598,7 +598,7 @@ def _job_quota(db, job: Job, deployment: Deployment):
                 'QUOTA_DIMENSION_UNRESOLVED',
                 'Import baseline does not provide normalized capacity for: ' + ', '.join(sorted(unresolved)),
             )
-    elif job.operation == 'terraform.destroy':
+    elif job.operation in {'terraform.destroy', 'proxmox.destroy'}:
         target = {}
     else:
         return None
@@ -615,7 +615,7 @@ def prepare_job_reservation(db, job: Job, deployment: Deployment | None = None):
         return None
 
     payload = dict(job.payload or {})
-    if job.operation == 'terraform.destroy':
+    if job.operation in {'terraform.destroy', 'proxmox.destroy'}:
         # A new destroy supersedes stale/uncertain quota work for the same
         # deployment. new_job() already rejects deployments with active jobs,
         # so any remaining active reservation here belongs to a terminal,
@@ -695,12 +695,12 @@ def reconcile_terraform_presence(db, scope: Scope, subject_id: str, *, present: 
         QuotaReservation.subject_type == 'deployment',
         QuotaReservation.subject_id == str(subject_id),
         QuotaReservation.status.in_(ACTIVE_RESERVATION_STATES),
-        QuotaReservation.operation.in_(('terraform.apply', 'terraform.destroy')),
+        QuotaReservation.operation.in_(('terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy')),
     ).order_by(QuotaReservation.created_at).with_for_update()).all()
     resolved = []
     allocation = _allocation(db, scope, 'deployment', str(subject_id), lock=True)
     for row in rows:
-        if row.operation == 'terraform.apply':
+        if row.operation in {'terraform.apply', 'proxmox.provision'}:
             # Presence proves an initial create reached the provider, but it
             # does not prove a re-apply changed CPU/RAM/disk to the requested
             # target. Keep update reservations unresolved until stronger

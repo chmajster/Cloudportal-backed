@@ -140,6 +140,59 @@ def test_hostname_scheme_edit_cannot_reset_sequence(client, headers):
 
 
 
+def test_direct_proxmox_blueprint_execute_queues_provider_job_without_terraform(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    payload = {
+        'slug': 'direct-proxmox-vm',
+        'name': 'Direct Proxmox VM',
+        'deployment': {
+            'name': 'direct-proxmox-vm',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'executor': 'proxmox',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'direct-proxmox-vm',
+                'template_node': 'pve',
+                'cpu': 2,
+                'memory': 4096,
+                'disk': 32,
+                'network': 'vmbr0',
+            },
+        },
+        'workflow': [
+            {'id': 'clone', 'type': 'clone_vm', 'timeout': 7200},
+            {'id': 'configure', 'type': 'configure_vm', 'depends_on': ['clone']},
+            {'id': 'start', 'type': 'start_vm', 'depends_on': ['configure']},
+            {'id': 'running', 'type': 'wait_for_vm', 'depends_on': ['start']},
+        ],
+    }
+
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+    assert created.json()['deployment']['executor'] == 'proxmox'
+    assert all(
+        not str(step['type']).startswith('terraform_')
+        for step in created.json()['workflow']
+    )
+
+    execution = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    body = execution.json()
+    assert body['executor'] == 'proxmox'
+    assert body['state_location'].startswith('provider://proxmox/')
+    assert body['job']['operation'] == 'proxmox.provision'
+    assert body['job']['progress_percent'] is None
+    assert [step['type'] for step in body['workflow']['blueprint']['steps']] == [
+        'clone_vm', 'configure_vm', 'start_vm', 'wait_for_vm',
+    ]
+
+
 def test_blueprint_bundle_creates_hostname_scheme_atomically(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     blueprint = {

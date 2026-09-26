@@ -205,7 +205,7 @@ function deploymentActions(item, returnTo = 'my-resources') {
   if (item.active_job_id && allowed('jobs.cancel') && item.status !== 'cancelling') {
     actions.push(button('Anuluj', () => confirmAction(
       'Anuluj aktywne zadanie',
-      'Backend przerwie Terraform/Ansible. Jeżeli worker już nie działa, dispatcher zamknie osierocony job automatycznie.',
+      'Backend przerwie aktywną operację provisioning/Ansible. Jeżeli worker już nie działa, dispatcher zamknie osierocony job automatycznie.',
       async () => {
         const cancelled = await api('/jobs/' + item.active_job_id + '/cancel', { method: 'POST' });
         toast(cancelled.status === 'cancelled' ? 'Zadanie anulowane.' : 'Anulowanie rozpoczęte.');
@@ -213,7 +213,9 @@ function deploymentActions(item, returnTo = 'my-resources') {
       },
     ), 'danger'));
   }
-  if (allowed('jobs.execute') && allowed('terraform.execute') && !item.active_job_id && item.status !== 'destroyed') {
+  if (item.executor !== 'proxmox'
+      && allowed('jobs.execute') && allowed('terraform.execute')
+      && !item.active_job_id && item.status !== 'destroyed') {
     actions.push(button(
       reconciliationRequired ? 'Plan reconciliacyjny' : 'Plan',
       () => createTerraformJob(item, 'terraform.plan'),
@@ -223,9 +225,26 @@ function deploymentActions(item, returnTo = 'my-resources') {
       actions.push(button('Zastosuj', () => createTerraformJob(item, 'terraform.apply')));
     }
   }
-  if (allowed('deployments.destroy') && allowed('jobs.execute') && !item.active_job_id
+  const canDestroy = item.executor === 'proxmox'
+    ? (
+        allowed('deployments.destroy') && allowed('jobs.execute')
+        && allowed('vms.read') && allowed('vms.delete') && allowed('vms.power')
+      )
+    : (allowed('deployments.destroy') && allowed('jobs.execute'));
+  if (canDestroy && !item.active_job_id
       && item.status !== 'destroyed' && !reconciliationRequired) {
-    actions.push(button('Usuń zasoby', () => confirmAction('Usuń zasoby wdrożenia', `Terraform usunie zasoby wdrożenia ${item.name}.`, async () => { await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true }); toast('Utworzono zadanie usuwania zasobów.'); navigate(returnTo); }), 'danger'));
+    const destroyText = item.executor === 'proxmox'
+      ? `Proxmox API usunie VM wdrożenia ${item.name}.`
+      : `Terraform usunie zasoby wdrożenia ${item.name}.`;
+    actions.push(button('Usuń zasoby', () => confirmAction(
+      'Usuń zasoby wdrożenia',
+      destroyText,
+      async () => {
+        await api(`/deployments/${item.id}/destroy`, { method: 'POST', body: {}, idempotent: true });
+        toast('Utworzono zadanie usuwania zasobów.');
+        navigate(returnTo);
+      },
+    ), 'danger'));
   }
   return actions;
 }
@@ -236,7 +255,7 @@ function showDeploymentDetails(item) {
     info('Status', statusLabel(item.status)),
     info('Platforma', CREDENTIAL_TYPE_CONFIG[item.provider]?.label || item.provider),
     info('Szablon', item.template),
-    info('Silnik IaC', item.executor),
+    info('Sposób provisioning', item.executor === 'proxmox' ? 'Proxmox API' : item.executor),
     info('Utworzono', formatDate(item.created_at)),
     info('Aktualizacja', formatDate(item.updated_at)));
   const content = node('div', { class: 'stack' },
@@ -884,6 +903,19 @@ async function jobsView() {
         item.provider_waiting || jobDispatchedToWorker(item) ? 'warning' : statusKind(item.status)
       ) },
       { label: 'Etap', value: item => window.JobStageUI.cell(item) },
+      { label: 'Postęp', value: item => {
+        const percent = Number(item.progress_percent);
+        const hasPercent = Number.isFinite(percent) && percent >= 0 && percent <= 100;
+        const message = String(item.progress_message || '').trim();
+        if (!hasPercent && !message) return '—';
+        return node('div', { class: 'my-resource-provisioning-progress job-progress-cell' },
+          node('div', {
+            class: 'my-resource-provisioning-progress-track' + (hasPercent ? '' : ' indeterminate'),
+          }, node('span', { style: hasPercent ? 'width:' + percent.toFixed(1) + '%' : '' })),
+          node('div', { class: 'my-resource-provisioning-progress-copy' },
+            node('span', { text: message || 'Operacja w toku' }),
+            node('strong', { text: hasPercent ? Math.round(percent) + '%' : 'w toku' })));
+      } },
       { label: 'Synchronizacja', value: item => item.provider_waiting
         ? node('span', { class: 'muted', text: 'Próba ' + item.provider_retry_attempts + ' · kolejna ' + formatDate(item.provider_next_retry_at) })
         : jobDispatchedToWorker(item)
@@ -908,7 +940,7 @@ async function jobsView() {
       if (allowed('jobs.cancel') && ['queued', 'running'].includes(item.status) && !item.cancel_requested) {
         actions.push(button('Anuluj', () => confirmAction(
           'Anuluj zadanie',
-          `Zadanie ${short(item.id)} zostanie zatrzymane. Trwający Terraform/Ansible otrzyma przerwanie.`,
+          `Zadanie ${short(item.id)} zostanie zatrzymane. Trwająca operacja providera/Terraform/Ansible otrzyma przerwanie.`,
           async () => {
             const result = await api(`/jobs/${item.id}/cancel`, { method: 'POST' });
             toast(result.status === 'cancelled' ? 'Zadanie anulowane.' : 'Anulowanie rozpoczęte.');

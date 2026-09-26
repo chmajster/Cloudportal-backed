@@ -104,7 +104,13 @@ def load_target(db, resource_id: str):
         raise failure('RESOURCE_NOT_FOUND', status_code=404)
     provider, credential = _provider_and_credential(db, resource.provider_id)
     deployment = db.get(Deployment, resource.deployment_id) if resource.deployment_id else None
-    managed = bool(deployment and deployment.executor in {'terraform', 'opentofu'})
+    management_mode = (
+        'TERRAFORM_MANAGED'
+        if deployment and deployment.executor in {'terraform', 'opentofu'}
+        else 'PROVIDER_MANAGED'
+        if deployment and deployment.executor == 'proxmox'
+        else 'EXTERNAL'
+    )
     target = Day2Target(
         resource_id=resource.id,
         provider_id=resource.provider_id,
@@ -112,7 +118,7 @@ def load_target(db, resource_id: str):
         resource_type=resource.resource_type,
         name=resource.name,
         deployment_id=resource.deployment_id,
-        management_mode='TERRAFORM_MANAGED' if managed else 'EXTERNAL',
+        management_mode=management_mode,
         external_id=resource.external_id,
         primary_ip=resource.primary_ip,
     )

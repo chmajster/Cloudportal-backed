@@ -409,10 +409,15 @@ async function catalogView() {
       node('div', { class: 'panel-header' },
         node('div', {},
           node('h2', { text: 'Szablony utworzone w kreatorze' }),
-          node('p', { class: 'muted', text: 'Gotowe presety Proxmox z zapisaną VM bazową, parametrami, silnikiem IaC i generatorem hostname.' }))),
+          node('p', { class: 'muted', text: 'Gotowe presety Proxmox z zapisaną VM bazową, parametrami, sposobem provisioningu i generatorem hostname.' }))),
       table([
         { label: 'Nazwa', value: item => node('div', {}, node('strong', { text: item.name }), node('div', { class: 'mono muted', text: item.slug })) },
-        { label: 'Silnik', value: item => badge(item.deployment?.executor === 'opentofu' ? 'OpenTofu' : 'Terraform', 'info') },
+        { label: 'Provisioning', value: item => badge(
+          item.deployment?.executor === 'proxmox'
+            ? 'Proxmox API'
+            : item.deployment?.executor === 'opentofu' ? 'OpenTofu' : 'Terraform',
+          'info'
+        ) },
         { label: 'Provider', value: item => '#' + (item.deployment?.provider_id ?? '—') },
         { label: 'VM bazowa', value: item => {
           const nodeName = item.deployment?.variables?.template_node || item.deployment?.variables?.node || '—';

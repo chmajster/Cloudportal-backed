@@ -24,7 +24,7 @@ from app.jobs.approval import approve_policy_stage, gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
 from app.jobs.force_dispatch import ForceDispatchConflict, ForceDispatchUnavailable, force_dispatch_job
 from app.quotas.service import prepare_job_reservation, release_job_reservation
-from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, Provider, now
+from app.models import Blueprint, Credential, Deployment, HostnameReservation, IPAllocation, Job, JobLog, ManagedVM, Provider, now
 from app.providers.registry import provider_for
 from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, test_proxmox_connection
 from app.projects.models import Project
@@ -42,10 +42,64 @@ def deployment_public(d):
     return public(d, DEPLOYMENT_FIELDS)
 
 
+def _job_workflow_progress(j):
+    payload = dict(j.payload or {})
+    blueprint = payload.get('blueprint') or {}
+    if not isinstance(blueprint, dict):
+        return None, 0
+
+    steps = [step for step in (blueprint.get('steps') or []) if isinstance(step, dict)]
+    if not steps:
+        return None, 0
+
+    step_ids = [str(step.get('id') or '') for step in steps]
+    stage = str(payload.get('_current_stage') or '').strip()
+    current_step_id = None
+    for prefix in ('workflow.step.start:', 'workflow.step.completed:'):
+        if stage.startswith(prefix):
+            current_step_id = stage[len(prefix):].split(':', 1)[0].strip() or None
+            break
+
+    runtime = dict(payload.get('_workflow_runtime') or {})
+    completed = {str(value) for value in (runtime.get('completed_steps') or [])}
+    rollback_targets = {
+        str(step.get('rollback'))
+        for step in steps
+        if step.get('rollback')
+    }
+
+    if current_step_id not in step_ids:
+        pending = [
+            step_id for step_id in step_ids
+            if step_id and step_id not in completed and step_id not in rollback_targets
+        ]
+        current_step_id = pending[0] if pending else None
+
+    if current_step_id in step_ids:
+        return step_ids.index(current_step_id) + 1, len(steps)
+    if str(j.status or '').lower() == 'successful':
+        return len(steps), len(steps)
+    return None, len(steps)
+
+
 def job_public(j):
     result = public(j, JOB_FIELDS)
     stage = (j.payload or {}).get('_current_stage')
     result['current_stage'] = str(stage)[:255] if stage else None
+    workflow_step_index, workflow_step_total = _job_workflow_progress(j)
+    result['workflow_step_index'] = workflow_step_index
+    result['workflow_step_total'] = workflow_step_total
+    progress = (j.payload or {}).get('_progress') or {}
+    raw_percent = progress.get('percent')
+    try:
+        result['progress_percent'] = (
+            max(0.0, min(100.0, float(raw_percent)))
+            if raw_percent is not None else None
+        )
+    except (TypeError, ValueError):
+        result['progress_percent'] = None
+    result['progress_message'] = str(progress.get('message') or '')[:255] or None
+    result['progress_phase'] = str(progress.get('phase') or '')[:64] or None
     wait = (j.payload or {}).get('_provider_wait') or {}
     result['provider_waiting'] = bool(wait)
     result['provider_retry_attempts'] = int(wait.get('attempts') or 0)
@@ -503,6 +557,16 @@ def playbook_source(id: str, actor=Depends(require('ansible.read')), db=Depends(
 def check_job_permissions(request, operation):
     if operation == 'proxmox.clone_template':
         required = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+    elif operation == 'proxmox.provision':
+        required = {
+            'jobs.execute', 'deployments.create',
+            'vms.read', 'vms.clone', 'vms.update', 'vms.power',
+        }
+    elif operation == 'proxmox.destroy':
+        required = {
+            'jobs.execute', 'deployments.destroy',
+            'vms.read', 'vms.delete', 'vms.power',
+        }
     else:
         required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
         if operation == 'terraform.destroy':
@@ -525,10 +589,11 @@ def validate_ansible(db, data):
 
 def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
     check_job_permissions(request, operation)
+    provisioning_operation = operation in {'terraform.apply', 'proxmox.provision'}
     blueprint = ((payload or {}).get('blueprint') or {}) if isinstance(payload, dict) else {}
-    if not blueprint and deployment and operation == 'terraform.apply':
+    if not blueprint and deployment and provisioning_operation:
         blueprint = ((deployment.workflow or {}).get('blueprint') or {})
-    if blueprint and operation == 'terraform.apply' and 'blueprints.execute' not in request.state.permissions:
+    if blueprint and provisioning_operation and 'blueprints.execute' not in request.state.permissions:
         raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
     if (
         deployment
@@ -536,7 +601,7 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
             (deployment.workflow or {}).get('ansible')
             or (deployment.workflow or {}).get('ansible_runs')
         )
-        and operation == 'terraform.apply'
+        and provisioning_operation
         and 'ansible.execute' not in request.state.permissions
     ):
         raise HTTPException(403, 'ansible.execute required by the deployment workflow')
@@ -547,13 +612,13 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         )
     if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
         raise HTTPException(409, 'Deployment is busy or destroyed')
-    if deployment and operation == 'terraform.apply' and has_released_allocations(db, deployment.id):
+    if deployment and provisioning_operation and has_released_allocations(db, deployment.id):
         raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
     if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
         raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
     job_payload = snapshot_ansible_payload(
         db,
-        payload or (deployment.workflow if deployment and operation == 'terraform.apply' else {}),
+        payload or (deployment.workflow if deployment and provisioning_operation else {}),
     )
     if deployment:
         job_payload['previous_status'] = deployment.status
@@ -575,6 +640,11 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
 
 @router.post('/deployments', status_code=202, response_model=CreatedDeploymentOutput)
 def create_deployment(data: DeploymentInput, request: Request, actor=Depends(require('deployments.create')), db=Depends(get_db, scope='function')):
+    if data.executor == 'proxmox':
+        raise HTTPException(
+            422,
+            'Direct Proxmox provisioning must be launched from a Blueprint so the provider workflow is immutable and auditable',
+        )
     check_job_permissions(request, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
     ensure_credential_usable(find(db, Credential, p.credentials_id))
@@ -623,6 +693,8 @@ def recreate_deployment(id: str, request: Request, actor=Depends(require('deploy
         deployment = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
         if deployment is None:
             raise HTTPException(404, 'Deployment not found')
+        if deployment.executor == 'proxmox':
+            raise HTTPException(409, 'Direct Proxmox deployments do not use Terraform recreate; delete and execute the Blueprint again')
         payload = recreate_job_payload(deployment)
         job = new_job(db, request, actor, 'terraform.apply', deployment, payload)
         audit(db, request, 'deployment.recreate_requested', 'deployments', deployment.id)
@@ -638,7 +710,8 @@ def destroy_deployment(id: str, request: Request, actor=Depends(require('deploym
         d = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
         if not d:
             raise HTTPException(404, 'Deployment not found')
-        return job_public(new_job(db, request, actor, 'terraform.destroy', d))
+        operation = 'proxmox.destroy' if d.executor == 'proxmox' else 'terraform.destroy'
+        return job_public(new_job(db, request, actor, operation, d))
     return idempotent(db, request, actor, {'id': id}, create, required=True)
 
 
@@ -735,6 +808,141 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
     audit(db, request, 'blueprint.execution.approved', 'jobs', job.id)
     db.flush()
     return job_public(job)
+
+
+@router.post('/jobs/{id}/accept-awx-onboarding', status_code=202, response_model=JobOutput)
+def accept_awx_onboarding(
+    id: str,
+    request: Request,
+    actor=Depends(require('jobs.execute')),
+    db=Depends(get_db, scope='function'),
+):
+    original = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if original is None:
+        raise HTTPException(404, 'Job not found')
+    if original.status != 'failed':
+        raise HTTPException(409, 'Only a failed AWX onboarding job can be accepted manually')
+    if original.operation not in {'terraform.apply', 'proxmox.provision'} or not original.deployment_id:
+        raise HTTPException(409, 'Manual AWX onboarding acceptance requires a Blueprint provisioning job')
+
+    check_job_permissions(request, original.operation)
+    deployment = db.scalar(
+        select(Deployment).where(Deployment.id == original.deployment_id).with_for_update()
+    )
+    if deployment is None:
+        raise HTTPException(404, 'Deployment not found')
+    if deployment.active_job_id:
+        raise HTTPException(409, 'Deployment is busy')
+    if deployment.status in {'destroyed', 'reconciliation_required'}:
+        raise HTTPException(409, 'Deployment cannot resume AWX onboarding in its current state')
+
+    payload = dict(original.payload or {})
+    stage = str(payload.get('_current_stage') or '').strip()
+    prefix = 'workflow.step.start:'
+    if not stage.startswith(prefix):
+        raise HTTPException(409, 'Failed job is not stopped on a Blueprint workflow step')
+    step_id, separator, step_type = stage[len(prefix):].partition(':')
+    if not separator or not step_id or step_type != 'register_awx':
+        raise HTTPException(409, 'Failed job is not stopped on AWX onboarding')
+
+    blueprint = payload.get('blueprint') or ((deployment.workflow or {}).get('blueprint') or {})
+    steps = list(blueprint.get('steps') or []) if isinstance(blueprint, dict) else []
+    matching_step = next(
+        (
+            step for step in steps
+            if str((step or {}).get('id') or '') == step_id
+            and str((step or {}).get('type') or '') == 'register_awx'
+        ),
+        None,
+    )
+    if matching_step is None:
+        raise HTTPException(409, 'AWX onboarding step no longer exists in the Blueprint snapshot')
+
+    runtime = dict(payload.get('_workflow_runtime') or {})
+    if runtime.get('provider_applied') is not True or runtime.get('inventory_synced') is not True:
+        raise HTTPException(
+            409,
+            'AWX onboarding can be accepted manually only after Terraform apply and inventory synchronization',
+        )
+    managed_vm = db.scalar(select(ManagedVM).where(
+        ManagedVM.deployment_id == deployment.id,
+        ManagedVM.lifecycle_status == 'active',
+    ).limit(1))
+    if managed_vm is None:
+        raise HTTPException(409, 'Managed VM is not active; manual AWX onboarding acceptance is unsafe')
+
+    accepted_at = now().isoformat()
+    completed_steps = {
+        str(value) for value in (runtime.get('completed_steps') or [])
+    }
+    completed_steps.add(step_id)
+    runtime['completed_steps'] = sorted(completed_steps)
+    overrides = list(runtime.get('manual_overrides') or [])
+    overrides.append({
+        'step_id': step_id,
+        'step_type': 'register_awx',
+        'accepted_by': actor.user_id,
+        'accepted_at': accepted_at,
+        'source_job_id': original.id,
+    })
+    runtime['manual_overrides'] = overrides[-50:]
+    payload['_workflow_runtime'] = runtime
+
+    for key in (
+        '_approval',
+        '_current_stage',
+        '_provider_wait',
+        '_quota_checked',
+        '_quota_reservation_id',
+        '_state_recovery',
+        '_auto_resume',
+        '_recreate',
+    ):
+        payload.pop(key, None)
+
+    def create():
+        resumed = new_job(
+            db,
+            request,
+            actor,
+            original.operation,
+            deployment,
+            payload,
+            retry_of=original.id,
+            attempt=original.attempt + 1,
+        )
+        db.add(JobLog(
+            job_id=original.id,
+            message=(
+                f'workflow.awx.manual_accept: step={step_id}; user={actor.user_id}; '
+                f'resume_job={resumed.id}'
+            ),
+        ))
+        db.add(JobLog(
+            job_id=resumed.id,
+            message=(
+                f'workflow.awx.manual_accept.resumed: step={step_id}; '
+                f'source_job={original.id}; terraform_apply=checkpoint_reused'
+            ),
+        ))
+        audit(
+            db,
+            request,
+            'workflow.awx.manual_accept',
+            'jobs',
+            original.id,
+            'success',
+        )
+        return job_public(resumed)
+
+    return idempotent(
+        db,
+        request,
+        actor,
+        {'job_id': original.id, 'action': 'accept_awx_onboarding', 'step_id': step_id},
+        create,
+        required=True,
+    )
 
 
 @router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)

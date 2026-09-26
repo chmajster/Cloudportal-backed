@@ -100,12 +100,23 @@
   }
 
   function requiredExecutionPermissions(item = {}) {
-    const required = new Set([
-      'blueprints.execute',
-      'jobs.execute',
-      'terraform.execute',
-      'deployments.create',
-    ]);
+    const directProxmox = item.deployment?.executor === 'proxmox';
+    const required = new Set(directProxmox
+      ? [
+          'blueprints.execute',
+          'jobs.execute',
+          'deployments.create',
+          'vms.read',
+          'vms.clone',
+          'vms.update',
+          'vms.power',
+        ]
+      : [
+          'blueprints.execute',
+          'jobs.execute',
+          'terraform.execute',
+          'deployments.create',
+        ]);
     if (item.recovery_policy === 'destroy_on_failure') required.add('deployments.destroy');
     if (item.deployment?.ansible) required.add('ansible.execute');
     const stepTypes = new Set((item.workflow || []).map(step => String(step?.type || '')));

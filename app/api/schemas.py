@@ -661,7 +661,7 @@ class DeploymentInput(Input):
     template: Slug = 'proxmox-vm'
     credentials_id: int = Field(gt=0)
     variables: dict[str, Any]
-    executor: Literal['terraform', 'opentofu'] = 'terraform'
+    executor: Literal['terraform', 'opentofu', 'proxmox'] = 'terraform'
     ansible: AnsibleInput | None = None
 
     @model_validator(mode='after')
@@ -672,7 +672,7 @@ class DeploymentInput(Input):
 
 
 class JobInput(Input):
-    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'terraform.import', 'ansible.execute']
+    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy', 'terraform.import', 'proxmox.provision', 'proxmox.destroy', 'ansible.execute']
     deployment_id: str | None = None
     ansible: AnsibleInput | None = None
 
@@ -796,7 +796,7 @@ class BlueprintDeployment(Input):
     credentials_id: int = Field(gt=0)
     template: Slug = 'proxmox-vm'
     variables: dict[str, Any]
-    executor: Literal['terraform', 'opentofu'] = 'terraform'
+    executor: Literal['terraform', 'opentofu', 'proxmox'] = 'terraform'
     ansible: AnsibleInput | None = None
     ansible_runs: Annotated[list[AnsibleInput], Field(max_length=20)] = Field(default_factory=list)
     awx: AwxOnboardingInput | None = None
@@ -940,35 +940,59 @@ class BlueprintInput(Input):
             raise ValueError('Workflow can contain exactly one terraform_apply step')
         legacy_provisioning = any(step.type in legacy_markers for step in self.workflow)
         if not apply_steps and not legacy_provisioning:
-            raise ValueError('Workflow must contain terraform_apply or a legacy provisioning marker')
+            raise ValueError('Workflow must contain terraform_apply or a provisioning marker')
 
         plan_steps = [step for step in self.workflow if step.type == 'terraform_plan']
         if len(plan_steps) > 1:
             raise ValueError('Workflow can contain at most one terraform_plan step')
-        if plan_steps and not apply_steps:
-            raise ValueError('terraform_plan requires an explicit terraform_apply step')
 
-        if apply_steps:
-            apply_id = apply_steps[0].id
-            if plan_steps and plan_steps[0].id not in ancestors(apply_id):
-                raise ValueError('terraform_plan must be an ancestor of terraform_apply')
-
+        direct_proxmox = self.deployment.executor == 'proxmox'
+        direct_create_steps = [
+            step for step in self.workflow if step.type in {'clone_vm', 'create_vm'}
+        ]
+        if direct_proxmox:
+            if self.deployment.template != 'proxmox-vm':
+                raise ValueError('Direct Proxmox provisioning requires the proxmox-vm template')
+            if apply_steps or plan_steps or any(step.type == 'terraform_destroy' for step in self.workflow):
+                raise ValueError('Direct Proxmox provisioning cannot contain Terraform plan/apply/destroy steps')
+            if len(direct_create_steps) != 1:
+                raise ValueError('Direct Proxmox provisioning requires exactly one clone_vm or create_vm step')
             if approval_steps:
-                approval_id = approval_steps[0].id
-                if approval_id not in ancestors(apply_id):
-                    raise ValueError('approval must be an ancestor of terraform_apply')
-                if plan_steps and plan_steps[0].id not in ancestors(approval_id):
-                    raise ValueError('terraform_plan must be an ancestor of approval')
-
+                raise ValueError(
+                    'Direct Proxmox provisioning uses job-level approval; an explicit approval workflow step is not supported'
+                )
+            create_id = direct_create_steps[0].id
             vm_runtime_types = {
                 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
                 'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
             }
             for step in self.workflow:
-                if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
-                    raise ValueError(f'{step.type} must depend on terraform_apply')
-        elif approval_steps:
-            raise ValueError('approval requires an explicit terraform_apply step')
+                if step.type in vm_runtime_types and create_id not in ancestors(step.id):
+                    raise ValueError(f'{step.type} must depend on the direct Proxmox VM creation step')
+        else:
+            if plan_steps and not apply_steps:
+                raise ValueError('terraform_plan requires an explicit terraform_apply step')
+            if apply_steps:
+                apply_id = apply_steps[0].id
+                if plan_steps and plan_steps[0].id not in ancestors(apply_id):
+                    raise ValueError('terraform_plan must be an ancestor of terraform_apply')
+
+                if approval_steps:
+                    approval_id = approval_steps[0].id
+                    if approval_id not in ancestors(apply_id):
+                        raise ValueError('approval must be an ancestor of terraform_apply')
+                    if plan_steps and plan_steps[0].id not in ancestors(approval_id):
+                        raise ValueError('terraform_plan must be an ancestor of approval')
+
+                vm_runtime_types = {
+                    'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+                    'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+                }
+                for step in self.workflow:
+                    if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
+                        raise ValueError(f'{step.type} must depend on terraform_apply')
+            elif approval_steps:
+                raise ValueError('approval requires an explicit terraform_apply step')
 
         return self
 

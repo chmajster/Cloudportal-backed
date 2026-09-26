@@ -25,8 +25,11 @@ class FakeContext:
         self.ansible_runs = []
         self.step_deadline = None
         self.rollback_destroyed = False
+        self.blueprint_workflow_completed = False
+        self.quota_provider_submitted = False
         self.logs = []
         self.stages = []
+        self.progress_updates = []
 
     def log(self, message):
         self.logs.append(message)
@@ -36,6 +39,9 @@ class FakeContext:
 
     def check(self):
         return None
+
+    def progress(self, percent=None, message=None, *, phase=None):
+        self.progress_updates.append((percent, message, phase))
 
 
 class FakeExecutor:
@@ -127,6 +133,60 @@ def test_blueprint_workflow_implicit_apply_preserves_legacy_clone_only_workflow(
 
     assert executor.operations == ['terraform.apply']
     assert any('implicit terraform_apply' in value for value in context.logs)
+
+
+def test_direct_proxmox_workflow_clones_configures_cloud_init_and_starts(monkeypatch):
+    steps = [
+        {'id': 'clone', 'type': 'clone_vm', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'configure', 'type': 'configure_vm', 'depends_on': ['clone'], 'retry': 0, 'timeout': 30},
+        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': ['configure'], 'retry': 0, 'timeout': 30},
+        {'id': 'start', 'type': 'start_vm', 'depends_on': ['cloud'], 'retry': 0, 'timeout': 30},
+    ]
+    context = FakeContext(steps, executor='proxmox')
+    calls = []
+
+    def clone(active, timeout):
+        calls.append(('clone', timeout))
+        active.deployment.variables['vm_id'] = 120
+        return 120
+
+    monkeypatch.setattr(worker.proxmox_provision, 'clone', clone)
+    monkeypatch.setattr(
+        worker.proxmox_provision,
+        'register_inventory',
+        lambda _context: calls.append(('inventory', 120)) or {'node': 'pve01', 'vm_id': 120},
+    )
+    monkeypatch.setattr(
+        worker.proxmox_provision,
+        'configure',
+        lambda _context, timeout: calls.append(('configure', timeout)) or True,
+    )
+    monkeypatch.setattr(
+        worker.proxmox_provision,
+        'configure_cloud_init',
+        lambda _context, guest, timeout: calls.append(('cloud_init', timeout, guest.get('username'))) or True,
+    )
+    monkeypatch.setattr(
+        worker.proxmox_provision,
+        'start',
+        lambda _context, timeout: calls.append(('start', timeout)) or True,
+    )
+    monkeypatch.setattr(
+        worker,
+        '_guest_target_credential',
+        lambda _context: {'username': 'clouduser', 'public_key': None, 'password': None},
+    )
+    monkeypatch.setattr(worker, 'persist_workflow_runtime', lambda *_args: None)
+
+    worker.run_proxmox_blueprint_workflow(context)
+
+    assert [call[0] for call in calls] == [
+        'clone', 'inventory', 'configure', 'cloud_init', 'start'
+    ]
+    assert context.blueprint_workflow_completed is True
+    assert any('workflow.step.completed:clone:clone_vm' in value for value in context.stages)
+    assert any('workflow.step.completed:start:start_vm' in value for value in context.stages)
+    assert context.progress_updates[-1] == (100, 'Provisioning VM zakończony', 'completed')
 
 
 def test_blueprint_resume_uses_completed_apply_checkpoint(monkeypatch, tmp_path):

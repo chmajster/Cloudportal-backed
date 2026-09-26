@@ -118,36 +118,64 @@ function validateWorkflow(state, editingItem) {
   if (applySteps.length > 1) fail('Workflow może zawierać dokładnie jeden krok terraform_apply.');
   const legacyProvisioning = steps.some(step => legacyMarkers.has(step.type));
   if (!applySteps.length && !legacyProvisioning) fail('Workflow musi zawierać terraform_apply lub deklaratywny krok provisioningu.');
-  if (!editingItem && applySteps.length !== 1) fail('Nowy Blueprint musi zawierać dokładnie jeden terraform_apply.');
 
   const planSteps = steps.filter(step => step.type === 'terraform_plan');
   if (planSteps.length > 1) fail('Workflow może zawierać maksymalnie jeden terraform_plan.');
-  if (planSteps.length && !applySteps.length) fail('terraform_plan wymaga terraform_apply.');
 
-  if (applySteps.length === 1) {
-    const apply = applySteps[0];
-    const applyAncestors = ancestors(apply.id);
-    if (planSteps.length && !applyAncestors.has(planSteps[0].id)) {
-      fail('terraform_plan musi być przodkiem terraform_apply.');
+  const directProxmox = state.executor === 'proxmox';
+  if (directProxmox) {
+    const terraformSteps = steps.filter(step => ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(step.type));
+    if (terraformSteps.length) {
+      fail('Tryb Proxmox API nie może zawierać kroków Terraform plan/apply/destroy.');
+    }
+    const createSteps = steps.filter(step => ['clone_vm', 'create_vm'].includes(step.type));
+    if (createSteps.length !== 1) {
+      fail('Tryb Proxmox API wymaga dokładnie jednego kroku clone_vm lub create_vm.');
     }
     if (approvalSteps.length) {
-      const approval = approvalSteps[0];
-      if (!applyAncestors.has(approval.id)) fail('approval musi być przodkiem terraform_apply.');
-      if (planSteps.length && !ancestors(approval.id).has(planSteps[0].id)) {
-        fail('terraform_plan musi być przodkiem approval.');
+      fail('Tryb Proxmox API używa akceptacji całego joba; usuń jawny krok approval.');
+    }
+    if (createSteps.length === 1) {
+      const createId = createSteps[0].id;
+      const runtimeTypes = new Set([
+        'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+        'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+      ]);
+      for (const step of steps) {
+        if (runtimeTypes.has(step.type) && !ancestors(step.id).has(createId)) {
+          fail(step.type + ' musi zależeć od bezpośredniego utworzenia VM w Proxmox.');
+        }
       }
     }
-    const runtimeTypes = new Set([
-      'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-      'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
-    ]);
-    for (const step of steps) {
-      if (runtimeTypes.has(step.type) && !ancestors(step.id).has(apply.id)) {
-        fail(step.type + ' musi zależeć od terraform_apply.');
+  } else {
+    if (!editingItem && applySteps.length !== 1) fail('Nowy Blueprint Terraform/OpenTofu musi zawierać dokładnie jeden terraform_apply.');
+    if (planSteps.length && !applySteps.length) fail('terraform_plan wymaga terraform_apply.');
+
+    if (applySteps.length === 1) {
+      const apply = applySteps[0];
+      const applyAncestors = ancestors(apply.id);
+      if (planSteps.length && !applyAncestors.has(planSteps[0].id)) {
+        fail('terraform_plan musi być przodkiem terraform_apply.');
       }
+      if (approvalSteps.length) {
+        const approval = approvalSteps[0];
+        if (!applyAncestors.has(approval.id)) fail('approval musi być przodkiem terraform_apply.');
+        if (planSteps.length && !ancestors(approval.id).has(planSteps[0].id)) {
+          fail('terraform_plan musi być przodkiem approval.');
+        }
+      }
+      const runtimeTypes = new Set([
+        'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+        'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+      ]);
+      for (const step of steps) {
+        if (runtimeTypes.has(step.type) && !ancestors(step.id).has(apply.id)) {
+          fail(step.type + ' musi zależeć od terraform_apply.');
+        }
+      }
+    } else if (approvalSteps.length) {
+      fail('approval wymaga jawnego terraform_apply.');
     }
-  } else if (approvalSteps.length) {
-    fail('approval wymaga jawnego terraform_apply.');
   }
 
   if (state.providerType !== 'proxmox') {
@@ -176,6 +204,9 @@ function validateStep(index, state, data, editingItem) {
   } else if (index === 1) {
     const provider = data.providers.find(value => String(value.id) === String(state.providerId));
     if (!provider) errors.provider = 'Wybierz platformę.';
+    if (state.executor === 'proxmox' && provider?.type !== 'proxmox') {
+      errors.executor = 'Bezpośredni tryb Proxmox API jest dostępny tylko dla providera Proxmox.';
+    }
     if (provider?.type === 'proxmox') {
       if (!state.node) errors.node = 'Wybierz docelowy node.';
       if (!state.selectedTemplateVmid) errors.template = 'Wybierz template/VM bazową.';

@@ -16,7 +16,8 @@
     site: 'Site',
   };
   const WORKFLOW_TYPES = [
-    'cloud_init', 'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
+    'clone_vm', 'create_vm', 'configure_vm', 'cloud_init', 'start_vm',
+    'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
     'wait_for_ip', 'wait_for_ssh', 'run_ansible_playbook', 'register_awx', 'create_snapshot',
     'health_check', 'condition', 'approval', 'delay', 'notification',
     'terraform_destroy',
@@ -63,14 +64,26 @@
     const steps = [];
     let previous = [];
     const add = (id, type, overrides = {}) => {
-      const defaultTimeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type) ? 3600 : type === 'wait_for_ip' ? 180 : 600;
+      const defaultTimeout = ['terraform_plan', 'terraform_apply', 'terraform_destroy'].includes(type)
+        ? 3600
+        : type === 'clone_vm' ? 7200
+          : type === 'wait_for_ip' ? 180 : 600;
       const timeout = overrides.timeout ?? defaultTimeout;
       const retry = overrides.retry ?? 0;
       steps.push({ id, type, depends_on: [...previous], conditions: {}, retry, timeout, rollback: null });
       previous = [id];
     };
-    if (options.cloudInit) add('cloud_init', 'cloud_init');
-    add('apply', 'terraform_apply');
+
+    if (options.directProxmox) {
+      add('clone', 'clone_vm');
+      add('configure', 'configure_vm');
+      if (options.cloudInit) add('cloud_init', 'cloud_init');
+      add('start', 'start_vm');
+    } else {
+      if (options.cloudInit) add('cloud_init', 'cloud_init');
+      add('apply', 'terraform_apply');
+    }
+
     if (options.waitAgent) add('agent', 'wait_for_agent');
     if (options.waitAgent || options.ansible || options.guestAccess || options.awx) add('guest_ip', 'wait_for_ip');
     if (options.guestAccess) add('guest_ssh', 'wait_for_ssh');
@@ -532,6 +545,7 @@
 
   function buildPayload(state, data) {
     const autoWorkflow = workflow({
+      directProxmox: state.providerType === 'proxmox' && state.executor === 'proxmox',
       hostname: state.hostnameEnabled,
       ipam: state.ipMode === 'ipam',
       tags: Boolean(String(state.tags || '').trim()

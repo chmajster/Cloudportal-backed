@@ -147,6 +147,11 @@ class JobOutput(Output):
     retry_of: str | None
     attempt: int
     current_stage: str | None = None
+    workflow_step_index: int | None = None
+    workflow_step_total: int = 0
+    progress_percent: float | None = None
+    progress_message: str | None = None
+    progress_phase: str | None = None
     provider_waiting: bool = False
     provider_retry_attempts: int = 0
     provider_next_retry_at: datetime | None = None
@@ -171,7 +176,7 @@ class DeploymentOutput(Output):
     updated_at: datetime
     destroyed_at: datetime | None
     active_job_id: str | None
-    executor: Literal['terraform', 'opentofu']
+    executor: Literal['terraform', 'opentofu', 'proxmox']
 
 
 class CreatedDeploymentOutput(DeploymentOutput):

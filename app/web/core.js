@@ -627,7 +627,7 @@ const STATUS_LABELS = {
   degraded: 'Ograniczony', missing: 'Brak', present: 'Dostępny', defined: 'Zdefiniowany',
   released: 'Zwolniony', reserved: 'Zarezerwowany', assigned: 'Przypisany', disabled: 'Wyłączony',
   stopped: 'Zatrzymany', started: 'Uruchomiony', available: 'Dostępny', external: 'Zewnętrzny',
-  terraform: 'Terraform', pending: 'Oczekuje', delivered: 'Dostarczony', retrying: 'Ponawianie',
+  terraform: 'Terraform', proxmox: 'Proxmox API', pending: 'Oczekuje', delivered: 'Dostarczony', retrying: 'Ponawianie',
   success: 'Sukces', failure: 'Błąd', critical: 'Krytyczny', warning: 'Ostrzeżenie', down: 'Niedostępny',
 };
 
@@ -638,6 +638,8 @@ const OPERATION_LABELS = {
   'terraform.import': 'Terraform: import',
   'ansible.execute': 'Ansible: wykonaj',
   'proxmox.clone_template': 'Proxmox: Klon VM → Template',
+  'proxmox.provision': 'Proxmox: utwórz VM',
+  'proxmox.destroy': 'Proxmox: usuń VM',
 };
 
 function statusLabel(value) {

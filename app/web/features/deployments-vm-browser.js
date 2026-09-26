@@ -140,7 +140,7 @@ function normalizedLifecycleJob(deployment, job) {
   }
   if (deploymentStatus === 'failed') return { ...job, status: 'failed' };
   if (deploymentStatus === 'cancelled') return { ...job, status: 'cancelled' };
-  if (deploymentStatus === 'destroyed' && job.operation === 'terraform.destroy') {
+  if (deploymentStatus === 'destroyed' && ['terraform.destroy', 'proxmox.destroy'].includes(job.operation)) {
     return { ...job, status: 'successful', error: null };
   }
   return job;
@@ -169,7 +169,7 @@ async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] })
 
   const latestLifecycleJobByDeployment = new Map();
   allJobs
-    .filter(item => item.deployment_id && ['terraform.apply', 'terraform.destroy'].includes(item.operation))
+    .filter(item => item.deployment_id && ['terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'].includes(item.operation))
     .sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0))
     .forEach(item => {
       if (!latestLifecycleJobByDeployment.has(item.deployment_id)) {
@@ -180,7 +180,7 @@ async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] })
   const provisioningJobForDeployment = deployment => {
     if (!deployment) return null;
     const active = deployment.active_job_id ? jobById.get(deployment.active_job_id) : null;
-    if (active && ['terraform.apply', 'terraform.destroy'].includes(active.operation)) {
+    if (active && ['terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'].includes(active.operation)) {
       return active;
     }
     return normalizedLifecycleJob(
@@ -201,7 +201,7 @@ async function composeProvisioningVms({ deployments = [], vms = [], jobs = [] })
       node: variables.node || variables.target_node || '',
       vm_id: vmId,
       name: deployment.name,
-      management_mode: 'terraform',
+      management_mode: deployment.executor === 'proxmox' ? 'proxmox' : 'terraform',
       lifecycle_status: 'provisioning',
       created_by: deployment.created_by,
       created_at: deployment.created_at,
@@ -333,15 +333,18 @@ function emptyVmState(title, description) {
 
 async function deleteVmFromCard(item, deployment, onRefresh = null) {
   const name = String(item?.name || ('VM ' + (item?.vm_id ?? '')));
-  const terraformManaged = item?.management_mode === 'terraform' && Boolean(deployment?.id);
+  const deploymentManaged = Boolean(deployment?.id)
+    && ['terraform', 'proxmox'].includes(String(item?.management_mode || ''));
 
   confirmAction(
     'Usuń VM',
-    terraformManaged
-      ? 'Terraform usunie VM „' + name + '” oraz powiązane zasoby tego wdrożenia. Operacji nie można cofnąć.'
+    deploymentManaged
+      ? (item?.management_mode === 'proxmox'
+          ? 'Proxmox API usunie VM „' + name + '” oraz zamknie powiązane wdrożenie. Operacji nie można cofnąć.'
+          : 'Terraform usunie VM „' + name + '” oraz powiązane zasoby tego wdrożenia. Operacji nie można cofnąć.')
       : 'VM „' + name + '” zostanie trwale usunięta u providera. Operacji nie można cofnąć.',
     async () => {
-      if (terraformManaged) {
+      if (deploymentManaged) {
         await api('/deployments/' + encodeURIComponent(deployment.id) + '/destroy', {
           method: 'POST',
           body: {},
@@ -369,11 +372,20 @@ async function deleteVmFromCard(item, deployment, onRefresh = null) {
   );
 }
 
+function failedAwxOnboarding(job) {
+  if (!job || String(job.status || '').toLowerCase() !== 'failed') return false;
+  if (!['terraform.apply', 'proxmox.provision'].includes(job.operation)) return false;
+  const stage = String(job.current_stage || '').trim();
+  if (!stage.startsWith('workflow.step.start:')) return false;
+  const parts = stage.slice('workflow.step.start:'.length).split(':');
+  return parts.length >= 2 && parts[0] && parts[1] === 'register_awx';
+}
+
 function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSelectionChange = null, onRefresh = null) {
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   const createdAt = deployment?.created_at || item.created_at || '';
   const provisioningJob = item.provisioning_job || null;
-  const destroyJob = provisioningJob?.operation === 'terraform.destroy';
+  const destroyJob = ['terraform.destroy', 'proxmox.destroy'].includes(provisioningJob?.operation);
   const provisioningVisible = Boolean(
     item.provisioning_placeholder
     || (provisioningJob && provisioningJob.status !== 'successful')
@@ -397,13 +409,31 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
     && !destroyInProgress;
   const canOpen = allowed('vms.read') && active && hasCommand('inventory.openVm');
   const canConsole = allowed('vms.console') && active && hasCommand('inventory.consoleVm');
+  const directProxmox = deployment?.executor === 'proxmox'
+    || provisioningJob?.operation === 'proxmox.provision'
+    || item.management_mode === 'proxmox';
+  const canRetryProvisioning = directProxmox
+    ? (
+        allowed('jobs.execute') && allowed('deployments.create') && allowed('blueprints.execute')
+        && allowed('vms.read') && allowed('vms.clone') && allowed('vms.update') && allowed('vms.power')
+      )
+    : (
+        allowed('jobs.execute') && allowed('terraform.execute')
+        && allowed('deployments.create') && allowed('blueprints.execute')
+      );
+  const canDestroyDeployment = directProxmox
+    ? (
+        allowed('deployments.destroy') && allowed('jobs.execute')
+        && allowed('vms.read') && allowed('vms.delete') && allowed('vms.power')
+      )
+    : (
+        allowed('deployments.destroy') && allowed('jobs.execute') && allowed('terraform.execute')
+      );
   const actions = [];
 
   if ((provisioningFailed || destroyFailed) && deployment && !deployment.active_job_id
       && deployment.status !== 'reconciliation_required') {
-    if (provisioningFailed
-        && allowed('jobs.execute') && allowed('terraform.execute')
-        && allowed('deployments.create') && allowed('blueprints.execute')) {
+    if (provisioningFailed && canRetryProvisioning) {
       actions.push(button('Ponów', async () => {
         await api(`/jobs/${provisioningJob.id}/retry`, { method: 'POST', idempotent: true });
         toast('Provisioning został ponowiony.');
@@ -411,12 +441,31 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
         else navigate('my-resources');
       }, 'primary'));
     }
-    if (allowed('deployments.destroy') && allowed('jobs.execute') && allowed('terraform.execute')) {
+    if (provisioningFailed
+        && failedAwxOnboarding(provisioningJob)
+        && canRetryProvisioning) {
+      actions.push(button('Onboarding OK', () => confirmAction(
+        'Potwierdź poprawny onboarding AWX',
+        'Użyj tej opcji tylko, jeśli host jest już poprawnie zarejestrowany w AWX. CloudPortal oznaczy krok AWX jako wykonany i wznowi workflow od następnego kroku. Terraform apply nie zostanie wykonany ponownie.',
+        async () => {
+          await api(`/jobs/${provisioningJob.id}/accept-awx-onboarding`, {
+            method: 'POST',
+            idempotent: true,
+          });
+          toast('Onboarding AWX oznaczono jako poprawny. Workflow został wznowiony.');
+          if (typeof onRefresh === 'function') await onRefresh();
+          else navigate('my-resources');
+        },
+      ), 'ghost'));
+    }
+    if (canDestroyDeployment) {
       actions.push(button(destroyFailed ? 'Wymuś usunięcie' : 'Usuń', () => confirmAction(
         destroyFailed ? 'Wymuś usunięcie zasobów' : 'Usuń nieudany provisioning',
         destroyFailed
-          ? 'Cloudportal wykona twarde zatrzymanie VM w Proxmox i ponowi Terraform destroy bez oczekiwania na QEMU Guest Agent.'
-          : 'Terraform usunie zasoby utworzone przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.',
+          ? 'Cloudportal wykona twarde zatrzymanie VM w Proxmox i ponowi usunięcie bez oczekiwania na QEMU Guest Agent.'
+          : (directProxmox
+              ? 'Proxmox API usunie VM utworzoną przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.'
+              : 'Terraform usunie zasoby utworzone przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.'),
         async () => {
           await api(`/deployments/${deployment.id}/destroy`, { method: 'POST', body: {}, idempotent: true });
           toast(destroyFailed
@@ -460,19 +509,17 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
   if (canRecreate) {
     actions.push(button('Odtwórz od zera', () => runCommand('inventory.recreateVm', item), 'danger'));
   }
-  const canDeleteTerraform = !provisioningVisible
-    && item.management_mode === 'terraform'
+  const canDeleteManaged = !provisioningVisible
+    && ['terraform', 'proxmox'].includes(item.management_mode)
     && Boolean(deployment?.id)
     && deployment?.status !== 'reconciliation_required'
-    && allowed('deployments.destroy')
-    && allowed('jobs.execute')
-    && allowed('terraform.execute');
+    && canDestroyDeployment;
   const canDeleteExternal = !provisioningVisible
-    && item.management_mode !== 'terraform'
+    && !['terraform', 'proxmox'].includes(item.management_mode)
     && item.lifecycle_status === 'active'
     && allowed('day2.view')
     && allowed('day2.delete');
-  if (canDeleteTerraform || canDeleteExternal) {
+  if (canDeleteManaged || canDeleteExternal) {
     actions.push(button('Usuń', () => deleteVmFromCard(item, deployment, onRefresh), 'danger'));
   }
 
@@ -481,6 +528,18 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
         ? window.JobStageUI.cell(provisioningJob)
         : node('span', { text: statusLabel(provisioningJob?.status || deployment?.status || 'queued') }))
     : null;
+  const workflowStageLabel = (
+    Number.isInteger(Number(provisioningJob?.workflow_step_index))
+    && Number(provisioningJob?.workflow_step_index) > 0
+    && Number.isInteger(Number(provisioningJob?.workflow_step_total))
+    && Number(provisioningJob?.workflow_step_total) > 0
+  )
+    ? `Etap ${Number(provisioningJob.workflow_step_index)} z ${Number(provisioningJob.workflow_step_total)}`
+    : 'Etap';
+  const progressValue = Number(provisioningJob?.progress_percent);
+  const hasProgressPercent = Number.isFinite(progressValue)
+    && progressValue >= 0 && progressValue <= 100;
+  const progressMessage = String(provisioningJob?.progress_message || '').trim();
   const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';
   const statusText = provisioningVisible
     ? (lifecycleFailed
@@ -531,8 +590,23 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
           lifecycleFailed ? 'danger' : lifecycleSuccessful ? 'ok' : 'warning'
         )),
       node('div', { class: 'my-resource-provisioning-stage' },
-        node('span', { class: 'muted', text: 'Etap' }),
+        node('span', { class: 'muted', text: workflowStageLabel }),
         stage),
+      (hasProgressPercent || progressMessage)
+        ? node('div', { class: 'my-resource-provisioning-progress' },
+            node('div', {
+              class: 'my-resource-provisioning-progress-track' + (hasProgressPercent ? '' : ' indeterminate'),
+              'aria-label': hasProgressPercent ? 'Postęp ' + Math.round(progressValue) + '%' : 'Operacja w toku',
+            },
+              node('span', {
+                style: hasProgressPercent ? 'width:' + progressValue.toFixed(1) + '%' : '',
+              })),
+            node('div', { class: 'my-resource-provisioning-progress-copy' },
+              node('span', { text: progressMessage || 'Operacja Proxmox w toku' }),
+              hasProgressPercent
+                ? node('strong', { text: Math.round(progressValue) + '%' })
+                : node('strong', { text: 'w toku' })))
+        : null,
       provisioningJob?.error
         ? node('div', { class: 'form-error my-resource-provisioning-error', text: provisioningJob.error })
         : null,

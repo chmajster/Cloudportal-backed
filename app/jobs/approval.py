@@ -15,7 +15,7 @@ def blueprint_snapshot(job, deployment=None):
 
 
 def blueprint_requires_approval(job, deployment=None):
-    return job.operation == 'terraform.apply' and bool(blueprint_snapshot(job, deployment).get('requires_approval'))
+    return job.operation in {'terraform.apply', 'proxmox.provision'} and bool(blueprint_snapshot(job, deployment).get('requires_approval'))
 
 
 def policy_approval_stages_from_effects(effects):
@@ -201,7 +201,7 @@ def approval_policy_for_job(db, job, deployment=None):
 def gate_job_for_approval(db, job, deployment=None):
     """Apply the effective Global -> Project -> Blueprint policy to Blueprint applies."""
     blueprint = blueprint_snapshot(job, deployment)
-    if job.operation != 'terraform.apply' or not blueprint.get('requires_approval'):
+    if job.operation not in {'terraform.apply', 'proxmox.provision'} or not blueprint.get('requires_approval'):
         return False
 
     config = effective_blueprint_execution_settings(

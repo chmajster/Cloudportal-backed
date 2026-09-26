@@ -1006,6 +1006,53 @@
   overflow-wrap: anywhere;
 }
 
+.my-resource-provisioning-progress {
+  display: grid;
+  gap: 5px;
+}
+.my-resource-provisioning-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.my-resource-provisioning-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width .25s ease;
+}
+.my-resource-provisioning-progress-track.indeterminate > span {
+  width: 36%;
+  animation: proxmox-progress-indeterminate 1.2s ease-in-out infinite alternate;
+}
+.my-resource-provisioning-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: .68rem;
+}
+.my-resource-provisioning-progress-copy span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.my-resource-provisioning-progress-copy strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-size: .7rem;
+}
+.job-progress-cell {
+  min-width: 190px;
+  max-width: 300px;
+}
+@keyframes proxmox-progress-indeterminate {
+  from { transform: translateX(-90%); }
+  to { transform: translateX(275%); }
+}
+
 .my-resource-card-actions .button.primary {
   flex: 1 1 140px;
 }
@@ -1112,6 +1159,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .my-resource-provisioning-progress-track.indeterminate > span {
+    animation: none;
+    width: 100%;
+    opacity: .45;
+  }
   .my-resources-summary-card,
   .my-resource-card {
     transition: none;
