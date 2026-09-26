@@ -263,15 +263,15 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       }, 'primary'));
     }
     if (allowed('deployments.destroy') && allowed('jobs.execute') && allowed('terraform.execute')) {
-      actions.push(button(destroyFailed ? 'Ponów usuwanie' : 'Usuń', () => confirmAction(
-        destroyFailed ? 'Ponów usuwanie zasobów' : 'Usuń nieudany provisioning',
+      actions.push(button(destroyFailed ? 'Wymuś usunięcie' : 'Usuń', () => confirmAction(
+        destroyFailed ? 'Wymuś usunięcie zasobów' : 'Usuń nieudany provisioning',
         destroyFailed
-          ? 'Terraform ponownie spróbuje usunąć zasoby tego wdrożenia.'
+          ? 'Cloudportal wykona twarde zatrzymanie VM w Proxmox i ponowi Terraform destroy bez oczekiwania na QEMU Guest Agent.'
           : 'Terraform usunie zasoby utworzone przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.',
         async () => {
           await api(`/deployments/${deployment.id}/destroy`, { method: 'POST', body: {}, idempotent: true });
           toast(destroyFailed
-            ? 'Utworzono ponowne zadanie usuwania zasobów.'
+            ? 'Utworzono wymuszone zadanie usuwania zasobów.'
             : 'Utworzono zadanie usuwania nieudanego provisioningu.');
           if (typeof onRefresh === 'function') await onRefresh();
           else navigate('my-resources');
