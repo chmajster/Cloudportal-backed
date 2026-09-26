@@ -189,6 +189,18 @@ def validate_authorization(db, job):
                 raise ExecutionFailed('Provider access has been revoked')
             if not reference_visible(db, 'credential', target.credentials_id, scope):
                 raise ExecutionFailed('Credential access has been revoked')
+        if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
+            try:
+                provider_id = int((job.payload or {}).get('provider_id'))
+            except (TypeError, ValueError):
+                raise ExecutionFailed('Clone-to-template provider identity is invalid') from None
+            provider = db.get(Provider, provider_id)
+            if provider is None or provider.type != 'proxmox':
+                raise ExecutionFailed('Clone-to-template provider no longer exists')
+            if not reference_visible(db, 'provider', provider.id, scope):
+                raise ExecutionFailed('Provider access has been revoked')
+            if not reference_visible(db, 'credential', provider.credentials_id, scope):
+                raise ExecutionFailed('Credential access has been revoked')
         ansible = (job.payload or {}).get('ansible') or {}
         if ansible and not reference_visible(db, 'credential', ansible.get('credentials_id'), scope):
             raise ExecutionFailed('Ansible credential access has been revoked')
@@ -224,7 +236,10 @@ def validate_authorization(db, job):
                 raise ExecutionFailed('AWX credential access has been revoked')
     except HTTPException:
         raise ExecutionFailed('Job project authorization has been revoked') from None
-    needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
+    if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
+        needed = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+    else:
+        needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
     if job.operation == 'terraform.apply':
         needed.add('deployments.create')
         blueprint = job.payload.get('blueprint') or {}
@@ -2181,7 +2196,9 @@ def _execute_unfenced(job_id):
             clear_provider_wait(job.id)
 
         context.stage('job.running')
-        if job.operation.startswith('terraform.'):
+        if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
+            execute_proxmox_clone_template(context)
+        elif job.operation.startswith('terraform.'):
             executor = OpenTofuExecutor() if context.deployment.executor == 'opentofu' else TerraformExecutor()
             blueprint = (job.payload or {}).get('blueprint') or {}
             if job.operation == 'terraform.apply' and blueprint.get('steps'):
