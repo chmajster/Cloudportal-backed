@@ -500,8 +500,6 @@ def test_policy_stage_rejects_wrong_approver():
         assert exc.status_code == 403
     else:
         raise AssertionError('Wrong approver must be rejected')
-,
-        })
 
 
 def test_access_whitelist_can_limit_one_apmid_to_dev():
