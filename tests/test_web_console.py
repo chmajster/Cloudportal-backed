@@ -293,6 +293,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Anuluj zadanie'" in script
     assert "button('Wymuś start'" in script
     assert "allowed('jobs.force')" in script
+    assert "function jobDispatchedToWorker(item)" in script
+    assert "!item.dispatched_at" in script
+    assert "!current.dispatched_at" in script
+    assert "'W kolejce workera'" in script
+    assert "'Worker · przekazano ' + formatDate(item.dispatched_at)" in script
     assert "/force-dispatch" in script
     assert "Anulowanie rozpoczęte." in script
     assert "item.status === 'cancelling'" in script
