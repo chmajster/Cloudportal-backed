@@ -267,59 +267,119 @@ function recreateVm(item) {
   );
 }
 
-function vmDetailActions(item) {
+function vmDetailActions(item, status = {}) {
   const base = vmBase(item);
-  const actions = [];
+  const runtime = vmRuntimeState(status, item);
+  const groups = {
+    power: [],
+    tools: [],
+    infrastructure: [],
+    danger: [],
+  };
+
   if (allowed('vms.power')) {
-    [
-      ['start', 'Uruchom', 'primary'],
-      ['shutdown', 'Wyłącz', 'ghost'],
-      ['reboot', 'Restart', 'ghost'],
-      ['suspend', 'Wstrzymaj', 'ghost'],
-      ['resume', 'Wznów', 'ghost'],
-      ['reset', 'Twardy reset', 'danger'],
-      ['stop', 'Wymuś stop', 'danger'],
-    ].forEach(([action, label, kind]) => actions.push(button(label, () => vmPower(item, action), kind)));
+    if (runtime === 'running') {
+      groups.power.push(
+        button('Wyłącz', () => vmPower(item, 'shutdown'), 'primary'),
+        button('Restart', () => vmPower(item, 'reboot'), 'ghost'),
+        button('Wstrzymaj', () => vmPower(item, 'suspend'), 'ghost'),
+      );
+      groups.danger.push(
+        button('Twardy reset', () => vmPower(item, 'reset'), 'danger'),
+        button('Wymuś stop', () => vmPower(item, 'stop'), 'danger'),
+      );
+    } else if (runtime === 'paused' || runtime === 'suspended') {
+      groups.power.push(button('Wznów', () => vmPower(item, 'resume'), 'primary'));
+      groups.danger.push(button('Wymuś stop', () => vmPower(item, 'stop'), 'danger'));
+    } else {
+      groups.power.push(button('Uruchom', () => vmPower(item, 'start'), 'primary'));
+    }
   }
-  if (allowed('vms.console')) actions.push(button('Konsola', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'), 'primary'));
-  if (allowed('snapshots.create')) actions.push(button('Snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new')));
-  if (allowed('backups.create')) actions.push(button('Backup', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
+
+  if (allowed('vms.console')) {
+    groups.tools.push(button('Konsola', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'), 'primary'));
+  }
+  if (allowed('snapshots.create')) {
+    groups.tools.push(button('Snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new')));
+  }
+  if (allowed('backups.create')) {
+    groups.tools.push(button('Backup', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
+  }
+
   if (allowed('vms.update')) {
-    actions.push(button('CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute')));
-    actions.push(button('Powiększ dysk', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/disk')));
+    groups.infrastructure.push(
+      button('CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute')),
+      button('Powiększ dysk', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/disk')),
+    );
   }
-  if (allowed('vms.migrate')) actions.push(button('Migracja', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/migrate')));
-  if (allowed('vms.clone')) actions.push(button('Klonuj', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/clone')));
-  if (allowed('vms.template')) actions.push(button('→ Szablon', () => confirmAction(
-    'Konwertuj do szablonu',
-    'Operacja zmieni VM w szablon.',
-    async () => {
-      const result = await api(`${base}/template`, { method: 'POST', idempotent: true });
-      await showProxmoxTask(item, result, 'Konwersja VM do szablonu');
-      return false;
-    },
-  )));
+  if (allowed('vms.migrate')) {
+    groups.infrastructure.push(button('Migracja', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/migrate')));
+  }
+  if (allowed('vms.clone')) {
+    groups.infrastructure.push(button('Klonuj', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/clone')));
+  }
+  if (allowed('vms.template')) {
+    groups.infrastructure.push(button('→ Szablon', () => confirmAction(
+      'Konwertuj do szablonu',
+      'Operacja zmieni VM w szablon.',
+      async () => {
+        const result = await api(`${base}/template`, { method: 'POST', idempotent: true });
+        await showProxmoxTask(item, result, 'Konwersja VM do szablonu');
+        return false;
+      },
+    )));
+  }
+
   const canRecreate = item.management_mode === 'terraform'
     && item.deployment_id
     && allowed('deployments.destroy')
     && allowed('deployments.create')
     && allowed('jobs.execute')
     && allowed('terraform.execute');
-  if (canRecreate) actions.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
-  if (allowed('vms.delete')) actions.push(button('Usuń VM', () => deleteVm(item), 'danger'));
-  return actions;
+  if (canRecreate) groups.danger.push(button('Odtwórz od zera', () => recreateVm(item), 'danger'));
+  if (allowed('vms.delete')) groups.danger.push(button('Usuń VM', () => deleteVm(item), 'danger'));
+
+  return groups;
 }
 
-function vmUsageBar(label, used, total, formatter = value => String(value)) {
+function vmActionGroup(title, description, actions, tone = '') {
+  if (!actions?.length) return null;
+  return node('section', { class: 'vm-action-group' + (tone ? ' ' + tone : '') },
+    node('div', { class: 'vm-action-group-copy' },
+      node('strong', { text: title }),
+      node('small', { text: description })),
+    node('div', { class: 'action-group vm-action-group-buttons' }, ...actions));
+}
+
+function vmUsagePercent(used, total) {
   const valid = Number.isFinite(Number(used)) && Number.isFinite(Number(total)) && Number(total) > 0;
-  const percent = valid ? Math.max(0, Math.min(100, Number(used) / Number(total) * 100)) : 0;
-  return node('div', { class: 'vm-usage-card' },
-    node('div', { class: 'vm-usage-heading' },
-      node('span', { text: label }),
-      node('strong', { text: valid ? `${formatter(used)} / ${formatter(total)}` : '—' })),
-    node('div', { class: 'vm-usage-track' },
-      node('span', { class: 'vm-usage-fill', style: `width:${percent.toFixed(1)}%` })),
-    node('small', { text: valid ? `${Math.round(percent)}%` : 'Brak danych' }));
+  return valid ? Math.max(0, Math.min(100, Number(used) / Number(total) * 100)) : null;
+}
+
+function vmSummaryCard(label, value, detail, percent = null) {
+  const safePercent = Number.isFinite(Number(percent)) ? Math.max(0, Math.min(100, Number(percent))) : null;
+  return node('section', { class: 'vm-summary-card' },
+    node('span', { class: 'vm-summary-label', text: label }),
+    node('strong', { class: 'vm-summary-value', text: value }),
+    safePercent === null ? null : node('div', { class: 'vm-summary-progress', 'aria-hidden': 'true' },
+      node('span', { style: `width:${safePercent.toFixed(1)}%` })),
+    node('small', { text: detail }));
+}
+
+function vmFact(label, value, mono = false) {
+  return node('div', { class: 'vm-fact' },
+    node('span', { text: label }),
+    node('strong', { class: mono ? 'mono' : '', text: value || '—' }));
+}
+
+function vmTagChips(rawTags) {
+  const tags = String(rawTags || '')
+    .split(/[;,]+/)
+    .map(value => value.trim())
+    .filter(Boolean);
+  if (!tags.length) return node('p', { class: 'muted', text: 'Brak tagów przypisanych do VM.' });
+  return node('div', { class: 'vm-tag-list' },
+    ...tags.map(tag => node('span', { class: 'vm-tag-chip mono', text: tag })));
 }
 
 function vmRuntimeState(status, item) {
@@ -346,33 +406,54 @@ function vmRuntimeStateKind(value) {
 }
 
 function vmOverviewContent(item, status) {
-  const stateValue = vmRuntimeState(status, item);
   const primaryIp = status.primary_ip || item.primary_ip || '—';
+  const cpuUsage = Number.isFinite(Number(status.cpu)) ? Math.max(0, Math.min(100, Number(status.cpu) * 100)) : null;
+  const ramUsage = vmUsagePercent(status.mem, status.maxmem);
+  const diskUsage = vmUsagePercent(status.disk, status.maxdisk);
+  const cpuCount = status.cpus ?? status.maxcpu ?? '—';
+  const ramValue = status.maxmem ? formatBytes(status.maxmem) : '—';
+  const diskValue = status.maxdisk ? formatBytes(status.maxdisk) : '—';
+
   return node('div', { class: 'vm-detail-stack' },
     node('div', { class: 'vm-overview-grid' },
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'Stan' }), badge(vmRuntimeStateLabel(stateValue), vmRuntimeStateKind(stateValue)), node('small', { text: item.node || '—' })),
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'IP' }), node('strong', { class: 'mono', text: primaryIp }), node('small', { text: primaryIp === '—' ? 'Brak adresu z inventory/QEMU Agent' : 'Adres podstawowy VM' })),
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'CPU' }), node('strong', { text: String(status.cpus ?? status.cpu ?? '—') }), node('small', { text: 'vCPU' })),
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'RAM' }), node('strong', { text: status.maxmem ? formatBytes(status.maxmem) : '—' }), node('small', { text: status.mem ? `używane ${formatBytes(status.mem)}` : 'brak telemetryki' })),
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'Dysk' }), node('strong', { text: status.maxdisk ? formatBytes(status.maxdisk) : '—' }), node('small', { text: status.disk ? `używane ${formatBytes(status.disk)}` : 'brak telemetryki' })),
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'Uptime' }), node('strong', { text: formatDuration(status.uptime) }), node('small', { text: `VMID ${item.vm_id}` })),
-      node('section', { class: 'vm-stat-card' }, node('span', { text: 'Zarządzanie' }), badge(statusLabel(item.management_mode), item.management_mode === 'terraform' ? 'ok' : 'info'), node('small', { text: item.deployment_id ? short(item.deployment_id, 20) : 'bez deploymentu' }))),
-    node('section', { class: 'panel vm-resource-panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Wykorzystanie zasobów' })),
-      node('div', { class: 'vm-usage-grid' },
-        vmUsageBar('RAM', status.mem, status.maxmem, formatBytes),
-        vmUsageBar('Dysk', status.disk, status.maxdisk, formatBytes),
-        vmUsageBar('CPU', Number(status.cpu || 0), 1, value => `${Math.round(Number(value) * 100)}%`))),
-    node('section', { class: 'panel' },
-      node('div', { class: 'panel-header' }, node('h2', { text: 'Informacje' })),
-      node('div', { class: 'checks' },
-        info('Nazwa', status.name || item.name || `VM ${item.vm_id}`),
-        info('Node', item.node || status.node || '—'),
-        info('VMID', String(item.vm_id)),
-        info('Adres IP', primaryIp),
-        info('Tagi', status.tags || '—'),
-        info('Tryb zarządzania', statusLabel(item.management_mode)),
-        info('Lifecycle', statusLabel(item.lifecycle_status)))));
+      vmSummaryCard('CPU', `${cpuCount} vCPU`,
+        cpuUsage === null ? 'Brak telemetryki użycia CPU' : `Użycie ${Math.round(cpuUsage)}%`,
+        cpuUsage),
+      vmSummaryCard('RAM', ramValue,
+        status.mem ? `${formatBytes(status.mem)} używane` : 'Brak telemetryki użycia RAM',
+        ramUsage),
+      vmSummaryCard('Dysk', diskValue,
+        status.disk ? `${formatBytes(status.disk)} używane` : 'Brak telemetryki wykorzystania dysku',
+        diskUsage),
+      vmSummaryCard('Adres IP', primaryIp,
+        primaryIp === '—' ? 'Brak adresu z inventory/QEMU Agent' : 'Adres podstawowy VM'),
+      vmSummaryCard('Uptime', formatDuration(status.uptime),
+        `${item.node || status.node || '—'} · VMID ${item.vm_id}`),
+      vmSummaryCard('Zarządzanie', statusLabel(item.management_mode),
+        item.deployment_id ? 'Deployment ' + short(item.deployment_id, 16) : 'Bez deploymentu')),
+
+    node('div', { class: 'vm-overview-lower-grid' },
+      node('section', { class: 'panel vm-facts-panel' },
+        node('div', { class: 'panel-header' },
+          node('div', {},
+            node('h2', { text: 'Szczegóły maszyny' }),
+            node('p', { class: 'muted', text: 'Tożsamość, lokalizacja i sposób zarządzania zasobem.' }))),
+        node('div', { class: 'vm-facts-grid' },
+          vmFact('Nazwa', status.name || item.name || `VM ${item.vm_id}`),
+          vmFact('Node', item.node || status.node || '—'),
+          vmFact('VMID', String(item.vm_id), true),
+          vmFact('Adres IP', primaryIp, true),
+          vmFact('Tryb zarządzania', statusLabel(item.management_mode)),
+          vmFact('Lifecycle', statusLabel(item.lifecycle_status)),
+          item.deployment_id ? vmFact('Deployment', item.deployment_id, true) : null,
+          item.provider_id ? vmFact('Provider ID', String(item.provider_id), true) : null))),
+
+      node('section', { class: 'panel vm-tags-panel' },
+        node('div', { class: 'panel-header' },
+          node('div', {},
+            node('h2', { text: 'Klasyfikacja' }),
+            node('p', { class: 'muted', text: 'Tagi synchronizowane z Proxmox i metadanymi CloudPortal.' }))),
+        vmTagChips(status.tags))));
 }
 
 function vmHardwareContent(item, status) {
@@ -741,6 +822,9 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
       onClick: () => renderTab(id),
     }, label)));
 
+    const runtimeState = vmRuntimeState(status, item);
+    const primaryIp = status.primary_ip || item.primary_ip || '—';
+    const actionGroups = vmDetailActions(item, status);
     const header = node('section', { class: 'vm-detail-header' },
       node('div', { class: 'vm-breadcrumbs' },
         node('button', { type: 'button', class: 'button link', onClick: () => navigate(returnView) }, returnLabel),
@@ -748,13 +832,28 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
         node('span', { text: item.node || 'Proxmox' }),
         node('span', { text: '/' }),
         node('strong', { text: `VM ${item.vm_id}` })),
-      node('div', { class: 'vm-title-row' },
-        node('div', {},
-          node('div', { class: 'vm-title-meta' }, badge(statusLabel(status.status || item.live?.status || 'unknown'), statusKind(status.status || item.live?.status)), badge(`VMID ${item.vm_id}`, 'info')),
-          node('p', { class: 'muted', text: `${item.node || '—'} · ${status.tags || 'bez tagów'}` })),
-        node('div', { class: 'action-group vm-detail-actions' },
-          button('Odśwież', () => showVmDetailsPage(item, activeTab, returnView)),
-          ...vmDetailActions(item))));
+
+      node('div', { class: 'vm-hero' },
+        node('div', { class: 'vm-hero-main' },
+          node('div', { class: 'vm-hero-icon', 'aria-hidden': 'true' }, appIcon('server')),
+          node('div', { class: 'vm-hero-copy' },
+            node('div', { class: 'vm-title-meta' },
+              badge(vmRuntimeStateLabel(runtimeState), vmRuntimeStateKind(runtimeState)),
+              badge(`VMID ${item.vm_id}`, 'info'),
+              badge(statusLabel(item.management_mode), item.management_mode === 'terraform' ? 'ok' : 'info')),
+            node('strong', { class: 'vm-hero-name', text: status.name || item.name || `VM ${item.vm_id}` }),
+            node('div', { class: 'vm-hero-facts' },
+              node('span', { text: item.node || status.node || '—' }),
+              node('span', { class: 'mono', text: primaryIp }),
+              item.deployment_id ? node('span', { class: 'mono', text: 'deployment ' + short(item.deployment_id, 14) }) : null))),
+        node('div', { class: 'vm-hero-actions' },
+          button('Odśwież', () => showVmDetailsPage(item, activeTab, returnView), 'ghost'))),
+
+      node('div', { class: 'vm-command-center' },
+        vmActionGroup('Zasilanie', 'Codzienne sterowanie stanem VM.', actionGroups.power),
+        vmActionGroup('Operacje', 'Konsola, snapshoty i backupy.', actionGroups.tools),
+        vmActionGroup('Infrastruktura', 'Zmiany parametrów i relokacja VM.', actionGroups.infrastructure),
+        vmActionGroup('Strefa ryzyka', 'Operacje mogące przerwać pracę lub usunąć dane.', actionGroups.danger, 'danger')));
 
     dom.content.replaceChildren(header, tabBar, tabContent);
     await renderTab(activeTab);
