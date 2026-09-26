@@ -369,6 +369,15 @@ async function deleteVmFromCard(item, deployment, onRefresh = null) {
   );
 }
 
+function failedAwxOnboarding(job) {
+  if (!job || String(job.status || '').toLowerCase() !== 'failed') return false;
+  if (job.operation !== 'terraform.apply') return false;
+  const stage = String(job.current_stage || '').trim();
+  if (!stage.startsWith('workflow.step.start:')) return false;
+  const parts = stage.slice('workflow.step.start:'.length).split(':');
+  return parts.length >= 2 && parts[0] && parts[1] === 'register_awx';
+}
+
 function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSelectionChange = null, onRefresh = null) {
   const deployment = item.deployment_id ? deploymentById.get(item.deployment_id) : null;
   const createdAt = deployment?.created_at || item.created_at || '';
@@ -410,6 +419,24 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
         if (typeof onRefresh === 'function') await onRefresh();
         else navigate('my-resources');
       }, 'primary'));
+    }
+    if (provisioningFailed
+        && failedAwxOnboarding(provisioningJob)
+        && allowed('jobs.execute') && allowed('terraform.execute')
+        && allowed('blueprints.execute')) {
+      actions.push(button('Onboarding OK', () => confirmAction(
+        'Potwierdź poprawny onboarding AWX',
+        'Użyj tej opcji tylko, jeśli host jest już poprawnie zarejestrowany w AWX. CloudPortal oznaczy krok AWX jako wykonany i wznowi workflow od następnego kroku. Terraform apply nie zostanie wykonany ponownie.',
+        async () => {
+          await api(`/jobs/${provisioningJob.id}/accept-awx-onboarding`, {
+            method: 'POST',
+            idempotent: true,
+          });
+          toast('Onboarding AWX oznaczono jako poprawny. Workflow został wznowiony.');
+          if (typeof onRefresh === 'function') await onRefresh();
+          else navigate('my-resources');
+        },
+      ), 'ghost'));
     }
     if (allowed('deployments.destroy') && allowed('jobs.execute') && allowed('terraform.execute')) {
       actions.push(button(destroyFailed ? 'Wymuś usunięcie' : 'Usuń', () => confirmAction(
