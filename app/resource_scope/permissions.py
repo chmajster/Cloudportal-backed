@@ -12,6 +12,7 @@ RESOURCE_ACTIONS = {
     'schedules': 'read create update delete',
     'providers': 'read', 'credentials': 'read test',
     'quotas': 'read manage tenant.manage',
+    'policies': 'read manage simulate audit exception.manage',
 }
 RESOURCE_PERMISSIONS = frozenset(f'{area}.{action}' for area, actions in RESOURCE_ACTIONS.items()
                                  for action in actions.split())

@@ -262,6 +262,40 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job permissions have been revoked')
     _validate_blueprint_authorization(db, job, user, permissions)
 
+    if job.operation == 'terraform.apply' and target is not None:
+        from app.policy_engine.integration import revalidate_blueprint_job
+        policy_result = revalidate_blueprint_job(db, job, user, permissions, target)
+        if policy_result:
+            if policy_result.get('decision') == 'deny':
+                reasons = [
+                    str(item.get('message') or item.get('type') or 'policy violation')
+                    for item in (policy_result.get('violations') or [])
+                ]
+                raise ExecutionFailed(
+                    'Policy authorization has been revoked'
+                    + (': ' + '; '.join(reasons[:3]) if reasons else '')
+                )
+            if policy_result.get('input_policy_drift'):
+                fields = ', '.join(sorted(policy_result['input_policy_drift']))
+                raise ExecutionFailed(
+                    'Policy changed protected provisioning inputs after the job was queued: ' + fields
+                )
+            if policy_result.get('decision') == 'approval_required':
+                from app.jobs.approval import policy_approval_signature
+
+                payload = dict(job.payload or {})
+                current_signature = policy_approval_signature(policy_result.get('approvals') or [])
+                original_signature = policy_approval_signature(
+                    ((payload.get('blueprint') or {}).get('policy_approvals')) or []
+                )
+                approval = dict(payload.get('_approval') or {})
+                policy_approval = dict(payload.get('_policy_approval') or {})
+                approved = approval.get('status') == 'approved'
+                if policy_approval:
+                    approved = approved and bool(policy_approval.get('complete'))
+                if not approved or current_signature != original_signature:
+                    raise ExecutionFailed('Current Policy Engine approval definition requires a new approval')
+
 
 def ensure_runtime_credential(credential):
     if credential is None:

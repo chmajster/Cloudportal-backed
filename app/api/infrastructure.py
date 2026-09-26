@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, update
@@ -20,7 +20,7 @@ from app.credentials.testing import test_connection
 from app.credentials.ssh import install_generated_key, scan_ssh_host_key
 from app.database import get_db
 from app.deployments.recreate import recreate_job_payload
-from app.jobs.approval import gate_job_for_approval
+from app.jobs.approval import approve_policy_stage, gate_job_for_approval
 from app.jobs.lifecycle import has_released_allocations, release_pre_execution_allocations
 from app.jobs.force_dispatch import ForceDispatchConflict, ForceDispatchUnavailable, force_dispatch_job
 from app.quotas.service import prepare_job_reservation, release_job_reservation
@@ -688,6 +688,37 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
                 raise HTTPException(409, 'Approval request has expired')
         except ValueError:
             raise HTTPException(409, 'Approval request expiry is invalid') from None
+    policy_stage = approve_policy_stage(job, actor, request.state.permissions, db=db)
+    if policy_stage is not None and not policy_stage['complete']:
+        payload = dict(job.payload or {})
+        next_stage = dict(policy_stage.get('next_stage') or {})
+        policy_config = dict(payload.get('_approval_policy') or {})
+        try:
+            timeout_hours = int(next_stage.get('timeout_hours') or policy_config.get('approval_timeout_hours') or 48)
+        except (TypeError, ValueError):
+            timeout_hours = 48
+        timeout_hours = max(1, min(720, timeout_hours))
+        requested_at = now()
+        expires_at = requested_at + timedelta(hours=timeout_hours)
+        payload['_approval'] = {
+            'status': 'pending',
+            'requested_at': requested_at.isoformat(),
+            'expires_at': expires_at.isoformat(),
+            'stage': int((payload.get('_policy_approval') or {}).get('current_stage') or 0),
+            'stage_name': next_stage.get('name'),
+        }
+        job.payload = payload
+        db.add(JobLog(job_id=job.id, message=(
+            'workflow.approval.policy.stage_approved: '
+            f"user={actor.user_id}; next_stage={next_stage.get('name')}; "
+            f'expires_at={expires_at.isoformat()}'
+        )))
+        audit(db, request, 'blueprint.execution.policy_stage_approved', 'jobs', job.id)
+        db.flush()
+        return job_public(job)
+
+    payload = dict(job.payload or {})
+    approval = dict(payload.get('_approval') or {})
     approval.update({
         'status': 'approved',
         'approved_by': actor.user_id,
