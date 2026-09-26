@@ -353,7 +353,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
 
 def revalidate_blueprint_job(db, job, user, permissions, deployment):
     """Re-evaluate current policy immediately before a persisted Blueprint job executes."""
-    if getattr(job, "operation", None) != "terraform.apply":
+    if getattr(job, "operation", None) not in {"terraform.apply", "proxmox.provision"}:
         return None
     blueprint = dict((getattr(job, "payload", {}) or {}).get("blueprint") or {})
     if not blueprint or deployment is None:
