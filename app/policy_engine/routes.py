@@ -1,6 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import select
 
 from app.api.common import Limit, Offset
 from app.database import get_db
@@ -9,8 +10,12 @@ from app.policy_engine.schemas import (
     EvaluationInput, PolicyExceptionInput, PolicyInput, PolicyRollback,
     PolicyUpdate, PreviewInput,
 )
+from app.projects.authorization import visible_projects
+from app.projects.models import Project
 from app.resource_scope.http import require
-from app.security.core import audit
+from app.security.core import audit, authenticate
+from app.tenancy.authorization import Principal, identity as scoped_identity, visible_tenants
+from app.tenancy.models import Tenant
 
 router = APIRouter(tags=["policies"])
 
@@ -46,6 +51,56 @@ def _context_from_input(request: Request, data: EvaluationInput):
 @router.get("/policies/capabilities")
 def policy_capabilities(actor=Depends(require("policies.read"))):
     return service.capabilities()
+
+
+@router.get("/policies/scopes")
+def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="function")):
+    """Return organizations/projects where the actor can manage Policy Engine rules."""
+    identity = scoped_identity(db, Principal.from_token(actor))
+
+    tenants = db.scalars(
+        select(Tenant)
+        .where(
+            visible_tenants(identity, permission="policies.manage"),
+            Tenant.status == "active",
+            Tenant.deleted_at.is_(None),
+        )
+        .order_by(Tenant.name, Tenant.id)
+    ).all()
+
+    projects = db.execute(
+        select(Project, Tenant)
+        .join(Tenant, Tenant.id == Project.tenant_id)
+        .where(
+            visible_projects(identity, permission="policies.manage"),
+            Project.status == "active",
+            Tenant.status == "active",
+            Project.deleted_at.is_(None),
+            Tenant.deleted_at.is_(None),
+        )
+        .order_by(Tenant.name, Tenant.id, Project.name, Project.id)
+    ).all()
+
+    return {
+        "global_allowed": bool(
+            identity.platform_admin and "governance.admin" in identity.global_permissions
+        ),
+        "tenants": [
+            {"id": row.id, "name": row.name, "slug": row.slug}
+            for row in tenants
+        ],
+        "projects": [
+            {
+                "id": project.id,
+                "tenant_id": tenant.id,
+                "name": project.name,
+                "slug": project.slug,
+                "tenant_name": tenant.name,
+                "tenant_slug": tenant.slug,
+            }
+            for project, tenant in projects
+        ],
+    }
 
 
 @router.post("/policies/evaluate")
