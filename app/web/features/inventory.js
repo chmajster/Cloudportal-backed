@@ -299,13 +299,17 @@ function vmActionGroup(title, description, actions, tone = '') {
 }
 
 function vmUsagePercent(used, total) {
-  const valid = Number.isFinite(Number(used)) && Number.isFinite(Number(total)) && Number(total) > 0;
-  return valid ? Math.max(0, Math.min(100, Number(used) / Number(total) * 100)) : null;
+  if (used === null || used === undefined || total === null || total === undefined) return null;
+  const numericUsed = Number(used);
+  const numericTotal = Number(total);
+  const valid = Number.isFinite(numericUsed) && Number.isFinite(numericTotal) && numericTotal > 0;
+  return valid ? Math.max(0, Math.min(100, numericUsed / numericTotal * 100)) : null;
 }
 
 function vmSummaryCard(label, value, detail, percent = null) {
-  const safePercent = Number.isFinite(Number(percent)) ? Math.max(0, Math.min(100, Number(percent))) : null;
-  return node('section', { class: 'vm-summary-card' },
+  const hasPercent = percent !== null && percent !== undefined && Number.isFinite(Number(percent));
+  const safePercent = hasPercent ? Math.max(0, Math.min(100, Number(percent))) : null;
+  return node('section', { class: 'vm-summary-card' + (safePercent === null ? '' : ' has-progress') },
     node('span', { class: 'vm-summary-label', text: label }),
     node('strong', { class: 'vm-summary-value', text: value }),
     safePercent === null ? null : node('div', { class: 'vm-summary-progress', 'aria-hidden': 'true' },
@@ -354,9 +358,11 @@ function vmRuntimeStateKind(value) {
 
 function vmOverviewContent(item, status) {
   const primaryIp = status.primary_ip || item.primary_ip || '—';
-  const cpuUsage = Number.isFinite(Number(status.cpu)) ? Math.max(0, Math.min(100, Number(status.cpu) * 100)) : null;
+  const cpuUsage = status.cpu === null || status.cpu === undefined || !Number.isFinite(Number(status.cpu))
+    ? null
+    : Math.max(0, Math.min(100, Number(status.cpu) * 100));
   const ramUsage = vmUsagePercent(status.mem, status.maxmem);
-  const diskUsage = vmUsagePercent(status.disk, status.maxdisk);
+  const diskUsage = Number(status.disk) > 0 ? vmUsagePercent(status.disk, status.maxdisk) : null;
   const cpuCount = status.cpus ?? status.maxcpu ?? '—';
   const ramValue = status.maxmem ? formatBytes(status.maxmem) : '—';
   const diskValue = status.maxdisk ? formatBytes(status.maxdisk) : '—';
@@ -367,10 +373,10 @@ function vmOverviewContent(item, status) {
         cpuUsage === null ? 'Brak telemetryki użycia CPU' : `Użycie ${Math.round(cpuUsage)}%`,
         cpuUsage),
       vmSummaryCard('RAM', ramValue,
-        status.mem ? `${formatBytes(status.mem)} używane` : 'Brak telemetryki użycia RAM',
+        ramUsage === null ? 'Brak telemetryki użycia RAM' : `${formatBytes(status.mem)} używane`,
         ramUsage),
       vmSummaryCard('Dysk', diskValue,
-        status.disk ? `${formatBytes(status.disk)} używane` : 'Brak telemetryki wykorzystania dysku',
+        diskUsage === null ? 'Brak telemetryki wykorzystania dysku' : `${formatBytes(status.disk)} używane`,
         diskUsage),
       vmSummaryCard('Adres IP', primaryIp,
         primaryIp === '—' ? 'Brak adresu z inventory/QEMU Agent' : 'Adres podstawowy VM'),
