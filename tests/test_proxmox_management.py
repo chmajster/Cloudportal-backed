@@ -269,6 +269,10 @@ def test_clone_can_schedule_automatic_template_conversion(client, headers, monke
         'clone_vm',
         lambda self, node, vmid, **kwargs: 'UPID:clone-template-route',
     )
+    monkeypatch.setattr(
+        'app.api.proxmox_management.track_proxmox_task',
+        lambda **kwargs: True,
+    )
 
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
     response = client.post(base + '/clone', headers=idem(headers), json={
