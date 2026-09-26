@@ -119,6 +119,21 @@ def _queue_clone_template_follow_up(adapter, item):
     if not target_node or target_vm_id is None:
         raise RuntimeError('Clone-to-template follow-up is missing target identity')
 
+    live = _live_vm(adapter, target_node, int(target_vm_id))
+    if int(live.get('template') or 0) == 1:
+        return {
+            'provider_id': int(item['provider_id']),
+            'node': target_node,
+            'upid': None,
+            'action': 'template',
+            'created_by': int(item['created_by']),
+            'vm_id': int(target_vm_id),
+            'target_node': None,
+            'target_vm_id': None,
+            'name': item.get('name'),
+            'convert_to_template': False,
+        }
+
     task = adapter.convert_to_template(target_node, int(target_vm_id))
     if not task:
         return {
@@ -143,10 +158,12 @@ def _queue_clone_template_follow_up(adapter, item):
         vm_id=int(target_vm_id),
         name=item.get('name'),
     )
-    # The provider mutation has already started. Never retry the conversion only
-    # because Redis tracking failed, otherwise the same clone could receive the
-    # template action twice. A later provider/inventory refresh will reconcile
-    # the resulting object even without this transient task metadata.
+    if not tracked:
+        # Keep the completed clone task metadata so the dispatcher retries
+        # reconciliation. On retry the target is checked first; once Proxmox
+        # exposes template=1 the stale ManagedVM row is removed without issuing
+        # the conversion again.
+        raise RuntimeError('Template follow-up task tracking failed')
     return None
 
 
