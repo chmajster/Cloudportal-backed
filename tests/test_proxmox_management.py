@@ -1,7 +1,7 @@
 import uuid
 
 from app.database import session
-from app.models import ManagedVM
+from app.models import Job, ManagedVM
 from app.projects.permissions import DEFAULT_PROJECT_ID
 from app.quotas.service import set_project_limit
 from app.resource_scope.authorization import Scope
@@ -303,11 +303,9 @@ def test_clone_can_schedule_automatic_template_conversion(client, headers, monke
     monkeypatch.setattr(
         ProxmoxProvider,
         'clone_vm',
-        lambda self, node, vmid, **kwargs: 'UPID:clone-template-route',
-    )
-    monkeypatch.setattr(
-        'app.api.proxmox_management.track_proxmox_task',
-        lambda **kwargs: True,
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('HTTP request must only enqueue the background job')
+        ),
     )
 
     base = f"/api/v1/providers/{provider['id']}/vms/pve01/101"
@@ -320,11 +318,26 @@ def test_clone_can_schedule_automatic_template_conversion(client, headers, monke
         'convert_to_template': True,
     })
     assert response.status_code == 202, response.text
-    assert response.json()['task'] == 'UPID:clone-template-route'
-    assert response.json()['convert_to_template'] is True
-    assert response.json()['follow_up_tracked'] is True
-    assert response.json()['target_node'] == 'pve02'
-    assert response.json()['target_vm_id'] == 405
+    payload = response.json()
+    assert payload['task'] is None
+    assert payload['background'] is True
+    assert payload['convert_to_template'] is True
+    assert payload['target_node'] == 'pve02'
+    assert payload['target_vm_id'] == 405
+    assert payload['job']['operation'] == 'proxmox.clone_template'
+    assert payload['job']['status'] == 'queued'
+
+    with session() as db:
+        job = db.get(Job, payload['job']['id'])
+        assert job is not None
+        assert job.operation == 'proxmox.clone_template'
+        assert job.payload['provider_id'] == provider['id']
+        assert job.payload['source_node'] == 'pve01'
+        assert job.payload['source_vm_id'] == 101
+        assert job.payload['target_node'] == 'pve02'
+        assert job.payload['target_vm_id'] == 405
+        assert job.payload['name'] == 'golden-template'
+        assert job.payload['storage'] == 'local-lvm'
 
     same_id = client.post(base + '/clone', headers=idem(headers), json={
         'new_vm_id': 101,
