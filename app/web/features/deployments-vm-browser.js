@@ -508,6 +508,14 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
         ? window.JobStageUI.cell(provisioningJob)
         : node('span', { text: statusLabel(provisioningJob?.status || deployment?.status || 'queued') }))
     : null;
+  const workflowStageLabel = (
+    Number.isInteger(Number(provisioningJob?.workflow_step_index))
+    && Number(provisioningJob?.workflow_step_index) > 0
+    && Number.isInteger(Number(provisioningJob?.workflow_step_total))
+    && Number(provisioningJob?.workflow_step_total) > 0
+  )
+    ? `Etap ${Number(provisioningJob.workflow_step_index)} z ${Number(provisioningJob.workflow_step_total)}`
+    : 'Etap';
   const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';
   const statusText = provisioningVisible
     ? (lifecycleFailed
@@ -558,7 +566,7 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
           lifecycleFailed ? 'danger' : lifecycleSuccessful ? 'ok' : 'warning'
         )),
       node('div', { class: 'my-resource-provisioning-stage' },
-        node('span', { class: 'muted', text: 'Etap' }),
+        node('span', { class: 'muted', text: workflowStageLabel }),
         stage),
       provisioningJob?.error
         ? node('div', { class: 'form-error my-resource-provisioning-error', text: provisioningJob.error })
