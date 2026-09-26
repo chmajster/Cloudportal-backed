@@ -388,7 +388,7 @@ def test_failed_workflow_rollback_destroy_marks_deployment_destroyed(client, hea
         lambda self, operation, context: operations.append(operation) or workspace,
     )
     monkeypatch.setattr(
-        'app.jobs.worker.provider_for',
+        'app.jobs.proxmox_destroy.provider_for',
         lambda credential: SimpleNamespace(
             vm_status=lambda node, vm_id: {'status': 'stopped'},
         ),

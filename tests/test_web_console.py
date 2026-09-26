@@ -222,7 +222,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "sekcji „Moje zasoby” w menu bocznym" in script
     assert "function productResourceTabs(" not in script
     assert "'aria-label': 'Produkty i zasoby'" not in script
-    assert "function myResourcesView(repairInventory = true)" in script
+    assert "function myResourcesView(repairInventory = true, refreshLive = repairInventory)" in script
     assert "api('/inventory/reconcile', { method: 'POST', body: {} })" in script
     assert "Odbudowano inventory dla " in script
     assert "function resourceSummaryCard(" in script

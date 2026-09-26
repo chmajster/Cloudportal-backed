@@ -284,6 +284,7 @@ def test_executor_selects_native_media_and_keeps_password_out_of_terraform(tmp_p
     monkeypatch.setattr(terraform, 'execution_environment', lambda workspace: {'PATH': '/usr/bin'})
     monkeypatch.setattr(terraform, 'distributed_deployment_lock', lambda deployment: nullcontext())
     monkeypatch.setattr(terraform, 'restore_state', lambda *args: False)
+    monkeypatch.setattr(terraform, 'reserve_proxmox_vm_id', lambda *args, **kwargs: 321)
     monkeypatch.setattr(terraform, 'decrypt_secret', lambda credential: {'token_id': 'api@pve!test', 'token_secret': 'provider-secret'})
     monkeypatch.setattr(terraform, 'prepare_qemu_bootstrap', lambda *args: pytest.fail('Native Cloud-init must never create an SSH bootstrap account'))
     resolved = []
