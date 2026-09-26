@@ -372,6 +372,49 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
     if data.convert_to_template and not data.full:
         raise HTTPException(422, 'Automatic clone-to-template conversion requires a full clone')
 
+    if data.convert_to_template:
+        def enqueue():
+            from app.api.infrastructure import job_public, new_job
+
+            # Validate the provider/credential before accepting a durable background job.
+            adapter(db, provider_id)
+            payload = {
+                'provider_id': provider_id,
+                'source_node': node,
+                'source_vm_id': int(vmid),
+                'target_node': data.target or node,
+                'target_vm_id': data.new_vm_id,
+                'name': data.name,
+                'storage': data.storage,
+                'pool': data.pool,
+                'full': True,
+            }
+            job = new_job(
+                db,
+                request,
+                actor,
+                'proxmox.clone_template',
+                None,
+                payload,
+            )
+            audit(
+                db,
+                request,
+                'vm.clone_to_template_queued',
+                'jobs',
+                job.id,
+            )
+            return {
+                'job': job_public(job),
+                'task': None,
+                'background': True,
+                'convert_to_template': True,
+                'target_node': data.target or node,
+                'target_vm_id': data.new_vm_id,
+            }
+
+        return idempotent(db, request, actor, data.model_dump(), enqueue, required=True)
+
     def execute():
         task = adapter(db, provider_id).clone_vm(
             node,
@@ -383,7 +426,7 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
             storage=data.storage,
             pool=data.pool,
         )
-        tracked = track_proxmox_task(
+        track_proxmox_task(
             provider_id=provider_id,
             node=node,
             upid=task,
@@ -393,19 +436,18 @@ def clone_vm(provider_id: int, node: NODE, vmid: VMID, data: CloneVMInput, reque
             target_vm_id=data.new_vm_id,
             name=data.name,
             created_by=actor.user_id,
-            convert_to_template=data.convert_to_template,
         )
         audit(
             db,
             request,
-            'vm.clone_to_template_started' if data.convert_to_template else 'vm.cloned',
+            'vm.cloned',
             'vms',
             f'{provider_id}:{node}:{vmid}->{data.new_vm_id}',
         )
         return {
             **task_result(task),
-            'convert_to_template': data.convert_to_template,
-            'follow_up_tracked': bool(tracked) if data.convert_to_template else None,
+            'convert_to_template': False,
+            'follow_up_tracked': None,
             'target_node': data.target or node,
             'target_vm_id': data.new_vm_id,
         }

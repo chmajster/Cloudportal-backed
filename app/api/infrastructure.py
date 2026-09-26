@@ -501,13 +501,16 @@ def playbook_source(id: str, actor=Depends(require('ansible.read')), db=Depends(
 
 
 def check_job_permissions(request, operation):
-    required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
-    if operation == 'terraform.destroy':
-        required.add('deployments.destroy')
-    if operation == 'terraform.import':
-        required.add('deployments.adopt')
-    if operation == 'terraform.apply':
-        required.add('deployments.create')
+    if operation == 'proxmox.clone_template':
+        required = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+    else:
+        required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
+        if operation == 'terraform.destroy':
+            required.add('deployments.destroy')
+        if operation == 'terraform.import':
+            required.add('deployments.adopt')
+        if operation == 'terraform.apply':
+            required.add('deployments.create')
     if not required <= request.state.permissions:
         raise HTTPException(403, 'Missing execution or deployment permissions')
 

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-const REQUIRED_PERMISSIONS = ['providers.read', 'vms.read', 'vms.clone', 'vms.template'];
+const REQUIRED_PERMISSIONS = ['providers.read', 'vms.read', 'vms.clone', 'vms.template', 'jobs.execute'];
 
 function toolMetaItem(label, value, mono = false) {
   return node('div', { class: 'tool-meta-item' },
@@ -78,51 +78,6 @@ function cloneTemplateToolCard() {
         node('span', { class: 'status-dot ok' }),
         'Oryginalny VMID nie jest konwertowany'),
       button('Utwórz template z klona', () => navigate('proxmox-template-clone'), 'primary'))
-  );
-}
-
-async function waitProxmoxTask(providerId, nodeName, upid, onPoll, timeoutMs = 60 * 60 * 1000) {
-  if (!upid) return { status: 'stopped', exitstatus: 'OK' };
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const task = await api(
-      '/providers/' + encodeURIComponent(providerId)
-      + '/tasks/' + encodeURIComponent(nodeName)
-      + '/' + encodeURIComponent(String(upid))
-    );
-    if (typeof onPoll === 'function') onPoll(task);
-    const stopped = String(task.status || '').toLowerCase() === 'stopped' || Boolean(task.exitstatus);
-    if (stopped) {
-      if (String(task.exitstatus || '') !== 'OK') {
-        throw new Error('Task Proxmox zakończył się błędem: ' + (task.exitstatus || 'nieznany błąd'));
-      }
-      return task;
-    }
-    await new Promise(resolve => window.setTimeout(resolve, 2000));
-  }
-  throw new Error('Przekroczono czas oczekiwania na task Proxmox.');
-}
-
-async function waitForTemplate(providerId, nodeName, targetVmid, onPoll, timeoutMs = 20 * 60 * 1000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const status = await api(
-        '/providers/' + encodeURIComponent(providerId)
-        + '/vms/' + encodeURIComponent(nodeName)
-        + '/' + encodeURIComponent(targetVmid)
-        + '/status'
-      );
-      if (Number(status.template || 0) === 1) return status;
-    } catch {
-      // Clone/template may briefly be absent while Proxmox finalizes the task.
-    }
-    if (typeof onPoll === 'function') onPoll();
-    await new Promise(resolve => window.setTimeout(resolve, 3000));
-  }
-  throw new Error(
-    'Klon został utworzony, ale nie potwierdzono konwersji do template w wymaganym czasie. '
-    + 'Sprawdź VMID ' + targetVmid + ' bezpośrednio w Proxmox.'
   );
 }
 
@@ -352,12 +307,11 @@ async function proxmoxTemplateCloneView() {
     }
 
     runButton.disabled = true;
-    let cloneFinished = false;
     try {
-      setBadge(stepClone, '1. Klonowanie', 'warning');
-      setBadge(stepConvert, '2. Oczekuje', 'info');
-      setBadge(stepVerify, '3. Oczekuje', 'info');
-      detail.textContent = 'Źródłowa VM pozostaje bez zmian. Tworzę pełny klon VMID ' + targetVmid + '…';
+      setBadge(stepClone, '1. Kolejka', 'warning');
+      setBadge(stepConvert, '2. W zadaniu', 'info');
+      setBadge(stepVerify, '3. W zadaniu', 'info');
+      detail.textContent = 'Tworzę zadanie w tle. Po zapisaniu cały postęp będzie widoczny w Zadaniach.';
 
       const result = await api(
         '/providers/' + encodeURIComponent(state.providerId)
@@ -379,61 +333,18 @@ async function proxmoxTemplateCloneView() {
         }
       );
 
-      await waitProxmoxTask(
-        state.providerId,
-        source.node,
-        result.task,
-        task => {
-          detail.textContent = 'Klonowanie: ' + statusLabel(task.status || 'running')
-            + (task.exitstatus ? ' · ' + task.exitstatus : '');
-        }
-      );
-      cloneFinished = true;
-      setBadge(stepClone, '1. Klon gotowy', 'ok');
-      setBadge(stepConvert, '2. Konwersja', 'warning');
-
-      if (result.follow_up_tracked === false) {
-        detail.textContent = 'Backend nie zapisał follow-upu w kolejce. Kończę konwersję bezpośrednio z tego widoku.';
-        const templateTask = await api(
-          '/providers/' + encodeURIComponent(state.providerId)
-          + '/vms/' + encodeURIComponent(targetNode)
-          + '/' + encodeURIComponent(targetVmid)
-          + '/template',
-          { method: 'POST', idempotent: true }
-        );
-        await waitProxmoxTask(state.providerId, targetNode, templateTask.task);
-      }
-
-      detail.textContent = 'Klon jest gotowy. Backend konwertuje VMID ' + targetVmid + ' do template…';
-      await waitForTemplate(state.providerId, targetNode, targetVmid, () => {
-        detail.textContent = 'Oczekiwanie na pojawienie się template VMID ' + targetVmid + ' w Proxmox…';
-      });
-      setBadge(stepConvert, '2. Template gotowy', 'ok');
-
-      const originalStatus = await api(
-        '/providers/' + encodeURIComponent(state.providerId)
-        + '/vms/' + encodeURIComponent(source.node)
-        + '/' + encodeURIComponent(source.vmid)
-        + '/status'
-      );
-      if (Number(originalStatus.template || 0) === 1) throw new Error(
-        'Template został utworzony, ale źródłowy VMID ' + source.vmid + ' nie jest już zwykłą VM.'
-      );
-
-      await loadProvider();
-      setBadge(stepClone, '1. Klon gotowy', 'ok');
-      setBadge(stepConvert, '2. Template gotowy', 'ok');
-      setBadge(stepVerify, '3. Oryginał dostępny', 'ok');
-      detail.textContent = 'Gotowe. Template VMID ' + targetVmid
-        + ' utworzony z pełnego klona. Oryginalna VMID ' + source.vmid
-        + ' nadal istnieje i nie została przekonwertowana.';
-      toast('Template utworzony z klona. Oryginalna VM pozostała dostępna.');
+      if (!result.job?.id) throw new Error('Backend nie zwrócił identyfikatora zadania.');
+      setBadge(stepClone, '1. Dodano do kolejki', 'ok');
+      setBadge(stepConvert, '2. Śledź w Zadaniach', 'info');
+      setBadge(stepVerify, '3. Śledź w Zadaniach', 'info');
+      detail.textContent = 'Zadanie ' + short(result.job.id, 18)
+        + ' działa w tle. Możesz opuścić ten widok; klonowanie, konwersja i weryfikacja będą kontynuowane przez workera.';
+      toast('Klon VM → Template dodano do zadań.');
+      navigate('jobs');
     } catch (error) {
-      if (cloneFinished) setBadge(stepConvert, '2. Wymaga sprawdzenia', 'danger');
-      else setBadge(stepClone, '1. Błąd', 'danger');
+      setBadge(stepClone, '1. Błąd kolejki', 'danger');
       detail.textContent = error.message;
       toast(error.message, 'error');
-    } finally {
       runButton.disabled = false;
     }
   }, 'primary');
