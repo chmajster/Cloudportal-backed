@@ -2600,7 +2600,7 @@ def _execute_unfenced(job_id):
         blueprint = (current.payload or {}).get('blueprint') or {}
         if (
             status == 'failed'
-            and current.operation == 'terraform.apply'
+            and current.operation in {'terraform.apply', 'proxmox.provision'}
             and current.source != 'Recovery'
             and current.deployment_id
             and blueprint.get('recovery_policy') == 'destroy_on_failure'
@@ -2608,9 +2608,14 @@ def _execute_unfenced(job_id):
         ):
             deployment = db.get(Deployment, current.deployment_id)
             if owns_deployment and deployment is not None and deployment.active_job_id is None:
+                recovery_operation = (
+                    'proxmox.destroy'
+                    if current.operation == 'proxmox.provision'
+                    else 'terraform.destroy'
+                )
                 recovery = Job(
                     id=str(uuid.uuid4()),
-                    operation='terraform.destroy',
+                    operation=recovery_operation,
                     deployment_id=deployment.id,
                     payload={'previous_status': 'failed', 'recovery_of': current.id},
                     created_by=current.created_by,
