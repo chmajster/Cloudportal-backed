@@ -329,6 +329,8 @@ def _dispatch_once_unfenced():
     q = queue()
     with session() as db:
         acquire_dispatch_capacity_lock(db)
+        from app.dcst.service import materialize_periodic_reconciliation
+        materialize_periodic_reconciliation(db)
         expire_waiting_approvals(db)
         jobs = db.scalars(
             select(Job)
@@ -361,7 +363,17 @@ def _dispatch_once_unfenced():
                 break
             if job.id in active_rq_jobs or not provider_retry_ready(job):
                 continue
-            worker_target = 'app.day2.worker.execute' if job.operation.startswith('day2.') else 'app.jobs.worker.execute'
+            dependency_id = (job.payload or {}).get('_depends_on_job_id')
+            if dependency_id:
+                dependency = db.get(Job, dependency_id)
+                if dependency is not None and dependency.status not in {'successful', 'failed', 'cancelled'}:
+                    continue
+            if job.operation.startswith('day2.'):
+                worker_target = 'app.day2.worker.execute'
+            elif job.operation.startswith('dcst.'):
+                worker_target = 'app.dcst.worker.execute'
+            else:
+                worker_target = 'app.jobs.worker.execute'
             q.enqueue(worker_target, job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)
             job.dispatched_at = now()
