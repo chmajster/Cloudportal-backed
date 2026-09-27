@@ -291,12 +291,6 @@
               delete state.hostnameValues.environment;
             }
             state.tags = root.querySelector('[name="tags"]')?.value.trim() || '';
-            state.sshUsername = root.querySelector('[name="ssh_username"]')?.value.trim() || 'clouduser';
-            state.sshPublicKey = root.querySelector('[name="ssh_public_key"]')?.value.trim() || '';
-            const guestCredential = root.querySelector('[name="guest_credential_id"]');
-            if (guestCredential) state.guestCredentialId = guestCredential.value;
-            const templateGuestCredential = root.querySelector('[name="template_guest_credential_id"]');
-            if (templateGuestCredential) state.templateGuestCredentialId = templateGuestCredential.value;
           } else {
             root.querySelectorAll('[data-generic-variable]').forEach(input => {
               const template = data.templates.find(value => value.id === state.terraformTemplateId);
@@ -316,8 +310,24 @@
         } else if (state.step === 6) {
           const cloudAccountMode = root.querySelector('[name="cloud_init_guest_account_mode"]');
           if (cloudAccountMode) state.guestAccountMode = cloudAccountMode.value;
-          const cloudCredential = root.querySelector('[name="cloud_init_guest_credential_id"]');
-          if (cloudCredential) state.guestCredentialId = cloudCredential.value;
+          const cloudCredential = root.querySelector('[name="cloud_init_access_credential_id"]');
+          if (cloudCredential) {
+            if (state.guestAccountMode === 'existing_template') {
+              state.templateGuestCredentialId = cloudCredential.value;
+              state.guestCredentialId = '';
+            } else {
+              state.guestCredentialId = cloudCredential.value;
+              state.templateGuestCredentialId = '';
+            }
+          }
+          const cloudUsername = root.querySelector('[name="cloud_init_ssh_username"]');
+          if (cloudUsername && !cloudUsername.disabled) {
+            state.sshUsername = cloudUsername.value.trim() || 'clouduser';
+          }
+          const cloudPublicKey = root.querySelector('[name="cloud_init_ssh_public_key"]');
+          if (cloudPublicKey && !cloudPublicKey.disabled) {
+            state.sshPublicKey = cloudPublicKey.value.trim();
+          }
           state.installQemuGuestAgent = root.querySelector('[name="install_qemu_guest_agent"]')?.checked ?? state.installQemuGuestAgent;
           state.waitAgent = root.querySelector('[name="wait_agent"]')?.checked ?? state.waitAgent;
           state.advancedWorkflow = root.querySelector('[name="advanced_workflow"]')?.checked ?? state.advancedWorkflow;
@@ -656,73 +666,70 @@
           value: value.iface,
           label: value.iface + (value.type ? ' [' + value.type + ']' : ''),
         }));
+
         const fields = node('div', { class: 'form-grid' },
           field('CPU', 'cpu', { type: 'number', min: 1, max: 128, value: state.cpu, required: true }),
           field('RAM (MiB)', 'memory', { type: 'number', min: 512, max: 1048576, value: state.memory, required: true }),
           field('Dysk (GiB)', 'disk', { type: 'number', min: 1, max: 65536, value: state.disk, required: true }),
           field('VLAN ID (opcjonalnie)', 'vlan_id', { type: 'number', min: 1, max: 4094, value: state.vlanId }),
           selectField('Storage', 'storage', storageChoices, state.storage, { required: true, placeholder: 'Wybierz storage' }),
-          selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' }),
-          !state.selectEnvironmentOnExecute
-            ? selectField('Environment', 'environment',
-                ['test', 'dev', 'nonprod', 'prod']
-                  .filter(name => data.vmClassification?.environments?.[name] !== false)
-                  .map(name => ({ value: name, label: name.toUpperCase() })),
-                state.environment, { required: true, placeholder: 'Brak włączonych Environment' })
-            : null,
-          !state.selectApmidOnExecute
-            ? ((data.vmClassification?.apmids || []).length
-                ? selectField('APMID', 'apmid',
-                    data.vmClassification.apmids.map(value => ({ value, label: value })),
-                    state.apmid, { required: true, placeholder: 'Wybierz APMID' })
-                : field('APMID', 'apmid', {
-                    value: state.apmid,
-                    required: true,
-                    placeholder: 'IAASTEAM',
-                    help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
-                  }))
-            : null
+          selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' })
         );
-
-        const guestCredentialChoices = window.BlueprintProvisioningGuards.guestCredentialChoices(
-          data.credentials || []
-        );
-        const templateGuestCredentialField = selectField(
-          'Istniejące konto lokalne w template',
-          'template_guest_credential_id',
-          [
-            { value: '', label: 'Nie używaj predefiniowanego konta z template' },
-            ...guestCredentialChoices,
-          ],
-          state.templateGuestCredentialId,
-          {
-            wide: true,
-            help: guestCredentialChoices.length
-              ? 'Wybierz Credential SSH opisujący konto, które już istnieje w bazowej VM/template. Cloudportal nie tworzy ani nie nadpisuje tego konta. Credential będzie używany do uwierzytelnionych kroków SSH po uruchomieniu VM i może zostać ponownie wykorzystany przez dalszą automatyzację.'
-              : 'Brak dostępnych Credentiali SSH dla istniejącego konta w template.',
-          }
-        );
-        templateGuestCredentialField.querySelector('select').addEventListener('change', event => {
-          state.templateGuestCredentialId = event.currentTarget.value;
+        fields.querySelectorAll('input,select').forEach(control => {
+          control.addEventListener('input', () => {
+            saveStateFromInput(control);
+            if (['cpu', 'memory', 'disk'].includes(control.name)) state.preset = 'custom';
+          });
+          control.addEventListener('change', () => {
+            saveStateFromInput(control);
+            if (['cpu', 'memory', 'disk'].includes(control.name)) state.preset = 'custom';
+          });
         });
 
-        const guestCredentialField = selectField(
-          'Konto zarządzane przez Cloud-init',
-          'guest_credential_id',
-          [
-            { value: '', label: 'Nie zmieniaj konta przez Cloud-init' },
-            ...guestCredentialChoices,
-          ],
-          state.guestCredentialId,
-          {
-            wide: true,
-            help: guestCredentialChoices.length
-              ? 'Cloud-init utworzy albo zaktualizuje użytkownika z wybranego Credentiala. Aby użyć istniejącego konta z template i jednocześnie zaktualizować je przez Cloud-init, wybierz ten sam Credential w obu polach.'
-              : 'Brak credentiali SSH z hasłem lub kluczem prywatnym dostępnych dla Cloud-init.',
-          }
+        const vmParameters = node('section', { class: 'blueprint-wizard-inline-panel wide' },
+          node('div', { class: 'blueprint-wizard-section-heading wide' },
+            node('strong', { text: 'Parametry VM' }),
+            node('span', { class: 'muted', text: 'Zasoby obliczeniowe, dysk, storage i podłączenie sieciowe maszyny.' })),
+          fields
         );
-        guestCredentialField.querySelector('select').addEventListener('change', event => {
-          state.guestCredentialId = event.currentTarget.value;
+
+        const environmentField = !state.selectEnvironmentOnExecute
+          ? selectField('Environment', 'environment',
+              ['test', 'dev', 'nonprod', 'prod']
+                .filter(name => data.vmClassification?.environments?.[name] !== false)
+                .map(name => ({ value: name, label: name.toUpperCase() })),
+              state.environment, { required: true, placeholder: 'Brak włączonych Environment' })
+          : null;
+        const apmidField = !state.selectApmidOnExecute
+          ? ((data.vmClassification?.apmids || []).length
+              ? selectField('APMID', 'apmid',
+                  data.vmClassification.apmids.map(value => ({ value, label: value })),
+                  state.apmid, { required: true, placeholder: 'Wybierz APMID' })
+              : field('APMID', 'apmid', {
+                  value: state.apmid,
+                  required: true,
+                  placeholder: 'IAASTEAM',
+                  help: 'Brak zapisanych APMID w Ustawieniach — możesz podać wartość ręcznie.',
+                }))
+          : null;
+        const classificationValues = node('div', { class: 'form-grid wide' },
+          environmentField,
+          apmidField
+        );
+        classificationValues.querySelectorAll('input,select').forEach(control => {
+          control.addEventListener('input', () => {
+            saveStateFromInput(control);
+          });
+          control.addEventListener('change', () => {
+            saveStateFromInput(control);
+            if (control.name === 'environment') {
+              state.environment = control.value;
+              state.hostnameValues.env = control.value;
+              state.hostnameValues.environment = control.value;
+            }
+            if (control.name === 'apmid') state.apmid = String(control.value || '').trim().toUpperCase();
+            render();
+          });
         });
 
         const runtimeEnvironment = checkboxField(
@@ -735,10 +742,15 @@
           'select_apmid_on_execute',
           state.selectApmidOnExecute
         );
-        const runtimeClassification = node('div', { class: 'blueprint-wizard-inline-panel wide' },
+        const classificationPanel = node('section', { class: 'blueprint-wizard-inline-panel wide' },
           node('div', { class: 'blueprint-wizard-section-heading wide' },
-            node('strong', { text: 'Parametry wybierane przy użyciu Blueprintu' }),
-            node('span', { class: 'muted', text: 'Włącz pola, które użytkownik ma wybrać dopiero podczas tworzenia VM z gotowego Blueprintu.' })),
+            node('strong', { text: 'Klasyfikacja VM' }),
+            node('span', { class: 'muted', text: 'Organizacja i projekt pochodzą ze scope Blueprintu. APMID i Environment mogą być stałe albo wybierane przy uruchomieniu.' })),
+          node('div', { class: 'blueprint-wizard-info wide' },
+            node('strong', { text: 'Scope' }),
+            node('span', { text: 'Organizacja: ' + blueprintScope.tenantLabel(state.tenantId)
+              + ' · Projekt: ' + blueprintScope.projectLabel(state.projectId) })),
+          classificationValues,
           runtimeEnvironment,
           runtimeApmid
         );
@@ -770,64 +782,50 @@
           });
         });
 
-        fields.querySelectorAll('input,select').forEach(control => {
-          control.addEventListener('input', () => {
-            saveStateFromInput(control);
-            if (['cpu', 'memory', 'disk'].includes(control.name)) state.preset = 'custom';
-          });
-          control.addEventListener('change', () => {
-            saveStateFromInput(control);
-            if (control.name === 'environment') {
-              state.environment = control.value;
-              state.hostnameValues.env = control.value;
-              state.hostnameValues.environment = control.value;
-            }
-            if (control.name === 'apmid') state.apmid = String(control.value || '').trim().toUpperCase();
-            if (['environment', 'apmid'].includes(control.name)) render();
-          });
+        const normalizeTagPart = value => String(value || '')
+          .normalize('NFKD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9_.-]+/g, '-')
+          .replace(/^[.-]+|[.-]+$/g, '')
+          .slice(0, 48);
+        const tenant = (data.tenants || []).find(value => String(value.id) === String(state.tenantId));
+        const project = (data.projects || []).find(value => String(value.id) === String(state.projectId));
+        const automaticTags = [
+          'managed-by-cloudportal',
+          'tenant-' + (normalizeTagPart(tenant?.slug || tenant?.name || state.tenantId) || 'scope'),
+          'project-' + (normalizeTagPart(project?.slug || project?.name || state.projectId) || 'scope'),
+          'blueprint-' + (normalizeTagPart(state.slug) || 'po-zapisie'),
+          'deployment-<generowany-przy-wdrożeniu>',
+          state.selectApmidOnExecute
+            ? 'apmid-<wybierany-przy-uruchomieniu>'
+            : (state.apmid ? 'apmid-' + normalizeTagPart(state.apmid) : null),
+          state.selectEnvironmentOnExecute
+            ? 'env-<wybierany-przy-uruchomieniu>'
+            : (state.environment ? 'env-' + normalizeTagPart(state.environment) : null),
+          (!state.selectApmidOnExecute && !state.selectEnvironmentOnExecute && state.apmid && state.environment)
+            ? normalizeTagPart(state.apmid) + '.' + normalizeTagPart(state.environment)
+            : null,
+        ].filter(Boolean);
+        const additionalTagsField = field('Dodatkowe tagi Proxmox', 'tags', {
+          value: state.tags,
+          wide: true,
+          placeholder: 'linux, web, nginx',
+          help: 'Wpisuj wyłącznie tagi dodatkowe. Tagi systemowe, scope oraz klasyfikacji są generowane automatycznie i backend traktuje je jako autorytatywne.',
         });
-
-        const sshCredentialUsers = [];
-        const seenSshCredentialUsers = new Set();
-        (data.credentials || []).forEach(value => {
-          if (value.type !== 'ssh') return;
-          const username = String(value.username || '').trim();
-          if (!username || seenSshCredentialUsers.has(username)) return;
-          seenSshCredentialUsers.add(username);
-          sshCredentialUsers.push({
-            username,
-            credentialName: value.name || ('Credential #' + value.id),
-          });
+        additionalTagsField.querySelector('input').addEventListener('input', event => {
+          state.tags = event.currentTarget.value;
         });
-        const sshUsernameField = field('Użytkownik SSH', 'ssh_username', {
-          value: state.sshUsername || 'clouduser',
-          help: sshCredentialUsers.length
-            ? 'Możesz wpisać login ręcznie albo wybrać użytkownika z zapisanych Credentiali.'
-            : 'Brak użytkowników SSH w zapisanych Credentialach — wpisz login ręcznie.',
-        });
-        const sshUsernameInput = sshUsernameField.querySelector('input');
-        if (sshUsernameInput && sshCredentialUsers.length) {
-          const sshUsersListId = 'blueprint-wizard-ssh-credential-users';
-          sshUsernameInput.setAttribute('list', sshUsersListId);
-          sshUsernameInput.setAttribute('autocomplete', 'off');
-          sshUsernameField.append(node('datalist', { id: sshUsersListId },
-            ...sshCredentialUsers.map(value => node('option', {
-              value: value.username,
-              label: value.credentialName,
-            }))));
-        }
-
-        const advanced = node('details', { class: 'advanced-options' },
-          node('summary', { text: 'Zaawansowane parametry VM' }),
-          node('div', { class: 'advanced-options-body form-grid' },
-            field('Tagi Proxmox', 'tags', {
-              value: state.tags, wide: true, placeholder: 'linux, production, web',
-            }),
-            sshUsernameField,
-            field('Klucz publiczny SSH', 'ssh_public_key', {
-              tag: 'textarea', value: state.sshPublicKey, wide: true,
-            })));
-        advanced.querySelectorAll('input,textarea').forEach(control => control.addEventListener('input', () => saveStateFromInput(control)));
+        const metadataPanel = node('section', { class: 'blueprint-wizard-inline-panel wide blueprint-wizard-metadata-panel' },
+          node('div', { class: 'blueprint-wizard-section-heading wide' },
+            node('strong', { text: 'Metadata / Tagi' }),
+            node('span', { class: 'muted', text: 'Tagi zarządzania CloudPortal są automatyczne; tutaj dodajesz tylko własne oznaczenia VM.' })),
+          node('div', { class: 'blueprint-wizard-tag-preview wide' },
+            node('span', { class: 'blueprint-wizard-tag-preview-label', text: 'Automatyczne tagi Proxmox' }),
+            node('div', { class: 'blueprint-wizard-tag-list' },
+              ...automaticTags.map(value => node('code', { text: value })))),
+          additionalTagsField
+        );
 
         const qemuAgentInfo = node('div', { class: 'blueprint-wizard-info' },
           node('strong', { text: 'QEMU Guest Agent' }),
@@ -837,26 +835,16 @@
             : (state.waitAgent ? 'Automatyczna instalacja jest wyłączona. Workflow będzie czekać na QEMU Guest Agent już obecny w obrazie/template.'
               : 'Automatyczna instalacja i oczekiwanie na QEMU Guest Agent są wyłączone.') }));
 
-        const classificationPreview = node('div', { class: 'blueprint-wizard-info' },
-          node('strong', { text: 'Klasyfikacja VM' }),
-          node('span', { text: [
-            state.selectApmidOnExecute ? 'APMID: wybierany przy tworzeniu VM' : 'APMID: ' + (state.apmid || 'nieustawiony'),
-            state.selectEnvironmentOnExecute ? 'Environment: wybierany przy tworzeniu VM' : 'Environment: ' + (state.environment ? state.environment.toUpperCase() : 'nieustawiony'),
-          ].join(' · ') }));
-
         return node('div', { class: 'blueprint-wizard-step-stack' },
           node('div', { class: 'blueprint-wizard-presets' },
             presetButton('small', 'Mała', 1, 2048, 20),
             presetButton('standard', 'Standardowa', 2, 4096, 40),
             presetButton('large', 'Duża', 4, 8192, 80),
             presetButton('custom', 'Własna', state.cpu, state.memory, state.disk)),
-          fields,
-          templateGuestCredentialField,
-          guestCredentialField,
-          runtimeClassification,
+          vmParameters,
           qemuAgentInfo,
-          classificationPreview,
-          advanced);
+          classificationPanel,
+          metadataPanel);
       }
 
       function renderHostname() {
