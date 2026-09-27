@@ -536,7 +536,12 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
   )
     ? `Etap ${Number(provisioningJob.workflow_step_index)} z ${Number(provisioningJob.workflow_step_total)}`
     : 'Etap';
-  const progressValue = Number(provisioningJob?.progress_percent);
+  const rawProgressValue = provisioningJob?.progress_percent;
+  const progressValue = rawProgressValue === null
+    || rawProgressValue === undefined
+    || rawProgressValue === ''
+    ? Number.NaN
+    : Number(rawProgressValue);
   const hasProgressPercent = Number.isFinite(progressValue)
     && progressValue >= 0 && progressValue <= 100;
   const progressMessage = String(provisioningJob?.progress_message || '').trim();
