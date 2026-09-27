@@ -354,6 +354,16 @@
           }
         } else if (state.step === 8) {
           const ids = (name, previous, visibleRows) => {
+            const cards = root.querySelector('[data-simple-access-name="' + CSS.escape(name) + '"]');
+            if (cards) {
+              const visibleIds = new Set((visibleRows || []).map(row => Number(row.id)));
+              const hiddenExisting = previous
+                .map(Number)
+                .filter(id => !visibleIds.has(id));
+              const selectedVisible = [...cards.querySelectorAll('input[type="checkbox"]:checked')]
+                .map(input => Number(input.value));
+              return [...new Set([...hiddenExisting, ...selectedVisible])];
+            }
             const list = root.querySelector('[data-dual-list-name="' + CSS.escape(name) + '"]');
             if (!list) return [...previous];
             const visibleIds = new Set((visibleRows || []).map(row => Number(row.id)));
@@ -464,7 +474,7 @@
           node('span', { class: 'blueprint-wizard-select-card-copy' },
             node('strong', { text: provider.name }),
             node('small', { text: CREDENTIAL_TYPE_CONFIG[provider.type]?.label || provider.type }),
-            node('small', { text: credential ? 'Credentials: ' + credential.name : 'Brak przypisanych credentials' })),
+            node('small', { text: credential ? 'Dostęp: ' + credential.name : 'Brak przypisanego Dostępu' })),
           active ? node('span', { class: 'blueprint-wizard-card-check' }, appIcon('check')) : null);
         card.addEventListener('click', async () => {
           state.providerId = String(provider.id);
@@ -481,7 +491,7 @@
         const wrapper = node('div', { class: 'blueprint-wizard-step-stack' },
           node('div', { class: 'blueprint-wizard-section-heading' },
             node('strong', { text: 'Platforma' }),
-            node('span', { class: 'muted', text: 'Credentials przypisane do providera są wybierane automatycznie.' })),
+            node('span', { class: 'muted', text: 'Dostęp przypisany do platformy jest używany automatycznie.' })),
           providerGrid);
 
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
@@ -492,7 +502,7 @@
           node('span', { class: 'status-dot ' + (verifiedConnection ? 'ok' : (state.providerError ? 'bad' : '')) }),
           node('strong', { text: verifiedConnection
             ? 'Połączenie z providerem działa'
-            : state.providerError ? 'Nie udało się odczytać providera' : 'Provider ma przypisane credentials' }),
+            : state.providerError ? 'Nie udało się odczytać providera' : 'Platforma ma przypisany Dostęp' }),
           state.providerError ? node('small', { text: state.providerError }) : null));
 
         if (provider.type === 'proxmox') {
@@ -1028,31 +1038,83 @@
 
       function renderAccess() {
         const content = node('div', { class: 'blueprint-wizard-step-stack' },
-          node('div', { class: 'blueprint-wizard-info' },
-            node('strong', { text: 'Opcjonalne ustawienia dostępu' }),
-            node('span', { text: 'Domyślna konfiguracja udostępnia Blueprint w backendzie i API bez dodatkowych ograniczeń.' })),
-          node('div', { class: 'form-grid' },
-            checkboxField('Backend', 'visibility_backend', state.visibilityBackend),
-            checkboxField('CloudPortal', 'visibility_cloudportal', state.visibilityCloudportal),
-            checkboxField('API', 'visibility_api', state.visibilityApi),
-            checkboxField('Wymaga zatwierdzenia przed uruchomieniem', 'requires_approval', state.requiresApproval), ...window.BlueprintApprovalPolicyUI.wizardFields(state),
+          node('div', { class: 'blueprint-wizard-access-hero' },
+            node('div', {},
+              node('span', { class: 'eyebrow', text: 'Dostęp do Blueprintu' }),
+              node('h4', { text: 'Kto może używać i zarządzać tym Blueprintem?' }),
+              node('p', { class: 'muted', text: 'Jeśli nie ustawisz ograniczeń, dostęp wynika z RBAC organizacji/projektu. Dodawaj wyjątki tylko wtedy, gdy są potrzebne.' })),
+            badge(state.allowedRoleIds.length || state.allowedUserIds.length ? 'Ograniczony' : 'Dziedziczony', state.allowedRoleIds.length || state.allowedUserIds.length ? 'warning' : 'ok')));
+
+        const visibility = node('section', { class: 'blueprint-wizard-access-section' },
+          node('div', { class: 'blueprint-wizard-section-heading' },
+            node('strong', { text: 'Widoczność' }),
+            node('span', { class: 'muted', text: 'Gdzie Blueprint ma być dostępny.' })),
+          node('div', { class: 'blueprint-wizard-access-toggle-grid' },
+            parts.ui.toggleCard('CloudPortal', 'visibility_cloudportal', state.visibilityCloudportal, 'Widoczny w katalogu i ekranach CloudPortal.'),
+            parts.ui.toggleCard('API', 'visibility_api', state.visibilityApi, 'Możliwy do użycia przez API.'),
+            parts.ui.toggleCard('Backend', 'visibility_backend', state.visibilityBackend, 'Aktywny w backendzie i automatyzacjach.')));
+
+        const launch = node('section', { class: 'blueprint-wizard-access-section' },
+          node('div', { class: 'blueprint-wizard-section-heading' },
+            node('strong', { text: 'Uruchamianie' }),
+            node('span', { class: 'muted', text: 'Zasady wymagane przed wykonaniem Blueprintu.' })),
+          parts.ui.toggleCard(
+            'Wymagaj zatwierdzenia przed uruchomieniem',
+            'requires_approval',
+            state.requiresApproval,
+            'Uruchomienie trafi do approval flow przed wykonaniem.'
+          ),
+          node('div', { class: 'blueprint-wizard-access-policy-fields' },
+            ...window.BlueprintApprovalPolicyUI.wizardFields(state)));
+
+        content.append(visibility, launch);
+
+        if (allowed('roles.read') || data.roles.length) {
+          content.append(node('section', { class: 'blueprint-wizard-access-section' },
+            node('div', { class: 'blueprint-wizard-section-heading' },
+              node('strong', { text: 'Ogranicz użycie do ról' }),
+              node('span', { class: 'muted', text: 'Puste oznacza: każdy użytkownik z odpowiednim RBAC w tym scope.' })),
+            parts.ui.multiCardGroup(
+              'Dozwolone role',
+              'allowed_role_ids',
+              data.roles,
+              state.allowedRoleIds,
+              'Zaznacz tylko role, które mają móc uruchamiać ten Blueprint.'
+            )));
+        }
+
+        if (allowed('users.read') || data.users.length) {
+          content.append(node('section', { class: 'blueprint-wizard-access-section' },
+            node('div', { class: 'blueprint-wizard-section-heading' },
+              node('strong', { text: 'Ogranicz użycie do użytkowników' }),
+              node('span', { class: 'muted', text: 'Opcjonalne dodatkowe ograniczenie po konkretnych kontach.' })),
+            parts.ui.multiCardGroup(
+              'Dozwoleni użytkownicy',
+              'allowed_user_ids',
+              data.users,
+              state.allowedUserIds,
+              'Puste oznacza brak dodatkowego ograniczenia po użytkowniku.'
+            )));
+        }
+
+        const advanced = node('details', { class: 'blueprint-wizard-access-advanced' },
+          node('summary', { text: 'Zaawansowane zarządzanie' }),
+          node('div', { class: 'blueprint-wizard-access-advanced-body' },
+            (allowed('roles.read') || data.managerRoles.length)
+              ? parts.ui.multiCardGroup(
+                  'Role zarządzające Blueprintem',
+                  'manager_role_ids',
+                  data.managerRoles,
+                  state.managerRoleIds,
+                  'Te role mogą zarządzać Blueprintem. Rola musi spełniać wymagania backendu.'
+                )
+              : null,
             selectField('Po błędzie wdrożenia', 'recovery_policy', [
               { value: 'preserve', label: 'Zachowaj zasoby do analizy' },
               { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
-            ], state.recoveryPolicy, { wide: true }))
-        );
-        if (allowed('roles.read') || data.roles.length) {
-          content.append(
-            parts.ui.dualListGroup('Dozwolone role', 'allowed_role_ids', data.roles, state.allowedRoleIds,
-              'Pusta lista „Wybrane” oznacza brak ograniczenia po roli.'),
-            parts.ui.dualListGroup('Role zarządzające Blueprintem', 'manager_role_ids', data.managerRoles, state.managerRoleIds,
-              'Rola zarządzająca musi mieć blueprints.read/update/delete. Ta sama rola może zarządzać wieloma Blueprintami.')
-          );
-        }
-        if (allowed('users.read') || data.users.length) {
-          content.append(parts.ui.dualListGroup('Dozwoleni użytkownicy', 'allowed_user_ids', data.users, state.allowedUserIds,
-            'Pusta lista „Wybrane” oznacza brak ograniczenia po użytkowniku.'));
-        }
+            ], state.recoveryPolicy, { wide: true })));
+        content.append(advanced);
+
         content.querySelectorAll('input,select').forEach(control => {
           control.addEventListener('change', () => saveStateFromInput(control));
         });
