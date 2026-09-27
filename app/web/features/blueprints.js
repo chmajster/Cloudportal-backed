@@ -105,11 +105,13 @@ async function blueprintsView() {
   const remembered = window.CloudportalBlueprintScope || null;
   const projectContext = await api('/project-context').catch(() => ({ selected: null }));
   const contextProjectId = String(projectContext?.selected?.id || '');
-  const selected = scopes.find(scope =>
-    remembered
-    && String(scope.tenant_id) === String(remembered.tenant_id)
-    && String(scope.project_id) === String(remembered.project_id)
-  ) || scopes.find(scope => String(scope.project_id) === contextProjectId) || scopes[0];
+  const selected = scopes.find(scope => String(scope.project_id) === contextProjectId)
+    || scopes.find(scope =>
+      remembered
+      && String(scope.tenant_id) === String(remembered.tenant_id)
+      && String(scope.project_id) === String(remembered.project_id)
+    )
+    || scopes[0];
 
   window.CloudportalBlueprintScope = {
     tenant_id: String(selected.tenant_id),
@@ -160,13 +162,28 @@ async function blueprintsView() {
     String(selected.tenant_id) + '|' + String(selected.project_id),
     {
       wide: true,
-      help: 'Lista i wszystkie operacje poniżej są wykonywane wyłącznie w wybranym tenant/projekcie.',
+      help: 'Zmiana tego pola aktualizuje również globalny kontekst pracy w górnym pasku. Operacje są wykonywane wyłącznie w wybranym tenant/projekcie.',
     }
   );
-  scopeSelect.querySelector('select').addEventListener('change', event => {
+  scopeSelect.querySelector('select').addEventListener('change', async event => {
     const [tenantId, projectId] = String(event.currentTarget.value).split('|');
+    const chosen = scopes.find(scope =>
+      String(scope.tenant_id) === String(tenantId)
+      && String(scope.project_id) === String(projectId));
     window.CloudportalBlueprintScope = { tenant_id: tenantId, project_id: projectId };
-    blueprintsView().catch(error => toast(error.message, 'error'));
+    try {
+      if (chosen && globalThis.CPProjectContext?.choose) {
+        await globalThis.CPProjectContext.choose({
+          id: chosen.project_id,
+          tenant_id: chosen.tenant_id,
+          name: chosen.project_name,
+          slug: chosen.project_slug,
+        }, () => viewIs('blueprints'), { notify: false });
+      }
+      await blueprintsView();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
   });
 
   dom.content.replaceChildren(

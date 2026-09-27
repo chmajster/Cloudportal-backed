@@ -33,9 +33,15 @@
 
   async function request(path, options = {}, canRefresh = true) {
     const method = options.method || 'GET';
+    const inheritedScope = options.scope === false
+      ? {}
+      : (typeof globalThis.CPProjectContext?.headers === 'function'
+        ? globalThis.CPProjectContext.headers()
+        : {});
     const headers = {
       'X-Request-ID': crypto.randomUUID(),
       'X-Portal-Source': 'Cloudportal-backed',
+      ...inheritedScope,
       ...(options.headers || {}),
     };
     if (options.auth !== false && state.session?.access_token) {
@@ -68,9 +74,13 @@
   }
 
   async function text(path, canRefresh = true) {
+    const inheritedScope = typeof globalThis.CPProjectContext?.headers === 'function'
+      ? globalThis.CPProjectContext.headers()
+      : {};
     const headers = {
       'X-Request-ID': crypto.randomUUID(),
       'X-Portal-Source': 'Cloudportal-backed',
+      ...inheritedScope,
     };
     if (state.session?.access_token) headers.Authorization = 'Bearer ' + state.session.access_token;
 
