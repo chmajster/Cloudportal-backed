@@ -318,7 +318,7 @@ async function settingsView() {
       settingsValue('Źródło sesji', state.identity?.token_type || 'session'),
       settingsValue('HTTPS', location.protocol === 'https:' ? 'Aktywne' : 'HTTP')),
     node('div', { class: 'settings-card-actions' },
-      allowed('roles.read') ? button('Role i RBAC', () => navigate('roles')) : null,
+      allowed('roles.read') ? button('Role i dostęp', () => navigate('roles')) : null,
       allowed('tokens.read') ? button('Tokeny API', () => navigate('tokens')) : null)
   );
 
