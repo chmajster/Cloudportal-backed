@@ -355,6 +355,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "deployment?.created_at || item.created_at" in script
     assert "class: 'my-resource-card-created'" in script
     assert "text: 'Data utworzenia'" in script
+    assert "function vmMetaChip(label, value, tone = '')" in script
+    assert "vmMetaChip('Tryb', statusLabel(item.management_mode), 'mode')" in script
+    assert "vmMetaChip('APMID', metadata.apmid, 'classification')" in script
+    assert "vmMetaChip('ENV', metadata.environment.toUpperCase(), 'classification')" in script
+    assert "vmMetaChip('Właściciel', metadata.owner, 'identity')" in script
+    assert "vmMetaChip('Projekt', metadata.project, 'scope')" in script
     assert "my-resources-vm-list-header" in script
     assert "selectFilter('APMID'" in script
     assert "selectFilter('Środowisko'" in script
@@ -438,6 +444,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.my-resources-empty-icon' in stylesheet
     assert '.my-resource-grid' in stylesheet
     assert '.my-resources-vm-controls' in stylesheet
+    assert '.my-resource-meta-chip' in stylesheet
+    assert '.my-resource-meta-chip-label' in stylesheet
+    assert '.my-resource-meta-chip-value' in stylesheet
+    assert '.my-resource-meta-chip.classification' in stylesheet
+    assert '.my-resource-meta-chip.scope' in stylesheet
     assert '.my-resources-filter-panel' in stylesheet
     assert '.my-resources-sort-panel' in stylesheet
     assert '.my-resources-sort-grid' in stylesheet

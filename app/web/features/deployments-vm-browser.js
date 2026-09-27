@@ -342,6 +342,17 @@ function emptyVmState(title, description) {
     node('span', { class: 'muted', text: description }));
 }
 
+function vmMetaChip(label, value, tone = '') {
+  const text = String(value ?? '').trim();
+  if (!text || text === '—') return null;
+  return node('span', {
+    class: 'my-resource-meta-chip' + (tone ? ' ' + tone : ''),
+    title: label + ': ' + text,
+  },
+    node('span', { class: 'my-resource-meta-chip-label', text: label }),
+    node('strong', { class: 'my-resource-meta-chip-value', text }));
+}
+
 async function deleteVmFromCard(item, deployment, onRefresh = null) {
   const name = String(item?.name || ('VM ' + (item?.vm_id ?? '')));
   const deploymentManaged = Boolean(deployment?.id)
@@ -586,12 +597,16 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
         })),
       badge(statusText, statusKindValue)),
     node('div', { class: 'my-resource-card-meta' },
-      node('span', { text: metadata.provider || providerNames.get(Number(item.provider_id)) || ('Platforma #' + item.provider_id) }),
-      node('span', { text: statusLabel(item.management_mode) }),
-      metadata.apmid ? node('span', { text: 'APMID: ' + metadata.apmid }) : null,
-      metadata.environment ? node('span', { text: 'ENV: ' + metadata.environment.toUpperCase() }) : null,
-      metadata.owner && metadata.owner !== '—' ? node('span', { text: 'Właściciel: ' + metadata.owner }) : null,
-      metadata.project && metadata.project !== '—' ? node('span', { text: 'Projekt: ' + metadata.project }) : null),
+      vmMetaChip(
+        'Platforma',
+        metadata.provider || providerNames.get(Number(item.provider_id)) || ('Platforma #' + item.provider_id),
+        'platform'
+      ),
+      vmMetaChip('Tryb', statusLabel(item.management_mode), 'mode'),
+      metadata.apmid ? vmMetaChip('APMID', metadata.apmid, 'classification') : null,
+      metadata.environment ? vmMetaChip('ENV', metadata.environment.toUpperCase(), 'classification') : null,
+      metadata.owner && metadata.owner !== '—' ? vmMetaChip('Właściciel', metadata.owner, 'identity') : null,
+      metadata.project && metadata.project !== '—' ? vmMetaChip('Projekt', metadata.project, 'scope') : null),
     node('div', { class: 'my-resource-card-created' },
       node('span', { class: 'my-resource-card-created-label', text: 'Data utworzenia' }),
       node('span', {
