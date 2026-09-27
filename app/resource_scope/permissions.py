@@ -13,6 +13,16 @@ RESOURCE_ACTIONS = {
     'providers': 'read', 'credentials': 'read test',
     'quotas': 'read manage tenant.manage',
     'policies': 'read manage simulate audit exception.manage',
+    # pro­mox_admin.scope.all is intentionally global-only and therefore omitted here.
+    # A project role can receive only permissions that remain confined to the selected scope.
+    'proxmox_admin': (
+        'view dashboard.view providers.view nodes.view nodes.services.manage '
+        'vm.view vm.power vm.modify vm.clone vm.migrate vm.delete '
+        'containers.view containers.power containers.modify containers.clone containers.migrate containers.delete '
+        'snapshots.view snapshots.manage storage.view storage.manage images.view images.manage '
+        'templates.view templates.manage backups.view backups.run backups.restore backups.delete '
+        'cluster.view tasks.view firewall.view firewall.manage console.use search bulk'
+    ),
 }
 RESOURCE_PERMISSIONS = frozenset(f'{area}.{action}' for area, actions in RESOURCE_ACTIONS.items()
                                  for action in actions.split())
@@ -27,4 +37,13 @@ EXECUTION_PERMISSIONS = frozenset({
     'inventory.import', 'inventory.update', 'inventory.delete',
     'vms.power', 'vms.update', 'vms.delete', 'vms.clone', 'vms.migrate', 'vms.template',
     'snapshots.create', 'snapshots.delete', 'snapshots.rollback', 'backups.create', 'backups.restore',
+    'proxmox_admin.nodes.services.manage',
+    'proxmox_admin.vm.power', 'proxmox_admin.vm.modify', 'proxmox_admin.vm.clone',
+    'proxmox_admin.vm.migrate', 'proxmox_admin.vm.delete',
+    'proxmox_admin.containers.power', 'proxmox_admin.containers.modify', 'proxmox_admin.containers.clone',
+    'proxmox_admin.containers.migrate', 'proxmox_admin.containers.delete',
+    'proxmox_admin.snapshots.manage', 'proxmox_admin.storage.manage',
+    'proxmox_admin.images.manage', 'proxmox_admin.templates.manage',
+    'proxmox_admin.backups.run', 'proxmox_admin.backups.restore', 'proxmox_admin.backups.delete',
+    'proxmox_admin.firewall.manage', 'proxmox_admin.bulk',
 })
