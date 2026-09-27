@@ -188,6 +188,20 @@
 }
 .blueprint-wizard-info span { color: var(--muted); font-size: .76rem; }
 
+.blueprint-wizard-name-active-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: end;
+  gap: 16px;
+}
+.blueprint-wizard-name-active-row > label:first-child { min-width: 0; }
+.blueprint-wizard-active-toggle {
+  min-height: 43px;
+  align-items: center;
+  align-self: end;
+  white-space: nowrap;
+}
+
 .blueprint-wizard-section-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; padding-top: 4px; }
 .blueprint-wizard-section-heading strong { font-size: .9rem; }
 .blueprint-wizard-section-heading span { font-size: .75rem; }
