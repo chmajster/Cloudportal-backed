@@ -1,5 +1,19 @@
 # Parallel development instructions
 
+## Required regression-history preflight
+
+Before analyzing, editing, reviewing, or refactoring this repository, **read `CHANGELOG.md` first**. It is the project's regression memory built from the full pull-request history and records failures, root causes, architectural invariants, and fixes that must not be reintroduced.
+
+For every task:
+- search `CHANGELOG.md` for the affected domain and related PR numbers before changing code;
+- treat **MERGED** entries as historical constraints/invariants unless a newer merged change explicitly supersedes them;
+- treat **OPEN** and **CLOSED-UNMERGED** entries as warnings/context, not as proof that the behavior exists on `main`;
+- when changing Blueprint/workflow, RBAC/scope, Terraform/Proxmox, inventory, jobs, updater/installer, migrations, AWX/Ansible, noVNC, or shared UI state, review the corresponding regression rules in `CHANGELOG.md`;
+- after a refactor, search the repository for removed symbols, fields, compatibility branches, and stale tests so no dead reference remains;
+- if the task fixes a new significant regression or changes an architectural invariant, update `CHANGELOG.md` in the same pull request.
+
+Do not implement a historical workaround merely because an old PR used it. Follow the newest merged contract and the invariants documented in `CHANGELOG.md`.
+
 Work on one domain per branch. Prefer adding files inside the owning module over editing shared composition files.
 
 Before editing, map the task to one of these frontend domains: identity, credentials, providers, catalog, blueprints, ipam, inventory, deployments/jobs, operations, monitoring/dashboard. Put browser behavior in `app/web/features/<domain>.js` and domain CSS in `app/web/styles/features/<domain>.css`.
