@@ -1,6 +1,327 @@
 'use strict';
 
 (() => {
+let rbacTab = 'overview';
+let rbacSelectedUserId = null;
+
+const RBAC_TABS = [
+  { id: 'overview', label: 'Przegląd' },
+  { id: 'assignments', label: 'Przypisania' },
+  { id: 'roles', label: 'Role' },
+  { id: 'analysis', label: 'Analiza dostępu' },
+  { id: 'governance', label: 'Zakresy i polityki' },
+];
+
+function setRbacTab(tab) {
+  rbacTab = RBAC_TABS.some(item => item.id === tab) ? tab : 'overview';
+  return rolesView();
+}
+
+function rbacTabs() {
+  return node('div', { class: 'rbac-tabs', role: 'tablist', 'aria-label': 'Role i dostęp' },
+    ...RBAC_TABS.map(item => node('button', {
+      type: 'button',
+      class: `rbac-tab ${rbacTab === item.id ? 'active' : ''}`,
+      role: 'tab',
+      'aria-selected': String(rbacTab === item.id),
+      onClick: () => setRbacTab(item.id).catch(error => toast(error.message, 'error')),
+    }, item.label)));
+}
+
+function rbacStat(label, value, note = '') {
+  return node('section', { class: 'panel rbac-stat' },
+    node('span', { class: 'rbac-stat-label', text: label }),
+    node('strong', { class: 'rbac-stat-value', text: String(value) }),
+    note ? node('small', { class: 'muted', text: note }) : null);
+}
+
+function roleModuleNames(role) {
+  return [...new Set((role.permissions || []).map(permission => {
+    const key = String(permission).split('.')[0] || 'other';
+    return PERMISSION_GROUP_LABELS[key] || key;
+  }))];
+}
+
+function roleCard(role) {
+  const modules = roleModuleNames(role);
+  const actions = [
+    button('Uprawnienia', () => showPermissionSummary(role.name, role.permissions)),
+  ];
+  if (allowed('roles.update')) {
+    actions.push(button('Edytuj', () => navigate('/access/roles/edit/' + encodeURIComponent(role.id) + '/' + encodeURIComponent(role.name || 'role')), 'primary'));
+  }
+  if (allowed('roles.delete')) {
+    actions.push(button('Usuń', () => confirmAction(
+      'Usuń rolę',
+      `Rola ${role.name} zostanie trwale usunięta. Najpierw usuń wszystkie jej przypisania.`,
+      async () => {
+        await api(`/roles/${role.id}`, { method: 'DELETE' });
+        toast('Rola usunięta.');
+        await rolesView();
+      }
+    ), 'danger'));
+  }
+  return node('article', { class: 'panel rbac-role-card' },
+    node('div', { class: 'rbac-role-card-head' },
+      node('div', {},
+        node('span', { class: 'rbac-kicker', text: 'Rola RBAC' }),
+        node('h3', { text: role.name })),
+      badge(`${role.permissions.length} uprawnień`, role.permissions.length ? 'info' : 'warning')),
+    node('p', { class: 'muted rbac-role-modules', text: modules.length ? modules.slice(0, 5).join(' · ') : 'Brak przypisanych modułów' }),
+    modules.length > 5 ? node('small', { class: 'muted', text: `+${modules.length - 5} kolejnych modułów` }) : null,
+    node('div', { class: 'rbac-card-actions' }, actions));
+}
+
+function rbacOverviewPanel(roles, users, permissions) {
+  const rolePreview = roles.slice(0, 6);
+  return node('div', { class: 'rbac-stack' },
+    node('section', { class: 'panel rbac-explainer' },
+      node('div', {},
+        node('span', { class: 'rbac-kicker', text: 'Model dostępu' }),
+        node('h2', { text: 'Kto → rola → zakres → polityka' }),
+        node('p', { class: 'muted', text: 'Rola definiuje co wolno. Przypisanie wskazuje komu nadajesz rolę. Tenant, projekt i Policy Engine ograniczają gdzie i w jakich warunkach dostęp obowiązuje.' })),
+      node('div', { class: 'rbac-flow', 'aria-label': 'Model RBAC' },
+        node('span', { text: 'Użytkownik / grupa' }),
+        node('strong', { text: '→' }),
+        node('span', { text: 'Rola' }),
+        node('strong', { text: '→' }),
+        node('span', { text: 'Zakres' }),
+        node('strong', { text: '→' }),
+        node('span', { text: 'Policy Engine' }))),
+    node('section', { class: 'rbac-quick-grid' },
+      node('button', { type: 'button', class: 'panel rbac-quick-card', onClick: () => setRbacTab('assignments').catch(error => toast(error.message, 'error')) },
+        node('strong', { text: 'Nadaj dostęp' }),
+        node('span', { text: 'Wybierz użytkownika i przypisz mu jedną lub więcej ról.' })),
+      node('button', { type: 'button', class: 'panel rbac-quick-card', onClick: () => setRbacTab('roles').catch(error => toast(error.message, 'error')) },
+        node('strong', { text: 'Zarządzaj rolami' }),
+        node('span', { text: 'Buduj role z pogrupowanych uprawnień zamiast pojedynczych technicznych bindingów.' })),
+      node('button', { type: 'button', class: 'panel rbac-quick-card', onClick: () => setRbacTab('analysis').catch(error => toast(error.message, 'error')) },
+        node('strong', { text: 'Sprawdź dostęp' }),
+        node('span', { text: 'Zobacz z jakiej roli wynika konkretne uprawnienie użytkownika.' })),
+      node('button', { type: 'button', class: 'panel rbac-quick-card', onClick: () => setRbacTab('governance').catch(error => toast(error.message, 'error')) },
+        node('strong', { text: 'Zakresy i polityki' }),
+        node('span', { text: 'Przejdź do organizacji, projektów i reguł Policy Engine.' }))),
+    node('section', { class: 'rbac-section' },
+      node('div', { class: 'rbac-section-heading' },
+        node('div', {},
+          node('span', { class: 'rbac-kicker', text: 'Najważniejsze role' }),
+          node('h2', { text: 'Role w systemie' })),
+        button('Pokaż wszystkie', () => setRbacTab('roles').catch(error => toast(error.message, 'error')))),
+      rolePreview.length
+        ? node('div', { class: 'rbac-role-grid' }, ...rolePreview.map(roleCard))
+        : node('div', { class: 'panel empty', text: 'Nie ma jeszcze żadnych ról.' })),
+    node('section', { class: 'panel rbac-footnote' },
+      node('strong', { text: 'Stan katalogu' }),
+      node('span', { class: 'muted', text: `${roles.length} ról · ${users?.length ?? '—'} użytkowników · ${permissions.length} zdefiniowanych uprawnień` })));
+}
+
+async function rbacAssignmentsPanel(roles, users) {
+  if (!allowed('users.read')) {
+    return node('section', { class: 'panel' },
+      node('h2', { text: 'Przypisania' }),
+      node('p', { class: 'muted', text: 'Do przeglądania przypisań wymagane jest uprawnienie users.read.' }));
+  }
+
+  const selection = node('section', { class: 'panel rbac-assignment-editor' },
+    node('div', { class: 'rbac-section-heading' },
+      node('div', {},
+        node('span', { class: 'rbac-kicker', text: 'Przypisanie' }),
+        node('h2', { text: 'Wybierz użytkownika' }),
+        node('p', { class: 'muted', text: 'Role globalne są niezależne od członkostwa w tenantach i projektach.' }))),
+    node('div', { class: 'rbac-empty-selection', text: 'Wybierz konto z tabeli poniżej, aby zobaczyć i zmienić jego role.' }));
+
+  async function renderUser(user) {
+    rbacSelectedUserId = Number(user.id);
+    selection.replaceChildren(
+      node('div', { class: 'rbac-section-heading' },
+        node('div', {},
+          node('span', { class: 'rbac-kicker', text: 'Przypisanie globalne' }),
+          node('h2', { text: user.username }),
+          node('p', { class: 'muted', text: user.email || 'Brak adresu e-mail' })),
+        button('Zmień użytkownika', () => {
+          rbacSelectedUserId = null;
+          rbacAssignmentsPanel(roles, users).then(panel => {
+            const current = dom.content.querySelector('.rbac-tab-body');
+            if (current) current.replaceWith(panel);
+          }).catch(error => toast(error.message, 'error'));
+        }))
+    );
+
+    const assigned = await api(`/users/${user.id}/roles`);
+    const assignedIds = new Set((assigned.items || []).map(role => Number(role.id)));
+    const roleOptions = node('div', { class: 'rbac-role-options' },
+      ...roles.map(role => node('label', { class: `rbac-role-option ${assignedIds.has(Number(role.id)) ? 'selected' : ''}` },
+        node('input', { type: 'checkbox', name: 'role_id', value: role.id, checked: assignedIds.has(Number(role.id)), disabled: !allowed('roles.assign') }),
+        node('span', { class: 'rbac-role-option-copy' },
+          node('strong', { text: role.name }),
+          node('small', { class: 'muted', text: `${role.permissions.length} uprawnień · ${roleModuleNames(role).slice(0, 3).join(', ') || 'brak modułów'}` })))));
+    roleOptions.querySelectorAll('input').forEach(input => input.addEventListener('change', () => {
+      input.closest('.rbac-role-option')?.classList.toggle('selected', input.checked);
+    }));
+
+    const form = node('form', {
+      class: 'rbac-assignment-form',
+      onSubmit: async event => {
+        event.preventDefault();
+        if (!allowed('roles.assign')) return;
+        const role_ids = [...form.querySelectorAll('[name="role_id"]:checked')].map(input => Number(input.value));
+        const submit = form.querySelector('[type="submit"]');
+        submit.disabled = true;
+        try {
+          await api(`/users/${user.id}/roles`, { method: 'PUT', body: { role_ids } });
+          toast('Dostęp użytkownika zapisany.');
+          await renderUser(user);
+        } catch (error) {
+          toast(error.message, 'error');
+        } finally {
+          submit.disabled = false;
+        }
+      },
+    },
+    node('div', { class: 'rbac-assignment-toolbar' },
+      node('div', {},
+        node('strong', { text: 'Role użytkownika' }),
+        node('span', { class: 'muted', text: allowed('roles.assign') ? 'Zaznacz role i zapisz zmiany.' : 'Tryb tylko do odczytu.' })),
+      allowed('roles.assign') ? node('button', { type: 'submit', class: 'button primary' }, 'Zapisz przypisanie') : null),
+    roleOptions);
+    selection.append(form);
+  }
+
+  const rows = users || [];
+  const userTable = table([
+    { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
+    { label: 'Źródło', value: user => badge(user.auth_source === 'ldap' ? 'LDAP' : 'Lokalne', user.auth_source === 'ldap' ? 'info' : '') },
+    { label: 'Typ', value: user => user.is_service_account ? 'Konto serwisowe' : 'Użytkownik' },
+    { label: 'Status', value: user => badge(user.is_locked ? 'Zablokowany' : user.is_active ? 'Aktywny' : 'Wyłączony', user.is_locked || !user.is_active ? 'danger' : 'ok') },
+  ], rows, user => [button(rbacSelectedUserId === Number(user.id) ? 'Wybrany' : 'Zarządzaj dostępem', () => renderUser(user).catch(error => toast(error.message, 'error')), rbacSelectedUserId === Number(user.id) ? 'primary' : 'ghost')]);
+
+  const wrapper = node('div', { class: 'rbac-tab-body rbac-stack' },
+    selection,
+    node('section', { class: 'rbac-section' },
+      node('div', { class: 'rbac-section-heading' },
+        node('div', {},
+          node('span', { class: 'rbac-kicker', text: 'Konta' }),
+          node('h2', { text: 'Użytkownicy i konta serwisowe' }),
+          node('p', { class: 'muted', text: 'Wyszukaj konto i otwórz jego przypisania. Tabela zachowuje filtry, sortowanie i gęstość widoku.' }))),
+      userTable));
+
+  const selected = rows.find(user => Number(user.id) === Number(rbacSelectedUserId));
+  if (selected) await renderUser(selected);
+  return wrapper;
+}
+
+function rbacRolesPanel(roles) {
+  return node('div', { class: 'rbac-tab-body rbac-stack' },
+    node('div', { class: 'rbac-section-heading' },
+      node('div', {},
+        node('span', { class: 'rbac-kicker', text: 'Definicje' }),
+        node('h2', { text: 'Role' }),
+        node('p', { class: 'muted', text: 'Rola odpowiada wyłącznie na pytanie „co wolno”. Zakres organizacji/projektu i polityki są zarządzane oddzielnie.' })),
+      allowed('roles.create') ? button('Nowa rola', () => navigate('/access/roles/new'), 'primary') : null),
+    roles.length
+      ? node('div', { class: 'rbac-role-grid' }, ...roles.map(roleCard))
+      : node('div', { class: 'panel empty', text: 'Brak ról. Utwórz pierwszą rolę RBAC.' }));
+}
+
+async function rbacAccessAnalysisPanel(roles, users, permissions) {
+  if (!allowed('users.read')) {
+    return node('section', { class: 'panel rbac-tab-body' },
+      node('h2', { text: 'Analiza dostępu' }),
+      node('p', { class: 'muted', text: 'Do analizy kont wymagane jest uprawnienie users.read.' }));
+  }
+
+  const userField = selectField('Użytkownik', 'user_id',
+    (users || []).map(user => ({ value: String(user.id), label: `${user.username}${user.email ? ' — ' + user.email : ''}` })),
+    rbacSelectedUserId ? String(rbacSelectedUserId) : '',
+    { required: true, placeholder: 'Wybierz użytkownika' });
+  const permissionField = selectField('Uprawnienie', 'permission',
+    permissions.map(permission => ({ value: permission, label: `${permissionLabel(permission)} — ${permission}` })),
+    '',
+    { required: true, placeholder: 'Wybierz operację' });
+  const result = node('div', { class: 'rbac-analysis-result' },
+    node('div', { class: 'rbac-empty-selection', text: 'Wybierz użytkownika i uprawnienie, aby sprawdzić źródło dostępu.' }));
+
+  const form = node('form', {
+    class: 'panel rbac-analysis-form',
+    onSubmit: async event => {
+      event.preventDefault();
+      const userId = Number(form.elements.user_id.value);
+      const permission = form.elements.permission.value;
+      if (!userId || !permission) return;
+      const user = (users || []).find(item => Number(item.id) === userId);
+      const assigned = await api(`/users/${userId}/roles`);
+      const assignedRoles = assigned.items || [];
+      const granting = assignedRoles.filter(role => (role.permissions || []).includes(permission));
+      rbacSelectedUserId = userId;
+      result.replaceChildren(
+        node('section', { class: `panel rbac-decision ${granting.length ? 'allow' : 'deny'}` },
+          node('div', { class: 'rbac-decision-head' },
+            node('div', {},
+              node('span', { class: 'rbac-kicker', text: 'Wynik globalnego RBAC' }),
+              node('h2', { text: granting.length ? 'ALLOW' : 'DENY' }),
+              node('p', { class: 'muted', text: `${user?.username || 'Użytkownik'} · ${permission}` })),
+            badge(granting.length ? 'Dostęp nadany' : 'Brak uprawnienia', granting.length ? 'ok' : 'danger')),
+          granting.length
+            ? node('div', { class: 'rbac-reason-list' },
+                node('strong', { text: 'Źródło dostępu' }),
+                ...granting.map(role => node('div', { class: 'rbac-reason' },
+                  node('span', { text: role.name }),
+                  node('code', { class: 'mono', text: permission }))))
+            : node('p', { text: 'Żadna z globalnie przypisanych ról nie zawiera tego uprawnienia.' }),
+          node('p', { class: 'muted rbac-analysis-note', text: 'To wynik globalnego RBAC. Ostateczna decyzja dla konkretnego zasobu może zostać dodatkowo ograniczona przez tenant/projekt, scope zasobu oraz Policy Engine.' })),
+        node('section', { class: 'panel' },
+          node('div', { class: 'rbac-section-heading' },
+            node('div', {},
+              node('span', { class: 'rbac-kicker', text: 'Przypisane role' }),
+              node('h3', { text: assignedRoles.length ? assignedRoles.map(role => role.name).join(', ') : 'Brak ról' }))),
+          permissionSummary([...new Set(assignedRoles.flatMap(role => role.permissions || []))].sort())));
+    },
+  },
+  node('div', { class: 'form-grid' }, userField, permissionField),
+  node('div', { class: 'rbac-analysis-actions' }, node('button', { type: 'submit', class: 'button primary' }, 'Sprawdź dostęp')));
+
+  return node('div', { class: 'rbac-tab-body rbac-stack' },
+    form,
+    result);
+}
+
+function rbacGovernancePanel() {
+  const cards = [
+    {
+      title: 'Organizacje / tenanty',
+      text: 'Członkostwo i delegowane role w obrębie organizacji.',
+      action: () => navigate('tenants'),
+      enabled: true,
+    },
+    {
+      title: 'Projekty',
+      text: 'Dostęp projektowy i zakres operacji przypisany do konkretnego projektu.',
+      action: () => navigate('projects'),
+      enabled: true,
+    },
+    {
+      title: 'Policy Engine',
+      text: 'Warunkowe ALLOW/DENY, ochrona PROD, approvals i reguły zależne od scope.',
+      action: () => navigate('policies'),
+      enabled: allowed('policies.read'),
+    },
+  ];
+  return node('div', { class: 'rbac-tab-body rbac-stack' },
+    node('section', { class: 'panel rbac-explainer' },
+      node('div', {},
+        node('span', { class: 'rbac-kicker', text: 'Governance' }),
+        node('h2', { text: 'Zakres nie jest częścią definicji roli' }),
+        node('p', { class: 'muted', text: 'Role pozostają wielokrotnego użytku. Organizacja, projekt, APMID, ENV i warunki Policy Engine powinny być nakładane przy przypisaniu lub wykonywaniu operacji.' }))),
+    node('div', { class: 'rbac-governance-grid' },
+      ...cards.map(card => node('article', { class: 'panel rbac-governance-card' },
+        node('h3', { text: card.title }),
+        node('p', { class: 'muted', text: card.text }),
+        button('Otwórz', card.action, 'primary', !card.enabled)))),
+    node('section', { class: 'panel rbac-roadmap-note' },
+      node('strong', { text: 'Docelowy model scope' }),
+      node('p', { class: 'muted', text: 'Organization → Project → APMID → Environment → Resource. Ten widok jest przygotowany pod zunifikowany Scope Builder, ale obecne źródła prawdy pozostają w modułach Tenants, Projects i Policy Engine.' })));
+}
+
 async function usersView() {
   const users = (await api('/users?limit=200')).items;
   const actions = [];
@@ -17,7 +338,11 @@ async function usersView() {
 
 function userActions(user) {
   const actions = [];
-  if (allowed('roles.assign') && allowed('roles.read')) actions.push(button('Role', () => navigate('/access/users/' + encodeURIComponent(user.id) + '/roles')));
+  if (allowed('roles.read')) actions.push(button('Dostęp', () => {
+    rbacSelectedUserId = Number(user.id);
+    rbacTab = 'assignments';
+    navigate('roles');
+  }));
   if (allowed('users.update')) {
     actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
@@ -80,20 +405,9 @@ async function userCommand(user, command) {
 }
 
 async function assignUserRoles(user) {
-  try {
-    const [all, assigned] = await Promise.all([api('/roles?limit=200'), api(`/users/${user.id}/roles`)]);
-    const assignedIds = new Set(assigned.items.map(role => role.id));
-    const grid = node('div', { class: 'permission-grid' });
-    all.items.forEach(role => {
-      const checkbox = node('input', { type: 'checkbox', name: 'role_id', value: role.id, checked: assignedIds.has(role.id) });
-      const summary = node('span', {}, role.name, node('small', { class: 'muted', text: ` · ${role.permissions.length} uprawnień` }));
-      grid.append(node('label', {}, checkbox, summary));
-    });
-    openModal({ title: `Role: ${user.username}`, eyebrow: 'RBAC', body: grid, onSubmit: async (_data, form) => {
-      const role_ids = [...form.querySelectorAll('[name="role_id"]:checked')].map(input => Number(input.value));
-      await api(`/users/${user.id}/roles`, { method: 'PUT', body: { role_ids } }); toast('Role przypisane.'); navigate('users');
-    }});
-  } catch (error) { toast(error.message, 'error'); }
+  rbacSelectedUserId = Number(user.id);
+  rbacTab = 'assignments';
+  await navigate('roles');
 }
 
 function resetUserPassword(user) {
@@ -105,31 +419,119 @@ function resetUserPassword(user) {
 }
 
 async function rolesView() {
-  const roles = (await api('/roles?limit=200')).items;
-  const actions = allowed('roles.create') ? [button('Dodaj rolę', () => navigate('/access/roles/new'), 'primary')] : [];
-  dom.content.replaceChildren(heading('Role grupują uprawnienia do poszczególnych modułów. System chroni ostatniego aktywnego administratora.', actions),
-    table([{ label: 'Rola', value: role => node('strong', { text: role.name }) }, { label: 'Uprawnienia', value: role => badge(`${role.permissions.length} uprawnień`, role.permissions.length ? 'info' : '') }], roles, role => {
-      const actions = [];
-      if (allowed('roles.update')) actions.push(button('Edytuj', () => navigate('/access/roles/edit/' + encodeURIComponent(role.id) + '/' + encodeURIComponent(role.name || 'role'))));
-      if (allowed('roles.delete')) actions.push(button('Usuń', () => confirmAction('Usuń rolę', `Rola ${role.name} zostanie trwale usunięta.`, async () => { await api(`/roles/${role.id}`, { method: 'DELETE' }); toast('Rola usunięta.'); navigate('roles'); }), 'danger'));
-      return actions;
-    }));
+  const [roleResult, permissionResult, userResult] = await Promise.all([
+    api('/roles?limit=200'),
+    api('/permissions'),
+    allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
+  ]);
+  const roles = roleResult.items || [];
+  const permissions = permissionResult.items || [];
+  const users = userResult.items || [];
+
+  const actions = [];
+  if (allowed('roles.create')) actions.push(button('Nowa rola', () => navigate('/access/roles/new'), 'primary'));
+  if (allowed('roles.assign') && allowed('users.read')) actions.push(button('Nadaj dostęp', () => setRbacTab('assignments').catch(error => toast(error.message, 'error'))));
+  const stats = node('div', { class: 'rbac-stats' },
+    rbacStat('Role', roles.length, 'definicje globalne'),
+    rbacStat('Użytkownicy', allowed('users.read') ? users.length : '—', allowed('users.read') ? 'konta dostępne do przypisań' : 'brak users.read'),
+    rbacStat('Permissiony', permissions.length, 'katalog uprawnień'),
+    rbacStat('Twój dostęp', state.identity?.permissions?.length || 0, 'efektywne globalnie'));
+
+  let body;
+  if (rbacTab === 'assignments') body = await rbacAssignmentsPanel(roles, users);
+  else if (rbacTab === 'roles') body = rbacRolesPanel(roles);
+  else if (rbacTab === 'analysis') body = await rbacAccessAnalysisPanel(roles, users, permissions);
+  else if (rbacTab === 'governance') body = rbacGovernancePanel();
+  else body = rbacOverviewPanel(roles, users, permissions);
+
+  dom.content.replaceChildren(
+    heading('Jedno miejsce do definiowania ról, nadawania dostępu i sprawdzania z czego wynika efektywne uprawnienie.', actions),
+    rbacTabs(),
+    stats,
+    body);
 }
 
 async function roleForm(role = null) {
   try {
     const permissions = (await api('/permissions')).items;
     const picker = permissionPicker(permissions, role?.permissions || [], 'permission');
-    const fields = node('div', { class: 'form-grid' },
-      field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true }),
-      formSection('Uprawnienia', 'Uprawnienia są pogrupowane według modułów. Zaznacz tylko zakres potrzebny tej roli.', picker));
-    openModal({ title: role ? 'Edytuj rolę' : 'Nowa rola', eyebrow: 'RBAC', body: fields, submitLabel: role ? 'Zapisz' : 'Utwórz', wide: true, onSubmit: async (_data, form) => {
-      const payload = { name: form.elements.name.value, permissions: [...form.querySelectorAll('[name="permission"]:checked')].map(input => input.value) };
-      await api(role ? `/roles/${role.id}` : '/roles', { method: role ? 'PUT' : 'POST', body: payload });
-      toast('Rola zapisana.');
-      navigate('roles');
-    }});
-  } catch (error) { toast(error.message, 'error'); }
+    picker.classList.add('rbac-permission-picker');
+
+    const searchField = field('Filtr uprawnień', 'permission_filter', {
+      type: 'search',
+      placeholder: 'np. vm, blueprint, delete, snapshot',
+      wide: true,
+      help: 'Filtruje nazwy techniczne i czytelne etykiety bez zmiany zaznaczeń.',
+    });
+    const selectedCounter = node('strong', { class: 'rbac-selected-counter' });
+    const readOnly = button('Tylko odczyt', () => {
+      picker.querySelectorAll('[name="permission"]').forEach(input => {
+        const permission = String(input.value);
+        input.checked = permission.endsWith('.read') || permission.includes('.read.');
+      });
+      updateEditor();
+    });
+    const clear = button('Wyczyść', () => {
+      picker.querySelectorAll('[name="permission"]').forEach(input => { input.checked = false; });
+      updateEditor();
+    });
+
+    const toolbar = node('div', { class: 'rbac-permission-toolbar' },
+      node('div', { class: 'rbac-permission-toolbar-copy' },
+        selectedCounter,
+        node('span', { class: 'muted', text: ' zaznaczonych uprawnień' })),
+      node('div', { class: 'action-group' }, readOnly, clear));
+
+    function updateEditor() {
+      const query = searchable(searchField.querySelector('input').value.trim());
+      let selected = 0;
+      picker.querySelectorAll('.permission-group').forEach(group => {
+        let visible = 0;
+        group.querySelectorAll('.permission-grid label').forEach(label => {
+          const input = label.querySelector('input');
+          if (input?.checked) selected += 1;
+          const show = !query || searchable(label.textContent).includes(query);
+          label.hidden = !show;
+          if (show) visible += 1;
+        });
+        group.hidden = visible === 0;
+        if (query && visible) group.open = true;
+      });
+      selectedCounter.textContent = String(selected);
+    }
+
+    searchField.querySelector('input').addEventListener('input', updateEditor);
+    picker.querySelectorAll('[name="permission"]').forEach(input => input.addEventListener('change', updateEditor));
+    updateEditor();
+
+    const fields = node('div', { class: 'form-grid rbac-role-form' },
+      formSection('Rola', 'Nazwa powinna opisywać odpowiedzialność, nie konkretną osobę lub środowisko.',
+        field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true, placeholder: 'np. VM Operator' })),
+      formSection('Uprawnienia', 'Wybierz co ta rola może robić. Zakres Organization/Project/APMID/ENV jest nakładany osobno.',
+        searchField,
+        toolbar,
+        picker));
+
+    openModal({
+      title: role ? `Edytuj rolę: ${role.name}` : 'Nowa rola',
+      eyebrow: 'Role i dostęp',
+      body: fields,
+      submitLabel: role ? 'Zapisz rolę' : 'Utwórz rolę',
+      wide: true,
+      onSubmit: async (_data, form) => {
+        const payload = {
+          name: form.elements.name.value,
+          permissions: [...form.querySelectorAll('[name="permission"]:checked')].map(input => input.value),
+        };
+        await api(role ? `/roles/${role.id}` : '/roles', { method: role ? 'PUT' : 'POST', body: payload });
+        toast('Rola zapisana.');
+        rbacTab = 'roles';
+        navigate('roles');
+      },
+    });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 async function tokensView() {
@@ -381,9 +783,11 @@ registerRoutedForm({
 }, () => createToken());
 
 registerCommand('users.create', () => navigate('/access/users/new'));
+registerCommand('roles.create', () => navigate('/access/roles/new'));
 registerCommand('tokens.create', () => navigate('/access/tokens/new'));
 registerView({ id: 'users', label: 'Użytkownicy', icon: 'U', permission: 'users.read', order: 10 }, usersView);
-registerView({ id: 'roles', label: 'Role i RBAC', icon: 'R', permission: 'roles.read', order: 20 }, rolesView);
+registerView({ id: 'roles', label: 'Role i dostęp', icon: 'R', permission: 'roles.read', order: 20 }, rolesView);
 registerView({ id: 'tokens', label: 'Tokeny API', icon: 'T', permission: 'tokens.read', order: 30 }, tokensView);
 registerView({ id: 'account', label: 'Moje konto', icon: 'M', order: 170 }, accountView);
+document.addEventListener('cloudportal:app-hidden', () => { rbacTab = 'overview'; rbacSelectedUserId = null; });
 })();

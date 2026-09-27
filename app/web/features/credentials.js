@@ -457,7 +457,7 @@ function renderCredentialDynamic(container, type, item) {
     node('div', { class: 'credential-secret-header' },
       node('div', {}, node('strong', { text: item ? 'Zapisany sekret' : 'Dane uwierzytelniające' }),
         node('p', { text: item ? 'Sekrety nie są odczytywane z backendu. Włącz wymianę tylko gdy chcesz je zastąpić.' : 'Pola są wysyłane wyłącznie przy zapisie.' })),
-      badge(item?.configured ? 'configured' : 'new', item?.configured ? 'ok' : 'info')));
+      badge(item?.configured ? 'Gotowy' : 'Nowy', item?.configured ? 'ok' : 'info')));
 
   let replaceInput = null;
   if (item) {
@@ -488,45 +488,215 @@ function renderCredentialDynamic(container, type, item) {
   container.replaceChildren(typeCard, identity, secretPanel);
 }
 
+function credentialHealth(item) {
+  const nowMs = Date.now();
+  const expires = item?.expires_at ? new Date(item.expires_at).getTime() : null;
+  const rotation = item?.rotation_due_at ? new Date(item.rotation_due_at).getTime() : null;
+  if (!item?.configured) return { label: 'Wymaga konfiguracji', kind: 'danger' };
+  if (Number.isFinite(expires) && expires <= nowMs) return { label: 'Wygasł', kind: 'danger' };
+  if (Number.isFinite(rotation) && rotation <= nowMs) return { label: 'Wymaga rotacji', kind: 'warning' };
+  return { label: 'Gotowy', kind: 'ok' };
+}
+
+function credentialCard(item) {
+  const config = CREDENTIAL_TYPE_CONFIG[item.type] || CREDENTIAL_TYPE_CONFIG.other;
+  const health = credentialHealth(item);
+  const details = [];
+  if (item.endpoint) details.push(['Endpoint', item.endpoint, true]);
+  if (item.username) details.push(['Użytkownik', item.username, false]);
+  if (item.expires_at) details.push(['Wygasa', formatDate(item.expires_at), false]);
+  if (item.rotation_due_at) details.push(['Rotacja', formatDate(item.rotation_due_at), false]);
+
+  return node('article', { class: 'panel credential-access-card', 'data-credential-type': item.type },
+    node('div', { class: 'credential-access-card-head' },
+      node('div', { class: 'credential-access-card-title' },
+        node('span', { class: 'credential-access-type', text: config.label }),
+        node('h3', { text: item.name })),
+      badge(health.label, health.kind)),
+    node('p', { class: 'muted credential-access-description', text: config.description }),
+    details.length
+      ? node('dl', { class: 'credential-access-meta' },
+          ...details.slice(0, 4).flatMap(([label, value, mono]) => [
+            node('dt', { text: label }),
+            node('dd', { class: mono ? 'mono' : '', text: value }),
+          ]))
+      : node('div', { class: 'credential-access-empty-meta', text: 'Ten typ dostępu nie wymaga endpointu ani nazwy użytkownika.' }),
+    node('div', { class: 'credential-access-card-actions' }, credentialActions(item)));
+}
+
+function credentialTypeChoiceGrid(select, selectedType) {
+  const preferred = ['proxmox', 'ssh', 'awx', 'vmware'];
+  const remaining = Object.keys(CREDENTIAL_TYPE_CONFIG).filter(type => !preferred.includes(type));
+  const renderChoice = type => {
+    const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
+    const active = String(select.value) === String(type);
+    return node('button', {
+      type: 'button',
+      class: `credential-type-choice ${active ? 'active' : ''}`,
+      'data-type': type,
+      'aria-pressed': String(active),
+      onClick: event => {
+        select.value = type;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        const grid = event.currentTarget.closest('.credential-type-choice-shell');
+        grid?.querySelectorAll('.credential-type-choice').forEach(buttonElement => {
+          const selected = buttonElement.dataset.type === type;
+          buttonElement.classList.toggle('active', selected);
+          buttonElement.setAttribute('aria-pressed', String(selected));
+        });
+      },
+    },
+    node('strong', { text: config.label }),
+    node('small', { text: config.description }));
+  };
+
+  return node('div', { class: 'credential-type-choice-shell wide' },
+    node('div', { class: 'credential-type-choice-copy' },
+      node('strong', { text: 'Rodzaj dostępu' }),
+      node('span', { class: 'muted', text: 'Wybierz system, do którego CloudPortal ma się łączyć.' })),
+    node('div', { class: 'credential-type-choice-grid' }, ...preferred.map(renderChoice)),
+    node('details', { class: 'credential-type-more' },
+      node('summary', { text: 'Pozostałe typy' }),
+      node('div', { class: 'credential-type-choice-grid secondary' }, ...remaining.map(renderChoice))));
+}
+
 async function credentialsView() {
-  const credentials = (await api('/credentials?limit=200')).items;
-  const actions = allowed('credentials.create') ? [button('Dodaj dane dostępowe', () => navigate('/access/credentials/new'), 'primary')] : [];
-  dom.content.replaceChildren(heading('Sekrety są szyfrowane i nigdy nie wracają do przeglądarki.', actions),
-    table([
-      { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
-      { label: 'Typ', value: item => badge(credentialTypeLabel(item.type), 'info') },
-      { label: 'Endpoint', value: item => node('span', { class: 'mono', text: item.endpoint || 'zarządzany przez dostawcę' }) },
-      { label: 'Użytkownik', value: item => item.username || '—' },
-      { label: 'Sekret', value: item => item.configured ? badge('configured', 'ok') : badge('missing', 'danger') },
-      { label: 'Wygasa', value: item => item.expires_at ? formatDate(item.expires_at) : '—' },
-      { label: 'Rotacja', value: item => item.rotation_due_at ? formatDate(item.rotation_due_at) : '—' },
-      { label: 'Sekret zmieniono', value: item => item.secret_updated_at ? formatDate(item.secret_updated_at) : '—' },
-    ], credentials, item => credentialActions(item)));
+  const credentials = (await api('/credentials?limit=200')).items || [];
+  const actions = allowed('credentials.create')
+    ? [button('Dodaj dostęp', () => navigate('/access/credentials/new'), 'primary')]
+    : [];
+
+  const configured = credentials.filter(item => item.configured).length;
+  const attention = credentials.filter(item => credentialHealth(item).kind !== 'ok').length;
+  const types = new Set(credentials.map(item => item.type)).size;
+
+  const search = node('input', {
+    type: 'search',
+    class: 'credential-access-search',
+    placeholder: 'Szukaj po nazwie, typie, endpointcie lub użytkowniku…',
+    'aria-label': 'Szukaj dostępów',
+  });
+  const typeFilter = node('select', { class: 'credential-access-filter', 'aria-label': 'Filtruj typ dostępu' },
+    node('option', { value: 'all', text: 'Wszystkie typy' }),
+    ...[...new Set(credentials.map(item => item.type))]
+      .sort((a, b) => credentialTypeLabel(a).localeCompare(credentialTypeLabel(b), 'pl'))
+      .map(type => node('option', { value: type, text: credentialTypeLabel(type) })));
+  const cards = node('div', { class: 'credential-access-grid' });
+  const empty = node('div', { class: 'panel credential-access-empty', hidden: true },
+    node('strong', { text: 'Brak pasujących dostępów' }),
+    node('span', { class: 'muted', text: 'Zmień filtr lub wyszukiwaną frazę.' }));
+
+  function renderList() {
+    const phrase = searchable(search.value.trim());
+    const selectedType = typeFilter.value;
+    const visible = credentials.filter(item => {
+      if (selectedType !== 'all' && item.type !== selectedType) return false;
+      if (!phrase) return true;
+      return searchable([
+        item.name,
+        item.type,
+        credentialTypeLabel(item.type),
+        item.endpoint,
+        item.username,
+      ].join(' ')).includes(phrase);
+    });
+    cards.replaceChildren(...visible.map(credentialCard));
+    empty.hidden = visible.length > 0;
+  }
+
+  search.addEventListener('input', renderList);
+  typeFilter.addEventListener('change', renderList);
+  renderList();
+
+  dom.content.replaceChildren(
+    heading('Połączenia i sekrety używane przez CloudPortal do Proxmox, SSH, AWX, chmur i innych systemów.', actions),
+    node('div', { class: 'credential-access-stats' },
+      node('section', { class: 'panel credential-access-stat' },
+        node('span', { text: 'Wszystkie' }), node('strong', { text: String(credentials.length) })),
+      node('section', { class: 'panel credential-access-stat' },
+        node('span', { text: 'Gotowe' }), node('strong', { text: String(configured) })),
+      node('section', { class: 'panel credential-access-stat' },
+        node('span', { text: 'Wymagają uwagi' }), node('strong', { text: String(attention) })),
+      node('section', { class: 'panel credential-access-stat' },
+        node('span', { text: 'Typy' }), node('strong', { text: String(types) }))),
+    node('section', { class: 'panel credential-access-toolbar' },
+      search,
+      typeFilter),
+    credentials.length
+      ? node('div', { class: 'credential-access-list-shell' }, cards, empty)
+      : node('section', { class: 'panel credential-access-first' },
+          node('span', { class: 'credential-access-first-icon', 'aria-hidden': 'true', text: '+' }),
+          node('h2', { text: 'Nie ma jeszcze żadnego dostępu' }),
+          node('p', { class: 'muted', text: 'Dodaj połączenie do Proxmox, SSH, AWX, VMware albo chmury. Sekrety są szyfrowane po stronie backendu.' }),
+          allowed('credentials.create') ? button('Dodaj pierwszy dostęp', () => navigate('/access/credentials/new'), 'primary') : null));
 }
 
 function credentialActions(item) {
   const actions = [];
-  if (allowed('credentials.test') && item.type !== 'other' && (item.type !== 'ssh' || item.endpoint)) actions.push(button('Testuj', async () => {
-    try {
-      const result = await api('/credentials/' + item.id + '/test', { method: 'POST' });
-      toast('Połączenie działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
-    } catch (error) { toast(error.message, 'error'); }
-  }));
-  if (allowed('credentials.update')) actions.push(button('Edytuj', () => navigate('/access/credentials/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'credential'))));
-  if (allowed('credentials.delete')) actions.push(button('Usuń', () => confirmAction('Usuń dane dostępowe', 'Pozycja „' + item.name + '” zostanie trwale usunięta.', async () => {
-    await api('/credentials/' + item.id, { method: 'DELETE' }); toast('Dane dostępowe usunięte.'); navigate('credentials');
-  }), 'danger'));
+  if (allowed('credentials.test') && item.type !== 'other' && (item.type !== 'ssh' || item.endpoint)) {
+    actions.push(button('Testuj', async () => {
+      try {
+        const result = await api('/credentials/' + item.id + '/test', { method: 'POST' });
+        toast('Połączenie działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    }));
+  }
+  if (allowed('credentials.update')) {
+    actions.push(button('Edytuj', () => navigate('/access/credentials/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'credential')), 'primary'));
+  }
+  if (allowed('credentials.delete')) {
+    actions.push(button('Usuń', () => confirmAction(
+      'Usuń dostęp',
+      'Dostęp „' + item.name + '” zostanie trwale usunięty. Operacje korzystające z niego mogą przestać działać.',
+      async () => {
+        await api('/credentials/' + item.id, { method: 'DELETE' });
+        toast('Dostęp usunięty.');
+        navigate('credentials');
+      }
+    ), 'danger'));
+  }
   return actions;
 }
 
 function credentialForm(item = null) {
   const dynamic = node('div', { class: 'credential-dynamic wide' });
   const typeField = selectField('Typ', 'type', credentialTypeChoices(), item?.type || 'proxmox', { required: true });
-  const fields = node('div', { class: 'form-grid' },
-    field('Nazwa', 'name', { required: true, value: item?.name || '' }), typeField,
-    field('Dane dostępowe wygasają (opcjonalnie)', 'expires_at', { type: 'datetime-local', value: item?.expires_at ? toDateTimeLocal(item.expires_at) : '' }),
-    field('Rotacja wymagana do (opcjonalnie)', 'rotation_due_at', { type: 'datetime-local', value: item?.rotation_due_at ? toDateTimeLocal(item.rotation_due_at) : '' }),
-    dynamic);
+  typeField.classList.add('credential-type-select-native');
+  const typeSelect = typeField.querySelector('select');
+  const typeChoices = credentialTypeChoiceGrid(typeSelect, item?.type || 'proxmox');
+
+  const basics = formSection(
+    'Podstawowe informacje',
+    'Nadaj połączeniu czytelną nazwę i wybierz system docelowy.',
+    field('Nazwa dostępu', 'name', {
+      required: true,
+      value: item?.name || '',
+      wide: true,
+      placeholder: item ? item.name : 'np. Proxmox PROD',
+    }),
+    typeField,
+    typeChoices);
+
+  const advanced = node('details', { class: 'credential-advanced-options wide' },
+    node('summary', { text: 'Opcje zaawansowane' }),
+    node('div', { class: 'form-grid credential-advanced-grid' },
+      field('Dostęp wygasa', 'expires_at', {
+        type: 'datetime-local',
+        value: item?.expires_at ? toDateTimeLocal(item.expires_at) : '',
+        help: 'Opcjonalna data wygaśnięcia dostępu.',
+      }),
+      field('Rotacja wymagana do', 'rotation_due_at', {
+        type: 'datetime-local',
+        value: item?.rotation_due_at ? toDateTimeLocal(item.rotation_due_at) : '',
+        help: 'Opcjonalny termin wymiany sekretu.',
+      })));
+
+  const fields = node('div', { class: 'form-grid credential-simple-form' },
+    basics,
+    formSection('Połączenie', 'Wprowadź tylko dane wymagane przez wybrany system.', dynamic),
+    advanced);
 
   let connectionCheck = null;
   let connectionResult = null;
@@ -545,9 +715,11 @@ function credentialForm(item = null) {
       connectionResult.className = 'credential-connection-result pending';
       connectionResult.replaceChildren(
         node('div', { class: 'credential-connection-result-header' },
-          badge('Test', 'info'), node('strong', { text: selectedType === 'awx'
-            ? 'Sprawdzanie połączenia z AWX…' : 'Sprawdzanie połączenia z Proxmox VE…' })),
-        node('p', { class: 'credential-connection-message', text: 'Weryfikuję endpoint, TLS i uwierzytelnienie bez zapisywania sekretu.' }));
+          badge('Test', 'info'),
+          node('strong', { text: selectedType === 'awx'
+            ? 'Sprawdzanie AWX…'
+            : 'Sprawdzanie Proxmox VE…' })),
+        node('p', { class: 'credential-connection-message', text: 'Sprawdzam endpoint, TLS i uwierzytelnienie bez zapisywania sekretu.' }));
       try {
         if (selectedType === 'awx') {
           const result = await testAwxCredentialForm(item, form);
@@ -564,17 +736,18 @@ function credentialForm(item = null) {
         control.textContent = previous;
       }
     }, 'ghost');
+
     connectionCheck = node('section', { class: 'credential-connection-check wide' },
       node('div', { class: 'credential-connection-check-copy' },
-        node('strong', { text: 'Test połączenia przed zapisem' }),
-        node('p', { text: 'Sprawdza API, uwierzytelnienie i TLS. Dla AWX wykrywa także wersję oraz dostępne zasoby. Sekret nie jest zapisywany podczas testu.' })),
+        node('strong', { text: 'Sprawdź przed zapisaniem' }),
+        node('p', { text: 'Test jest dostępny dla Proxmox VE i AWX. Nie zapisuje sekretu.' })),
       node('div', { class: 'credential-connection-check-actions' }, connectionButton),
       connectionResult);
-    fields.append(connectionCheck);
-    fields.append(checkboxField('Po zapisaniu przetestuj połączenie', 'test_after_save', false));
+    fields.insertBefore(connectionCheck, advanced);
+    advanced.append(node('div', { class: 'credential-advanced-toggle' },
+      checkboxField('Po zapisaniu automatycznie przetestuj połączenie', 'test_after_save', false)));
   }
 
-  const typeSelect = typeField.querySelector('select');
   const render = () => {
     renderCredentialDynamic(dynamic, typeSelect.value, item);
     if (connectionCheck) {
@@ -587,9 +760,11 @@ function credentialForm(item = null) {
   render();
 
   openModal({
-    title: item ? 'Edytuj dane dostępowe: ' + item.name : 'Nowe dane dostępowe',
-    eyebrow: 'Sekrety infrastruktury', body: fields,
-    submitLabel: item ? 'Zapisz zmiany' : 'Dodaj dane dostępowe', wide: true,
+    title: item ? 'Edytuj dostęp: ' + item.name : 'Nowy dostęp',
+    eyebrow: 'Dostępy',
+    body: fields,
+    submitLabel: item ? 'Zapisz' : 'Dodaj dostęp',
+    wide: true,
     onSubmit: async (data, form) => {
       const type = data.get('type');
       const config = CREDENTIAL_TYPE_CONFIG[type] || CREDENTIAL_TYPE_CONFIG.other;
@@ -652,8 +827,12 @@ function credentialForm(item = null) {
           try {
             const result = await api('/credentials/' + saved.id + '/test', { method: 'POST' });
             toast('Token Proxmox wygenerowany i zapisany. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
-          } catch (error) { toast('Token wygenerowany i zapisany, ale test nie powiódł się: ' + error.message, 'error'); }
-        } else toast('Token Proxmox wygenerowany i zapisany. Hasło nie zostało zachowane.');
+          } catch (error) {
+            toast('Token wygenerowany i zapisany, ale test nie powiódł się: ' + error.message, 'error');
+          }
+        } else {
+          toast('Token Proxmox wygenerowany i zapisany. Hasło nie zostało zachowane.');
+        }
         navigate('credentials');
         return;
       }
@@ -720,13 +899,20 @@ function credentialForm(item = null) {
         if (!Object.keys(secrets).length) throw new Error('Wprowadź wymagane dane uwierzytelniające.');
         payload.secrets = secrets;
       }
-      const saved = await api(item ? '/credentials/' + item.id : '/credentials', { method: item ? 'PUT' : 'POST', body: payload });
+      const saved = await api(item ? '/credentials/' + item.id : '/credentials', {
+        method: item ? 'PUT' : 'POST',
+        body: payload,
+      });
       if (data.has('test_after_save') && type !== 'other' && (type !== 'ssh' || endpoint)) {
         try {
           const result = await api('/credentials/' + saved.id + '/test', { method: 'POST' });
-          toast('Dane dostępowe zapisane. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
-        } catch (error) { toast('Dane dostępowe zapisane, ale test nie powiódł się: ' + error.message, 'error'); }
-      } else toast('Dane dostępowe zapisane.');
+          toast('Dostęp zapisany. Test działa' + (result.version ? ' (' + result.version + ')' : '') + '.');
+        } catch (error) {
+          toast('Dostęp zapisany, ale test nie powiódł się: ' + error.message, 'error');
+        }
+      } else {
+        toast('Dostęp zapisany.');
+      }
       navigate('credentials');
     },
   });
@@ -737,19 +923,19 @@ registerRoutedForm({
   pattern: /^\/access\/credentials\/new$/,
   parent: 'credentials',
   permission: 'credentials.create',
-  label: 'Dane dostępowe',
+  label: 'Dostępy',
 }, () => credentialForm());
 registerRoutedForm({
   id: 'credentials-edit',
   pattern: /^\/access\/credentials\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
   parent: 'credentials',
   permission: 'credentials.update',
-  label: 'Dane dostępowe',
+  label: 'Dostępy',
 }, async match => {
   const credentials = (await api('/credentials?limit=200')).items;
   const item = credentials.find(value => Number(value.id) === Number(match.params.id));
   if (!item) throw new Error('Nie znaleziono danych dostępowych.');
   credentialForm(item);
 });
-registerView({ id: 'credentials', label: 'Dane dostępowe', icon: 'K', permission: 'credentials.read', order: 40 }, credentialsView);
+registerView({ id: 'credentials', label: 'Dostępy', icon: 'K', permission: 'credentials.read', order: 40 }, credentialsView);
 })();

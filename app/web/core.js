@@ -664,7 +664,7 @@ function webhookEventLabel(value) {
 }
 
 const AUDIT_RESOURCE_LABELS = {
-  users: 'Użytkownik', roles: 'Rola', tokens: 'Token', credentials: 'Dane dostępowe',
+  users: 'Użytkownik', roles: 'Rola', tokens: 'Token', credentials: 'Dostępy',
   providers: 'Platforma', deployments: 'Wdrożenie', jobs: 'Zadanie', blueprints: 'Blueprint',
   hostnames: 'Hostname', hostname_schemes: 'Schemat hostname', ip_pools: 'Pula IPAM',
   ip_allocations: 'Adres IP', managed_vms: 'VM', schedules: 'Harmonogram', webhooks: 'Webhook',
@@ -689,7 +689,7 @@ function auditActionLabel(value) {
 }
 
 const PERMISSION_GROUP_LABELS = {
-  users: 'Użytkownicy', roles: 'Role i RBAC', tokens: 'Tokeny API', credentials: 'Dane dostępowe',
+  users: 'Użytkownicy', roles: 'Role i dostęp', tokens: 'Tokeny API', credentials: 'Dane dostępowe',
   providers: 'Platformy', deployments: 'Wdrożenia', jobs: 'Zadania', terraform: 'Terraform / OpenTofu',
   ansible: 'Ansible', blueprints: 'Blueprinty', hostnames: 'Hostname Manager', ipam: 'IPAM',
   inventory: 'Moje zasoby', vms: 'Maszyny wirtualne', snapshots: 'Snapshoty', backups: 'Backupy',

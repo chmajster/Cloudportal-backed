@@ -83,17 +83,17 @@
       ...(existingAccount ? [
         '# Konto ' + JSON.stringify(username) + ' już istnieje w template.',
         '# Cloud-init nie utworzy użytkownika, nie zmieni jego hasła, kluczy SSH ani sudo.',
-        '# Wybrany credential będzie używany w późniejszych etapach dostępu do VM.',
+        '# Wybrany Dostęp będzie używany w późniejszych etapach dostępu do VM.',
       ] : [
         'users:',
         '  - name: ' + JSON.stringify(username),
         '    shell: /bin/sh',
         ...(credential ? [
           ...(credential.supports_cloud_init_password === true
-            ? ['    # Hasło z Credentiala zostanie zapisane wyłącznie jako solony hash.']
+            ? ['    # Hasło z Dostępu zostanie zapisane wyłącznie jako solony hash.']
             : []),
           ...(credential.supports_cloud_init_ssh_key === true
-            ? ['    # Z klucza prywatnego Credentiala zostanie wyprowadzony tylko klucz publiczny.']
+            ? ['    # Z klucza prywatnego Dostępu zostanie wyprowadzony tylko klucz publiczny.']
             : (state.sshPublicKey
                 ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)]
                 : [])),
@@ -150,7 +150,7 @@
       { value: 'existing_template', label: 'Użyj istniejącego konta z template' },
     ], state.guestAccountMode || 'cloud_init_managed', {
       wide: true,
-      help: 'Dla konta istniejącego w template Cloud-init nie zmienia hasła, kluczy SSH ani sudo. Credential służy wtedy do późniejszego logowania i automatyzacji.',
+      help: 'Dla konta istniejącego w template Cloud-init nie zmienia hasła, kluczy SSH ani sudo. Wybrany Dostęp służy wtedy do późniejszego logowania i automatyzacji.',
     });
     accountMode.querySelector('select').addEventListener('change', event => {
       capture();
@@ -164,43 +164,50 @@
     });
 
     const choices = window.BlueprintProvisioningGuards.guestCredentialChoices(data.credentials || []);
+    const eligibleCredentialIds = new Set(choices.map(choice => String(choice.value)));
+    const sshAccesses = (data.credentials || []).filter(row =>
+      row.type === 'ssh' && eligibleCredentialIds.has(String(row.id)));
     const accessCredentialId = state.guestAccountMode === 'existing_template'
       ? (state.templateGuestCredentialId || state.guestCredentialId || '')
       : (state.guestCredentialId || '');
-    const credentialField = selectField(
-      'Credential SSH',
+    const credentialField = parts.ui.credentialPicker(
+      state.guestAccountMode === 'existing_template'
+        ? 'Dostęp do konta istniejącego w template'
+        : 'Dostęp zarządzany przez Cloud-init',
       'cloud_init_access_credential_id',
-      [{
-        value: '',
-        label: state.guestAccountMode === 'existing_template'
-          ? 'Wybierz Credential konta istniejącego w template'
-          : 'Bez Credentiala — użyj ustawień ręcznych poniżej',
-      }, ...choices],
+      sshAccesses,
       accessCredentialId,
-      {
-        wide: true,
-        help: state.guestAccountMode === 'existing_template'
-          ? 'Credential opisuje konto już obecne w template i będzie używany przez wait_for_ssh, Ansible oraz inne kroki wymagające dostępu do systemu.'
-          : 'Username pochodzi z Credentiala. Hasło pozostaje zaszyfrowane w backendzie, a z klucza prywatnego backend wyprowadza wyłącznie odpowiadający klucz publiczny do Cloud-init.',
+      value => {
+        capture();
+        if (state.guestAccountMode === 'existing_template') {
+          state.templateGuestCredentialId = value;
+          state.guestCredentialId = '';
+        } else {
+          state.guestCredentialId = value;
+          state.templateGuestCredentialId = '';
+        }
+        rerender();
       },
-    );
-    credentialField.querySelector('select').addEventListener('change', event => {
-      capture();
-      if (state.guestAccountMode === 'existing_template') {
-        state.templateGuestCredentialId = event.currentTarget.value;
-        state.guestCredentialId = '';
-      } else {
-        state.guestCredentialId = event.currentTarget.value;
-        state.templateGuestCredentialId = '';
+      {
+        noneLabel: state.guestAccountMode === 'existing_template'
+          ? 'Nie wybrano Dostępu do konta z template'
+          : 'Użyj ustawień ręcznych',
+        noneDescription: state.guestAccountMode === 'existing_template'
+          ? 'Wybierz zapisany Dostęp SSH do konta już obecnego w template.'
+          : 'Cloud-init użyje użytkownika i klucza publicznego z ustawień ręcznych.',
+        description: state.guestAccountMode === 'existing_template'
+          ? 'Sekret pozostaje w backendzie. Cloud-init zachowa konto z template bez zmiany jego hasła, kluczy i sudo.'
+          : 'Dostęp używany przez Cloud-init jest zapisywany w Blueprintcie wyłącznie jako ID; sekret nie trafia do przeglądarki.',
+        emptyTitle: 'Brak Dostępów SSH',
+        emptyText: 'Dodaj Dostęp typu SSH / Linux albo użyj konfiguracji ręcznej.',
       }
-      rerender();
-    });
+    );
 
     const selectedCredential = (data.credentials || []).find(row =>
       String(row.id) === String(accessCredentialId));
     const credentialSummary = selectedCredential
       ? node('div', { class: 'blueprint-wizard-info wide' },
-          node('strong', { text: 'Dostęp z Credentiala' }),
+          node('strong', { text: 'Wybrany Dostęp SSH' }),
           node('span', { text: [
             'Użytkownik: ' + (selectedCredential.username || selectedCredential.name || ('#' + selectedCredential.id)),
             selectedCredential.supports_cloud_init_ssh_key === true
@@ -216,7 +223,7 @@
       const usernameField = field('Użytkownik SSH', 'cloud_init_ssh_username', {
         value: selectedCredential?.username || state.sshUsername || 'clouduser',
         help: selectedCredential
-          ? 'Username jest pobierany z wybranego Credentiala i ma pierwszeństwo przed wartością ręczną.'
+          ? 'Username jest pobierany z wybranego Dostępu i ma pierwszeństwo przed wartością ręczną.'
           : 'Konto zostanie utworzone lub skonfigurowane przez Cloud-init.',
       });
       const usernameInput = usernameField.querySelector('input');
@@ -231,7 +238,7 @@
         value: state.sshPublicKey,
         wide: true,
         help: credentialOwnsKey
-          ? 'Klucz publiczny zostanie automatycznie wyprowadzony z klucza prywatnego Credentiala. Ręczna wartość nie jest używana.'
+          ? 'Klucz publiczny zostanie automatycznie wyprowadzony z klucza prywatnego Dostępu. Ręczna wartość nie jest używana.'
           : (selectedCredential
               ? 'Opcjonalny klucz publiczny. Przy Credentialzie hasłowym może zostać dodany obok logowania hasłem.'
               : 'Opcjonalny pojedynczy klucz publiczny OpenSSH, np. ssh-ed25519.'),
@@ -264,7 +271,7 @@
       manualAccess,
       networkSummary,
       node('p', { class: 'muted wide', text: state.guestAccountMode === 'existing_template'
-        ? 'Cloud-init wykona konfigurację systemu, sieci i opcjonalnie QEMU Guest Agent, ale zachowa istniejące konto z template. Wybrany Credential będzie używany później przez etapy wymagające dostępu do systemu gościa.'
+        ? 'Cloud-init wykona konfigurację systemu, sieci i opcjonalnie QEMU Guest Agent, ale zachowa istniejące konto z template. Wybrany Dostęp będzie używany później przez etapy wymagające dostępu do systemu gościa.'
         : 'Konfiguracja trafi na nośnik NoCloud ISO (CIDATA) przez API Proxmoxa przed uruchomieniem VM. Hasła i klucze prywatne nie są wysyłane do przeglądarki ani zapisywane w zmiennych Terraform.' }),
       node('p', { class: 'muted wide', text: 'Opcja „Instaluj QEMU Guest Agent automatycznie” dodaje pakiet oraz uruchomienie usługi do Cloud-init. Nie instaluje agenta przez SSH.' }),
       node('details', { class: 'advanced-options wide' },

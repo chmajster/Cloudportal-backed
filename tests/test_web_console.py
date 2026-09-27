@@ -227,8 +227,27 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "registerCommand('deployments.create'" in script
     assert "navigate('/providers/new')" in script
     assert "navigate('/access/credentials/new')" in script
+    assert "registerView({ id: 'credentials', label: 'Dostępy'" in script
+    assert "function credentialHealth(" in script
+    assert "function credentialCard(" in script
+    assert "function credentialTypeChoiceGrid(" in script
+    assert "credential-access-grid" in script
+    assert "credential-type-choice-grid" in script
+    assert "Opcje zaawansowane" in script
+    assert "Dodaj dostęp" in script
     assert "navigate('/access/users/new')" in script
     assert "navigate('/access/roles/new')" in script
+    assert "registerCommand('roles.create'" in script
+    assert "label: 'Role i dostęp'" in script
+    assert "const RBAC_TABS = [" in script
+    assert "function rbacAssignmentsPanel(" in script
+    assert "function rbacRolesPanel(" in script
+    assert "function rbacAccessAnalysisPanel(" in script
+    assert "function rbacGovernancePanel(" in script
+    assert "Kto → rola → zakres → polityka" in script
+    assert "Organization → Project → APMID → Environment → Resource" in script
+    assert "To wynik globalnego RBAC." in script
+    assert "openModal({ title: `Role: ${user.username}`" not in script
     assert "navigate('/ipam/pools/new')" in script
     assert "navigate('/operations/schedules/new')" in script
     assert "navigate('/operations/webhooks/new')" in script
@@ -710,6 +729,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'Konfiguracja', 'Konfiguracja systemu'" in script
     assert "'Workflow', 'Workflow'" in script
     assert "'Dostęp', 'Dostęp i bezpieczeństwo'" in script
+    assert 'function credentialPicker(' in script
+    assert 'function multiCardGroup(' in script
+    assert 'function toggleCard(' in script
+    assert 'blueprint-wizard-access-card-grid' in script
+    assert 'Dostęp do konta istniejącego w template' in script
+    assert 'Dostęp zarządzany przez Cloud-init' in script
+    assert 'Dostęp używany przez Cloud-init' in script
+    assert 'Kto może używać i zarządzać tym Blueprintem?' in script
+    assert 'Ogranicz użycie do ról' in script
+    assert 'Ogranicz użycie do użytkowników' in script
+    assert 'Zaawansowane zarządzanie' in script
     assert 'function dualListGroup(' in script
     assert "'data-dual-list-name': name" in script
     assert "dualListGroup('Dozwolone role'" in script
@@ -1116,6 +1146,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.credential-user-row' in stylesheet
     assert '.credential-connection-check' in stylesheet
     assert '.credential-connection-result' in stylesheet
+    assert '.credential-access-stats' in stylesheet
+    assert '.credential-access-grid' in stylesheet
+    assert '.credential-access-card' in stylesheet
+    assert '.credential-type-choice-grid' in stylesheet
+    assert '.credential-advanced-options' in stylesheet
     assert '.ssh-key-bootstrap-panel' in stylesheet
     assert '.ssh-host-fingerprint' in stylesheet
     assert '.credential-connection-result.pending' in stylesheet
@@ -1150,6 +1185,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.vra-yaml-editor' in stylesheet
     assert '.blueprint-wizard-steps' in stylesheet
     assert '.blueprint-wizard-select-card' in stylesheet
+    assert '.blueprint-wizard-access-picker' in stylesheet
+    assert '.blueprint-wizard-access-card-grid' in stylesheet
+    assert '.blueprint-wizard-access-multi-grid' in stylesheet
+    assert '.blueprint-wizard-access-toggle-grid' in stylesheet
+    assert '.blueprint-wizard-access-advanced' in stylesheet
     assert '.blueprint-wizard-dual-fieldset' in stylesheet
     assert '.blueprint-wizard-dual-list' in stylesheet
     assert '.blueprint-wizard-dual-select' in stylesheet
@@ -1164,6 +1204,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.advanced-table.compact' in stylesheet
     assert '.advanced-table {' in stylesheet
     assert '.permission-group' in stylesheet
+    assert '.rbac-tabs' in stylesheet
+    assert '.rbac-stats' in stylesheet
+    assert '.rbac-role-grid' in stylesheet
+    assert '.rbac-assignment-editor' in stylesheet
+    assert '.rbac-analysis-result' in stylesheet
+    assert '.rbac-governance-grid' in stylesheet
     assert '.account-overview-grid' in stylesheet
     assert '.account-profile-head' in stylesheet
     assert '.account-meta-grid' in stylesheet
