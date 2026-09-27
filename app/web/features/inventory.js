@@ -741,7 +741,7 @@ async function vmAuditContent(item) {
       { label: 'Zdarzenie', value: row => node('strong', { text: row.title || '—' }) },
       { label: 'Status', value: row => row.status ? badge(statusLabel(row.status), vmHistoryStatusTone(row.status)) : '—' },
       { label: 'Szczegóły', value: row => row.detail || '—' },
-      { label: 'Użytkownik', value: row => row.actor_user_id || '—' },
+      { label: 'Użytkownik', value: row => row.actor_username || '—' },
       { label: 'ID', value: row => node('span', { class: 'mono', text: [
         row.job_id ? `job ${short(row.job_id, 12)}` : null,
         row.request_id ? `req ${short(row.request_id, 12)}` : null,

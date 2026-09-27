@@ -16,7 +16,7 @@ from app.database import get_db
 from app.day2.models import Day2ActionRequest
 from app.inventory_sync import repair_inventory_from_states
 from app.jobs.lifecycle import release_pre_execution_allocations
-from app.models import Audit, Credential, Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, now
+from app.models import Audit, Credential, Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, User, now
 from app.providers.registry import provider_for
 from app.security.core import audit
 from app.resource_scope.http import require
@@ -476,6 +476,19 @@ def managed_vm_history(
                 request_id=entry.request_id,
                 actor_user_id=entry.user_id,
             )
+
+    actor_user_ids = {
+        entry['actor_user_id']
+        for entry in entries
+        if entry['actor_user_id'] is not None
+    }
+    actor_usernames = {}
+    if actor_user_ids:
+        actor_usernames = dict(db.execute(
+            select(User.id, User.username).where(User.id.in_(actor_user_ids))
+        ).all())
+    for entry in entries:
+        entry['actor_username'] = actor_usernames.get(entry['actor_user_id'])
 
     entries.sort(key=lambda item: item['timestamp'], reverse=True)
     return {'items': entries[:limit]}
