@@ -236,24 +236,33 @@ interactive_action_menu() {
     exit 2
   fi
 
+  cat >&3 <<'EOF'
+   _____ _                 _ _____           _        _
+  / ____| |               | |  __ \         | |      | |
+ | |    | | ___  _   _  __| | |__) |__  _ __| |_ __ _| |
+ | |    | |/ _ \| | | |/ _` |  ___/ _ \| '__| __/ _` | |
+ | |____| | (_) | |_| | (_| | |  | (_) | |  | || (_| | |
+  \_____|_|\___/ \__,_|\__,_|_|   \___/|_|   \__\__,_|_|
+                    by Chris majster
+EOF
   ui_header 'Cloudportal-backed — wybór operacji'
   cat >&3 <<'EOF'
   [1] Instalacja / aktualizacja — systemd
   [2] Instalacja / aktualizacja — Docker
-  [3] Status — systemd
-  [4] Status / auto-naprawa — Docker
-  [5] Odinstaluj — zachowaj bazę i dane
-  [6] Odinstaluj całkowicie — usuń bazę i dane
-  [7] Odinstaluj Docker — zachowaj wolumeny i konfigurację
-  [8] Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację
-  [9] Recovery password / konto Administrator — systemd
-  [10] Recovery password / konto Administrator — Docker
-  [11] Włącz automatyczne aktualizacje cron — systemd
-  [12] Włącz automatyczne aktualizacje cron — Docker
-  [13] Wyłącz automatyczne aktualizacje cron
-  [14] Status automatycznych aktualizacji cron
-  [15] Instalacja / aktualizacja — Kubernetes
-  [16] Status — Kubernetes
+  [3] Instalacja / aktualizacja — Kubernetes
+  [4] Status — systemd
+  [5] Status / auto-naprawa — Docker
+  [6] Status — Kubernetes
+  [7] Recovery password / konto Administrator — systemd
+  [8] Recovery password / konto Administrator — Docker
+  [9] Włącz automatyczne aktualizacje cron — systemd
+  [10] Włącz automatyczne aktualizacje cron — Docker
+  [11] Wyłącz automatyczne aktualizacje cron
+  [12] Status automatycznych aktualizacji cron
+  [13] Odinstaluj — zachowaj bazę i dane
+  [14] Odinstaluj całkowicie — usuń bazę i dane
+  [15] Odinstaluj Docker — zachowaj wolumeny i konfigurację
+  [16] Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację
   [17] Odinstaluj Kubernetes — zachowaj PVC i sekrety
   [18] Odinstaluj Kubernetes całkowicie — usuń PVC i sekrety
   [0] Wyjście
@@ -279,75 +288,75 @@ EOF
         return 0
         ;;
       3)
-        status_mode=1
+        k8s_mode=1
         exec 3>&-
         return 0
         ;;
       4)
-        docker_mode=1
         status_mode=1
         exec 3>&-
         return 0
         ;;
       5)
-        uninstall_mode=1
+        docker_mode=1
+        status_mode=1
         exec 3>&-
         return 0
         ;;
       6)
-        uninstall_mode=1
-        purge_data=1
+        k8s_mode=1
+        status_mode=1
         exec 3>&-
         return 0
         ;;
       7)
-        docker_mode=1
-        uninstall_mode=1
+        recovery_mode=1
         exec 3>&-
         return 0
         ;;
       8)
         docker_mode=1
-        uninstall_mode=1
-        purge_data=1
-        exec 3>&-
-        return 0
-        ;;
-      9)
         recovery_mode=1
         exec 3>&-
         return 0
         ;;
-      10)
-        docker_mode=1
-        recovery_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      11|12)
+      9|10)
         auto_update_mode=1
         auto_update_action=enable
-        [[ "$choice" != 12 ]] || docker_mode=1
+        [[ "$choice" != 10 ]] || docker_mode=1
         printf 'Interwał w godzinach [12] (1,2,3,4,6,8,12,24): ' >&3
         IFS= read -r auto_update_interval <&3 || { exec 3>&-; exit 2; }
         auto_update_interval=${auto_update_interval:-12}
         exec 3>&-
         return 0
         ;;
-      13|14)
+      11|12)
         auto_update_mode=1
-        if [[ "$choice" == 13 ]]; then auto_update_action=disable; else auto_update_action=status; fi
+        if [[ "$choice" == 11 ]]; then auto_update_action=disable; else auto_update_action=status; fi
+        exec 3>&-
+        return 0
+        ;;
+      13)
+        uninstall_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      14)
+        uninstall_mode=1
+        purge_data=1
         exec 3>&-
         return 0
         ;;
       15)
-        k8s_mode=1
+        docker_mode=1
+        uninstall_mode=1
         exec 3>&-
         return 0
         ;;
       16)
-        k8s_mode=1
-        status_mode=1
+        docker_mode=1
+        uninstall_mode=1
+        purge_data=1
         exec 3>&-
         return 0
         ;;
