@@ -128,3 +128,12 @@ def test_docker_updater_is_unix_socket_only_and_does_not_require_host_8766():
     assert 'CP_UPDATER_SOCKET=$docker_updater_runtime/updater.sock' in block
     assert 'CP_UPDATER_PORT=8766' not in block
     assert 'Unix-socket-only' in block
+
+def test_docker_candidate_failure_logs_migrate_and_rebuilds_previous_release():
+    assert "ui_info 'Log usługi migrate:'" in INSTALLER
+    assert 'docker_compose_for "$release" "$candidate_env" logs --tail=120 migrate' in INSTALLER
+    assert "ui_info 'Odbudowuję obrazy poprzedniego release" in INSTALLER
+    assert 'docker_compose_for "$previous_release" "$docker_env" build' in INSTALLER
+    assert "ui_ok 'Poprzedni release Docker został odbudowany i przywrócony.'" in INSTALLER
+    assert 'automatyczny rollback również się nie powiódł' in INSTALLER
+
