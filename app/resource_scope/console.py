@@ -16,10 +16,18 @@ def console_access(record, *, adapter=False):
     except (KeyError, TypeError, ValueError):
         fail(410, 'CONSOLE_EXPIRED', 'Console session is no longer valid')
     with session() as db:
-        authorize(db, principal, scope, 'vms.console')
+        permission = str(record.get('permission') or 'vms.console')
+        if permission not in {'vms.console', 'proxmox_admin.console.use'}:
+            fail(410, 'CONSOLE_EXPIRED', 'Console session permission is invalid')
+        actor, scoped = authorize(db, principal, scope, permission)
         bind_scope(db, scope)
-        guard_raw_provider(db, provider_id, scope)
-        guard_vm_identity(db, provider_id, vmid, scope)
+        if permission == 'vms.console':
+            guard_raw_provider(db, provider_id, scope)
+            guard_vm_identity(db, provider_id, vmid, scope)
+        elif 'proxmox_admin.scope.all' not in actor.global_permissions:
+            from app.resource_scope.service import filter_provider_vms
+            if not filter_provider_vms(db, provider_id, [{'vmid': vmid}]):
+                fail(404, 'RESOURCE_NOT_FOUND', 'Console resource is no longer accessible')
         provider = db.get(Provider, provider_id)
         credential = db.get(Credential, provider.credentials_id) if provider else None
         if provider is None or credential is None or provider.type != 'proxmox' or credential.type != 'proxmox':
