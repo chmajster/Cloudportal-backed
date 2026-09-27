@@ -172,7 +172,7 @@ async function blueprintsView() {
       { label: 'Kroki', value: item => item.workflow.length },
       { label: 'Zarządzanie', value: item => (item.manager_role_ids || []).length
         ? (item.manager_role_ids || []).map(id => roleNames.get(Number(id)) || ('Rola #' + id)).join(', ')
-        : badge('Bez roli dedykowanej', 'warning') },
+        : badge('Bez roli zarządzającej', 'warning') },
       { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, window.BlueprintApprovalPolicyUI.badgeFor(item), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
