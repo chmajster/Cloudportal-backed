@@ -54,7 +54,11 @@ def context_get(db, principal):
     if row is None or row.project_id is None:
         return {'selected': None, 'version': row.version if row else 0}
     access = authorize(db, principal, row.project_id, 'projects.read', tenant_id=row.tenant_id)
-    return {'selected': project_output(access.project), 'version': row.version}
+    return {
+        'selected': project_output(access.project),
+        'tenant_name': access.tenant.name,
+        'version': row.version,
+    }
 
 
 def context_set(db, principal, data):
@@ -72,7 +76,11 @@ def context_set(db, principal, data):
         row.tenant_id, row.project_id = access.tenant.id, access.project.id
         row.version += 1
     db.flush()
-    return {'selected': project_output(access.project), 'version': row.version}
+    return {
+        'selected': project_output(access.project),
+        'tenant_name': access.tenant.name,
+        'version': row.version,
+    }
 
 
 def context_clear(db, principal, expected_version=None):
