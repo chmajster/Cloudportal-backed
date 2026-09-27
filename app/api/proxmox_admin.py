@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 
 from app.api.common import Limit, idempotent
+from app.api.proxmox_management import issue_console_session
 from app.database import get_db
 from app.day2.models import BulkDay2ActionRequest
 from app.models import Audit, EventRecord, Job, JobLog, now
@@ -337,6 +338,23 @@ def vm_history(
     }
 
 
+@router.post('/vms/{node}/{vmid}/console')
+def vm_console(
+    node: str,
+    vmid: int,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.console.use')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    _target(db, provider_id, request, node, vmid, 'vm')
+    return issue_console_session(
+        provider_id, node, vmid, request, actor, db,
+        object_type='vm', permission='proxmox_admin.console.use',
+    )
+
+
 @router.post('/vms/{node}/{vmid}/power', status_code=202)
 def vm_power(
     node: str,
@@ -657,6 +675,23 @@ def container(
 ):
     _ready(db)
     return container_detail(db, provider_id, request, node, vmid)
+
+
+@router.post('/containers/{node}/{vmid}/console')
+def lxc_console(
+    node: str,
+    vmid: int,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.console.use')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    _target(db, provider_id, request, node, vmid, 'lxc')
+    return issue_console_session(
+        provider_id, node, vmid, request, actor, db,
+        object_type='container', permission='proxmox_admin.console.use',
+    )
 
 
 @router.post('/containers/{node}/{vmid}/power', status_code=202)
