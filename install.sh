@@ -2816,7 +2816,12 @@ EOF
     cat <<'EOF'
         - {name: app-data, persistentVolumeClaim: {claimName: cloudportal-app-data}}
         - {name: nginx, configMap: {name: cloudportal-nginx}}
-        - {name: tls, secret: {secretName: cloudportal-tls}}
+        - name: tls
+          secret:
+            secretName: cloudportal-tls
+            items:
+              - {key: tls.crt, path: server.crt, mode: 0444}
+              - {key: tls.key, path: server.key, mode: 0400}
 EOF
   } | k8s_ns apply -f - >/dev/null
 }
