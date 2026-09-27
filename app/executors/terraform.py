@@ -701,6 +701,11 @@ class TerraformExecutor(Executor):
                             )
                             if clone_telemetry is not None and clone_telemetry.clone_started:
                                 context.stage('terraform.apply')
+                                context.progress(
+                                    None,
+                                    'Finalizowanie Terraform apply',
+                                    phase='terraform',
+                                )
                 finally:
                     keep_plan = (
                         operation == 'terraform.plan'
