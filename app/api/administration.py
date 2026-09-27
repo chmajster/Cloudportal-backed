@@ -240,12 +240,7 @@ def reconcile_job_execution_capacity(request: Request,
         request,
         'settings.job_execution_capacity_reconciled',
         'settings',
-        'job_execution',
-        details={
-            'max_parallel_jobs': minimum,
-            'worker_count': capacity.get('worker_count'),
-            'changed': bool(capacity.get('changed')),
-        },
+        f"job_execution:{minimum}:{capacity.get('worker_count')}",
     )
     return {**capacity, 'max_parallel_jobs': minimum}
 
