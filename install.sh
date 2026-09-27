@@ -2632,6 +2632,7 @@ spec:
       labels: {app.kubernetes.io/part-of: cloudportal-backed}
     spec:
       restartPolicy: Never
+      securityContext: {fsGroup: 10001}
       containers:
         - name: $mode
           image: $k8s_image
@@ -2653,7 +2654,7 @@ EOF
         - name: master-key
           secret:
             secretName: cloudportal-secrets
-            items: [{key: master-key, path: master.key, mode: 0400}]
+            items: [{key: master-key, path: master.key, mode: 0440}]
 EOF
   } | k8s_ns apply -f - >/dev/null
   if ! k8s_ns wait --for=condition=complete "job/$name" --timeout=600s; then
@@ -2664,6 +2665,8 @@ EOF
 }
 
 k8s_apply_app() {
+  local revision
+  revision=$(date -u +%Y%m%dT%H%M%SZ)-$
   {
     cat <<EOF
 apiVersion: v1
@@ -2708,6 +2711,8 @@ spec:
       labels:
         app.kubernetes.io/name: cloudportal-app
         app.kubernetes.io/part-of: cloudportal-backed
+      annotations:
+        cloudportal.io/rollout-revision: "$revision"
     spec:
       securityContext: {fsGroup: 10001}
       containers:
@@ -2760,7 +2765,7 @@ EOF
         - name: master-key
           secret:
             secretName: cloudportal-secrets
-            items: [{key: master-key, path: master.key, mode: 0400}]
+            items: [{key: master-key, path: master.key, mode: 0440}]
         - {name: app-data, persistentVolumeClaim: {claimName: cloudportal-app-data}}
         - {name: nginx, configMap: {name: cloudportal-nginx}}
         - {name: tls, secret: {secretName: cloudportal-tls}}
@@ -2826,26 +2831,26 @@ k8s_install() {
   k8s_run_job cloudportal-migrate migrate || { ui_fail 'Migracje nie powiodły się.'; exit 1; }
   ui_ok 'Migracje zakończone.'
 
-  ui_stage 5 "$stages" 'Bootstrap'
-  k8s_run_job cloudportal-bootstrap bootstrap || { ui_fail 'Bootstrap nie powiódł się.'; exit 1; }
-  bootstrap_output=$(k8s_ns logs job/cloudportal-bootstrap --all-containers=true 2>/dev/null || true)
-  [[ -z "$bootstrap_output" ]] || printf '%s\n' "$bootstrap_output"
-  ui_ok 'Bootstrap zakończony.'
-
-  ui_stage 6 "$stages" 'Aplikacja, workery i TLS'
+  ui_stage 5 "$stages" 'Aplikacja, workery i TLS'
   k8s_apply_app
   if ! k8s_ns rollout status statefulset/cloudportal-app --timeout=600s; then
     k8s_ns describe statefulset/cloudportal-app || true
     k8s_ns get pods -l app.kubernetes.io/name=cloudportal-app -o wide || true
-    k8s_ns logs statefulset/cloudportal-app -c api --tail=120 || true
+    k8s_ns logs pod/cloudportal-app-0 -c api --tail=120 || true
     exit 1
   fi
   ui_ok "Aplikacja gotowa; procesy workerów: $workers."
 
-  ui_stage 7 "$stages" 'Healthcheck i podsumowanie'
-  k8s_ns exec statefulset/cloudportal-app -c api -- python -c     'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=5).read()' >/dev/null
-  k8s_ns exec statefulset/cloudportal-app -c proxy --     wget --no-check-certificate -qO- https://127.0.0.1:8443/api/v1/health >/dev/null
+  ui_stage 6 "$stages" 'Healthcheck'
+  k8s_ns exec pod/cloudportal-app-0 -c api -- python -c     'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=5).read()' >/dev/null
+  k8s_ns exec pod/cloudportal-app-0 -c proxy --     wget --no-check-certificate -qO- https://127.0.0.1:8443/api/v1/health >/dev/null
   ui_ok 'Healthcheck API i HTTPS zakończony.'
+
+  ui_stage 7 "$stages" 'Bootstrap i podsumowanie'
+  k8s_run_job cloudportal-bootstrap bootstrap || { ui_fail 'Bootstrap nie powiódł się.'; exit 1; }
+  bootstrap_output=$(k8s_ns logs job/cloudportal-bootstrap --all-containers=true 2>/dev/null || true)
+  [[ -z "$bootstrap_output" ]] || printf '%s\n' "$bootstrap_output"
+  ui_ok 'Bootstrap zakończony.'
 
   service_type=$(k8s_ns get service cloudportal -o jsonpath='{.spec.type}')
   node_port=$(k8s_ns get service cloudportal -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)
@@ -2880,7 +2885,7 @@ k8s_status() {
   if k8s_ns rollout status statefulset/cloudportal-app --timeout=1s >/dev/null 2>&1; then ui_ok 'Cloudportal: Ready'; else ui_fail 'Cloudportal: FAIL'; failed=1; fi
 
   if ((failed == 0)); then
-    k8s_ns exec statefulset/cloudportal-app -c api -- python -c       'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=5).read()' >/dev/null 2>&1       && ui_ok 'API healthcheck: OK' || { ui_fail 'API healthcheck: FAIL'; failed=1; }
+    k8s_ns exec pod/cloudportal-app-0 -c api -- python -c       'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=5).read()' >/dev/null 2>&1       && ui_ok 'API healthcheck: OK' || { ui_fail 'API healthcheck: FAIL'; failed=1; }
   fi
 
   k8s_ns get pods,svc,pvc,jobs -l app.kubernetes.io/part-of=cloudportal-backed -o wide || true
