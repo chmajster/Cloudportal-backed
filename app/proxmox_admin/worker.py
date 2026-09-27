@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import session
 from app.day2.models import Day2ActionRequest
 from app.day2.service import (
@@ -409,6 +411,21 @@ def _audit_worker(db, job, meta, *, action, result):
     ))
 
 
+def _cleanup_staged_upload(meta):
+    if meta.get('command') != 'image.upload':
+        return
+    raw = str((meta.get('parameters') or {}).get('staged_path') or '')
+    if not raw:
+        return
+    root = (settings().data_dir / 'proxmox-admin' / 'uploads').resolve()
+    try:
+        candidate = Path(raw).resolve()
+        if candidate.parent == root:
+            candidate.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _finish(job_id, *, status, error=None, after=None, reconciliation_required=False, event_suffix=None):
     with session() as db:
         job = db.get(Job, job_id)
@@ -467,6 +484,7 @@ def _finish(job_id, *, status, error=None, after=None, reconciliation_required=F
         db.add(JobLog(job_id=job.id, message=f'proxmox.admin.{suffix}: {status}'))
         queue_job_webhooks(db, job)
         db.commit()
+        _cleanup_staged_upload(meta)
 
 
 def _execute_unfenced(job_id):
