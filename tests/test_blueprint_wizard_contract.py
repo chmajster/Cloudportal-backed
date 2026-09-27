@@ -767,3 +767,23 @@ def test_blueprint_wizard_uses_scoped_hostname_permissions_and_immutable_edit_sc
     assert "allowed('hostnames.create')" not in hostname
     assert "tenantSelect.disabled = tenants.length === 1 || Boolean(options.item)" in scope
     assert "projectSelect.disabled = projects.length === 1 || Boolean(options.item)" in scope
+
+def test_wizard_offers_replace_when_blueprint_name_or_slug_already_exists():
+    source = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard.js').read_text()
+    stylesheet = (ROOT / 'app' / 'web' / 'styles' / 'features' / 'blueprints.css').read_text()
+
+    assert 'async function findExistingBlueprintConflicts(payload)' in source
+    assert "normalizedBlueprintIdentity(item.name) === targetName" in source
+    assert "normalizedBlueprintIdentity(item.slug) === targetSlug" in source
+    assert "api('/blueprints?limit=200&offset=' + offset" in source
+    assert "button('Zastąp istniejący produkt'" in source
+    assert "button('Wróć i zmień nazwę'" in source
+    assert "blueprintScope.allows('blueprints.update')" in source
+    assert "existing.can_manage !== false" in source
+    assert "'If-Match': String(existing.version)" in source
+    assert "method: 'PUT'" in source
+    assert "Number(error?.status) === 409" in source
+    assert "Istniejący produkt został zastąpiony i zapisany jako nowa wersja." in source
+    assert '.blueprint-wizard-replace-existing' in stylesheet
+    assert '.blueprint-wizard-replace-meta' in stylesheet
+
