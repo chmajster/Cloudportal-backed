@@ -1839,6 +1839,8 @@ def run_blueprint_workflow(context, executor):
                 commit_job_reservation(quota_db, quota_job)
                 quota_db.commit()
         runtime['inventory_synced'] = True
+        from app.availability.service import apply_pending_for_deployment
+        apply_pending_for_deployment(context)
         if inventory['vm_id'] is not None:
             context.log(f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}")
         else:
