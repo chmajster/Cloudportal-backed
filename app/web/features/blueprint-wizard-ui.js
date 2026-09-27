@@ -141,6 +141,114 @@
       body);
   }
 
-  parts.ui = { errorText, summaryRow, workflowVisual, avatarPicker, dualListGroup };
+
+  function credentialPicker(title, name, rows, selectedValue, onChange, options = {}) {
+    const selected = String(selectedValue || '');
+    const input = node('input', { type: 'hidden', name, value: selected });
+    const grid = node('div', { class: 'blueprint-wizard-access-card-grid' });
+
+    const update = value => {
+      input.value = String(value || '');
+      wrapper.querySelectorAll('.blueprint-wizard-access-card').forEach(card => {
+        const active = card.dataset.value === input.value;
+        card.classList.toggle('selected', active);
+        card.setAttribute('aria-pressed', String(active));
+      });
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      if (typeof onChange === 'function') onChange(input.value);
+    };
+
+    const card = (value, heading, detail, meta = '', icon = 'key') => {
+      const active = String(value || '') === selected;
+      return node('button', {
+        type: 'button',
+        class: 'blueprint-wizard-access-card' + (active ? ' selected' : ''),
+        'data-value': String(value || ''),
+        'aria-pressed': String(active),
+        onClick: () => update(value),
+      },
+      node('span', { class: 'blueprint-wizard-access-card-icon', 'aria-hidden': 'true' }, appIcon(icon)),
+      node('span', { class: 'blueprint-wizard-access-card-copy' },
+        node('strong', { text: heading }),
+        detail ? node('small', { text: detail }) : null,
+        meta ? node('code', { text: meta }) : null),
+      active ? node('span', { class: 'blueprint-wizard-card-check' }, appIcon('check')) : null);
+    };
+
+    if (options.allowNone !== false) {
+      grid.append(card('', options.noneLabel || 'Bez zapisanego dostępu',
+        options.noneDescription || 'Użyj ustawień ręcznych albo nie konfiguruj tego dostępu.', '', 'x'));
+    }
+
+    rows.forEach(row => {
+      const type = credentialTypeLabel(row.type || 'ssh');
+      const detail = [row.username, row.endpoint].filter(Boolean).join(' · ');
+      grid.append(card(
+        row.id,
+        row.name || ('Dostęp #' + row.id),
+        detail || type,
+        type,
+        row.type === 'ssh' ? 'key' : 'shield'
+      ));
+    });
+
+    const wrapper = node('fieldset', { class: 'blueprint-wizard-access-picker' },
+      node('legend', { text: title }),
+      options.description ? node('p', { class: 'muted', text: options.description }) : null,
+      input,
+      rows.length || options.allowNone !== false
+        ? grid
+        : node('div', { class: 'blueprint-wizard-empty' },
+            node('strong', { text: options.emptyTitle || 'Brak dostępnych pozycji' }),
+            node('p', { class: 'muted', text: options.emptyText || 'Dodaj odpowiedni Dostęp i wróć do kreatora.' })));
+    return wrapper;
+  }
+
+  function multiCardGroup(title, name, rows, selectedValues = [], description = '') {
+    const selected = new Set((selectedValues || []).map(value => String(value)));
+    const labelFor = row => row.name || row.username || ('#' + row.id);
+    const wrapper = node('fieldset', {
+      class: 'blueprint-wizard-access-multi',
+      'data-simple-access-name': name,
+    },
+    node('legend', { text: title }),
+    description ? node('p', { class: 'muted', text: description }) : null);
+
+    if (!rows.length) {
+      wrapper.append(node('div', { class: 'blueprint-wizard-empty' },
+        node('strong', { text: 'Brak dostępnych pozycji' }),
+        node('p', { class: 'muted', text: 'Nie ma elementów, które można przypisać w tym zakresie.' })));
+      return wrapper;
+    }
+
+    const grid = node('div', { class: 'blueprint-wizard-access-multi-grid' });
+    rows.slice().sort((a, b) => labelFor(a).localeCompare(labelFor(b), 'pl')).forEach(row => {
+      const checked = selected.has(String(row.id));
+      const checkbox = node('input', { type: 'checkbox', name, value: String(row.id), checked });
+      const item = node('label', { class: 'blueprint-wizard-access-multi-card' + (checked ? ' selected' : '') },
+        checkbox,
+        node('span', { class: 'blueprint-wizard-access-multi-copy' },
+          node('strong', { text: labelFor(row) }),
+          row.email ? node('small', { text: row.email }) : null,
+          row.permissions ? node('small', { text: row.permissions.length + ' uprawnień' }) : null));
+      checkbox.addEventListener('change', () => item.classList.toggle('selected', checkbox.checked));
+      grid.append(item);
+    });
+    wrapper.append(grid);
+    return wrapper;
+  }
+
+  function toggleCard(title, name, checked, description = '') {
+    const checkbox = node('input', { type: 'checkbox', name, checked });
+    const wrapper = node('label', { class: 'blueprint-wizard-access-toggle' + (checked ? ' selected' : '') },
+      checkbox,
+      node('span', { class: 'blueprint-wizard-access-toggle-copy' },
+        node('strong', { text: title }),
+        description ? node('small', { text: description }) : null));
+    checkbox.addEventListener('change', () => wrapper.classList.toggle('selected', checkbox.checked));
+    return wrapper;
+  }
+
+  parts.ui = { errorText, summaryRow, workflowVisual, avatarPicker, dualListGroup, credentialPicker, multiCardGroup, toggleCard };
   registerExtension('blueprint-wizard-ui', () => {});
 })();
