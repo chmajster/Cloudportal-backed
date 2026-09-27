@@ -15,6 +15,10 @@ def test_context_http_revision_isolation_and_recovery(system):
     assert client.put('/api/v1/project-context', headers=vh, json=payload).status_code == 404
     chosen = client.put('/api/v1/project-context', headers=h, json=payload)
     assert chosen.status_code == 200 and chosen.json()['version'] == 1, chosen.text
+    assert chosen.json()['tenant_name'] == t['name']
+    assert chosen.json()['selected']['name'] == p['name']
+    selected = client.get('/api/v1/project-context', headers=h)
+    assert selected.status_code == 200 and selected.json()['tenant_name'] == t['name'], selected.text
     assert client.put('/api/v1/project-context', headers=h, json=payload).status_code == 409
     assert client.get('/api/v1/auth/me', headers=h).json()['permissions'] == []
     assert client.get('/api/v1/providers', headers=h).status_code == 403
