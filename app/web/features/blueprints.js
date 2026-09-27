@@ -36,6 +36,7 @@ function readBlueprintTemplateVariables(root, template) {
   return result;
 }
 function canManageBlueprintByRole(item) {
+  if (typeof item?.can_manage === 'boolean') return item.can_manage;
   const required = new Set((item?.manager_role_ids || []).map(Number));
   if (!required.size) return true;
   const owned = new Set((state.identity?.roles || []).map(role => Number(role.id)));
