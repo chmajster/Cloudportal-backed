@@ -53,7 +53,11 @@ def test_installer_without_arguments_opens_action_menu():
     assert 'Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację' in INSTALLER
     assert 'Recovery password / konto Administrator — systemd' in INSTALLER
     assert 'Recovery password / konto Administrator — Docker' in INSTALLER
-    assert "Wybierz operację [0-14]:" in INSTALLER
+    assert 'Instalacja / aktualizacja — Kubernetes' in INSTALLER
+    assert 'Status — Kubernetes' in INSTALLER
+    assert 'Odinstaluj Kubernetes — zachowaj PVC i sekrety' in INSTALLER
+    assert 'Odinstaluj Kubernetes całkowicie — usuń PVC i sekrety' in INSTALLER
+    assert "Wybierz operację [0-18]:" in INSTALLER
 
 
 def test_installer_without_arguments_requires_tty_in_automation():
