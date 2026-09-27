@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import stat
 from urllib.parse import quote, urlsplit
@@ -274,7 +275,33 @@ def require(permission):
     return dependency
 
 
-def audit(db, request, action, resource='', resource_id=None, result='success', user_id=None):
+_AUDIT_SECRET_KEY = re.compile(
+    r'(password|passwd|secret|token|ticket|private[_-]?key|authorization|cookie|credential)',
+    re.IGNORECASE,
+)
+
+
+def _safe_audit_details(value, key='', depth=0):
+    """Bound structured audit metadata and redact secret-bearing fields centrally."""
+    if key and _AUDIT_SECRET_KEY.search(str(key)):
+        return '[REDACTED]'
+    if depth >= 8:
+        return '<max-depth>'
+    if isinstance(value, dict):
+        return {
+            str(item_key)[:128]: _safe_audit_details(item_value, item_key, depth + 1)
+            for item_key, item_value in list(value.items())[:100]
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_audit_details(item, '', depth + 1) for item in list(value)[:100]]
+    if isinstance(value, bytes):
+        return '<bytes>'
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:8192]
+
+
+def audit(db, request, action, resource='', resource_id=None, result='success', user_id=None, details=None):
     actor = getattr(request.state, 'actor', None)
     effective_user_id = user_id if user_id is not None else actor.user_id if actor else None
     effective_token_id = actor.id if actor else None
@@ -289,6 +316,7 @@ def audit(db, request, action, resource='', resource_id=None, result='success', 
         resource_id=resource_id_text,
         result=result,
         request_id=request.state.request_id,
+        details=_safe_audit_details(details or {}),
     ))
 
     # Audit is already the common transaction boundary for state-changing API
