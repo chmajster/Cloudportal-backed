@@ -322,6 +322,15 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "function createVmBrowser(" in script
     assert "Szukaj VM, VMID, node, APMID" in script
     assert "button('Filtry'" in script
+    assert "button('Sortuj'" in script
+    assert "Sortuj po" in script
+    assert "Kierunek" in script
+    assert "Data utworzenia" in script
+    assert "Nazwa maszyny" in script
+    assert "VMID" in script
+    assert "sortVmEntries(entries.filter(vmMatchesFilters))" in script
+    assert "myResourcesVmUi.sortKey" in script
+    assert "myResourcesVmUi.sortDirection" in script
     assert "button('Kafelki'" in script
     assert "button('Lista'" in script
     assert "deployment?.created_at || item.created_at" in script
@@ -411,6 +420,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.my-resource-grid' in stylesheet
     assert '.my-resources-vm-controls' in stylesheet
     assert '.my-resources-filter-panel' in stylesheet
+    assert '.my-resources-sort-panel' in stylesheet
+    assert '.my-resources-sort-grid' in stylesheet
+    assert '.my-resources-sort-button.active' in stylesheet
     assert '.my-resource-grid-list' in stylesheet
     assert '.my-resource-grid-list .my-resource-provisioning-head,' in stylesheet
     assert 'display: contents;' in stylesheet

@@ -8,6 +8,9 @@ const myResourcesVmUi = (() => {
     view: 'cards',
     query: '',
     filtersOpen: false,
+    sortOpen: false,
+    sortKey: 'created_at',
+    sortDirection: 'desc',
     filters: {
       apmid: '',
       environment: '',
@@ -27,6 +30,12 @@ const myResourcesVmUi = (() => {
       ...stored,
       view: stored.view === 'list' ? 'list' : 'cards',
       filtersOpen: false,
+      sortOpen: false,
+      sortKey: [
+        'created_at', 'name', 'vm_id', 'status', 'apmid',
+        'environment', 'project', 'owner', 'provider', 'node',
+      ].includes(stored.sortKey) ? stored.sortKey : defaults.sortKey,
+      sortDirection: stored.sortDirection === 'asc' ? 'asc' : 'desc',
       filters: { ...defaults.filters, ...(stored.filters || {}) },
     };
   } catch {
@@ -119,6 +128,8 @@ function saveMyResourcesVmUi() {
     localStorage.setItem(MY_RESOURCES_VM_UI_KEY, JSON.stringify({
       view: myResourcesVmUi.view,
       query: myResourcesVmUi.query,
+      sortKey: myResourcesVmUi.sortKey,
+      sortDirection: myResourcesVmUi.sortDirection,
       filters: myResourcesVmUi.filters,
     }));
   } catch {
@@ -655,9 +666,74 @@ function createVmBrowser({
     ),
   }));
 
+  const sortOptions = [
+    { value: 'created_at', label: 'Data utworzenia', short: 'Data' },
+    { value: 'name', label: 'Nazwa maszyny', short: 'Nazwa' },
+    { value: 'vm_id', label: 'VMID', short: 'VMID' },
+    { value: 'status', label: 'Status', short: 'Status' },
+    { value: 'apmid', label: 'APMID', short: 'APMID' },
+    { value: 'environment', label: 'Environment', short: 'ENV' },
+    { value: 'project', label: 'Projekt', short: 'Projekt' },
+    { value: 'owner', label: 'Właściciel', short: 'Właściciel' },
+    { value: 'provider', label: 'Platforma', short: 'Platforma' },
+    { value: 'node', label: 'Node', short: 'Node' },
+  ];
+  const sortOptionByKey = new Map(sortOptions.map(option => [option.value, option]));
+
+  function vmSortValue(entry, key) {
+    const deployment = entry.item.deployment_id
+      ? deploymentById.get(entry.item.deployment_id)
+      : null;
+    if (key === 'created_at') {
+      const timestamp = Date.parse(deployment?.created_at || entry.item.created_at || '');
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+    if (key === 'vm_id') {
+      const rawVmId = entry.item.vm_id;
+      if (rawVmId === null || rawVmId === undefined || rawVmId === '') return null;
+      const vmId = Number(rawVmId);
+      return Number.isFinite(vmId) ? vmId : null;
+    }
+    if (key === 'name') return String(entry.item.name || '').trim();
+    return String(entry.meta[key] || '').trim();
+  }
+
+  function sortVmEntries(rows) {
+    const key = sortOptionByKey.has(myResourcesVmUi.sortKey)
+      ? myResourcesVmUi.sortKey
+      : 'created_at';
+    const direction = myResourcesVmUi.sortDirection === 'asc' ? 1 : -1;
+    return [...rows].sort((left, right) => {
+      const leftValue = vmSortValue(left, key);
+      const rightValue = vmSortValue(right, key);
+      const leftMissing = leftValue === null || leftValue === '';
+      const rightMissing = rightValue === null || rightValue === '';
+      if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+
+      let result = 0;
+      if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+        result = leftValue - rightValue;
+      } else {
+        result = String(leftValue || '').localeCompare(
+          String(rightValue || ''),
+          'pl',
+          { numeric: true, sensitivity: 'base' }
+        );
+      }
+      if (result) return result * direction;
+
+      return String(left.item.name || '').localeCompare(
+        String(right.item.name || ''),
+        'pl',
+        { numeric: true, sensitivity: 'base' }
+      );
+    });
+  }
+
   const wrapper = node('div', { class: 'my-resources-vm-browser' });
   const controls = node('div', { class: 'my-resources-vm-controls' });
   const filterPanel = node('div', { class: 'my-resources-filter-panel' });
+  const sortPanel = node('div', { class: 'my-resources-sort-panel' });
   const results = node('div', { class: 'my-resources-vm-results' });
   const resultSummary = node('span', { class: 'my-resources-vm-result-count muted' });
 
@@ -670,11 +746,70 @@ function createVmBrowser({
   });
   const filterButton = button('Filtry', () => {
     myResourcesVmUi.filtersOpen = !myResourcesVmUi.filtersOpen;
+    if (myResourcesVmUi.filtersOpen) {
+      myResourcesVmUi.sortOpen = false;
+      sortPanel.hidden = true;
+      sortButton.setAttribute('aria-expanded', 'false');
+    }
     filterPanel.hidden = !myResourcesVmUi.filtersOpen;
     filterButton.setAttribute('aria-expanded', String(myResourcesVmUi.filtersOpen));
   }, 'ghost');
   filterButton.classList.add('my-resources-filter-button');
   filterButton.setAttribute('aria-expanded', String(myResourcesVmUi.filtersOpen));
+
+  const sortButton = button('Sortuj', () => {
+    myResourcesVmUi.sortOpen = !myResourcesVmUi.sortOpen;
+    if (myResourcesVmUi.sortOpen) {
+      myResourcesVmUi.filtersOpen = false;
+      filterPanel.hidden = true;
+      filterButton.setAttribute('aria-expanded', 'false');
+    }
+    sortPanel.hidden = !myResourcesVmUi.sortOpen;
+    sortButton.setAttribute('aria-expanded', String(myResourcesVmUi.sortOpen));
+  }, 'ghost');
+  sortButton.classList.add('my-resources-sort-button');
+  sortButton.setAttribute('aria-expanded', String(myResourcesVmUi.sortOpen));
+
+  const sortKeyField = selectField(
+    'Sortuj po',
+    'vm_sort_key',
+    sortOptions.map(option => ({ value: option.value, label: option.label })),
+    myResourcesVmUi.sortKey
+  );
+  const sortDirectionField = selectField(
+    'Kierunek',
+    'vm_sort_direction',
+    [
+      { value: 'asc', label: 'Rosnąco (A→Z / najstarsze)' },
+      { value: 'desc', label: 'Malejąco (Z→A / najnowsze)' },
+    ],
+    myResourcesVmUi.sortDirection
+  );
+  const sortKeySelect = sortKeyField.querySelector('select');
+  const sortDirectionSelect = sortDirectionField.querySelector('select');
+  sortKeySelect.addEventListener('change', event => {
+    myResourcesVmUi.sortKey = event.currentTarget.value;
+    saveMyResourcesVmUi();
+    renderResults();
+  });
+  sortDirectionSelect.addEventListener('change', event => {
+    myResourcesVmUi.sortDirection = event.currentTarget.value === 'asc' ? 'asc' : 'desc';
+    saveMyResourcesVmUi();
+    renderResults();
+  });
+  const resetSort = button('Domyślne', () => {
+    myResourcesVmUi.sortKey = 'created_at';
+    myResourcesVmUi.sortDirection = 'desc';
+    sortKeySelect.value = myResourcesVmUi.sortKey;
+    sortDirectionSelect.value = myResourcesVmUi.sortDirection;
+    saveMyResourcesVmUi();
+    renderResults();
+  }, 'ghost');
+  sortPanel.append(
+    node('div', { class: 'my-resources-sort-grid' }, sortKeyField, sortDirectionField),
+    node('div', { class: 'my-resources-sort-actions' }, resetSort)
+  );
+  sortPanel.hidden = !myResourcesVmUi.sortOpen;
 
   const cardsButton = button('Kafelki', () => {
     myResourcesVmUi.view = 'cards';
@@ -691,7 +826,7 @@ function createVmBrowser({
     cardsButton,
     listButton);
 
-  controls.append(search, filterButton, resultSummary, viewToggle);
+  controls.append(search, filterButton, sortButton, resultSummary, viewToggle);
 
   const selectFilter = (label, name, choices, value) => {
     const control = selectField(label, name, [
@@ -758,10 +893,17 @@ function createVmBrowser({
   filterPanel.hidden = !myResourcesVmUi.filtersOpen;
 
   function renderResults() {
-    const filtered = entries.filter(vmMatchesFilters);
+    const filtered = sortVmEntries(entries.filter(vmMatchesFilters));
     const filterCount = activeVmFilterCount();
     filterButton.textContent = filterCount ? 'Filtry (' + filterCount + ')' : 'Filtry';
     filterButton.classList.toggle('active', filterCount > 0);
+    const activeSort = sortOptionByKey.get(myResourcesVmUi.sortKey) || sortOptionByKey.get('created_at');
+    sortButton.textContent = 'Sortuj: ' + activeSort.short
+      + (myResourcesVmUi.sortDirection === 'asc' ? ' ↑' : ' ↓');
+    sortButton.classList.toggle(
+      'active',
+      myResourcesVmUi.sortKey !== 'created_at' || myResourcesVmUi.sortDirection !== 'desc'
+    );
     cardsButton.classList.toggle('active', myResourcesVmUi.view === 'cards');
     listButton.classList.toggle('active', myResourcesVmUi.view === 'list');
     resultSummary.textContent = filtered.length + ' z ' + entries.length + ' VM';
@@ -812,7 +954,7 @@ function createVmBrowser({
     renderResults();
   });
 
-  wrapper.append(controls, filterPanel, results);
+  wrapper.append(controls, filterPanel, sortPanel, results);
   renderResults();
   return wrapper;
 }
