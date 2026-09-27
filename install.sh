@@ -2348,7 +2348,11 @@ EOF
   fi
   if ((docker_tls_changed)) && ! docker_compose_for "$release" "$candidate_env" restart proxy; then
     if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls" "$rollback_db_dump"; then
-      ui_fail 'Nie udało się przeładować proxy z nowym TLS; poprzedni release został przywrócony.'
+      if [[ -n "$previous_release" ]]; then
+        ui_fail 'Nie udało się przeładować proxy z nowym TLS; poprzedni release i baza danych zostały przywrócone.'
+      else
+        ui_fail 'Nie udało się przeładować proxy z nowym TLS podczas świeżej instalacji; kandydat został zatrzymany.'
+      fi
     else
       ui_fail 'Nie udało się przeładować proxy z nowym TLS, a rollback poprzedniego release również się nie powiódł.'
     fi
@@ -2372,7 +2376,13 @@ EOF
     ui_fail 'Kandydat Docker wystartował, ale HTTPS healthcheck nie przeszedł.'
     docker_compose_for "$release" "$candidate_env" ps || true
     docker_compose_for "$release" "$candidate_env" logs --tail=100 api proxy || true
-    if ! docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls" "$rollback_db_dump"; then
+    if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls" "$rollback_db_dump"; then
+      if [[ -n "$previous_release" ]]; then
+        ui_fail 'HTTPS healthcheck kandydata nie przeszedł; poprzedni release i baza danych zostały przywrócone.'
+      else
+        ui_fail 'HTTPS healthcheck świeżej instalacji nie przeszedł; kandydat został zatrzymany.'
+      fi
+    else
       ui_fail 'HTTPS healthcheck kandydata nie przeszedł, a rollback poprzedniego release również się nie powiódł.'
     fi
     exit 1
