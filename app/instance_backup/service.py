@@ -26,7 +26,7 @@ from app.version import build_commit, build_version
 
 def installation_mode() -> str:
     configured = os.environ.get("CP_INSTALL_MODE", "").strip().lower()
-    if configured in {"docker", "systemd"}:
+    if configured in {"docker", "systemd", "k8s"}:
         return configured
     return "docker" if os.path.exists("/.dockerenv") else "systemd"
 
