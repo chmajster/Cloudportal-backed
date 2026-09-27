@@ -6,27 +6,6 @@ if (loginSubmit) {
   loginSubmit.textContent = 'Zaloguj';
 }
 
-const userMenu = document.querySelector('#user-menu');
-const userMenuToggle = document.querySelector('#user-menu-toggle');
-const userMenuDropdown = document.querySelector('#user-menu-dropdown');
-const currentUserAvatar = document.querySelector('#current-user-avatar');
-
-function setUserMenuOpen(open) {
-  const active = Boolean(open);
-  userMenuDropdown.hidden = !active;
-  userMenuToggle.setAttribute('aria-expanded', String(active));
-  userMenu.classList.toggle('open', active);
-}
-function renderUserMenuIdentity() {
-  const user = state.identity?.user || {};
-  const parts = [user.first_name, user.last_name].map(value => String(value || '').trim()).filter(Boolean);
-  const source = parts.length ? parts : [user.username || 'U'];
-  currentUserAvatar.textContent = source.slice(0, 2).map(value => value.charAt(0)).join('').toUpperCase();
-  setUserMenuOpen(false);
-}
-document.addEventListener('cloudportal:app-shown', renderUserMenuIdentity);
-document.addEventListener('cloudportal:app-hidden', () => setUserMenuOpen(false));
-
 dom.loginForm.addEventListener('submit', async event => {
   event.preventDefault();
   const submit = dom.loginForm.querySelector('button[type="submit"]');
@@ -53,26 +32,10 @@ document.querySelector('#reset-open').addEventListener('click', () => {
 });
 
 document.querySelector('#logout').addEventListener('click', async () => {
-  setUserMenuOpen(false);
   try { await api('/auth/logout', { method: 'POST' }); } catch { /* Local logout still clears the session. */ }
   showLogin('Wylogowano.', 'success');
 });
 document.querySelectorAll('[data-theme-toggle]').forEach(control => control.addEventListener('click', toggleTheme));
-document.querySelector('#user-menu-theme').addEventListener('click', () => {
-  toggleTheme();
-  setUserMenuOpen(false);
-});
-userMenuToggle.addEventListener('click', event => {
-  event.stopPropagation();
-  setUserMenuOpen(userMenuDropdown.hidden);
-});
-document.querySelector('#user-menu-account').addEventListener('click', () => {
-  setUserMenuOpen(false);
-  navigate('account');
-});
-document.addEventListener('click', event => {
-  if (!userMenu.contains(event.target)) setUserMenuOpen(false);
-});
 dom.refreshView.addEventListener('click', async () => {
   dom.refreshView.disabled = true;
   dom.refreshView.classList.add('is-refreshing');
@@ -95,11 +58,6 @@ window.addEventListener('resize', () => {
   updateSidebarToggleState();
 });
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && userMenuToggle.getAttribute('aria-expanded') === 'true') {
-    setUserMenuOpen(false);
-    userMenuToggle.focus();
-    return;
-  }
   if (event.key === 'Escape' && typeof window.modalSurfaceOpen === 'function'
       && window.modalSurfaceOpen() && !dom.modal.open) {
     closeModal();
