@@ -57,6 +57,23 @@ function blueprintExecutionPath(item, scope = null) {
     + '/execute' + blueprintScopeQuery(scope);
 }
 
+function blueprintDetailsPath(item, scope = null) {
+  return '/blueprints/' + encodeURIComponent(item.id)
+    + '/' + encodeURIComponent(item.slug || item.name || 'blueprint')
+    + blueprintScopeQuery(scope);
+}
+
+function blueprintDetailsLink(item, scope = null) {
+  const path = blueprintDetailsPath(item, scope);
+  return node('a', {
+    class: 'button blueprint-details-link',
+    href: '#' + path,
+    text: 'Szczegóły',
+    title: 'Otwórz szczegóły Blueprintu',
+    'aria-label': 'Szczegóły Blueprintu ' + item.name,
+  });
+}
+
 async function toggleBlueprintEnabled(item, scopeHeaders) {
   const enabled = !item.is_active;
   try {
@@ -176,7 +193,7 @@ async function blueprintsView() {
       { label: 'Zasady', value: item => node('div', { class: 'row-actions' }, window.BlueprintApprovalPolicyUI.badgeFor(item), item.recovery_policy === 'destroy_on_failure' ? badge('Usuń po błędzie', 'danger') : badge('Zachowaj po błędzie', 'info')) },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], blueprints, item => {
-      const result = [];
+      const result = [blueprintDetailsLink(item, selected)];
       const executionControl = window.BlueprintProvisioningGuards.executionControl(
         item,
         () => navigate(blueprintExecutionPath(item, selected)),
@@ -316,6 +333,7 @@ window.BlueprintsFeature = Object.freeze({
   canManage: canManageBlueprintByRole,
   execute: executeBlueprint,
   executionPath: blueprintExecutionPath,
+  detailsPath: blueprintDetailsPath,
 });
 
 registerCommand('blueprints.proxmoxTemplateWizard', item => item ? window.BlueprintWizard.open({ item }) : window.BlueprintWizard.open());
