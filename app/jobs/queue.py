@@ -296,6 +296,21 @@ def reconcile_stale_jobs(db):
         Job.heartbeat_at < now() - timedelta(seconds=STALE_JOB_HEARTBEAT_SECONDS),
     ).with_for_update(skip_locked=True)).all()
     for job in rows:
+        if job.operation.startswith('pxadmin.'):
+            payload = dict(job.payload or {})
+            meta = dict(payload.get('_proxmox_admin') or {})
+            meta['reconciliation_required'] = True
+            meta['finished_at'] = now().isoformat() + 'Z'
+            payload['_proxmox_admin'] = meta
+            job.payload = payload
+            job.status = 'reconciliation_required'
+            job.error = (
+                'Worker heartbeat lost during a Proxmox Admin operation. '
+                'The live Proxmox state must be reconciled before another conflicting mutation.'
+            )
+            db.add(JobLog(job_id=job.id, message='proxmox.admin.reconciliation_required: worker heartbeat lost'))
+            queue_job_webhooks(db, job)
+            continue
         mark_job_reservation_uncertain(db, job)
         deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
         resumed = queue_automatic_resume(db, job, deployment)
@@ -361,7 +376,12 @@ def _dispatch_once_unfenced():
                 break
             if job.id in active_rq_jobs or not provider_retry_ready(job):
                 continue
-            worker_target = 'app.day2.worker.execute' if job.operation.startswith('day2.') else 'app.jobs.worker.execute'
+            if job.operation.startswith('day2.'):
+                worker_target = 'app.day2.worker.execute'
+            elif job.operation.startswith('pxadmin.'):
+                worker_target = 'app.proxmox_admin.worker.execute'
+            else:
+                worker_target = 'app.jobs.worker.execute'
             q.enqueue(worker_target, job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)
             job.dispatched_at = now()
