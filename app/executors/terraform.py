@@ -2,6 +2,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from contextlib import contextmanager
@@ -244,6 +245,136 @@ def terraform_plan_command(binary, operation, recreate_address=None):
     elif recreate_address:
         command.append('-replace=' + recreate_address)
     return command
+
+
+_TERRAFORM_PROXMOX_VM_CREATE = re.compile(
+    r'(?:^|\.)proxmox_virtual_environment_vm\.[^:]+:\s+'
+    r'(Creating|Still creating|Creation complete)',
+    re.IGNORECASE,
+)
+_TERRAFORM_PERCENT = re.compile(
+    r'(?<![0-9.])(100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)\s*%'
+)
+
+
+def _terraform_line_percent(line):
+    latest = None
+    for match in _TERRAFORM_PERCENT.finditer(str(line or '')):
+        try:
+            value = float(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value <= 100:
+            latest = value
+    return latest
+
+
+class ProxmoxTerraformApplyTelemetry:
+    """Translate Terraform VM creation output into provider-aware clone progress."""
+
+    def __init__(self, context, adapter, vm_id):
+        self._context = context
+        self._adapter = adapter
+        self._vm_id = int(vm_id)
+        self._clone_started = False
+        self._clone_completed = False
+        self._last_percent = None
+        self._last_task_poll = 0.0
+        self._started_at = time.time()
+
+    def __getattr__(self, name):
+        return getattr(self._context, name)
+
+    @property
+    def clone_started(self):
+        return self._clone_started
+
+    def log(self, message):
+        self._context.log(message)
+        self._observe(message)
+
+    def _observe(self, message):
+        match = _TERRAFORM_PROXMOX_VM_CREATE.search(str(message or ''))
+        if not match:
+            return
+
+        state = match.group(1).lower()
+        if state == 'creation complete':
+            if self._clone_started and not self._clone_completed:
+                self._clone_completed = True
+                self._last_percent = 100.0
+                self._context.progress(
+                    100,
+                    'Klonowanie VM w Proxmox — zakończone',
+                    phase='clone',
+                )
+            return
+
+        if not self._clone_started:
+            self._clone_started = True
+            self._context.stage('terraform.proxmox.clone')
+
+        percent = _terraform_line_percent(message)
+        if percent is None:
+            percent = self._provider_clone_percent()
+        if percent is not None:
+            self._last_percent = percent
+
+        self._context.progress(
+            self._last_percent,
+            'Klonowanie VM w Proxmox',
+            phase='clone',
+        )
+
+    def _provider_clone_percent(self):
+        now_monotonic = time.monotonic()
+        if now_monotonic - self._last_task_poll < 1.5:
+            return self._last_percent
+        self._last_task_poll = now_monotonic
+
+        try:
+            tasks = self._adapter.recent_tasks(vm_id=self._vm_id, limit=25)
+        except Exception:
+            return self._last_percent
+
+        candidates = []
+        for row in tasks or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get('type') or '').lower() != 'qmclone':
+                continue
+            try:
+                starttime = float(row.get('starttime') or 0)
+            except (TypeError, ValueError):
+                starttime = 0.0
+            # VMIDs may be reused after a previous VM was destroyed. Do not bind
+            # this run to a stale clone task for the same numeric VMID.
+            if starttime and starttime < self._started_at - 120:
+                continue
+            candidates.append((starttime, row))
+
+        if not candidates:
+            return self._last_percent
+
+        candidates.sort(key=lambda value: value[0], reverse=True)
+        row = candidates[0][1]
+        upid = str(row.get('upid') or '').strip()
+        node = str(row.get('node') or '').strip()
+        if not upid or not node:
+            return self._last_percent
+
+        try:
+            task_rows = self._adapter.task_log(node, upid, start=0, limit=2000)
+        except Exception:
+            return self._last_percent
+
+        latest = None
+        for task_row in task_rows or []:
+            text = str(task_row.get('t') if isinstance(task_row, dict) else task_row)
+            value = _terraform_line_percent(text)
+            if value is not None:
+                latest = value
+        return self._last_percent if latest is None else latest
 
 
 class TerraformExecutor(Executor):
@@ -546,7 +677,35 @@ class TerraformExecutor(Executor):
                             # Terraform subprocess is actually about to be submitted.
                             # Init/plan/preflight failures are safe to retry.
                             context.quota_provider_submitted = True
-                            run_process([self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'], workspace, env, context, sensitive_values)
+                            apply_context = context
+                            clone_telemetry = None
+                            if (
+                                provider_type == 'proxmox'
+                                and deployment.template == 'proxmox-vm'
+                                and runtime_variables.get('template_id') not in {None, ''}
+                                and runtime_variables.get('vm_id') not in {None, ''}
+                            ):
+                                from app.providers.proxmox import ProxmoxProvider
+                                clone_telemetry = ProxmoxTerraformApplyTelemetry(
+                                    context,
+                                    ProxmoxProvider(credential),
+                                    runtime_variables['vm_id'],
+                                )
+                                apply_context = clone_telemetry
+                            run_process(
+                                [self.binary, 'apply', '-input=false', '-no-color', '-lock-timeout=30s', 'execution.tfplan'],
+                                workspace,
+                                env,
+                                apply_context,
+                                sensitive_values,
+                            )
+                            if clone_telemetry is not None and clone_telemetry.clone_started:
+                                context.stage('terraform.apply')
+                                context.progress(
+                                    None,
+                                    'Finalizowanie Terraform apply',
+                                    phase='terraform',
+                                )
                 finally:
                     keep_plan = (
                         operation == 'terraform.plan'
