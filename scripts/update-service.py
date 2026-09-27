@@ -1399,12 +1399,14 @@ def installer_args(ref: str) -> list[str]:
         backend = parse_kv(CONFIG_DIR / "docker.env")
         host = backend.get("CP_PUBLIC_HOST")
         port = backend.get("CP_HTTPS_PORT")
-        workers = backend.get("CP_WORKER_COUNT", "1")
         if not host or not port:
             raise RuntimeError("Missing installed Docker host/port configuration")
+        # Worker topology is reconciled by install.sh from the installed config.
+        # Do not pass --workers here: doing so made legacy CP_WORKER_COUNT=1 look
+        # like an explicit operator choice and blocked the 1 -> current-default migration.
         args = [
             "/bin/bash", "{installer}", "--docker", "--non-interactive",
-            "--host", host, "--port", port, "--workers", workers,
+            "--host", host, "--port", port,
             "--ref", ref,
         ]
     else:
@@ -1412,14 +1414,14 @@ def installer_args(ref: str) -> list[str]:
         backend = parse_kv(CONFIG_DIR / "backend.env")
         host = public.get("host")
         port = public.get("port")
-        workers = backend.get("CP_WORKER_COUNT", "1")
         retention = backend.get("CP_BACKUP_RETENTION_DAYS", "14")
         backup = backend.get("CP_BACKUP_SCHEDULE_ENABLED", "false").lower() == "true"
         if not host or not port:
             raise RuntimeError("Missing installed host/port configuration")
+        # As above, let install.sh preserve or migrate the installed worker pool.
         args = [
             "/bin/bash", "{installer}", "--non-interactive",
-            "--host", host, "--port", port, "--workers", workers,
+            "--host", host, "--port", port,
             "--backup-retention-days", retention,
             "--ref", ref,
             "--enable-backups" if backup else "--disable-backups",
