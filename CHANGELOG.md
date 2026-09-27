@@ -139,7 +139,6 @@
 - GitHub 429/5xx/network error wymaga retry/backoff.
 - Legacy/non-Git marker wersji nie może być wysyłany jako commit SHA do GitHub compare.
 - Po update commit marker ma być prawdziwym Git SHA.
-- Updater nie może przekazywać do instalatora bieżącego `CP_WORKER_COUNT` jako jawnego `--workers` podczas zwykłego auto-update. Instalator jest właścicielem migracji topologii workerów; inaczej stary `CP_WORKER_COUNT=1` blokuje przejście do bieżącego domyślnego poolu.
 
 ## 1.11. Installer: systemd, Docker, Kubernetes
 
@@ -158,7 +157,6 @@
 - Docker candidate build używa tych samych nazw obrazów Compose co aktywny release. Rollback po nieudanym kandydacie musi odbudować obrazy z katalogu poprzedniego release przed `compose up`; samo uruchomienie starego `docker-compose.yml` może wystartować na obrazie kandydata.
 - Rollback aplikacji po wykonaniu migracji wymaga przywrócenia bazy do rewizji zgodnej z poprzednim release. Przed mutacją produkcyjnej DB zatrzymaj warstwę aplikacyjną i wykonaj rollback dump; po błędzie odtwórz DB przed uruchomieniem starego `migrate`/API.
 - Przy błędzie usługi `migrate` instalator ma pokazać jej log. Nie wolno raportować „poprzedni release przywrócony”, jeżeli rollback sam zakończył się błędem.
-- Updater-driven update musi zmigrować legacy `CP_WORKER_COUNT=1` do bieżącej wartości domyślnej także wtedy, gdy starszy updater podał `--workers 1`. Jawne `--workers 1` uruchomione ręcznie poza updaterem nadal pozostaje ważną konfiguracją operatora.
 
 ## 1.12. Migracje i baza
 
