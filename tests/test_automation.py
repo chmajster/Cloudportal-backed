@@ -239,7 +239,7 @@ def test_blueprint_save_rejects_invalid_static_proxmox_network(client, headers):
 
 
 
-def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client, headers):
+def test_blueprint_manager_role_is_required_and_reusable_across_provisioning_modes(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
 
     manager_role = client.post('/api/v1/roles', headers=headers, json={
@@ -307,7 +307,7 @@ def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client
         json={**payload, 'description': 'unauthorized edit'},
     )
     assert denied.status_code == 403
-    assert 'dedicated manager role' in denied.text
+    assert 'manager role assigned to this Blueprint' in denied.text
 
     allowed = client.put(
         '/api/v1/blueprints/' + str(blueprint['id']),
@@ -317,13 +317,39 @@ def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()['description'] == 'authorized edit'
 
-    second = client.post('/api/v1/blueprints', headers=headers, json={
+    direct_payload = {
         **payload,
         'slug': 'second-role-protected-template',
         'name': 'Second role protected template',
-    })
-    assert second.status_code == 409
-    assert 'already dedicated to another template' in second.text
+        'deployment': {
+            **payload['deployment'],
+            'name': 'second-role-protected-template',
+            'template': 'proxmox-vm',
+            'executor': 'proxmox',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'second-role-protected-template',
+                'template_node': 'pve',
+                'cpu': 2,
+                'memory': 2048,
+                'disk': 20,
+                'network': 'vmbr0',
+            },
+        },
+        'workflow': [{'id': 'clone', 'type': 'clone_vm'}],
+    }
+    second = client.post('/api/v1/blueprints', headers=headers, json=direct_payload)
+    assert second.status_code == 201, second.text
+    assert second.json()['manager_role_ids'] == [manager_role.json()['id']]
+    assert second.json()['deployment']['executor'] == 'proxmox'
+
+    second_update = client.put(
+        '/api/v1/blueprints/' + str(second.json()['id']),
+        headers={**manager_headers, 'If-Match': str(second.json()['version'])},
+        json={**direct_payload, 'description': 'same manager role reused'},
+    )
+    assert second_update.status_code == 200, second_update.text
+    assert second_update.json()['description'] == 'same manager role reused'
 
     denied_delete = client.delete('/api/v1/blueprints/' + str(blueprint['id']), headers=other_headers)
     assert denied_delete.status_code == 403

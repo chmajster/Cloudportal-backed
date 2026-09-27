@@ -609,7 +609,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'new_scheme_next' in script
     assert "state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName" in script
     assert 'Role zarządzające Blueprintem' in script
-    assert 'może być przypisana tylko do jednego Blueprintu' in script
+    assert 'Ta sama rola może zarządzać wieloma Blueprintami.' in script
+    assert 'dedicatedElsewhere' not in script
     assert "options.hostnameSchemeId && data.schemes.some" in script
     assert 'Rzeczywisty numer zostanie zarezerwowany dopiero podczas wykonania Blueprintu.' in script
     assert '/providers/' in script and '/templates' in script

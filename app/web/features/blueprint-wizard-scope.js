@@ -80,14 +80,8 @@
     }
 
     function refreshManagerRoles(resetSelection = false) {
-      const dedicatedElsewhere = new Set(
-        data.blueprints
-          .filter(value => Number(value.id) !== Number(options.item?.id || 0))
-          .flatMap(value => value.manager_role_ids || []).map(Number)
-      );
       data.managerRoles = data.roles.filter(role =>
-        !dedicatedElsewhere.has(Number(role.id))
-        && [...managerRequired].every(permission => (role.permissions || []).includes(permission)));
+        [...managerRequired].every(permission => (role.permissions || []).includes(permission)));
       const available = new Set(data.managerRoles.map(role => Number(role.id)));
       state.managerRoleIds = resetSelection
         ? data.managerRoles.filter(role => defaultManagerRoleNames.has(role.name)).map(role => Number(role.id))
@@ -148,13 +142,12 @@
 
     async function loadResources(resetManagerSelection = false) {
       const requestOptions = { headers: parts.core.scopeHeaders(state) };
-      const [providers, templates, schemes, pools, credentials, blueprints, playbooks, roleOptions, userOptions] = await Promise.all([
+      const [providers, templates, schemes, pools, credentials, playbooks, roleOptions, userOptions] = await Promise.all([
         safeApi('/providers?limit=200', [], requestOptions),
         safeApi('/templates', [], requestOptions),
         scopeAllows('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
         scopeAllows('ipam.read') ? safeApi('/ipam/pools?limit=200', [], requestOptions) : Promise.resolve([]),
         safeApi('/credentials?limit=200', [], requestOptions),
-        scopeAllows('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
         scopeAllows('ansible.read') ? safeApi('/ansible/playbooks', [], requestOptions) : Promise.resolve([]),
         allowed('roles.read')
           ? Promise.resolve(data.globalRoles || [])
@@ -200,7 +193,6 @@
       data.credentials = credentials;
       data.roles = roleOptions;
       data.users = userOptions;
-      data.blueprints = blueprints;
       data.playbooks = playbooks.filter(value => value.enabled !== false);
       if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
       if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');

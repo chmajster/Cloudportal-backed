@@ -428,7 +428,7 @@ async function catalogView() {
         { label: 'Wersja', value: item => 'v' + item.version },
         { label: 'Role zarządzające', value: item => (item.manager_role_ids || []).length
           ? (item.manager_role_ids || []).map(id => rolesById.get(Number(id)) || ('Rola #' + id)).join(', ')
-          : 'Brak dedykowanej roli' },
+          : 'Brak roli zarządzającej' },
         { label: 'Status', value: item => badge(item.is_active ? 'Aktywny' : 'Nieaktywny', item.is_active ? 'ok' : 'danger') },
       ], generated, item => {
         const rowActions = [];

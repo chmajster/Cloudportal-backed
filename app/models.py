@@ -22,7 +22,7 @@ class Timestamp:
 class UserRole(Base):
     __tablename__ = "user_roles"
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True, index=True)
 
 
 class RolePermission(Base):
@@ -222,7 +222,7 @@ class HostnameReservation(ResourceScope, Timestamp, Base):
 class BlueprintManagerRole(Base):
     __tablename__ = "blueprint_manager_roles"
     blueprint_id: Mapped[int] = mapped_column(ForeignKey("blueprints.id", ondelete="CASCADE"), primary_key=True)
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True, unique=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
 
 
 class Blueprint(ResourceScope, Timestamp, Base):
