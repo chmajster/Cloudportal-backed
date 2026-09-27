@@ -222,6 +222,94 @@ def load_update_service_module(tmp_path, monkeypatch):
     return module
 
 
+def test_ensure_worker_capacity_scales_docker_and_persists_count(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    monkeypatch.setattr(updater, 'INSTALL_MODE', 'docker')
+    config = updater.CONFIG_DIR / 'docker.env'
+    config.write_text(
+        'CP_PUBLIC_HOST=cloudportal.example.test\n'
+        'CP_HTTPS_PORT=8443\n'
+        'CP_WORKER_COUNT=1\n',
+        encoding='utf-8',
+    )
+    calls = []
+    monkeypatch.setattr(updater, '_docker_compose_base', lambda: ['docker', 'compose'])
+    monkeypatch.setattr(
+        updater,
+        '_run_worker_command',
+        lambda command, label, timeout=300: calls.append((command, label)) or '',
+    )
+    monkeypatch.setattr(updater, '_schedule_api_refresh_after_worker_change', lambda: None)
+
+    result = updater.ensure_worker_capacity(4)
+
+    assert result == {
+        'changed': True,
+        'reconciled': True,
+        'previous_worker_count': 1,
+        'worker_count': 4,
+        'install_mode': 'docker',
+    }
+    assert updater.parse_kv(config)['CP_WORKER_COUNT'] == '4'
+    assert calls == [(
+        ['docker', 'compose', 'up', '-d', '--no-deps', '--no-recreate', '--scale', 'worker=4', 'worker'],
+        'rekonsyliacja workerów Docker',
+    )]
+
+    unchanged = updater.ensure_worker_capacity(3)
+    assert unchanged['changed'] is False
+    assert unchanged['reconciled'] is True
+    assert unchanged['worker_count'] == 4
+    assert calls[-1] == (
+        ['docker', 'compose', 'up', '-d', '--no-deps', '--no-recreate', '--scale', 'worker=4', 'worker'],
+        'rekonsyliacja workerów Docker',
+    )
+    assert len(calls) == 2
+
+
+def test_ensure_worker_capacity_starts_missing_systemd_units(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    monkeypatch.setattr(updater, 'INSTALL_MODE', 'systemd')
+    config = updater.CONFIG_DIR / 'backend.env'
+    config.write_text('CP_WORKER_COUNT=1\n', encoding='utf-8')
+    calls = []
+
+    class Result:
+        def __init__(self, returncode):
+            self.returncode = returncode
+            self.stdout = ''
+
+    monkeypatch.setattr(updater.shutil, 'which', lambda name: '/bin/systemctl' if name == 'systemctl' else None)
+    monkeypatch.setattr(updater, '_service_active', lambda unit: unit == 'cloudportal-worker@1.service')
+    monkeypatch.setattr(
+        updater.subprocess,
+        'run',
+        lambda command, **kwargs: Result(0 if command[-1] == 'cloudportal-worker@1.service' else 1),
+    )
+    monkeypatch.setattr(
+        updater,
+        '_run_worker_command',
+        lambda command, label, timeout=300: calls.append((command, label)) or '',
+    )
+    monkeypatch.setattr(updater, '_schedule_api_refresh_after_worker_change', lambda: None)
+
+    result = updater.ensure_worker_capacity(3)
+
+    assert result['changed'] is True
+    assert result['reconciled'] is True
+    assert result['previous_worker_count'] == 1
+    assert result['worker_count'] == 3
+    assert updater.parse_kv(config)['CP_WORKER_COUNT'] == '3'
+    assert [call[0] for call in calls] == [[
+        '/bin/systemctl',
+        'enable',
+        '--now',
+        'cloudportal-worker@2.service',
+        'cloudportal-worker@3.service',
+    ]]
+    assert calls[0][1] == 'rekonsyliacja workerów systemd'
+
+
 def test_runtime_state_unlocks_orphaned_running_state(tmp_path, monkeypatch):
     updater = load_update_service_module(tmp_path, monkeypatch)
     updater.STATE_DIR.mkdir(parents=True, exist_ok=True)

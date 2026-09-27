@@ -120,6 +120,7 @@
 - Idempotency key powinien być stabilny per VM/per batch attempt.
 - Po częściowym sukcesie UI usuwa z zaznaczenia tylko zasoby rzeczywiście przyjęte/wykonane.
 - Fallback po błędzie bulk nie może oznaczać elementów jako obsłużone, jeżeli request zwrócił 500.
+- Limit `max_parallel_jobs` i fizyczna pula workerów to dwa ograniczenia. Gdy pula jest za mała, administrator może jawnie zrekonsyliować ją do ustawionego limitu przez uprzywilejowany updater; zwykły update nie może po cichu nadpisywać świadomego `CP_WORKER_COUNT=1`.
 
 ## 1.9. Quota, reservation i recovery
 
@@ -189,6 +190,8 @@
 - Nie dubluj identyfikatorów/nazw pól HTML; historycznie powodowało to kolizję nazwy deploymentu/hostname.
 - Pola zależne od runtime wyboru (APMID/ENV) nie mogą być jednocześnie wymagane/ustawiane statycznie w sposób sprzeczny.
 - UI ma rozróżniać stan VM (`running/stopped`) od stanu workflow (`running/queued/failed`).
+- Panel System ma pokazywać Redis z backendowego checku `queue`; nie używaj nieistniejącego `checks.redis`.
+- Jeżeli efektywny limit jest niższy od `max_parallel_jobs`, UI ma wskazać niedobór workerów i udostępnić jawną akcję „Dostosuj workery”.
 
 ## 1.15. Sekrety i bezpieczeństwo
 

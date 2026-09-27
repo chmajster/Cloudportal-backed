@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import timedelta, timezone
 from typing import Annotated
@@ -21,6 +22,7 @@ from app.database import get_db
 from app.models import Audit, PasswordReset, Role, Token, User, UserRole, now
 from app.rbac.service import ALL_PERMISSIONS, ensure_admin_remains, governance_lock, permissions_from_names
 from app.security.core import audit, digest, effective_permissions, issue_token, password_hasher, require, revoke_user
+from app.updates.service import UpdaterError, updater_request
 
 router = APIRouter(tags=['administration'])
 
@@ -211,9 +213,23 @@ def update_blueprint_execution_settings(data: BlueprintExecutionSettingsInput, r
     return result
 
 
+def _execution_install_mode():
+    mode = os.environ.get('CP_INSTALL_MODE', 'systemd').strip().lower()
+    return mode if mode in {'docker', 'systemd', 'k8s'} else 'systemd'
+
+
 @router.get('/settings/execution', response_model=JobExecutionSettingsOutput)
 def get_job_execution_settings(actor=Depends(require('settings.read')), db=Depends(get_db, scope='function')):
     return job_execution_settings(db)
+
+
+@router.get('/settings/execution/capabilities')
+def get_job_execution_capabilities(actor=Depends(require('settings.read'))):
+    mode = _execution_install_mode()
+    return {
+        'install_mode': mode,
+        'worker_reconciliation_supported': mode in {'docker', 'systemd'},
+    }
 
 
 @router.put('/settings/execution', response_model=JobExecutionSettingsOutput)
@@ -222,6 +238,34 @@ def update_job_execution_settings(data: JobExecutionSettingsInput, request: Requ
     result = save_job_execution_settings(db, data)
     audit(db, request, 'settings.job_execution_updated', 'settings', 'job_execution')
     return result
+
+
+@router.post('/settings/execution/reconcile')
+def reconcile_job_execution_capacity(request: Request,
+                                     actor=Depends(require('settings.update')),
+                                     db=Depends(get_db, scope='function')):
+    mode = _execution_install_mode()
+    if mode not in {'docker', 'systemd'}:
+        raise HTTPException(409, f'Worker reconciliation is not supported for install mode: {mode}')
+    execution = job_execution_settings(db)
+    minimum = int(execution['max_parallel_jobs'])
+    try:
+        capacity = updater_request(
+            '/workers/ensure',
+            'POST',
+            {'minimum': minimum},
+            timeout=330,
+        )
+    except UpdaterError as exc:
+        raise HTTPException(exc.status, exc.detail) from None
+    audit(
+        db,
+        request,
+        'settings.job_execution_capacity_reconciled',
+        'settings',
+        f"job_execution:{minimum}:{capacity.get('worker_count')}",
+    )
+    return {**capacity, 'max_parallel_jobs': minimum}
 
 
 @router.get('/settings/ldap', response_model=LDAPSettingsOutput)

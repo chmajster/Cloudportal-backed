@@ -1472,6 +1472,212 @@ def _docker_compose_base() -> list[str]:
     raise RuntimeError("Docker Compose nie jest dostępny dla updatera")
 
 
+def _worker_config_path() -> Path:
+    if INSTALL_MODE == "docker":
+        return CONFIG_DIR / "docker.env"
+    if INSTALL_MODE == "systemd":
+        return CONFIG_DIR / "backend.env"
+    raise RuntimeError(f"Dynamiczna zmiana workerów nie jest obsługiwana dla trybu {INSTALL_MODE!r}")
+
+
+def _configured_worker_count() -> tuple[Path, int]:
+    path = _worker_config_path()
+    if not path.is_file():
+        raise RuntimeError(f"Brak konfiguracji workerów: {path}")
+    raw = str(parse_kv(path).get("CP_WORKER_COUNT", "1")).strip()
+    try:
+        count = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Nieprawidłowy CP_WORKER_COUNT w {path}: {raw!r}") from exc
+    if not 1 <= count <= 64:
+        raise RuntimeError(f"CP_WORKER_COUNT poza zakresem 1-64 w {path}: {count}")
+    return path, count
+
+
+def _atomic_config_text(path: Path, value: str, source_stat=None) -> None:
+    source_stat = source_stat or path.stat()
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    try:
+        tmp.write_text(value, encoding="utf-8")
+        os.chmod(tmp, source_stat.st_mode & 0o777)
+        try:
+            os.chown(tmp, source_stat.st_uid, source_stat.st_gid)
+        except PermissionError:
+            pass
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _set_worker_count(path: Path, count: int) -> tuple[str, object]:
+    original = path.read_text(encoding="utf-8")
+    source_stat = path.stat()
+    lines = original.splitlines()
+    key = "CP_WORKER_COUNT="
+    replacement = key + str(count)
+    replaced = False
+    updated = []
+    for line in lines:
+        if line.startswith(key):
+            if not replaced:
+                updated.append(replacement)
+                replaced = True
+            continue
+        updated.append(line)
+    if not replaced:
+        updated.append(replacement)
+    _atomic_config_text(path, "\n".join(updated) + "\n", source_stat)
+    return original, source_stat
+
+
+def _run_worker_command(command: list[str], label: str, timeout: int = 300) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{label}: przekroczono limit czasu") from exc
+    if result.returncode == 0:
+        return result.stdout or ""
+    detail = "\n".join((result.stdout or "").splitlines()[-30:]).strip()
+    raise RuntimeError(
+        f"{label}: kod {result.returncode}" + (f"\n{detail}" if detail else "")
+    )
+
+
+def _refresh_api_runtime_after_worker_change() -> None:
+    time.sleep(2)
+    try:
+        if INSTALL_MODE == "docker":
+            _run_worker_command(
+                _docker_compose_base() + ["up", "-d", "--no-deps", "--force-recreate", "api"],
+                "odświeżenie API po zmianie workerów",
+                timeout=300,
+            )
+        elif INSTALL_MODE == "systemd":
+            systemctl = shutil.which("systemctl") or "systemctl"
+            _run_worker_command(
+                [systemctl, "restart", "cloudportal-api.service"],
+                "restart API po zmianie workerów",
+                timeout=120,
+            )
+    except Exception as exc:
+        append_output("worker-capacity refresh warning: " + str(exc))
+
+
+def _schedule_api_refresh_after_worker_change() -> None:
+    threading.Thread(
+        target=_refresh_api_runtime_after_worker_change,
+        daemon=True,
+        name="cloudportal-worker-capacity-refresh",
+    ).start()
+
+
+def ensure_worker_capacity(minimum: int) -> dict:
+    try:
+        minimum = int(minimum)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("minimum must be an integer from 1 to 64") from exc
+    if not 1 <= minimum <= 64:
+        raise ValueError("minimum must be an integer from 1 to 64")
+
+    with lock:
+        if update_operation_active():
+            raise RuntimeError("Nie można zmieniać puli workerów podczas aktywnej aktualizacji")
+
+        path, current = _configured_worker_count()
+        target = max(current, minimum)
+        config_changed = target != current
+        original = path.read_text(encoding="utf-8")
+        source_stat = path.stat()
+        if config_changed:
+            _set_worker_count(path, target)
+
+        systemd_state = {}
+        try:
+            if INSTALL_MODE == "docker":
+                _run_worker_command(
+                    _docker_compose_base()
+                    + ["up", "-d", "--no-deps", "--no-recreate", "--scale", f"worker={target}", "worker"],
+                    "rekonsyliacja workerów Docker",
+                    timeout=300,
+                )
+            elif INSTALL_MODE == "systemd":
+                systemctl = shutil.which("systemctl") or "systemctl"
+                units_to_ensure = []
+                for index in range(1, target + 1):
+                    unit = f"cloudportal-worker@{index}.service"
+                    active_before = _service_active(unit)
+                    enabled_before = subprocess.run(
+                        [systemctl, "is-enabled", "--quiet", unit],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    ).returncode == 0
+                    systemd_state[unit] = (active_before, enabled_before)
+                    if not (active_before and enabled_before):
+                        units_to_ensure.append(unit)
+                if units_to_ensure:
+                    _run_worker_command(
+                        [systemctl, "enable", "--now", *units_to_ensure],
+                        "rekonsyliacja workerów systemd",
+                        timeout=300,
+                    )
+            else:
+                raise RuntimeError(
+                    f"Dynamiczna zmiana workerów nie jest obsługiwana dla trybu {INSTALL_MODE!r}"
+                )
+        except Exception:
+            if config_changed:
+                _atomic_config_text(path, original, source_stat)
+            if INSTALL_MODE == "docker":
+                try:
+                    _run_worker_command(
+                        _docker_compose_base()
+                        + ["up", "-d", "--no-deps", "--no-recreate", "--scale", f"worker={current}", "worker"],
+                        "rollback skali workerów Docker",
+                        timeout=300,
+                    )
+                except Exception as rollback_exc:
+                    append_output("worker-capacity rollback warning: " + str(rollback_exc))
+            elif INSTALL_MODE == "systemd":
+                systemctl = shutil.which("systemctl") or "systemctl"
+                for unit, (active_before, enabled_before) in reversed(list(systemd_state.items())):
+                    try:
+                        if not active_before:
+                            subprocess.run(
+                                [systemctl, "stop", unit],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=False,
+                            )
+                        if not enabled_before:
+                            subprocess.run(
+                                [systemctl, "disable", unit],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=False,
+                            )
+                    except Exception:
+                        pass
+            raise
+
+        if config_changed:
+            _schedule_api_refresh_after_worker_change()
+        return {
+            "changed": config_changed,
+            "reconciled": True,
+            "previous_worker_count": current,
+            "worker_count": target,
+            "install_mode": INSTALL_MODE,
+        }
+
+
 def _docker_pre_update_backup() -> Path:
     root = DATA_DIR / "backups"
     root.mkdir(parents=True, exist_ok=True)
@@ -1826,6 +2032,18 @@ class Handler(BaseHTTPRequestHandler):
                     })
                     return
                 self.send_json(HTTPStatus.ACCEPTED, {"accepted": True, "already_running": False})
+                return
+            if path == "/workers/ensure":
+                if update_operation_active():
+                    self.send_json(
+                        HTTPStatus.CONFLICT,
+                        {"detail": "Update already in progress; worker capacity cannot be changed"},
+                    )
+                    return
+                self.send_json(
+                    HTTPStatus.OK,
+                    ensure_worker_capacity(payload.get("minimum")),
+                )
                 return
             if path == "/settings":
                 self.send_json(HTTPStatus.OK, update_settings(payload))

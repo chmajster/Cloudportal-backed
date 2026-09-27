@@ -4380,6 +4380,16 @@ server {
         proxy_send_timeout 3600s;
         proxy_buffering off;
     }
+    location = /api/v1/settings/execution/reconcile {
+        limit_except POST { deny all; }
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_read_timeout 360s;
+        proxy_send_timeout 360s;
+        proxy_connect_timeout 5s;
+    }
     location / {
         proxy_pass http://127.0.0.1:8765;
         proxy_set_header Host \$host;

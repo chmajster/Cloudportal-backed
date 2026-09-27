@@ -920,8 +920,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '/settings/vm-classification' in script
     assert "/settings/blueprints" in script
     assert "/settings/execution" in script
+    assert "/settings/execution/reconcile" in script
     assert "Limit równoległych zadań" in script
     assert "Zmień równoległość" in script
+    assert "Dostosuj workery" in script
+    assert "settingsHealth(checks.queue)" in script
+    assert "settingsHealth(checks.redis)" not in script
+    assert "Pula workerów jest mniejsza niż ustawiony limit" in script
     assert "Maksymalna liczba równoległych zadań" in script
     assert "Rzeczywista równoległość nie przekroczy liczby workerów online." in script
     assert "Automatyczne zatwierdzanie wykonania" in script

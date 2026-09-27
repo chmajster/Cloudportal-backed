@@ -403,3 +403,79 @@ def test_job_execution_concurrency_settings(client, headers):
     with session() as db:
         raw = db.get(Setting, 'job_execution').value
         assert raw == {'max_parallel_jobs': 3}
+
+
+def test_job_execution_capacity_reconcile_uses_configured_parallel_limit(client, headers, monkeypatch):
+    import app.api.administration as administration
+
+    saved = client.put(
+        '/api/v1/settings/execution',
+        headers=headers,
+        json={'max_parallel_jobs': 4},
+    )
+    assert saved.status_code == 200, saved.text
+
+    calls = []
+
+    def fake_updater_request(path, method='GET', payload=None, *, timeout=35):
+        calls.append((path, method, payload, timeout))
+        return {
+            'changed': True,
+            'reconciled': True,
+            'previous_worker_count': 1,
+            'worker_count': 4,
+            'install_mode': 'docker',
+        }
+
+    monkeypatch.setattr(administration, 'updater_request', fake_updater_request)
+
+    reconciled = client.post(
+        '/api/v1/settings/execution/reconcile',
+        headers=headers,
+        json={},
+    )
+
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json() == {
+        'changed': True,
+        'reconciled': True,
+        'previous_worker_count': 1,
+        'worker_count': 4,
+        'install_mode': 'docker',
+        'max_parallel_jobs': 4,
+    }
+    assert calls == [('/workers/ensure', 'POST', {'minimum': 4}, 330)]
+
+
+def test_job_execution_capacity_capabilities_gate_kubernetes(client, headers, monkeypatch):
+    import app.api.administration as administration
+
+    monkeypatch.setenv('CP_INSTALL_MODE', 'docker')
+    docker = client.get('/api/v1/settings/execution/capabilities', headers=headers)
+    assert docker.status_code == 200, docker.text
+    assert docker.json() == {
+        'install_mode': 'docker',
+        'worker_reconciliation_supported': True,
+    }
+
+    monkeypatch.setenv('CP_INSTALL_MODE', 'k8s')
+    kubernetes = client.get('/api/v1/settings/execution/capabilities', headers=headers)
+    assert kubernetes.status_code == 200, kubernetes.text
+    assert kubernetes.json() == {
+        'install_mode': 'k8s',
+        'worker_reconciliation_supported': False,
+    }
+
+    calls = []
+    monkeypatch.setattr(
+        administration,
+        'updater_request',
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    rejected = client.post(
+        '/api/v1/settings/execution/reconcile',
+        headers=headers,
+        json={},
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert calls == []

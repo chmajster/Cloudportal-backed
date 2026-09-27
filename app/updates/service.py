@@ -54,8 +54,14 @@ class _UnixHTTPConnection(HTTPConnection):
         self.sock = sock
 
 
-def _unix_updater_request(path: str, method: str, body: bytes | None, headers: dict) -> dict:
-    connection = _UnixHTTPConnection(UPDATER_UNIX_SOCKET, timeout=35)
+def _unix_updater_request(
+    path: str,
+    method: str,
+    body: bytes | None,
+    headers: dict,
+    timeout: float,
+) -> dict:
+    connection = _UnixHTTPConnection(UPDATER_UNIX_SOCKET, timeout=timeout)
     try:
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
@@ -75,7 +81,13 @@ def _unix_updater_request(path: str, method: str, body: bytes | None, headers: d
     return json.loads(raw) if raw else {}
 
 
-def updater_request(path: str, method: str = 'GET', payload: dict | None = None) -> dict:
+def updater_request(
+    path: str,
+    method: str = 'GET',
+    payload: dict | None = None,
+    *,
+    timeout: float = 35,
+) -> dict:
     body = None if payload is None else json.dumps(payload).encode('utf-8')
     headers = {
         'Accept': 'application/json',
@@ -85,11 +97,11 @@ def updater_request(path: str, method: str = 'GET', payload: dict | None = None)
         headers['Content-Type'] = 'application/json'
 
     if UPDATER_UNIX_SOCKET:
-        return _unix_updater_request(path, method, body, headers)
+        return _unix_updater_request(path, method, body, headers, timeout)
 
     request = Request(UPDATER_URL + path, data=body, method=method, headers=headers)
     try:
-        with urlopen(request, timeout=35) as response:
+        with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode('utf-8')
             return json.loads(raw) if raw else {}
     except HTTPError as exc:
