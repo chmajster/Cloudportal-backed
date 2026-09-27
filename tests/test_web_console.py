@@ -755,13 +755,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'ipam.release'" in script
     assert "Brak uprawnień do uruchomienia" in script
     assert script.count("workflowNeedsTags(") >= 1
-    assert "Brak credentiali SSH z hasłem lub kluczem prywatnym" in script
+    assert "Credential SSH" in script
     assert "QEMU Guest Agent zostanie zainstalowany przez konto bootstrapowe VM" in script
     assert "jednorazowe konto przez natywny cloud-init" in script
     assert "statycznego IP/IPAM" in script
     assert "Wybrano Credential VM" in script
-    assert "blueprint-wizard-ssh-credential-users" in script
-    assert "wybrać użytkownika z zapisanych Credentiali" in script
+    assert "Dodatkowe tagi Proxmox" in script
+    assert "managed-by-cloudportal" in script
+    assert "deployment-<generowany-przy-wdrożeniu>" in script
     assert "Instaluj QEMU Guest Agent automatycznie" in script
     assert "Czekaj na QEMU Guest Agent po Terraform apply" in script
     assert "install_qemu_guest_agent" in script
@@ -775,7 +776,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "add('clone', 'clone_vm')" not in script
     assert "if (options.cloudInit) add('cloud_init', 'cloud_init')" in script
     assert "registerExtension('blueprint-wizard-cloud-init'" in script
-    assert 'Użytkownik, hasło lub klucz z Dostępów' in script
+    assert 'Cloud-init i dostęp SSH' in script
+    assert 'Nadpisanie ręczne / fallback' in script
+    assert 'cloud_init_access_credential_id' in script
     assert 'NoCloud ISO (CIDATA) przez API Proxmoxa' in script
     assert 'Podgląd Cloud-init bez sekretów' in script
     assert '!parts.cloudInit.enabled(state) && isProxmox' in script
@@ -907,7 +910,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'JIT provisioning i RBAC' in script
     assert 'Hasło pozostaje wyłącznie w LDAP' in script
     assert "executor: state.executor" in script
-    assert 'Tagi Proxmox' in script
+    assert 'Dodatkowe tagi Proxmox' in script
     assert 'Serwery DNS' in script
     assert "set_tags: 'Tagi'" in script
     assert 'function multiCheckboxField(' in script

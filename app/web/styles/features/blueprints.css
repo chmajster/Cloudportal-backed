@@ -279,6 +279,40 @@
 .blueprint-wizard-inline-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .blueprint-wizard-token-grid { align-items: start; }
 
+.blueprint-wizard-metadata-panel,
+.blueprint-wizard-cloud-init-access { align-items: start; }
+.blueprint-wizard-tag-preview {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.blueprint-wizard-tag-preview-label {
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 800;
+}
+.blueprint-wizard-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.blueprint-wizard-tag-list code {
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: .68rem;
+  overflow-wrap: anywhere;
+}
+.blueprint-wizard-cloud-init-manual textarea {
+  min-height: 96px;
+}
+
 .blueprint-wizard-workflow-visual {
   display: flex; flex-direction: column; align-items: stretch; gap: 6px;
   max-width: 680px;
