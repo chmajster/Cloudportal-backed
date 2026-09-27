@@ -252,7 +252,7 @@ def test_ensure_worker_capacity_scales_docker_and_persists_count(tmp_path, monke
     }
     assert updater.parse_kv(config)['CP_WORKER_COUNT'] == '4'
     assert calls == [(
-        ['docker', 'compose', 'up', '-d', '--no-deps', '--scale', 'worker=4', 'worker'],
+        ['docker', 'compose', 'up', '-d', '--no-deps', '--no-recreate', '--scale', 'worker=4', 'worker'],
         'rekonsyliacja workerów Docker',
     )]
 
@@ -261,7 +261,7 @@ def test_ensure_worker_capacity_scales_docker_and_persists_count(tmp_path, monke
     assert unchanged['reconciled'] is True
     assert unchanged['worker_count'] == 4
     assert calls[-1] == (
-        ['docker', 'compose', 'up', '-d', '--no-deps', '--scale', 'worker=4', 'worker'],
+        ['docker', 'compose', 'up', '-d', '--no-deps', '--no-recreate', '--scale', 'worker=4', 'worker'],
         'rekonsyliacja workerów Docker',
     )
     assert len(calls) == 2
