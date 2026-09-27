@@ -220,14 +220,30 @@ def validate_blueprint_template_variables(data: BlueprintInput):
     validate_template_variables(data.deployment.template, variables)
 
 
-def validate_blueprint_role_scope(db, data, request: Request, actor):
-    """Reject Blueprint role references outside the actor's delegable scope.
+def validate_blueprint_role_scope(db, data, request: Request, actor, blueprint_id=None):
+    """Reject newly added Blueprint role references outside the actor's delegable scope.
 
-    The UI role picker is not an authorization boundary. Platform role readers
-    keep the existing global catalog behavior; scoped users may reference only
-    roles exposed by the selected tenant/project assignable-role catalogs.
+    The UI role picker is not an authorization boundary. Existing role references
+    may be preserved by a Blueprint manager who can update the resource but cannot
+    delegate roles. New references must be assignable in the selected tenant/project.
     """
-    requested = set(data.allowed_role_ids) | set(data.manager_role_ids)
+    requested_allowed = {int(value) for value in data.allowed_role_ids}
+    requested_manager = {int(value) for value in data.manager_role_ids}
+
+    if blueprint_id is not None:
+        existing = db.get(Blueprint, blueprint_id)
+        if existing is None:
+            raise HTTPException(404, 'Blueprint not found')
+        existing_allowed = {int(value) for value in (existing.allowed_role_ids or [])}
+        existing_manager = {int(role.id) for role in existing.manager_roles}
+        requested = (
+            requested_allowed - existing_allowed
+        ) | (
+            requested_manager - existing_manager
+        )
+    else:
+        requested = requested_allowed | requested_manager
+
     if not requested or 'roles.read' in request.state.permissions:
         return
 
@@ -549,7 +565,7 @@ def update_blueprint(
         raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(db, row, actor)
     require_blueprint_version(row, if_match)
-    validate_blueprint_role_scope(db, data, request, actor)
+    validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
@@ -575,7 +591,7 @@ def update_blueprint_bundle(
     require_blueprint_manager(db, row, actor)
     require_blueprint_version(row, if_match)
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
-    validate_blueprint_role_scope(db, data, request, actor)
+    validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
