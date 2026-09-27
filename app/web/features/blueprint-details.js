@@ -229,7 +229,7 @@
             }),
             node('div', { class: 'blueprint-details-hero-meta' },
               node('span', { text: (scope.tenant_name || scope.tenant_id) + ' / ' + (scope.project_name || scope.project_id) }),
-              node('span', { text: 'Aktualizacja: ' + formatDate(item.updated_at) }))),
+              node('span', { text: 'Aktualizacja: ' + formatDate(item.updated_at) }))));
 
         node('div', { class: 'blueprint-details-metrics' },
           metric('Wersja', 'v' + item.version, 'wersja definicji'),
