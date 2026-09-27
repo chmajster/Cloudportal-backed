@@ -307,7 +307,7 @@ def test_blueprint_manager_role_is_required_and_reusable_across_provisioning_mod
         json={**payload, 'description': 'unauthorized edit'},
     )
     assert denied.status_code == 403
-    assert 'dedicated manager role' in denied.text
+    assert 'manager role assigned to this Blueprint' in denied.text
 
     allowed = client.put(
         '/api/v1/blueprints/' + str(blueprint['id']),
