@@ -28,6 +28,7 @@ PERMISSIONS = {
         'events': 'read publish replay consume manage', 'extensions': 'read manage',
         'metrics': 'read', 'quotas': 'read manage tenant.manage',
         'policies': 'read manage simulate audit exception.manage',
+        'dcst': 'view create edit delete apply disable reconcile view_audit allow_unrestricted_rule admin',
         'tokens': 'read create revoke', 'settings': 'read update', 'updates': 'read execute update', 'portal': 'connect',
     }.items()}
 }
@@ -54,7 +55,7 @@ def seed(db):
         'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates', 'tenants', 'projects', 'governance', 'instance_backups'} and p != 'quotas.tenant.manage'} | {'updates.read'}),
         'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'schedules.read', 'schedules.create', 'schedules.update', 'events.read', 'extensions.read', 'quotas.read', 'policies.read'} | day2_operator,
         'Viewer': {'providers.read', 'deployments.read', 'deployments.read_all', 'jobs.read', 'jobs.read_all', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'day2.view', 'quotas.read', 'policies.read'},
-        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'events.read', 'extensions.read', 'metrics.read', 'updates.read', 'day2.view', 'quotas.read', 'policies.read', 'policies.audit'},
+        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'schedules.read', 'events.read', 'extensions.read', 'metrics.read', 'updates.read', 'day2.view', 'quotas.read', 'policies.read', 'policies.audit', 'dcst.view', 'dcst.view_audit'},
         'Portal Service': {'portal.connect'},
         **TENANCY_DEFAULT_ROLES,
         **PROJECT_DEFAULT_ROLES,
