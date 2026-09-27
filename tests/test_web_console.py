@@ -703,6 +703,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "for (const role of [...tenantRoles, ...projectRoles])" in script
     assert "allowed('roles.read') || data.roles.length" in script
     assert "globalRoles: roles" in script
+    assert "globalUsers: users.filter" in script
+    assert "'/projects/' + encodeURIComponent(state.projectId) + '/members?limit=200'" in script
+    assert "'/tenants/' + encodeURIComponent(state.tenantId) + '/members?limit=200&status=active'" in script
+    assert "allowed('users.read') || data.users.length" in script
     assert "'X-Tenant-ID': String(state.tenantId)" in script
     assert "'X-Project-ID': String(state.projectId)" in script
     assert "!state.selectEnvironmentOnExecute" in script
