@@ -869,7 +869,8 @@ tbody tr:hover { background: var(--row-hover); }
 
 
 /* Topbar account menu */
-.user-account {
+.user-account,
+.user-menu > .user-account {
   position: relative;
   display: inline-flex;
   align-items: center;
