@@ -919,6 +919,68 @@ function instanceBackupTool() {
 }
 
 
+const TOOLS_VIEW_KEY = 'cloudportal.console.tools.view';
+
+function readToolsViewMode() {
+  try {
+    return localStorage.getItem(TOOLS_VIEW_KEY) === 'list' ? 'list' : 'grid';
+  } catch {
+    return 'grid';
+  }
+}
+
+function saveToolsViewMode(mode) {
+  try {
+    localStorage.setItem(TOOLS_VIEW_KEY, mode === 'list' ? 'list' : 'grid');
+  } catch {
+    // localStorage może być niedostępny w trybie prywatnym lub restrykcyjnym.
+  }
+}
+
+function toolsViewToggle(container) {
+  let mode = readToolsViewMode();
+  const gridButton = node('button', {
+    class: 'tools-view-button',
+    type: 'button',
+    text: 'Kafelki',
+    'aria-label': 'Wyświetl narzędzia jako kafelki',
+  });
+  const listButton = node('button', {
+    class: 'tools-view-button',
+    type: 'button',
+    text: 'Lista',
+    'aria-label': 'Wyświetl narzędzia jako listę',
+  });
+
+  function sync() {
+    const list = mode === 'list';
+    container.classList.toggle('tools-list', list);
+    gridButton.classList.toggle('active', !list);
+    listButton.classList.toggle('active', list);
+    gridButton.setAttribute('aria-pressed', String(!list));
+    listButton.setAttribute('aria-pressed', String(list));
+  }
+
+  gridButton.addEventListener('click', () => {
+    mode = 'grid';
+    saveToolsViewMode(mode);
+    sync();
+  });
+  listButton.addEventListener('click', () => {
+    mode = 'list';
+    saveToolsViewMode(mode);
+    sync();
+  });
+
+  sync();
+  return node('div', {
+    class: 'tools-view-toggle',
+    role: 'group',
+    'aria-label': 'Sposób wyświetlania narzędzi',
+  }, gridButton, listButton);
+}
+
+
 async function toolsView() {
   const cards = [];
 
@@ -1001,6 +1063,13 @@ async function toolsView() {
     }
   }
 
+  const toolsContainer = cards.length
+    ? node('div', { class: 'tools-grid' }, cards)
+    : null;
+  const toolsCount = node('div', { class: 'tools-count' },
+    node('strong', { text: String(cards.length) }),
+    node('span', { text: cards.length === 1 ? 'narzędzie' : 'narzędzia' }));
+
   dom.content.replaceChildren(
     heading('Narzędzia administracyjne i serwisowe Cloudportal.'),
     node('section', { class: 'tools-hero' },
@@ -1008,12 +1077,11 @@ async function toolsView() {
         node('span', { class: 'tools-eyebrow', text: 'Centrum narzędzi' }),
         node('h2', { text: 'Narzędzia' }),
         node('p', { class: 'muted', text: 'Operacje systemowe i automatyzacja infrastruktury dostępne dla bieżącego użytkownika.' })),
-      node('div', { class: 'tools-count' },
-        node('strong', { text: String(cards.length) }),
-        node('span', { text: cards.length === 1 ? 'narzędzie' : 'narzędzia' }))),
-    cards.length
-      ? node('div', { class: 'tools-grid' }, cards)
-      : node('div', { class: 'empty', text: 'Brak narzędzi dostępnych dla bieżących uprawnień.' })
+      node('div', { class: 'tools-hero-actions' },
+        toolsCount,
+        ...(toolsContainer ? [toolsViewToggle(toolsContainer)] : []))),
+    toolsContainer
+      || node('div', { class: 'empty', text: 'Brak narzędzi dostępnych dla bieżących uprawnień.' })
   );
 }
 
