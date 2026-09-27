@@ -245,6 +245,7 @@ def test_ensure_worker_capacity_scales_docker_and_persists_count(tmp_path, monke
 
     assert result == {
         'changed': True,
+        'reconciled': True,
         'previous_worker_count': 1,
         'worker_count': 4,
         'install_mode': 'docker',
@@ -252,13 +253,18 @@ def test_ensure_worker_capacity_scales_docker_and_persists_count(tmp_path, monke
     assert updater.parse_kv(config)['CP_WORKER_COUNT'] == '4'
     assert calls == [(
         ['docker', 'compose', 'up', '-d', '--no-deps', '--scale', 'worker=4', 'worker'],
-        'skalowanie workerów Docker',
+        'rekonsyliacja workerów Docker',
     )]
 
     unchanged = updater.ensure_worker_capacity(3)
     assert unchanged['changed'] is False
+    assert unchanged['reconciled'] is True
     assert unchanged['worker_count'] == 4
-    assert len(calls) == 1
+    assert calls[-1] == (
+        ['docker', 'compose', 'up', '-d', '--no-deps', '--scale', 'worker=4', 'worker'],
+        'rekonsyliacja workerów Docker',
+    )
+    assert len(calls) == 2
 
 
 def test_ensure_worker_capacity_starts_missing_systemd_units(tmp_path, monkeypatch):
@@ -269,12 +275,17 @@ def test_ensure_worker_capacity_starts_missing_systemd_units(tmp_path, monkeypat
     calls = []
 
     class Result:
-        returncode = 1
-        stdout = ''
+        def __init__(self, returncode):
+            self.returncode = returncode
+            self.stdout = ''
 
     monkeypatch.setattr(updater.shutil, 'which', lambda name: '/bin/systemctl' if name == 'systemctl' else None)
-    monkeypatch.setattr(updater, '_service_active', lambda unit: False)
-    monkeypatch.setattr(updater.subprocess, 'run', lambda *args, **kwargs: Result())
+    monkeypatch.setattr(updater, '_service_active', lambda unit: unit == 'cloudportal-worker@1.service')
+    monkeypatch.setattr(
+        updater.subprocess,
+        'run',
+        lambda command, **kwargs: Result(0 if command[-1] == 'cloudportal-worker@1.service' else 1),
+    )
     monkeypatch.setattr(
         updater,
         '_run_worker_command',
@@ -285,6 +296,7 @@ def test_ensure_worker_capacity_starts_missing_systemd_units(tmp_path, monkeypat
     result = updater.ensure_worker_capacity(3)
 
     assert result['changed'] is True
+    assert result['reconciled'] is True
     assert result['previous_worker_count'] == 1
     assert result['worker_count'] == 3
     assert updater.parse_kv(config)['CP_WORKER_COUNT'] == '3'
