@@ -684,7 +684,9 @@ function createVmBrowser({
       return Number.isFinite(timestamp) ? timestamp : null;
     }
     if (key === 'vm_id') {
-      const vmId = Number(entry.item.vm_id);
+      const rawVmId = entry.item.vm_id;
+      if (rawVmId === null || rawVmId === undefined || rawVmId === '') return null;
+      const vmId = Number(rawVmId);
       return Number.isFinite(vmId) ? vmId : null;
     }
     if (key === 'name') return String(entry.item.name || '').trim();
