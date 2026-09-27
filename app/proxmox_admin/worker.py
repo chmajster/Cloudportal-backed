@@ -589,11 +589,11 @@ def _execute_unfenced(job_id):
             reconciliation_required=bool(ctx.upid),
             event_suffix='failed',
         )
-    except Exception as error:
+    except Exception:
         _finish(
             job_id,
             status='reconciliation_required' if ctx.upid else 'failed',
-            error='PROXMOX_ADMIN_EXECUTION_FAILED: ' + str(error)[:1000],
+            error='PROXMOX_ADMIN_EXECUTION_FAILED: unexpected execution error',
             after=None,
             reconciliation_required=bool(ctx.upid),
             event_suffix='failed',
