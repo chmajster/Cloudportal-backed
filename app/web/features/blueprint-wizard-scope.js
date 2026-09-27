@@ -51,7 +51,7 @@
   }
 
   function create(context) {
-    const { state, data, options, allowed, safeApi, discoverProvider, render } = context;
+    const { state, data, options, allowed, safeApi, optionalApi, discoverProvider, render } = context;
     const managerRequired = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
     const defaultManagerRoleNames = new Set(['Administrator', 'Infrastructure Administrator']);
 
@@ -158,9 +158,17 @@
         scopeAllows('ansible.read') ? safeApi('/ansible/playbooks', [], requestOptions) : Promise.resolve([]),
         allowed('roles.read')
           ? Promise.resolve(data.globalRoles || [])
-          : (scopeAllows('projects.roles.assign')
-              ? safeApi('/projects/' + encodeURIComponent(state.projectId) + '/assignable-roles?limit=200', [], requestOptions)
-              : Promise.resolve([])),
+          : Promise.all([
+              scopeAllows('projects.roles.assign')
+                ? optionalApi('/projects/' + encodeURIComponent(state.projectId) + '/assignable-roles?limit=200', [], requestOptions)
+                : Promise.resolve([]),
+              optionalApi('/tenants/' + encodeURIComponent(state.tenantId) + '/assignable-roles?limit=200', [], requestOptions),
+            ]).then(([projectRoles, tenantRoles]) => {
+              const merged = new Map();
+              for (const role of [...tenantRoles, ...projectRoles]) merged.set(Number(role.id), role);
+              return [...merged.values()].sort((left, right) =>
+                String(left.name || '').localeCompare(String(right.name || ''), 'pl'));
+            }),
       ]);
 
       data.providers = providers;
