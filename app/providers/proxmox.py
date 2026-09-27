@@ -912,6 +912,53 @@ class ProxmoxProvider(InfrastructureProvider):
             f'/nodes/{quote(node, safe="")}/storage/{quote(storage, safe="")}/content/{quote(volume, safe="")}'
         )
 
+    def upload_iso(self, node, storage, path, filename):
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\\.iso', filename, re.IGNORECASE):
+            raise HTTPException(422, 'Invalid ISO filename')
+        try:
+            with httpx.Client(
+                verify=self.verify_ssl,
+                timeout=httpx.Timeout(7200, connect=10),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                headers = {}
+                if self.secret.get('token_id') and self.secret.get('token_secret'):
+                    token_id = self.secret['token_id']
+                    if '!' not in token_id:
+                        token_id = self.username + '!' + token_id
+                    headers['Authorization'] = 'PVEAPIToken=' + token_id + '=' + self.secret['token_secret']
+                else:
+                    auth = client.post(
+                        self.endpoint + '/access/ticket',
+                        data={'username': self.username, 'password': self.secret.get('password', '')},
+                    )
+                    auth.raise_for_status()
+                    ticket = auth.json()['data']
+                    client.cookies.set('PVEAuthCookie', ticket['ticket'])
+                    headers['CSRFPreventionToken'] = ticket['CSRFPreventionToken']
+                with open(path, 'rb') as stream:
+                    response = client.post(
+                        self.endpoint
+                        + f'/nodes/{quote(node, safe="")}/storage/{quote(storage, safe="")}/upload',
+                        headers=headers,
+                        data={'content': 'iso'},
+                        files={'filename': (filename, stream, 'application/octet-stream')},
+                    )
+                response.raise_for_status()
+                task = response.json().get('data')
+        except httpx.HTTPStatusError as error:
+            raise _proxmox_http_exception(error, 'Upload ISO to Proxmox') from None
+        except httpx.HTTPError as error:
+            if _certificate_verification_failed(error):
+                raise HTTPException(502, 'Proxmox TLS certificate verification failed during ISO upload') from None
+            raise HTTPException(502, 'ISO upload to Proxmox failed') from None
+        except (OSError, KeyError, ValueError, TypeError):
+            raise HTTPException(502, 'Unable to upload ISO to Proxmox') from None
+        if not isinstance(task, str) or not task.startswith('UPID:'):
+            raise HTTPException(502, 'Proxmox did not return an ISO upload task identifier')
+        return task
+
     def upload_import_image(self, node, storage, path, filename):
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.qcow2', filename):
             raise HTTPException(422, 'Invalid appliance import image filename')
