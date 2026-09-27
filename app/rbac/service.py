@@ -23,6 +23,14 @@ PERMISSIONS = {
         'day2': ('view power snapshot.create snapshot.restore snapshot.delete compute.resize disk.add disk.resize '
                  'disk.delete network.manage cloudinit.update credentials.manage ansible.run package.manage '
                  'tags.manage metadata.manage migrate clone rebuild delete cancel retry approve admin override_protection'),
+        'proxmox_admin': (
+            'view dashboard.view providers.view scope.all nodes.view nodes.services.manage '
+            'vm.view vm.power vm.modify vm.clone vm.migrate vm.delete '
+            'containers.view containers.power containers.modify containers.clone containers.migrate containers.delete '
+            'snapshots.view snapshots.manage storage.view storage.manage images.view images.manage '
+            'templates.view templates.manage backups.view backups.run backups.restore backups.delete '
+            'cluster.view tasks.view firewall.view firewall.manage console.use search bulk'
+        ),
         'schedules': 'read create update delete',
         'webhooks': 'read create update delete',
         'events': 'read publish replay consume manage', 'extensions': 'read manage',
