@@ -5,11 +5,11 @@ import pytest
 from sqlalchemy import select, func
 from conftest import new_user
 from app.database import session
-from app.models import Deployment, Job, JobLog, ManagedVM, ManagedResource, Token
+from app.models import Deployment, Job, JobLog, ManagedVM, ManagedResource, Token, User
 from app.projects.models import Project, ProjectMembership
 from app.tenancy.models import TenantMembership
 from app.resource_scope.models import ProjectCredentialAccess
-from app.jobs.worker import execute, validate_authorization
+from app.jobs.worker import _validate_blueprint_authorization, execute, validate_authorization
 from app.executors.base import ExecutionFailed
 from app.executors.terraform import TerraformExecutor
 
@@ -166,6 +166,19 @@ def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
     available = client.get('/api/v1/blueprints?available=true', headers=user_headers)
     assert available.status_code == 200, available.text
     assert [row['id'] for row in available.json()['items']] == [created.json()['id']]
+    assert available.json()['items'][0]['can_manage'] is True
+
+    with session() as db:
+        _validate_blueprint_authorization(
+            db,
+            SimpleNamespace(
+                operation='terraform.apply',
+                payload={'blueprint': {'id': created.json()['id']}},
+                source='API',
+            ),
+            db.get(User, user['id']),
+            {'blueprints.execute'},
+        )
 
     updated_payload = {**payload, 'name': 'Scoped RBAC updated'}
     updated = client.put(
@@ -179,6 +192,17 @@ def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
     with session() as db:
         db.get(ProjectMembership, (p['id'], user['id'])).status = 'disabled'
         db.commit()
+        with pytest.raises(ExecutionFailed, match='Blueprint access has been revoked'):
+            _validate_blueprint_authorization(
+                db,
+                SimpleNamespace(
+                    operation='terraform.apply',
+                    payload={'blueprint': {'id': created.json()['id']}},
+                    source='API',
+                ),
+                db.get(User, user['id']),
+                {'blueprints.execute'},
+            )
 
     revoked = client.get('/api/v1/blueprints?available=true', headers=user_headers)
     assert revoked.status_code == 404, revoked.text
