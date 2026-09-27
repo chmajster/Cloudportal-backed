@@ -265,3 +265,418 @@
     text-align: left;
   }
 }
+
+
+/* Role and access workspace */
+.rbac-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 16px;
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.rbac-tab {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: .76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rbac-tab:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+.rbac-tab.active {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 8%);
+}
+.rbac-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.rbac-stat {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 16px 18px;
+}
+.rbac-stat-label,
+.rbac-kicker {
+  color: var(--muted);
+  font-size: .65rem;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.rbac-stat-value {
+  color: var(--text);
+  font-size: 1.45rem;
+  line-height: 1.1;
+}
+.rbac-stat small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rbac-stack {
+  display: grid;
+  gap: 16px;
+}
+.rbac-explainer {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(420px, .9fr);
+  align-items: center;
+  gap: 20px;
+  padding: 22px;
+}
+.rbac-explainer h2,
+.rbac-section-heading h2,
+.rbac-section-heading h3,
+.rbac-role-card h3,
+.rbac-governance-card h3,
+.rbac-decision h2 {
+  margin: 4px 0 0;
+}
+.rbac-explainer p {
+  max-width: 760px;
+  margin: 8px 0 0;
+  line-height: 1.55;
+}
+.rbac-flow {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+}
+.rbac-flow span {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: .72rem;
+  font-weight: 800;
+}
+.rbac-flow strong {
+  color: var(--muted);
+}
+.rbac-quick-grid,
+.rbac-governance-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.rbac-governance-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.rbac-quick-card {
+  display: grid;
+  gap: 7px;
+  min-height: 112px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.rbac-quick-card:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.rbac-quick-card strong {
+  font-size: .86rem;
+}
+.rbac-quick-card span {
+  color: var(--muted);
+  font-size: .74rem;
+  line-height: 1.45;
+}
+.rbac-section {
+  display: grid;
+  gap: 12px;
+}
+.rbac-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.rbac-section-heading p {
+  margin: 5px 0 0;
+  line-height: 1.45;
+}
+.rbac-role-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.rbac-role-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+}
+.rbac-role-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rbac-role-card-head > div {
+  min-width: 0;
+}
+.rbac-role-card h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rbac-role-modules {
+  min-height: 38px;
+  margin: 0;
+  line-height: 1.45;
+}
+.rbac-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.rbac-footnote {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+}
+.rbac-assignment-editor {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+.rbac-empty-selection {
+  padding: 24px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  text-align: center;
+}
+.rbac-assignment-form {
+  display: grid;
+  gap: 14px;
+}
+.rbac-assignment-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.rbac-assignment-toolbar > div {
+  display: grid;
+  gap: 3px;
+}
+.rbac-role-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.rbac-role-option {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.rbac-role-option:hover {
+  border-color: var(--accent-border);
+}
+.rbac-role-option.selected {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.rbac-role-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.rbac-role-option-copy strong,
+.rbac-role-option-copy small {
+  overflow-wrap: anywhere;
+}
+.rbac-analysis-form {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+.rbac-analysis-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.rbac-analysis-result {
+  display: grid;
+  gap: 14px;
+}
+.rbac-decision {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border-left: 4px solid var(--line);
+}
+.rbac-decision.allow {
+  border-left-color: var(--success, #16a34a);
+}
+.rbac-decision.deny {
+  border-left-color: var(--danger, #dc2626);
+}
+.rbac-decision-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.rbac-reason-list {
+  display: grid;
+  gap: 8px;
+}
+.rbac-reason {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.rbac-analysis-note {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  line-height: 1.5;
+}
+.rbac-governance-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+}
+.rbac-governance-card p {
+  flex: 1;
+  margin: 0;
+  line-height: 1.5;
+}
+.rbac-governance-card .button {
+  align-self: flex-start;
+}
+.rbac-roadmap-note {
+  padding: 18px 20px;
+}
+.rbac-roadmap-note p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+.rbac-role-form {
+  align-items: start;
+}
+.rbac-permission-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.rbac-permission-toolbar-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.rbac-selected-counter {
+  color: var(--accent);
+  font-size: 1rem;
+}
+.rbac-permission-picker .permission-group[hidden],
+.rbac-permission-picker .permission-grid label[hidden] {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .rbac-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rbac-explainer {
+    grid-template-columns: 1fr;
+  }
+  .rbac-flow {
+    justify-content: flex-start;
+  }
+  .rbac-quick-grid,
+  .rbac-role-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .rbac-stats,
+  .rbac-quick-grid,
+  .rbac-role-grid,
+  .rbac-governance-grid,
+  .rbac-role-options {
+    grid-template-columns: 1fr;
+  }
+  .rbac-section-heading,
+  .rbac-role-card-head,
+  .rbac-assignment-toolbar,
+  .rbac-decision-head,
+  .rbac-permission-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .rbac-explainer,
+  .rbac-assignment-editor,
+  .rbac-analysis-form,
+  .rbac-decision,
+  .rbac-governance-card {
+    padding: 16px;
+  }
+  .rbac-flow {
+    padding-bottom: 4px;
+  }
+  .rbac-analysis-actions {
+    justify-content: stretch;
+  }
+  .rbac-analysis-actions .button,
+  .rbac-assignment-toolbar .button {
+    width: 100%;
+  }
+  .rbac-reason {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
