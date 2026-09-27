@@ -300,4 +300,6 @@
     permission: null,
     label: 'Blueprinty',
   }, match => blueprintDetails(Number(match.params.id), match.searchParams));
+
+  registerExtension('blueprint-details', () => {});
 })();
