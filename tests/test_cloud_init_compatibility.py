@@ -60,6 +60,17 @@ def test_blueprint_list_exposes_scoped_enable_disable_action():
     assert "item.is_active ? 'Wyłącz' : 'Włącz'" in source
 
 
+def test_blueprint_name_and_active_toggle_are_aligned_in_one_row():
+    source = (ROOT / 'app/web/features/blueprint-wizard.js').read_text()
+    stylesheet = (ROOT / 'app/web/styles/features/blueprints.css').read_text()
+    assert "class: 'blueprint-wizard-name-active-row wide'" in source
+    assert "active.classList.add('blueprint-wizard-active-toggle')" in source
+    assert '.blueprint-wizard-name-active-row {' in stylesheet
+    assert 'grid-template-columns: minmax(0, 1fr) max-content;' in stylesheet
+    assert '.blueprint-wizard-active-toggle {' in stylesheet
+    assert 'min-height: 43px;' in stylesheet
+
+
 def test_quick_workflow_builds_required_cloud_init_before_awx():
     helper = ROOT / 'app/web/features/blueprint-form-utils.js'
     script = 'global.window = {}; global.registerExtension = (_name, initialize) => initialize();\n'
