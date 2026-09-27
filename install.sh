@@ -1228,13 +1228,27 @@ docker_rollback_candidate() {
   fi
 
   if [[ -n "$previous_release" && -f "$previous_release/docker-compose.yml" && -r "$docker_env" ]]; then
-    docker_compose_for "$previous_release" "$docker_env" up -d --remove-orphans --scale "worker=${previous_workers:-$default_workers}" || true
-    if ((tls_changed)); then
-      docker_compose_for "$previous_release" "$docker_env" restart proxy || true
+    ui_info 'Odbudowuję obrazy poprzedniego release, ponieważ build kandydata używa tych samych nazw obrazów Compose.'
+    if ! docker_compose_for "$previous_release" "$docker_env" build; then
+      ui_fail 'Nie udało się odbudować obrazów poprzedniego release podczas rollbacku.'
+      return 1
     fi
-  else
-    docker_compose_for "$candidate_release" "$candidate_env" down --remove-orphans >/dev/null 2>&1 || true
+    if ! docker_compose_for "$previous_release" "$docker_env" up -d --remove-orphans --scale "worker=${previous_workers:-$default_workers}"; then
+      ui_fail 'Nie udało się uruchomić poprzedniego release Docker po odbudowie obrazów.'
+      docker_compose_for "$previous_release" "$docker_env" logs --tail=120 migrate api worker dispatcher proxy || true
+      return 1
+    fi
+    if ((tls_changed)) && ! docker_compose_for "$previous_release" "$docker_env" restart proxy; then
+      ui_fail 'Poprzedni release działa, ale nie udało się przeładować proxy po przywróceniu TLS.'
+      return 1
+    fi
+    ui_ok 'Poprzedni release Docker został odbudowany i przywrócony.'
+    return 0
   fi
+
+  docker_compose_for "$candidate_release" "$candidate_env" down --remove-orphans >/dev/null 2>&1 || true
+  ui_warn 'Brak poprzedniego release do przywrócenia; kandydat został zatrzymany.'
+  return 0
 }
 
 docker_status_check() {
@@ -2253,13 +2267,23 @@ EOF
 
   ui_stage 6 "$stages" 'Start stacka i healthcheck'
   if ! docker_compose_for "$release" "$candidate_env" up -d --remove-orphans --scale "worker=$workers"; then
-    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
-    ui_fail 'Nie udało się uruchomić kandydata Docker; poprzedni aktywny release pozostaje źródłem prawdy.'
+    ui_fail 'Nie udało się uruchomić kandydata Docker.'
+    ui_info 'Log usługi migrate:'
+    docker_compose_for "$release" "$candidate_env" logs --tail=120 migrate || true
+    if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"; then
+      ui_fail 'Kandydat Docker został odrzucony; poprzedni release został przywrócony.'
+    else
+      ui_fail 'Kandydat Docker nie wystartował, a automatyczny rollback również się nie powiódł.'
+      ui_info "Diagnostyka: docker compose -p $docker_project ps -a && docker compose -p $docker_project logs --tail=150 migrate api"
+    fi
     exit 1
   fi
   if ((docker_tls_changed)) && ! docker_compose_for "$release" "$candidate_env" restart proxy; then
-    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
-    ui_fail 'Nie udało się przeładować proxy z nowym TLS; przywrócono poprzedni stan.'
+    if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"; then
+      ui_fail 'Nie udało się przeładować proxy z nowym TLS; poprzedni release został przywrócony.'
+    else
+      ui_fail 'Nie udało się przeładować proxy z nowym TLS, a rollback poprzedniego release również się nie powiódł.'
+    fi
     exit 1
   fi
   local ready=0
@@ -2280,7 +2304,9 @@ EOF
     ui_fail 'Kandydat Docker wystartował, ale HTTPS healthcheck nie przeszedł.'
     docker_compose_for "$release" "$candidate_env" ps || true
     docker_compose_for "$release" "$candidate_env" logs --tail=100 api proxy || true
-    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
+    if ! docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"; then
+      ui_fail 'HTTPS healthcheck kandydata nie przeszedł, a rollback poprzedniego release również się nie powiódł.'
+    fi
     exit 1
   }
   ui_ok 'Healthcheck HTTPS kandydata zakończony pomyślnie.'
