@@ -16,10 +16,6 @@ const dom = {
   pageEyebrow: document.querySelector('#page-eyebrow'),
   currentUser: document.querySelector('#current-user'),
   currentRoles: document.querySelector('#current-roles'),
-  currentUserAvatar: document.querySelector('#current-user-avatar'),
-  userMenu: document.querySelector('#user-menu'),
-  userMenuToggle: document.querySelector('#user-menu-toggle'),
-  userMenuDropdown: document.querySelector('#user-menu-dropdown'),
   sidebarProfile: document.querySelector('#sidebar-profile'),
   apiStatus: document.querySelector('#api-status'),
   sidebar: document.querySelector('#sidebar'),
@@ -140,12 +136,7 @@ function updateThemeControls() {
   const dark = document.documentElement.dataset.theme === 'dark';
   document.querySelectorAll('[data-theme-toggle]').forEach(control => {
     const label = dark ? 'Włącz jasny motyw' : 'Włącz ciemny motyw';
-    const icon = appIcon(dark ? 'sun' : 'moon', { className: 'button-icon' });
-    if (control.hasAttribute('data-theme-toggle-text')) {
-      control.replaceChildren(icon, node('span', { text: dark ? 'Motyw jasny' : 'Motyw ciemny' }));
-    } else {
-      control.replaceChildren(icon);
-    }
+    control.replaceChildren(appIcon(dark ? 'sun' : 'moon'));
     control.setAttribute('aria-label', label);
     control.setAttribute('title', label);
     control.setAttribute('aria-pressed', String(dark));
@@ -203,13 +194,6 @@ function loadTheme() {
 }
 function toggleTheme() {
   setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
-}
-function setUserMenuOpen(open) {
-  if (!dom.userMenuToggle || !dom.userMenuDropdown) return;
-  const active = Boolean(open);
-  dom.userMenuDropdown.hidden = !active;
-  dom.userMenuToggle.setAttribute('aria-expanded', String(active));
-  dom.userMenu?.classList.toggle('open', active);
 }
 function isDesktopSidebar() {
   return window.matchMedia('(min-width: 761px)').matches;
@@ -1057,7 +1041,6 @@ function setLoginMessage(message = '', type = 'error') {
 function showLogin(message = '', type = 'error') {
   clearSession();
   setMobileMenu(false);
-  setUserMenuOpen(false);
   dom.appView.hidden = true;
   dom.loginView.hidden = false;
   setLoginMessage(message, type);
@@ -1070,8 +1053,6 @@ function showApp() {
   dom.appView.hidden = false;
   dom.currentUser.textContent = identityDisplayName(state.identity.user);
   dom.currentRoles.textContent = state.identity.roles.map(role => role.name).join(', ') || 'Brak roli';
-  if (dom.currentUserAvatar) dom.currentUserAvatar.textContent = identityInitials(state.identity.user);
-  setUserMenuOpen(false);
   hydrateShellIcons();
   renderSidebarProfile();
   emitUiEvent('app-shown', { identity: state.identity });
