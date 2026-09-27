@@ -300,10 +300,14 @@ def test_ensure_worker_capacity_starts_missing_systemd_units(tmp_path, monkeypat
     assert result['previous_worker_count'] == 1
     assert result['worker_count'] == 3
     assert updater.parse_kv(config)['CP_WORKER_COUNT'] == '3'
-    assert [call[0] for call in calls] == [
-        ['/bin/systemctl', 'enable', '--now', 'cloudportal-worker@2.service'],
-        ['/bin/systemctl', 'enable', '--now', 'cloudportal-worker@3.service'],
-    ]
+    assert [call[0] for call in calls] == [[
+        '/bin/systemctl',
+        'enable',
+        '--now',
+        'cloudportal-worker@2.service',
+        'cloudportal-worker@3.service',
+    ]]
+    assert calls[0][1] == 'rekonsyliacja workerów systemd'
 
 
 def test_runtime_state_unlocks_orphaned_running_state(tmp_path, monkeypatch):
