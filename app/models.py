@@ -173,7 +173,7 @@ class Audit(Base):
     resource: Mapped[str] = mapped_column(String(100))
     resource_id: Mapped[str | None] = mapped_column(String(100))
     result: Mapped[str] = mapped_column(String(32), default="success")
-    request_id: Mapped[str] = mapped_column(String(36), index=True)
+    request_id: Mapped[str] = mapped_column(String(36), index=True)\n    details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Idempotency(Base):
