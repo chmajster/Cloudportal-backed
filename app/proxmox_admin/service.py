@@ -57,6 +57,12 @@ COMMAND_PERMISSIONS = {
     'vm.snapshot.create': 'proxmox_admin.snapshots.manage',
     'vm.snapshot.delete': 'proxmox_admin.snapshots.manage',
     'vm.snapshot.rollback': 'proxmox_admin.snapshots.manage',
+    'vm.iso.attach': 'proxmox_admin.vm.modify',
+    'template.clone': 'proxmox_admin.templates.manage',
+    'template.config': 'proxmox_admin.templates.manage',
+    'template.delete': 'proxmox_admin.templates.manage',
+    'image.upload': 'proxmox_admin.images.manage',
+    'image.delete': 'proxmox_admin.images.manage',
     'lxc.power': 'proxmox_admin.containers.power',
     'lxc.config': 'proxmox_admin.containers.modify',
     'lxc.clone': 'proxmox_admin.containers.clone',
@@ -95,6 +101,9 @@ GLOBAL_NATIVE_MUTATIONS = {
     'firewall.rule.create',
     'firewall.rule.update',
     'firewall.rule.delete',
+    'image.upload',
+    'image.delete',
+    'template.delete',
 }
 
 
@@ -512,6 +521,50 @@ def list_templates(db, provider_id, request):
     return fetched({'items': _enrich_inventory(db, provider_id, rows)})
 
 
+def _ensure_visible_template(db, provider_id, request, node, vmid):
+    _, _, adapter = get_proxmox_provider(db, provider_id)
+    rows = [
+        dict(row) for row in adapter.cluster_resources('vm')
+        if row.get('type') == 'qemu' and bool(row.get('template'))
+    ]
+    rows = _visible_native_rows(db, provider_id, rows, request)
+    match = next((
+        row for row in rows
+        if int(row.get('vmid', -1)) == int(vmid) and str(row.get('node') or '') == str(node)
+    ), None)
+    if match is None:
+        raise HTTPException(404, {'code': 'RESOURCE_NOT_FOUND', 'message': 'Proxmox template not found'})
+    return match
+
+
+def list_images(db, provider_id):
+    _, _, adapter = get_proxmox_provider(db, provider_id)
+    items = []
+    seen = set()
+    for row in adapter.cluster_resources('storage'):
+        node = row.get('node')
+        storage = row.get('storage')
+        if not node or not storage or (node, storage) in seen:
+            continue
+        seen.add((node, storage))
+        try:
+            content = adapter.storage_content(node, storage)
+        except HTTPException:
+            continue
+        for item in content:
+            content_type = str(item.get('content') or '')
+            volid = str(item.get('volid') or '')
+            if content_type not in {'iso', 'vztmpl'} and ':iso/' not in volid and ':vztmpl/' not in volid:
+                continue
+            items.append({
+                **dict(item),
+                'node': node,
+                'storage': storage,
+                'image_type': 'iso' if content_type == 'iso' or ':iso/' in volid else 'template',
+            })
+    return fetched({'items': items})
+
+
 def list_snapshots(db, provider_id, request):
     _, _, adapter = get_proxmox_provider(db, provider_id)
     items = []
@@ -663,6 +716,8 @@ def _target_snapshot(adapter, object_type, node, object_id):
             'status': adapter.vm_status(node, int(object_id)),
             'config': adapter.vm_config(node, int(object_id)),
         })
+    if object_type == 'template':
+        return redact({'config': adapter.vm_config(node, int(object_id))})
     if object_type == 'container':
         return redact({
             'status': adapter.lxc_status(node, int(object_id)),
@@ -806,6 +861,9 @@ def queue_operation(
             db, provider_id, request, node, int(object_id),
             'vm' if object_type == 'vm' else 'lxc',
         )
+        resource = {**dict(visible), **dict(resource or {})}
+    elif object_type == 'template':
+        visible = _ensure_visible_template(db, provider_id, request, node, int(object_id))
         resource = {**dict(visible), **dict(resource or {})}
     else:
         resource = dict(resource or {})
