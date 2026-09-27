@@ -723,27 +723,33 @@
         el('div', { class: 'vra-brand-mark', text: 'CP' }),
         el('div', {},
           el('strong', { text: 'Blueprint Designer' }),
-          el('span', { text: 'vRA-style canvas · GUI + YAML' })));
+          el('span', { text: 'Canvas workflow · GUI + YAML' })));
       const meta = el('div', { class: 'vra-header-meta' },
+        el('span', { class: 'vra-meta-label', text: 'BLUEPRINT' }),
         el('strong', { text: state.blueprint.name || 'Bez nazwy' }),
-        el('span', { class: 'mono', text: (state.blueprint.slug || '—') + (state.version ? ' · v' + state.version : ' · nowy') }),
-        state.dirty ? el('span', { class: 'vra-dirty', text: 'Niezapisane' }) : el('span', { class: 'vra-saved', text: 'Zapisano' }));
+        el('span', { class: 'mono vra-meta-slug', text: (state.blueprint.slug || '—') + (state.version ? ' · v' + state.version : ' · nowy') }),
+        state.dirty
+          ? el('span', { class: 'vra-state-badge vra-dirty', text: 'Niezapisane zmiany' })
+          : el('span', { class: 'vra-state-badge vra-saved', text: 'Zapisano' }));
       const tools = el('div', { class: 'vra-toolbar' },
-        iconButton('Cofnij', 'Ctrl+Z', undo),
-        iconButton('Ponów', 'Ctrl+Y', redo),
-        iconButton('Auto layout', 'Rozmieść graf automatycznie', fitLayout),
-        iconButton('Waliduj', 'Waliduj lokalnie i przez API', validateServer),
-        iconButton('Eksport YAML', 'Pobierz YAML', exportYaml),
-        iconButton('Zapisz', 'Ctrl+S', save, 'primary'),
-        iconButton('×', 'Zamknij', close, 'close'));
+        el('div', { class: 'vra-toolbar-group' },
+          iconButton('Cofnij', 'Ctrl+Z', undo),
+          iconButton('Ponów', 'Ctrl+Y', redo)),
+        el('div', { class: 'vra-toolbar-group' },
+          iconButton('Auto layout', 'Rozmieść graf automatycznie', fitLayout),
+          iconButton('Waliduj', 'Waliduj lokalnie i przez API', validateServer),
+          iconButton('Eksport YAML', 'Pobierz YAML', exportYaml)),
+        el('div', { class: 'vra-toolbar-group vra-toolbar-primary' },
+          iconButton('Zapisz', 'Ctrl+S', save, 'primary'),
+          iconButton('×', 'Zamknij', close, 'close')));
       header.append(title, meta, tools);
     }
 
     function renderPalette() {
       const root = el('aside', { class: 'vra-palette' });
       root.append(el('div', { class: 'vra-pane-title' },
-        el('strong', { text: 'Components' }),
-        el('span', { text: 'Przeciągnij na canvas' })));
+        el('strong', { text: 'Komponenty' }),
+        el('span', { text: 'Kliknij albo przeciągnij krok na canvas' })));
       const search = el('input', { class: 'vra-palette-search', type: 'search', placeholder: 'Szukaj komponentu…' });
       root.append(search);
       const list = el('div', { class: 'vra-palette-list' });
@@ -755,14 +761,19 @@
         for (const group of STEP_CATALOG) {
           const items = group.items.filter(item => !needle || item.join(' ').toLowerCase().includes(needle) || group.group.toLowerCase().includes(needle));
           if (!items.length) continue;
-          const section = el('section', { class: 'vra-palette-group' }, el('h4', { text: group.group }));
+          const section = el('section', { class: 'vra-palette-group' },
+            el('h4', {},
+              el('span', { text: group.group }),
+              el('span', { class: 'vra-group-count', text: String(items.length) })));
           for (const [type, label, description] of items) {
             const card = el('button', {
               type: 'button', class: 'vra-component', draggable: 'true',
+              title: description,
               onclick: () => addStep(type),
             },
               el('span', { class: 'vra-component-icon', text: label.slice(0, 2).toUpperCase() }),
-              el('span', {}, el('strong', { text: label }), el('small', { text: description })));
+              el('span', { class: 'vra-component-copy' }, el('strong', { text: label }), el('small', { text: description })),
+              el('span', { class: 'vra-component-add', text: '+' }));
             card.addEventListener('dragstart', event => {
               event.dataTransfer.setData('application/x-cloudportal-step', type);
               event.dataTransfer.effectAllowed = 'copy';
@@ -860,7 +871,10 @@
             }, '×')),
           el('div', { class: 'vra-node-id mono', text: step.id }),
           el('div', { class: 'vra-node-foot' },
-            el('span', { text: (step.depends_on || []).length + ' wejść' }),
+            el('div', { class: 'vra-node-stats' },
+              el('span', { text: (step.depends_on || []).length + ' wejść' }),
+              el('span', { text: 'timeout ' + Number(step.timeout || defaultStepTimeout(step.type)) + 's' }),
+              Number(step.retry || 0) > 0 ? el('span', { text: 'retry ' + step.retry }) : null),
             el('button', {
               type: 'button', class: 'vra-connect-button',
               onclick: event => {
@@ -1171,10 +1185,18 @@
     function renderMain() {
       main.replaceChildren();
       const palette = renderPalette();
+      const edgeCount = state.blueprint.workflow.reduce((sum, step) => sum + (step.depends_on || []).length, 0);
+      const executor = state.blueprint.deployment?.executor || 'terraform';
       const canvasPane = el('section', { class: 'vra-canvas-pane' },
         el('div', { class: 'vra-canvas-title' },
-          el('div', {}, el('strong', { text: 'Design' }), el('span', { text: 'DAG provisioningu' })),
-          el('div', { class: 'vra-canvas-help', text: 'Kliknij „Połącz →”, potem krok docelowy. Podwójny klik na linii usuwa zależność.' })),
+          el('div', { class: 'vra-canvas-heading' },
+            el('strong', { text: 'Workflow' }),
+            el('span', { text: 'DAG provisioningu i automatyzacji' })),
+          el('div', { class: 'vra-canvas-overview' },
+            el('span', { class: 'vra-canvas-chip', text: executor === 'proxmox' ? 'Direct Proxmox' : executor }),
+            el('span', { class: 'vra-canvas-chip', text: state.blueprint.workflow.length + ' kroków' }),
+            el('span', { class: 'vra-canvas-chip', text: edgeCount + ' połączeń' })),
+          el('div', { class: 'vra-canvas-help', text: 'Połącz: kliknij „Połącz →”, następnie krok docelowy. Usuń relację podwójnym kliknięciem linii.' })),
         el('div', { class: 'vra-canvas-host', 'data-vra-canvas-host': 'true' }));
       const inspector = el('aside', { class: 'vra-inspector', 'data-vra-inspector': 'true' });
       main.append(palette, canvasPane, inspector);
