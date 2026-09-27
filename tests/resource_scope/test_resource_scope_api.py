@@ -189,6 +189,19 @@ def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
     assert updated.status_code == 200, updated.text
     assert updated.json()['name'] == 'Scoped RBAC updated'
 
+    tenant_admin_role_id = next(row['id'] for row in roles if row['name'] == 'Tenant Administrator')
+    denied_role_reference = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(updated.json()['version'])},
+        json={
+            **payload,
+            'name': 'Must not accept tenant-wide role from project-only administrator',
+            'allowed_role_ids': [tenant_admin_role_id],
+        },
+    )
+    assert denied_role_reference.status_code == 403, denied_role_reference.text
+    assert 'role references exceed' in denied_role_reference.text
+
     with session() as db:
         db.get(ProjectMembership, (p['id'], user['id'])).status = 'disabled'
         db.commit()
