@@ -14,3 +14,104 @@
 }
 .projects-role-option .field-help { padding-left: 26px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .projects-overview { grid-template-columns: 1fr; } }
+
+/* Global organization/project work context shown in the application shell. */
+.global-project-context {
+  flex: 0 1 310px;
+  min-width: 210px;
+  max-width: 360px;
+}
+.global-context-trigger {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px 8px 13px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--panel-shadow);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.global-context-trigger:hover,
+.global-context-trigger:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--surface-2);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+  outline: none;
+}
+.global-context-trigger.warning {
+  border-color: var(--warning);
+}
+.global-context-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.global-context-copy small {
+  color: var(--muted);
+  font-size: .6rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.global-context-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .74rem;
+  font-weight: 800;
+}
+.global-context-chevron {
+  color: var(--muted);
+  font-size: .9rem;
+  text-align: center;
+}
+.global-context-summary {
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.global-context-summary p {
+  margin: 5px 0 0;
+  line-height: 1.5;
+}
+@media (max-width: 1220px) {
+  .global-project-context { flex-basis: 250px; max-width: 280px; }
+}
+@media (max-width: 980px) {
+  .global-project-context { flex: 0 1 240px; min-width: 180px; max-width: 250px; }
+}
+@media (max-width: 860px) {
+  .topbar > .global-project-context {
+    display: block;
+    flex: 0 1 210px;
+    min-width: 140px;
+    max-width: 210px;
+  }
+  .global-context-trigger { min-height: 46px; border-radius: 14px; }
+  .global-context-copy small { display: none; }
+}
+@media (max-width: 620px) {
+  .topbar > .global-project-context {
+    flex: 1 1 120px;
+    min-width: 90px;
+    max-width: 160px;
+  }
+  .global-context-trigger {
+    min-height: 44px;
+    padding-inline: 10px 8px;
+  }
+  .global-context-copy strong { font-size: .7rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .global-context-trigger { transition: none; }
+}
+
