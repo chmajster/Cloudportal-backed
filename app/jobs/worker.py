@@ -22,6 +22,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from fastapi import HTTPException
 from app.api.schemas import AnsibleInput, Inventory
+from app.automation.deletion import BlueprintDeletionDeferred
 from app.automation.workflow import WorkflowGraphError, ordered_workflow_steps
 from app.awx import (AwxClient, AwxError, DEFAULT_AWX_INVENTORY_PATTERN,
                      render_awx_inventory_name)
@@ -209,6 +210,21 @@ def validate_authorization(db, job):
                 raise ExecutionFailed('Provider access has been revoked')
             if not reference_visible(db, 'credential', target.credentials_id, scope):
                 raise ExecutionFailed('Credential access has been revoked')
+        if job.operation == 'blueprint.delete':
+            try:
+                blueprint_id = int((job.payload or {}).get('blueprint_id'))
+            except (TypeError, ValueError):
+                raise ExecutionFailed('Blueprint delete job identity is invalid') from None
+            blueprint = db.get(Blueprint, blueprint_id)
+            if blueprint is not None:
+                if (
+                    str(blueprint.tenant_id) != str(scope.tenant_id)
+                    or str(blueprint.project_id) != str(scope.project_id)
+                ):
+                    raise ExecutionFailed('Blueprint delete job scope does not match Blueprint scope')
+                from app.automation.service import can_manage_blueprint
+                if not can_manage_blueprint(db, blueprint, user):
+                    raise ExecutionFailed('Blueprint management access has been revoked')
         if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
             try:
                 provider_id = int((job.payload or {}).get('provider_id'))
@@ -256,7 +272,9 @@ def validate_authorization(db, job):
                 raise ExecutionFailed('AWX credential access has been revoked')
     except HTTPException:
         raise ExecutionFailed('Job project authorization has been revoked') from None
-    if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
+    if job.operation == 'blueprint.delete':
+        needed = {'blueprints.delete'}
+    elif job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
         needed = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
     elif job.operation == 'proxmox.provision':
         needed = {
@@ -2492,7 +2510,17 @@ def _execute_unfenced(job_id):
             clear_provider_wait(job.id)
 
         context.stage('job.running')
-        if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
+        if job.operation == 'blueprint.delete':
+            from app.automation.deletion import perform_blueprint_delete
+            context.stage('blueprint.delete.start')
+            with session() as delete_db:
+                delete_job = delete_db.get(Job, job.id)
+                if delete_job is None:
+                    raise ExecutionFailed('Blueprint delete job disappeared')
+                perform_blueprint_delete(delete_db, delete_job)
+                delete_db.commit()
+            context.stage('blueprint.delete.completed')
+        elif job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
             execute_proxmox_clone_template(context)
         elif job.operation == 'proxmox.provision':
             run_proxmox_blueprint_workflow(context)
@@ -2552,6 +2580,26 @@ def _execute_unfenced(job_id):
         else:
             AnsibleExecutor().execute(job.operation, context)
         context.check()
+    except BlueprintDeletionDeferred as exc:
+        with session() as db:
+            current = db.get(Job, job.id)
+            if current is not None:
+                payload = dict(current.payload or {})
+                payload['blocking_job_ids'] = list(exc.blocking_job_ids)
+                payload['_current_stage'] = 'blueprint.delete.waiting_for_provisioning'
+                current.payload = payload
+                current.status = 'queued'
+                current.dispatched_at = None
+                current.heartbeat_at = None
+                db.add(JobLog(
+                    job_id=current.id,
+                    message=(
+                        'blueprint.delete.deferred: waiting for provisioning jobs '
+                        + ', '.join(exc.blocking_job_ids)
+                    ),
+                ))
+                db.commit()
+        return
     except ApprovalPending:
         if not context.quota_provider_submitted:
             with session() as quota_db:
