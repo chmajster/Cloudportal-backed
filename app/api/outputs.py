@@ -208,6 +208,7 @@ class AuditOutput(Output):
     resource_id: str | None
     result: str
     request_id: str
+    details: dict[str, Any] = {}
 
 
 class TemplateOutput(Output):
