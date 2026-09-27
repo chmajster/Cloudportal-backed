@@ -25,39 +25,20 @@ function fixedEnvironment(item) {
   return '';
 }
 
-function runtimeFlag(value) {
-  if (value === true || value === 1) return true;
-  if (value === false || value === 0 || value == null) return false;
-  const normalized = String(value).trim().toLowerCase();
-  if (['true', '1', 'yes', 'tak', 'on'].includes(normalized)) return true;
-  if (['false', '0', 'no', 'nie', 'off', ''].includes(normalized)) return false;
-  return Boolean(value);
-}
-
-function allowsRuntimeApmid(item, fixed) {
-  const deployment = item?.deployment || {};
-  if (Object.prototype.hasOwnProperty.call(deployment, 'select_apmid_on_execute')) {
-    return runtimeFlag(deployment.select_apmid_on_execute);
-  }
-  return !fixed;
+function allowsRuntimeApmid(item) {
+  return item?.deployment?.select_apmid_on_execute === true;
 }
 
 function allowsRuntimeEnvironment(item) {
-  const deployment = item?.deployment || {};
-  return Object.prototype.hasOwnProperty.call(deployment, 'select_environment_on_execute')
-    ? runtimeFlag(deployment.select_environment_on_execute)
-    : false;
+  return item?.deployment?.select_environment_on_execute === true;
 }
+
 
 async function prepare(item, fields, scopeHeaders = {}) {
   const fixedAp = fixedApmid(item);
   const fixedEnv = fixedEnvironment(item);
-  // Mirror backend compile_blueprint() semantics exactly. Runtime
-  // classification is controlled by the Blueprint flags (plus the legacy
-  // no-fixed-APMID fallback), not by deployment.template. Product payloads may
-  // omit or transform the template field, which previously hid the selector
-  // while the backend still required an APMID.
-  const apmidSelectable = allowsRuntimeApmid(item, fixedAp);
+  // Runtime classification is controlled only by the explicit Blueprint flags.
+  const apmidSelectable = allowsRuntimeApmid(item);
   const environmentSelectable = allowsRuntimeEnvironment(item);
 
   let classification = null;
@@ -190,7 +171,6 @@ registerExtension('blueprint-runtime-apmid', () => {
     fixedEnvironment,
     allowsRuntimeApmid,
     allowsRuntimeEnvironment,
-    runtimeFlag,
     prepare,
     read,
     hostnameTokens,

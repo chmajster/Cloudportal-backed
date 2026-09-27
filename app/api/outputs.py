@@ -1,7 +1,7 @@
 """Public API contract. Secret-bearing ORM objects are never response models."""
 from datetime import datetime
 from typing import Any, Generic, Literal, TypeVar
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Output(BaseModel):
@@ -149,6 +149,7 @@ class JobOutput(Output):
     current_stage: str | None = None
     workflow_step_index: int | None = None
     workflow_step_total: int = 0
+    workflow_step_states: dict[str, str] = Field(default_factory=dict)
     progress_percent: float | None = None
     progress_message: str | None = None
     progress_phase: str | None = None

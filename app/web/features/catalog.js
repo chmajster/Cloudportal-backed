@@ -21,6 +21,7 @@ async function toggleGeneratedTemplate(item) {
     await api('/blueprints/' + item.id + '/enabled', {
       method: 'PUT',
       body: { enabled: !item.is_active },
+      headers: { 'If-Match': String(item.version) },
     });
     toast((item.is_active ? 'Wyłączono' : 'Włączono') + ' szablon „' + item.name + '”.');
     navigate('catalog');

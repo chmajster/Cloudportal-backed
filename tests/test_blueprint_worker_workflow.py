@@ -55,11 +55,11 @@ class FakeExecutor:
 
 def test_blueprint_workflow_order_respects_dependencies():
     ordered = worker.blueprint_workflow_order([
-        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['clone']},
-        {'id': 'hostname', 'type': 'generate_hostname', 'depends_on': []},
-        {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname']},
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud']},
+        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': ['plan']},
+        {'id': 'plan', 'type': 'terraform_plan', 'depends_on': []},
     ])
-    assert [step['id'] for step in ordered] == ['hostname', 'clone', 'apply']
+    assert [step['id'] for step in ordered] == ['plan', 'cloud', 'apply']
 
 
 def test_blueprint_workflow_order_rejects_cycle():
@@ -82,11 +82,47 @@ def test_blueprint_conditions_use_runtime_facts():
     )
 
 
-def test_blueprint_workflow_materializes_declarative_steps_at_apply(monkeypatch):
+def test_skipped_ansible_step_never_runs_configured_playbooks(monkeypatch):
     steps = [
-        {'id': 'hostname', 'type': 'generate_hostname', 'depends_on': [], 'retry': 0, 'timeout': 30},
-        {'id': 'clone', 'type': 'clone_vm', 'depends_on': ['hostname'], 'retry': 0, 'timeout': 30},
-        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': ['clone'], 'retry': 0, 'timeout': 30},
+        {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {
+            'id': 'ansible',
+            'type': 'run_ansible_playbook',
+            'depends_on': ['apply'],
+            'conditions': {'environment': 'prod'},
+            'retry': 0,
+            'timeout': 30,
+        },
+    ]
+    context = FakeContext(steps)
+    context.ansible_runs = [
+        (SimpleNamespace(playbook='bootstrap-linux', inventory=None), SimpleNamespace(id=11)),
+    ]
+    executor = FakeExecutor()
+    calls = []
+
+    monkeypatch.setattr(
+        worker,
+        'register_managed_inventory',
+        lambda _context, _workspace: {'external_id': '120', 'vm_id': 120, 'node': 'pve01'},
+    )
+    monkeypatch.setattr(
+        worker.AnsibleExecutor,
+        'execute',
+        lambda _executor, operation, _context: calls.append(operation),
+    )
+
+    worker.run_blueprint_workflow(context, executor)
+
+    assert executor.operations == ['terraform.apply']
+    assert calls == []
+    assert any('workflow.step.skipped: ansible:run_ansible_playbook' in value for value in context.logs)
+
+
+
+def test_blueprint_workflow_materializes_declarative_cloud_init_at_apply(monkeypatch):
+    steps = [
+        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': [], 'retry': 0, 'timeout': 30},
         {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud'], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
@@ -106,34 +142,21 @@ def test_blueprint_workflow_materializes_declarative_steps_at_apply(monkeypatch)
 
     assert workspace == '/tmp/workspace'
     assert executor.operations == ['terraform.apply']
-    assert any('workflow.step.completed:clone:clone_vm' in value for value in context.stages)
     assert any('workflow.step.completed:cloud:cloud_init' in value for value in context.stages)
-    assert any('workflow.step.materialized: clone:clone_vm' in value for value in context.logs)
-    assert any('workflow.step.materialized: cloud:cloud_init' in value for value in context.logs)
+    assert any('workflow.step.declarative: cloud:cloud_init' in value for value in context.logs)
 
 
-def test_blueprint_workflow_implicit_apply_preserves_legacy_clone_only_workflow(monkeypatch):
+def test_blueprint_workflow_without_explicit_apply_fails(monkeypatch):
     steps = [
-        {'id': 'clone', 'type': 'clone_vm', 'depends_on': [], 'retry': 0, 'timeout': 30},
+        {'id': 'cloud', 'type': 'cloud_init', 'depends_on': [], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
     executor = FakeExecutor()
 
-    monkeypatch.setattr(
-        worker,
-        'register_managed_inventory',
-        lambda context, workspace: {
-            'external_id': '102',
-            'vm_id': 102,
-            'node': 'pve01',
-        },
-    )
+    with pytest.raises(ExecutionFailed, match='terraform_apply was skipped or blocked'):
+        worker.run_blueprint_workflow(context, executor)
 
-    worker.run_blueprint_workflow(context, executor)
-
-    assert executor.operations == ['terraform.apply']
-    assert any('implicit terraform_apply' in value for value in context.logs)
-
+    assert executor.operations == []
 
 def test_direct_proxmox_workflow_clones_configures_cloud_init_and_starts(monkeypatch):
     steps = [
@@ -354,7 +377,8 @@ def test_recovery_preserves_original_blueprint_execution_channel():
     assert worker.blueprint_execution_channel(job) == 'backend'
 
 
-def test_blueprint_resume_checkpoints_compatibility_ansible(monkeypatch, tmp_path):
+
+def test_blueprint_does_not_run_configured_ansible_without_explicit_step(monkeypatch, tmp_path):
     steps = [
         {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
     ]
@@ -370,35 +394,22 @@ def test_blueprint_resume_checkpoints_compatibility_ansible(monkeypatch, tmp_pat
         'plan_sha256': None,
         'ansible_ran': False,
     }
-    restored = tmp_path / 'restored-compat-ansible-workspace'
+    restored = tmp_path / 'restored-explicit-workflow'
     restored.mkdir()
     calls = []
-    checkpoints = []
 
     monkeypatch.setattr(worker, 'restore_recovery_workspace', lambda _context: restored)
-    monkeypatch.setattr(
-        worker,
-        'wait_for_ansible_transport',
-        lambda _context, workspace, **_kwargs: ['192.0.2.20'],
-    )
     monkeypatch.setattr(
         worker.AnsibleExecutor,
         'execute',
         lambda _executor, operation, _context: calls.append(operation),
     )
-    monkeypatch.setattr(
-        worker,
-        'persist_workflow_runtime',
-        lambda _context, runtime: checkpoints.append(bool(runtime['ansible_ran'])),
-    )
+    monkeypatch.setattr(worker, 'persist_workflow_runtime', lambda *_args: None)
 
     worker.run_blueprint_workflow(context, FakeExecutor())
 
-    assert calls == ['ansible.execute']
-    assert checkpoints[-1] is True
-    assert True in checkpoints
+    assert calls == []
     assert context.blueprint_workflow_completed is True
-
 
 def test_unknown_workflow_step_fails_explicitly():
     context = FakeContext([
@@ -490,21 +501,15 @@ def test_blueprint_workflow_does_not_mark_completed_when_post_apply_step_fails(m
     assert context.blueprint_workflow_completed is False
 
 
-def test_declarative_step_after_apply_fails_at_runtime(monkeypatch):
+def test_removed_pseudo_direct_step_fails_at_runtime():
     steps = [
         {'id': 'apply', 'type': 'terraform_apply', 'depends_on': [], 'retry': 0, 'timeout': 30},
         {'id': 'tags', 'type': 'set_tags', 'depends_on': ['apply'], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
-    executor = FakeExecutor()
-    monkeypatch.setattr(
-        worker,
-        'register_managed_inventory',
-        lambda context, workspace: {'external_id': '106', 'vm_id': 106, 'node': 'pve01'},
-    )
 
-    with pytest.raises(ExecutionFailed, match='cannot run after terraform_apply'):
-        worker.run_blueprint_workflow(context, executor)
+    with pytest.raises(ExecutionFailed, match='Unsupported Blueprint workflow steps'):
+        worker.run_blueprint_workflow(context, FakeExecutor())
 
 
 def test_notification_rollback_runs_when_step_fails(monkeypatch):
@@ -630,33 +635,24 @@ def test_vm_agent_and_ip_waits_have_distinct_semantics(monkeypatch, tmp_path):
     assert [item[0] for item in calls] == ['vm_status', 'agent', 'addresses']
 
 
-def test_legacy_implicit_apply_runs_before_first_runtime_vm_step(monkeypatch):
+
+def test_runtime_vm_step_without_explicit_apply_fails(monkeypatch):
     steps = [
-        {'id': 'clone', 'type': 'clone_vm', 'depends_on': [], 'retry': 0, 'timeout': 30},
-        {'id': 'vm', 'type': 'wait_for_vm', 'depends_on': ['clone'], 'retry': 0, 'timeout': 30},
+        {'id': 'vm', 'type': 'wait_for_vm', 'depends_on': [], 'retry': 0, 'timeout': 30},
     ]
     context = FakeContext(steps)
     executor = FakeExecutor()
-    order = []
 
-    monkeypatch.setattr(
-        worker,
-        'register_managed_inventory',
-        lambda context, workspace: {'external_id': '110', 'vm_id': 110, 'node': 'pve01'},
-    )
     monkeypatch.setattr(
         worker,
         'wait_for_vm',
-        lambda context, workspace, timeout=600: order.append(('wait', workspace)) or True,
+        lambda context, workspace, timeout=600: True,
     )
-    original_execute = executor.execute
-    executor.execute = lambda operation, context: order.append(('execute', operation)) or original_execute(operation, context)
 
-    worker.run_blueprint_workflow(context, executor)
+    with pytest.raises(ExecutionFailed, match='requires a completed terraform_apply dependency'):
+        worker.run_blueprint_workflow(context, executor)
 
-    assert order[0] == ('execute', 'terraform.apply')
-    assert order[1] == ('wait', '/tmp/workspace')
-
+    assert executor.operations == []
 
 def test_skipped_dependency_blocks_downstream_step(monkeypatch):
     steps = [

@@ -936,14 +936,16 @@
           node('div', { class: 'form-grid' },
             field('ID', 'workflow_id', { value: step.id, required: true }),
             selectField('Typ', 'workflow_type',
-              (availableTypes.includes(step.type) ? availableTypes : [step.type, ...availableTypes])
-                .map(value => ({
-                  value,
-                  label: availableTypes.includes(value)
-                    ? parts.core.workflowLabel(value)
-                    : 'Legacy / niedostępne dla ' + state.providerType + ': ' + parts.core.workflowLabel(value),
-                })),
-              step.type, { required: true }),
+              availableTypes.map(value => ({
+                value,
+                label: parts.core.workflowLabel(value),
+              })),
+              availableTypes.includes(step.type) ? step.type : '', {
+                required: true,
+                placeholder: availableTypes.includes(step.type)
+                  ? 'Wybierz typ'
+                  : 'Usuń lub zmień nieobsługiwany krok: ' + step.type,
+              }),
             field('Zależy od (ID, po przecinku)', 'workflow_depends', { value: (step.depends_on || []).join(', ') }),
             field('Retry', 'workflow_retry', { type: 'number', min: 0, max: 10, value: step.retry ?? 0 }),
             field('Timeout (s)', 'workflow_timeout', { type: 'number', min: 1, max: 86400, value: step.timeout ?? (step.type === 'wait_for_ip' ? 180 : 600) }),
@@ -1253,7 +1255,10 @@
           const created = await api(requestPath, {
             method: editingItem ? 'PUT' : 'POST',
             body: requestBody,
-            headers: parts.core.scopeHeaders(state),
+            headers: {
+              ...parts.core.scopeHeaders(state),
+              ...(editingItem ? { 'If-Match': String(editingItem.version) } : {}),
+            },
             idempotent: !editingItem,
           });
           window.CloudportalBlueprintScope = {

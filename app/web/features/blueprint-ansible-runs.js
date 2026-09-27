@@ -10,10 +10,9 @@
   }
 
   function initialRunsFromDeployment(deployment = {}) {
-    if (Array.isArray(deployment.ansible_runs) && deployment.ansible_runs.length) {
-      return deployment.ansible_runs.map(cloneRun);
-    }
-    return deployment.ansible ? [cloneRun(deployment.ansible)] : [];
+    return Array.isArray(deployment.ansible_runs)
+      ? deployment.ansible_runs.map(cloneRun)
+      : [];
   }
 
   function createEditor(options = {}) {

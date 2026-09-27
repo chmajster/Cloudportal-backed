@@ -146,10 +146,10 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
     assert deployment['select_apmid_on_execute'] is True
     assert deployment['name'] == '{{ hostname }}'
     assert deployment['variables']['name'] == '{{ hostname }}'
-    assert deployment['ansible']['playbook'] == 'bootstrap-linux'
-    assert deployment['ansible']['credentials_id'] == 17
-    assert deployment['ansible']['variables']['hostname'] == '{{ hostname }}'
-    assert deployment['ansible_runs'] == [deployment['ansible']]
+    assert 'ansible' not in deployment
+    assert deployment['ansible_runs'][0]['playbook'] == 'bootstrap-linux'
+    assert deployment['ansible_runs'][0]['credentials_id'] == 17
+    assert deployment['ansible_runs'][0]['variables']['hostname'] == '{{ hostname }}'
     assert deployment['variables']['tags'] == ['linux', 'production']
 
     workflow_types = [step['type'] for step in result['workflow']]
@@ -207,7 +207,7 @@ console.log(JSON.stringify(core.buildPayload(state, data)));
         'linux-system-update',
     ]
     assert [run['credentials_id'] for run in runs] == [17, 18]
-    assert result['deployment']['ansible'] == runs[0]
+    assert 'ansible' not in result['deployment']
     assert [step['type'] for step in result['workflow']] == [
         'cloud_init',
         'terraform_apply',
@@ -343,7 +343,7 @@ console.log(JSON.stringify({ empty, partial, complete }));
     }
 
 
-def test_runtime_apmid_flag_normalizes_legacy_values_and_read_has_safe_fallback():
+def test_runtime_apmid_uses_only_explicit_boolean_flags_and_read_has_safe_fallback():
     node = shutil.which('node')
     if not node:
         pytest.skip('node is required for Blueprint runtime classification tests')
@@ -352,23 +352,29 @@ global.window = {{}};
 global.registerExtension = (_name, initialize) => initialize();
 eval(require('fs').readFileSync({json.dumps(str(RUNTIME_APMID))}, 'utf8'));
 const runtime = window.BlueprintRuntimeApmid;
-const trueValues = [true, 1, 'true', '1', 'yes', 'tak', 'on'].map(runtime.runtimeFlag);
-const falseValues = [false, 0, null, '', 'false', '0', 'no', 'nie', 'off'].map(runtime.runtimeFlag);
-const item = {{ deployment: {{ select_apmid_on_execute: 'true' }} }};
+const strictTrue = {{ deployment: {{ select_apmid_on_execute: true, select_environment_on_execute: true }} }};
+const stringTrue = {{ deployment: {{ select_apmid_on_execute: 'true', select_environment_on_execute: 'true' }} }};
+const missing = {{ deployment: {{}} }};
 const form = {{ elements: {{}} }};
 const read = runtime.read(form, {{ apmidSelectable: true, defaultApmid: 'LEO', environmentSelectable: true, defaultEnvironment: 'dev' }});
 console.log(JSON.stringify({{
-  trueValues,
-  falseValues,
-  selectable: runtime.allowsRuntimeApmid(item, ''),
+  explicitApmid: runtime.allowsRuntimeApmid(strictTrue),
+  explicitEnvironment: runtime.allowsRuntimeEnvironment(strictTrue),
+  stringApmid: runtime.allowsRuntimeApmid(stringTrue),
+  stringEnvironment: runtime.allowsRuntimeEnvironment(stringTrue),
+  missingApmid: runtime.allowsRuntimeApmid(missing),
+  missingEnvironment: runtime.allowsRuntimeEnvironment(missing),
   read,
 }}));
 """
     result = subprocess.run([node, '-e', script], check=True, capture_output=True, text=True)
     payload = json.loads(result.stdout)
-    assert payload['trueValues'] == [True] * 7
-    assert payload['falseValues'] == [False] * 9
-    assert payload['selectable'] is True
+    assert payload['explicitApmid'] is True
+    assert payload['explicitEnvironment'] is True
+    assert payload['stringApmid'] is False
+    assert payload['stringEnvironment'] is False
+    assert payload['missingApmid'] is False
+    assert payload['missingEnvironment'] is False
     assert payload['read'] == {'apmid': 'LEO', 'environment': 'dev'}
 
 

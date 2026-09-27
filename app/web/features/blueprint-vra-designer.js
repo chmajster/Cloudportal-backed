@@ -8,6 +8,12 @@
       ['terraform_destroy', 'Terraform destroy', 'Usunięcie zasobów'],
       ['create_snapshot', 'Snapshot', 'Punkt przywracania'],
     ] },
+    { group: 'Provisioning VM', items: [
+      ['clone_vm', 'Clone VM', 'Natywne klonowanie przez Proxmox API'],
+      ['configure_vm', 'Configure VM', 'CPU, RAM, sieć i dysk'],
+      ['cloud_init', 'Cloud-init', 'Konfiguracja pierwszego uruchomienia'],
+      ['start_vm', 'Start VM', 'Uruchomienie maszyny'],
+    ] },
     { group: 'Gotowość maszyny', items: [
       ['wait_for_vm', 'Wait for VM', 'Oczekiwanie na VM'],
       ['wait_for_agent', 'Wait for agent', 'Oczekiwanie na guest agent'],
@@ -29,9 +35,11 @@
     group: group.group, label: item[1], description: item[2],
   }])));
   const TERRAFORM_STEP_TYPES = new Set(['terraform_plan', 'terraform_apply', 'terraform_destroy']);
+  const DIRECT_PROXMOX_STEP_TYPES = new Set(['clone_vm', 'configure_vm', 'start_vm']);
 
   function defaultStepTimeout(type) {
     if (TERRAFORM_STEP_TYPES.has(type)) return 3600;
+    if (type === 'clone_vm') return 7200;
     if (type === 'wait_for_ip') return 180;
     return 600;
   }
@@ -138,7 +146,7 @@
         'slug', 'name', 'description', 'avatar_id', 'is_active', 'visibility',
         'allowed_role_ids', 'allowed_user_ids', 'manager_role_ids',
         'variables_schema', 'deployment', 'workflow',
-        'requires_approval', 'recovery_policy',
+        'requires_approval', 'auto_approve_for_executors', 'approval_timeout_hours', 'recovery_policy',
       ]) result[key] = deepClone(item[key]);
       return result;
     }
@@ -205,6 +213,8 @@
     const known = new Set(ids);
     if (!steps.length) errors.push('Workflow nie zawiera kroków.');
     if (new Set(ids).size !== ids.length) errors.push('ID kroków muszą być unikalne.');
+
+    const byId = new Map(steps.map(step => [step.id, step]));
     for (const step of steps) {
       if (!step.id) errors.push('Każdy krok musi mieć ID.');
       for (const dep of step.depends_on || []) {
@@ -212,6 +222,7 @@
         if (dep === step.id) errors.push(step.id + ': krok nie może zależeć od siebie.');
       }
       if (step.rollback && !known.has(step.rollback)) errors.push(step.id + ': nieznany rollback ' + step.rollback + '.');
+      if (!STEP_TYPES.includes(step.type)) errors.push(step.id + ': nieobsługiwany typ kroku ' + step.type + '.');
     }
 
     const visiting = new Set();
@@ -223,20 +234,80 @@
         return;
       }
       visiting.add(id);
-      const step = steps.find(value => value.id === id);
-      for (const dep of step?.depends_on || []) visit(dep);
+      for (const dep of byId.get(id)?.depends_on || []) visit(dep);
       visiting.delete(id);
       visited.add(id);
     }
     ids.forEach(visit);
 
-    const provisioning = steps.filter(step => ['terraform_apply', 'create_vm', 'clone_vm'].includes(step.type));
-    if (!provisioning.length) warnings.push('Brak kroku provisioningowego (Terraform apply / Create VM / Clone VM).');
-    if (steps.some(step => step.type === 'approval') && !blueprint.requires_approval) {
-      warnings.push('Workflow zawiera Approval, ale globalne requires_approval jest wyłączone.');
+    const ancestors = id => {
+      const result = new Set();
+      const pending = [...(byId.get(id)?.depends_on || [])];
+      while (pending.length) {
+        const parent = pending.pop();
+        if (result.has(parent)) continue;
+        result.add(parent);
+        pending.push(...(byId.get(parent)?.depends_on || []));
+      }
+      return result;
+    };
+
+    const deployment = blueprint.deployment || {};
+    const direct = deployment.executor === 'proxmox';
+    const apply = steps.filter(step => step.type === 'terraform_apply');
+    const plan = steps.filter(step => step.type === 'terraform_plan');
+    const clone = steps.filter(step => step.type === 'clone_vm');
+    const approval = steps.filter(step => step.type === 'approval');
+
+    if (direct) {
+      if (apply.length || plan.length) errors.push('Direct Proxmox nie może zawierać Terraform plan/apply.');
+      if (clone.length !== 1) errors.push('Direct Proxmox wymaga dokładnie jednego clone_vm.');
+      if (approval.length) errors.push('Direct Proxmox używa job-level approval; usuń jawny krok Approval.');
+      if (clone.length === 1) {
+        const cloneId = clone[0].id;
+        const afterClone = new Set([
+          'configure_vm', 'cloud_init', 'start_vm',
+          'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+          'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+        ]);
+        for (const step of steps) {
+          if (afterClone.has(step.type) && !ancestors(step.id).has(cloneId)) {
+            errors.push(step.id + ': ' + step.type + ' musi zależeć od clone_vm.');
+          }
+        }
+      }
+    } else {
+      if (apply.length !== 1) errors.push('Terraform/OpenTofu wymaga dokładnie jednego jawnego terraform_apply.');
+      const invalid = [...new Set(steps.filter(step => DIRECT_PROXMOX_STEP_TYPES.has(step.type)).map(step => step.type))];
+      if (invalid.length) errors.push('Terraform/OpenTofu nie może zawierać kroków Direct Proxmox: ' + invalid.join(', ') + '.');
+      if (apply.length === 1) {
+        const applyId = apply[0].id;
+        if (plan.length && !ancestors(applyId).has(plan[0].id)) errors.push('terraform_plan musi być przodkiem terraform_apply.');
+        const runtimeTypes = new Set([
+          'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+          'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+        ]);
+        for (const step of steps) {
+          if (runtimeTypes.has(step.type) && !ancestors(step.id).has(applyId)) {
+            errors.push(step.id + ': ' + step.type + ' musi zależeć od terraform_apply.');
+          }
+        }
+      }
     }
+
+    const ansibleSteps = steps.filter(step => step.type === 'run_ansible_playbook');
+    const hasAnsible = Boolean((deployment.ansible_runs || []).length);
+    if (hasAnsible && ansibleSteps.length !== 1) errors.push('Skonfigurowane Ansible wymaga dokładnie jednego run_ansible_playbook.');
+    if (!hasAnsible && ansibleSteps.length) errors.push('run_ansible_playbook wymaga konfiguracji Ansible.');
+
+    const awxSteps = steps.filter(step => step.type === 'register_awx');
+    if (deployment.awx && awxSteps.length !== 1) errors.push('AWX wymaga dokładnie jednego register_awx.');
+    if (!deployment.awx && awxSteps.length) errors.push('register_awx wymaga konfiguracji deployment.awx.');
+
+    if (approval.length && !blueprint.requires_approval) errors.push('Workflow zawiera Approval, ale requires_approval jest wyłączone.');
     return { errors: [...new Set(errors)], warnings: [...new Set(warnings)] };
   }
+
 
   function validateBlueprintReferences(blueprint, data, context = {}) {
     const errors = [];
@@ -249,27 +320,44 @@
       errors.push('Credential Blueprintu musi być credentialem wybranego providera.');
     }
     if (!template) errors.push('Wybrany template nie istnieje w katalogu.');
-    if (provider && template && template.provider !== provider.type) {
-      errors.push('Template nie jest zgodny z typem wybranego providera.');
-    }
+    if (provider && template && template.provider !== provider.type) errors.push('Template nie jest zgodny z typem wybranego providera.');
     if (template?.enabled === false && deployment.template !== originalTemplate) {
       errors.push('Nie można wybrać wyłączonego template dla nowego lub zmienianego Blueprintu.');
     }
-    const workflowTypes = new Set((blueprint.workflow || []).map(step => step.type));
-    if (!context.blueprintId && !workflowTypes.has('terraform_apply')) {
-      errors.push('Nowy Blueprint musi zawierać krok Terraform apply.');
+
+    const workflow = blueprint.workflow || [];
+    const direct = deployment.executor === 'proxmox';
+    if (direct) {
+      if (provider?.type !== 'proxmox') errors.push('Direct Proxmox wymaga providera Proxmox.');
+      if (deployment.template !== 'proxmox-vm') errors.push('Direct Proxmox wymaga template proxmox-vm.');
+      if (workflow.filter(step => step.type === 'clone_vm').length !== 1) errors.push('Direct Proxmox wymaga dokładnie jednego clone_vm.');
+      if (workflow.some(step => ['terraform_plan', 'terraform_apply'].includes(step.type))) errors.push('Direct Proxmox nie może zawierać Terraform plan/apply.');
+    } else {
+      if (workflow.filter(step => step.type === 'terraform_apply').length !== 1) {
+        errors.push('Terraform/OpenTofu wymaga dokładnie jednego jawnego terraform_apply.');
+      }
+      const invalidDirect = [...new Set(workflow
+        .filter(step => DIRECT_PROXMOX_STEP_TYPES.has(step.type))
+        .map(step => step.type))];
+      if (invalidDirect.length) {
+        errors.push('Terraform/OpenTofu nie może zawierać kroków Direct Proxmox: ' + invalidDirect.join(', ') + '.');
+      }
     }
+
     const proxmoxOnly = new Set([
-      'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+      'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
       'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+      'clone_vm', 'configure_vm', 'start_vm',
     ]);
     if (provider && provider.type !== 'proxmox') {
-      const invalid = [...workflowTypes].filter(type => proxmoxOnly.has(type));
+      const invalid = [...new Set(workflow.filter(step => proxmoxOnly.has(step.type)).map(step => step.type))];
       if (invalid.length) errors.push('Wybrany provider nie obsługuje kroków: ' + invalid.join(', ') + '.');
-      if (deployment.ansible) errors.push('Post-provisioning Ansible wymaga providera Proxmox.');
+      if ((deployment.ansible_runs || []).length) errors.push('Post-provisioning Ansible wymaga providera Proxmox.');
+      if (deployment.awx) errors.push('AWX onboarding wymaga providera Proxmox.');
     }
     return errors;
   }
+
 
   function autoPositions(workflow) {
     const byId = new Map(workflow.map(step => [step.id, step]));
@@ -548,7 +636,9 @@
         const result = await api(state.id ? '/blueprints/' + state.id : '/blueprints', {
           method: state.id ? 'PUT' : 'POST',
           body: state.blueprint,
-          headers: state.id ? undefined : { 'Idempotency-Key': crypto.randomUUID() },
+          headers: state.id
+            ? { 'If-Match': String(state.version) }
+            : { 'Idempotency-Key': crypto.randomUUID() },
         });
         state.id = result.id;
         state.version = result.version;
@@ -860,7 +950,6 @@
 
       body.append(textField('ID kroku', step.id, value => renameStep(step, value)));
       const typeChoices = STEP_TYPES.map(type => ({ value: type, label: TYPE_META.get(type)?.label || type }));
-      if (!STEP_TYPES.includes(step.type)) typeChoices.unshift({ value: step.type, label: 'Legacy / YAML: ' + step.type });
       body.append(selectField('Typ', step.type, typeChoices, value => mutate(() => {
         const previousType = step.type;
         const previousDefaultTimeout = defaultStepTimeout(previousType);
@@ -988,8 +1077,12 @@
         try { const parsed = parseJson(value, 'Variables', {}); mutate(() => { deployment.variables = parsed; }); }
         catch (error) { toast(error.message, 'error'); }
       }, { multiline: true }));
-      body.append(textField('Ansible (JSON / null)', deployment.ansible ? JSON.stringify(deployment.ansible, null, 2) : '', value => {
-        try { const parsed = value.trim() ? parseJson(value, 'Ansible', {}) : null; mutate(() => { deployment.ansible = parsed; }); }
+      body.append(textField('Ansible runs (JSON array)', JSON.stringify(deployment.ansible_runs || [], null, 2), value => {
+        try { const parsed = parseJson(value, 'Ansible runs', []); if (!Array.isArray(parsed)) throw new Error('Ansible runs musi być tablicą JSON.'); mutate(() => { deployment.ansible_runs = parsed; }); }
+        catch (error) { toast(error.message, 'error'); }
+      }, { multiline: true }));
+      body.append(textField('AWX onboarding (JSON / null)', deployment.awx ? JSON.stringify(deployment.awx, null, 2) : '', value => {
+        try { const parsed = value.trim() ? parseJson(value, 'AWX onboarding', {}) : null; mutate(() => { deployment.awx = parsed; }); }
         catch (error) { toast(error.message, 'error'); }
       }, { multiline: true }));
 

@@ -26,6 +26,9 @@ function validateWorkflow(state, editingItem) {
   const allowedConditionKeys = new Set(['provider', 'executor', 'has_ansible', 'hostname', 'environment', 'apmid']);
 
   for (const step of steps) {
+    if (!parts.core.WORKFLOW_TYPES.includes(step.type)) {
+      fail('Nieobsługiwany typ kroku workflow: ' + step.type + '.');
+    }
     if (step.conditions?.__invalid) fail('Conditions muszą być poprawnym obiektem JSON.');
     if ((step.depends_on || []).some(value => !known.has(value) || value === step.id)) {
       fail('Workflow zawiera brakującą zależność albo zależność do samego siebie.');
@@ -33,9 +36,32 @@ function validateWorkflow(state, editingItem) {
     const allowed = new Set(allowedConditionKeys);
     if (step.type === 'delay') allowed.add('seconds');
     if (step.type === 'notification') allowed.add('message');
-    const unknownConditions = Object.keys(step.conditions || {}).filter(key => !allowed.has(key));
+    const conditions = step.conditions || {};
+    const unknownConditions = Object.keys(conditions).filter(key => !allowed.has(key));
     if (unknownConditions.length) {
       fail('Krok ' + step.id + ' używa nieobsługiwanych conditions: ' + unknownConditions.join(', ') + '.');
+    }
+    if ('has_ansible' in conditions && typeof conditions.has_ansible !== 'boolean') {
+      fail('Condition has_ansible musi być wartością boolean.');
+    }
+    for (const key of ['provider', 'executor', 'hostname', 'environment', 'apmid']) {
+      if (!(key in conditions)) continue;
+      const value = conditions[key];
+      const valid = typeof value === 'string'
+        || (Array.isArray(value) && value.length && value.every(item => typeof item === 'string' && item));
+      if (!valid) fail('Condition ' + key + ' musi być stringiem albo niepustą listą stringów.');
+    }
+    if (step.type === 'delay') {
+      const seconds = conditions.seconds ?? 1;
+      if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0 || seconds > Number(step.timeout || 600)) {
+        fail('Delay seconds musi być liczbą od 0 do timeout kroku.');
+      }
+    }
+    if (step.type === 'notification') {
+      const message = conditions.message ?? step.id;
+      if (typeof message !== 'string' || message.length > 1000) {
+        fail('Notification message musi być tekstem do 1000 znaków.');
+      }
     }
   }
 
@@ -76,34 +102,12 @@ function validateWorkflow(state, editingItem) {
     }
     if (!safeRollbackTypes.has(rollback.type)) fail('Rollback może wskazywać tylko terraform_destroy, notification lub delay.');
     if ((rollback.depends_on || []).length) fail('Krok używany wyłącznie do rollbacku nie może mieć zwykłych zależności.');
-    if (steps.some(step => (step.depends_on || []).includes(target))) {
-      fail('Krok rollback nie może być zależnością normalnego workflow.');
-    }
+    if (steps.some(step => (step.depends_on || []).includes(target))) fail('Krok rollback nie może być zależnością normalnego workflow.');
   }
   for (const step of steps) {
     if (step.rollback === step.id) fail('Krok workflow nie może wykonywać rollbacku do samego siebie.');
     if (step.type === 'terraform_destroy' && !rollbackTargets.has(step.id)) {
       fail('terraform_destroy jest dozwolony wyłącznie jako cel rollbacku.');
-    }
-    if (step.type === 'release_ip') fail('release_ip nie jest dozwolony podczas provisioningu VM.');
-  }
-
-  const legacyMarkers = new Set([
-    'generate_hostname', 'allocate_ip', 'create_vm', 'clone_vm', 'configure_vm',
-    'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
-  ]);
-  for (const step of steps) {
-    if (legacyMarkers.has(step.type) && (
-      Object.keys(step.conditions || {}).length || Number(step.retry || 0) || step.rollback
-    )) fail('Deklaratywne kroki provisioning nie mogą mieć conditions, retry ani rollback.');
-  }
-
-  const declarative = new Set([
-    'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
-  ]);
-  for (const step of steps) {
-    if (declarative.has(step.type) && [...ancestors(step.id)].some(parent => byId.get(parent)?.type === 'terraform_apply')) {
-      fail('Deklaratywne kroki VM muszą być wykonywane przed terraform_apply.');
     }
   }
 
@@ -115,65 +119,54 @@ function validateWorkflow(state, editingItem) {
   }
 
   const applySteps = steps.filter(step => step.type === 'terraform_apply');
-  if (applySteps.length > 1) fail('Workflow może zawierać dokładnie jeden krok terraform_apply.');
-  const legacyProvisioning = steps.some(step => legacyMarkers.has(step.type));
-  if (!applySteps.length && !legacyProvisioning) fail('Workflow musi zawierać terraform_apply lub deklaratywny krok provisioningu.');
-
   const planSteps = steps.filter(step => step.type === 'terraform_plan');
   if (planSteps.length > 1) fail('Workflow może zawierać maksymalnie jeden terraform_plan.');
 
   const directProxmox = state.executor === 'proxmox';
+  const directOnly = new Set(['clone_vm', 'configure_vm', 'start_vm']);
   if (directProxmox) {
-    const terraformSteps = steps.filter(step => ['terraform_plan', 'terraform_apply'].includes(step.type));
-    if (terraformSteps.length) {
+    if (steps.some(step => ['terraform_plan', 'terraform_apply'].includes(step.type))) {
       fail('Tryb Proxmox API nie może zawierać kroków Terraform plan/apply.');
     }
     const cloneSteps = steps.filter(step => step.type === 'clone_vm');
-    const createSteps = steps.filter(step => step.type === 'create_vm');
-    if (createSteps.length) {
-      fail('Tryb Proxmox API nie obsługuje create_vm; użyj clone_vm.');
-    }
-    if (cloneSteps.length !== 1) {
-      fail('Tryb Proxmox API wymaga dokładnie jednego kroku clone_vm.');
-    }
-    if (approvalSteps.length) {
-      fail('Tryb Proxmox API używa akceptacji całego joba; usuń jawny krok approval.');
-    }
+    if (cloneSteps.length !== 1) fail('Tryb Proxmox API wymaga dokładnie jednego kroku clone_vm.');
+    if (approvalSteps.length) fail('Tryb Proxmox API używa akceptacji całego joba; usuń jawny krok approval.');
     if (cloneSteps.length === 1) {
-      const createId = cloneSteps[0].id;
-      const afterCreateTypes = new Set([
-        'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
+      const cloneId = cloneSteps[0].id;
+      const afterClone = new Set([
+        'configure_vm', 'cloud_init', 'start_vm',
         'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
         'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
       ]);
       for (const step of steps) {
-        if (afterCreateTypes.has(step.type) && !ancestors(step.id).has(createId)) {
+        if (afterClone.has(step.type) && !ancestors(step.id).has(cloneId)) {
           fail(step.type + ' musi zależeć od clone_vm w trybie Proxmox API.');
         }
       }
       const cloud = steps.find(step => step.type === 'cloud_init');
-      for (const start of steps.filter(step => step.type === 'start_vm')) {
-        if (cloud && !ancestors(start.id).has(cloud.id)) {
+      for (const startStep of steps.filter(step => step.type === 'start_vm')) {
+        if (cloud && !ancestors(startStep.id).has(cloud.id)) {
           fail('start_vm musi zależeć od cloud_init w trybie Proxmox API.');
         }
       }
     }
   } else {
-    if (!editingItem && applySteps.length !== 1) fail('Nowy Blueprint Terraform/OpenTofu musi zawierać dokładnie jeden terraform_apply.');
-    if (planSteps.length && !applySteps.length) fail('terraform_plan wymaga terraform_apply.');
-
+    if (applySteps.length !== 1) fail('Blueprint Terraform/OpenTofu wymaga dokładnie jednego jawnego terraform_apply.');
+    const invalidDirect = [...new Set(steps.filter(step => directOnly.has(step.type)).map(step => step.type))];
+    if (invalidDirect.length) fail('Terraform/OpenTofu nie może zawierać kroków Direct Proxmox: ' + invalidDirect.join(', ') + '.');
+    for (const cloud of steps.filter(step => step.type === 'cloud_init')) {
+      if (Object.keys(cloud.conditions || {}).length || Number(cloud.retry || 0) || cloud.rollback) {
+        fail('cloud_init w Terraform/OpenTofu jest deklaratywny i nie może mieć conditions, retry ani rollback.');
+      }
+    }
     if (applySteps.length === 1) {
       const apply = applySteps[0];
       const applyAncestors = ancestors(apply.id);
-      if (planSteps.length && !applyAncestors.has(planSteps[0].id)) {
-        fail('terraform_plan musi być przodkiem terraform_apply.');
-      }
+      if (planSteps.length && !applyAncestors.has(planSteps[0].id)) fail('terraform_plan musi być przodkiem terraform_apply.');
       if (approvalSteps.length) {
         const approval = approvalSteps[0];
         if (!applyAncestors.has(approval.id)) fail('approval musi być przodkiem terraform_apply.');
-        if (planSteps.length && !ancestors(approval.id).has(planSteps[0].id)) {
-          fail('terraform_plan musi być przodkiem approval.');
-        }
+        if (planSteps.length && !ancestors(approval.id).has(planSteps[0].id)) fail('terraform_plan musi być przodkiem approval.');
       }
       const runtimeTypes = new Set([
         'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
@@ -184,18 +177,27 @@ function validateWorkflow(state, editingItem) {
           fail(step.type + ' musi zależeć od terraform_apply.');
         }
       }
-    } else if (approvalSteps.length) {
-      fail('approval wymaga jawnego terraform_apply.');
     }
   }
+
+  const ansibleSteps = steps.filter(step => step.type === 'run_ansible_playbook');
+  if (state.ansibleEnabled && ansibleSteps.length !== 1) {
+    fail('Skonfigurowane Ansible wymaga dokładnie jednego jawnego kroku run_ansible_playbook.');
+  }
+  if (!state.ansibleEnabled && ansibleSteps.length) fail('run_ansible_playbook wymaga konfiguracji Ansible.');
+
+  const awxSteps = steps.filter(step => step.type === 'register_awx');
+  if (state.awxEnabled && awxSteps.length !== 1) fail('AWX wymaga dokładnie jednego jawnego kroku register_awx.');
+  if (!state.awxEnabled && awxSteps.length) fail('register_awx wymaga konfiguracji AWX.');
 
   if (state.providerType !== 'proxmox') {
     const proxmoxOnly = new Set([
       'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
       'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+      'clone_vm', 'configure_vm', 'start_vm',
     ]);
-    const invalid = steps.filter(step => proxmoxOnly.has(step.type)).map(step => step.type);
-    if (invalid.length) fail('Te kroki workflow są dostępne tylko dla Proxmox: ' + [...new Set(invalid)].join(', ') + '.');
+    const invalid = [...new Set(steps.filter(step => proxmoxOnly.has(step.type)).map(step => step.type))];
+    if (invalid.length) fail('Te kroki workflow są dostępne tylko dla Proxmox: ' + invalid.join(', ') + '.');
   }
 
   Object.assign(errors, parts.cloudInit.validate(state));

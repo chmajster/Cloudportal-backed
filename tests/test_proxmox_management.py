@@ -1,6 +1,7 @@
 import pytest
 import uuid
 
+from fastapi import HTTPException
 from app.database import session
 from app.models import Job, ManagedVM
 from app.projects.permissions import DEFAULT_PROJECT_ID
@@ -10,6 +11,16 @@ from app.tenancy.permissions import DEFAULT_TENANT_ID
 from app.providers.task_reconcile import reconcile_proxmox_tasks_once, track_proxmox_task
 
 from conftest import new_user
+
+
+def test_primary_disk_detection_skips_cloud_init_cdrom():
+    from app.jobs.proxmox_provision import _primary_disk
+
+    assert _primary_disk({
+        'boot': 'order=ide2;scsi0',
+        'ide2': 'local-lvm:cloudinit,media=cdrom',
+        'scsi0': 'local-lvm:vm-120-disk-0,size=32G',
+    }) == 'scsi0'
 
 
 def resources(client, headers):

@@ -122,7 +122,7 @@ def test_blueprint_can_reference_avatar_and_blocks_deletion_while_used(client, h
     payload['avatar_id'] = None
     updated = client.put(
         '/api/v1/blueprints/' + str(created.json()['id']),
-        headers=headers,
+        headers={**headers, 'If-Match': str(created.json()['version'])},
         json=payload,
     )
     assert updated.status_code == 200, updated.text

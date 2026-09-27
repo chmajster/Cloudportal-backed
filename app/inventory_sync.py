@@ -23,14 +23,15 @@ def sync_deployment_inventory(db, deployment, outputs):
 
     primary_ip = outputs.get('primary_ip', {}).get('value')
     variables = dict(deployment.variables or {})
+    blueprint_variables = dict((((deployment.workflow or {}).get('blueprint') or {}).get('variables') or {}))
     node = str(variables.get('node') or '')
     normalized_vm_id = None
     raw_tags = variables.get('tags') or []
     tags = list(raw_tags) if isinstance(raw_tags, list) else [
         item for item in str(raw_tags).replace(',', ';').split(';') if item
     ]
-    apmid = variables.get('apmid')
-    environment = variables.get('environment')
+    apmid = blueprint_variables.get('apmid')
+    environment = blueprint_variables.get('environment')
     if not apmid:
         apmid = next(
             (str(tag)[6:].upper() for tag in tags if str(tag).lower().startswith('apmid-')),
@@ -45,9 +46,9 @@ def sync_deployment_inventory(db, deployment, outputs):
         key: value for key, value in {
             'apmid': apmid,
             'environment': environment,
-            'organization': variables.get('organization'),
-            'project': variables.get('project'),
-            'resource_scope_key': variables.get('resource_scope_key'),
+            'organization': blueprint_variables.get('organization'),
+            'project': blueprint_variables.get('project'),
+            'resource_scope_key': blueprint_variables.get('scope_key'),
             'tags': tags,
         }.items()
         if value not in (None, '', [])

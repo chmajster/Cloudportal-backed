@@ -196,18 +196,6 @@ def _write_aliases(db, rendered, effective_resource, effective_scope=None):
     if "tags" in effective_resource:
         variables["tags"] = list(effective_resource.get("tags") or [])
 
-    persisted_scope_fields = {
-        "apmid": "apmid",
-        "environment": "environment",
-        "organization": "organization",
-        "project": "project",
-        "scope_key": "resource_scope_key",
-    }
-    for resource_field, variable_name in persisted_scope_fields.items():
-        value = effective_resource.get(resource_field)
-        if value not in (None, ""):
-            variables[variable_name] = value
-
     # Placement effects must change the actual Terraform input, not only the
     # decision trace. These names match the canonical Proxmox template and are
     # intentionally generic enough for future provider adapters.
@@ -359,10 +347,11 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
         return None
 
     variables = dict(getattr(deployment, "variables", {}) or {})
+    blueprint_variables = dict(blueprint.get("variables") or {})
     tags = _tags(variables)
     tagged_apmid, tagged_environment = _classification_from_tags(tags)
-    apmid_value = variables.get("apmid") or tagged_apmid
-    environment_value = variables.get("environment") or tagged_environment
+    apmid_value = blueprint_variables.get("apmid") or tagged_apmid
+    environment_value = blueprint_variables.get("environment") or tagged_environment
     scope_context = _scope_from_ids(
         db,
         getattr(job, "tenant_id", ""),
@@ -375,9 +364,9 @@ def revalidate_blueprint_job(db, job, user, permissions, deployment):
         "id": str(getattr(deployment, "id", "") or ""),
         "apmid": apmid_value,
         "environment": environment_value,
-        "organization": scope_context.get("organization") or variables.get("organization"),
-        "project": scope_context.get("project") or variables.get("project"),
-        "scope_key": scope_context.get("key") or variables.get("resource_scope_key"),
+        "organization": scope_context.get("organization") or blueprint_variables.get("organization"),
+        "project": scope_context.get("project") or blueprint_variables.get("project"),
+        "scope_key": scope_context.get("key") or blueprint_variables.get("scope_key"),
         "provider_id": getattr(deployment, "provider_id", None),
         "provider_type": getattr(deployment, "provider", None),
         "template": getattr(deployment, "template", None),

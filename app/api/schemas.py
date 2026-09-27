@@ -753,10 +753,10 @@ class BlueprintVisibility(Input):
 
 class BlueprintStep(Input):
     id: Slug
-    type: Literal['generate_hostname', 'allocate_ip', 'release_ip', 'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
-                  'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh', 'set_hostname',
+    type: Literal['clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
+                  'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
                   'run_ansible_playbook', 'register_awx', 'terraform_plan', 'terraform_apply', 'terraform_destroy', 'create_snapshot',
-                  'set_tags', 'health_check', 'condition', 'approval', 'delay', 'notification']
+                  'health_check', 'condition', 'approval', 'delay', 'notification']
     depends_on: Annotated[list[Slug], Field(max_length=50)] = Field(default_factory=list)
     conditions: dict[str, Any] = Field(default_factory=dict)
     retry: int = Field(default=0, ge=0, le=10)
@@ -766,8 +766,6 @@ class BlueprintStep(Input):
 
 class AwxOnboardingInput(Input):
     credential_id: int = Field(gt=0)
-    organization_id: int | None = Field(default=None, gt=0)
-    project_id: int | None = Field(default=None, gt=0)
     inventory_id: int | None = Field(default=None, gt=0)
     inventory_name: Annotated[str, Field(min_length=1, max_length=100)] = '<Projekt>-<APMID>-<ENV>'
     group_by_environment: bool = True
@@ -797,7 +795,6 @@ class BlueprintDeployment(Input):
     template: Slug = 'proxmox-vm'
     variables: dict[str, Any]
     executor: Literal['terraform', 'opentofu', 'proxmox'] = 'terraform'
-    ansible: AnsibleInput | None = None
     ansible_runs: Annotated[list[AnsibleInput], Field(max_length=20)] = Field(default_factory=list)
     awx: AwxOnboardingInput | None = None
     hostname_scheme_id: int | None = Field(default=None, gt=0)
@@ -835,10 +832,14 @@ class BlueprintInput(Input):
         reserved = {'hostname', 'ip_address', 'ip_address_cidr', 'ip_gateway', 'ip_prefix_length'}
         if set(self.variables_schema) & reserved:
             raise ValueError('Blueprint variables use names reserved for generated infrastructure values')
+
         ids = [step.id for step in self.workflow]
         if len(ids) != len(set(ids)):
             raise ValueError('Workflow step IDs must be unique')
         known = set(ids)
+        graph = {step.id: step.depends_on for step in self.workflow}
+        by_id = {step.id: step for step in self.workflow}
+
         for step in self.workflow:
             if step.id in step.depends_on:
                 raise ValueError(f'Workflow step "{step.id}" cannot depend on itself')
@@ -847,6 +848,7 @@ class BlueprintInput(Input):
                 raise ValueError(
                     f'Workflow step "{step.id}" depends on missing step(s) (dependency): {", ".join(missing)}'
                 )
+
         condition_keys = {'provider', 'executor', 'has_ansible', 'hostname', 'environment', 'apmid'}
         for step in self.workflow:
             allowed = set(condition_keys)
@@ -860,9 +862,36 @@ class BlueprintInput(Input):
                     f'Workflow step "{step.id}" uses unsupported condition key(s): '
                     + ', '.join(unknown_conditions)
                 )
+            for key, value in step.conditions.items():
+                if key == 'has_ansible' and not isinstance(value, bool):
+                    raise ValueError(f'Workflow step "{step.id}" condition has_ansible must be boolean')
+                if key in {'provider', 'executor', 'hostname', 'environment', 'apmid'}:
+                    valid = isinstance(value, str) or (
+                        isinstance(value, list)
+                        and bool(value)
+                        and all(isinstance(item, str) and bool(item) for item in value)
+                    )
+                    if not valid:
+                        raise ValueError(
+                            f'Workflow step "{step.id}" condition {key} must be a string or non-empty string list'
+                        )
+            if step.type == 'delay':
+                seconds = step.conditions.get('seconds', 1)
+                if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+                    raise ValueError(f'Workflow step "{step.id}" delay seconds must be numeric')
+                if seconds < 0 or seconds > step.timeout:
+                    raise ValueError(
+                        f'Workflow step "{step.id}" delay seconds must be between 0 and timeout'
+                    )
+            if step.type == 'notification':
+                message = step.conditions.get('message', step.id)
+                if not isinstance(message, str) or len(message) > 1000:
+                    raise ValueError(
+                        f'Workflow step "{step.id}" notification message must be a string up to 1000 characters'
+                    )
 
-        graph = {step.id: step.depends_on for step in self.workflow}
         visiting, visited = set(), set()
+
         def visit(node):
             if node in visiting:
                 raise ValueError('Workflow must be an acyclic graph')
@@ -873,10 +902,21 @@ class BlueprintInput(Input):
                 visit(parent)
             visiting.remove(node)
             visited.add(node)
+
         for node in graph:
             visit(node)
 
-        by_id = {step.id: step for step in self.workflow}
+        def ancestors(step_id):
+            result = set()
+            pending = list(graph[step_id])
+            while pending:
+                parent = pending.pop()
+                if parent in result:
+                    continue
+                result.add(parent)
+                pending.extend(graph[parent])
+            return result
+
         rollback_targets = {step.rollback for step in self.workflow if step.rollback}
         if any(target not in known for target in rollback_targets):
             raise ValueError('Workflow rollback references a missing step')
@@ -893,35 +933,6 @@ class BlueprintInput(Input):
                 raise ValueError('Rollback-only step cannot be a dependency of the normal workflow')
         if any(step.type == 'terraform_destroy' and step.id not in rollback_targets for step in self.workflow):
             raise ValueError('terraform_destroy is allowed only as a rollback target')
-        if any(step.type == 'release_ip' for step in self.workflow):
-            raise ValueError('release_ip is not allowed during VM provisioning; IP is released by destroy/recovery')
-
-        legacy_markers = {
-            'generate_hostname', 'allocate_ip',
-            'create_vm', 'clone_vm', 'configure_vm', 'cloud_init',
-            'start_vm', 'set_hostname', 'set_tags',
-        }
-        for step in self.workflow:
-            if step.type in legacy_markers and (step.conditions or step.retry or step.rollback):
-                raise ValueError(
-                    'Compile-time/declarative workflow markers cannot use conditions, retry or rollback'
-                )
-
-        declarative = {'create_vm', 'clone_vm', 'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags'}
-        def ancestors(step_id):
-            result = set()
-            pending = list(graph[step_id])
-            while pending:
-                parent = pending.pop()
-                if parent in result:
-                    continue
-                result.add(parent)
-                pending.extend(graph[parent])
-            return result
-        for step in self.workflow:
-            if step.type in declarative and any(by_id[parent].type == 'terraform_apply' for parent in ancestors(step.id)):
-                raise ValueError('Declarative VM steps must run before terraform_apply')
-
         from app.automation.cloud_init import validate_cloud_init_workflow
         validate_cloud_init_workflow([step.model_dump() for step in self.workflow])
 
@@ -936,75 +947,83 @@ class BlueprintInput(Input):
                 raise ValueError('Workflow approval step cannot use conditions, retry or rollback')
 
         apply_steps = [step for step in self.workflow if step.type == 'terraform_apply']
-        if len(apply_steps) > 1:
-            raise ValueError('Workflow can contain exactly one terraform_apply step')
-        legacy_provisioning = any(step.type in legacy_markers for step in self.workflow)
-        if not apply_steps and not legacy_provisioning:
-            raise ValueError('Workflow must contain terraform_apply or a legacy provisioning marker')
-
         plan_steps = [step for step in self.workflow if step.type == 'terraform_plan']
         if len(plan_steps) > 1:
             raise ValueError('Workflow can contain at most one terraform_plan step')
 
         direct_proxmox = self.deployment.executor == 'proxmox'
-        direct_create_steps = [
-            step for step in self.workflow if step.type in {'clone_vm', 'create_vm'}
-        ]
+        direct_only = {'clone_vm', 'configure_vm', 'start_vm'}
+
         if direct_proxmox:
             if self.deployment.template != 'proxmox-vm':
                 raise ValueError('Direct Proxmox provisioning requires the proxmox-vm template')
             if apply_steps or plan_steps:
                 raise ValueError('Direct Proxmox provisioning cannot contain Terraform plan/apply steps')
             clone_steps = [step for step in self.workflow if step.type == 'clone_vm']
-            create_steps = [step for step in self.workflow if step.type == 'create_vm']
-            if create_steps:
-                raise ValueError('Direct Proxmox create_vm is not implemented; use clone_vm')
             if len(clone_steps) != 1:
                 raise ValueError('Direct Proxmox provisioning requires exactly one clone_vm step')
             if approval_steps:
                 raise ValueError(
                     'Direct Proxmox provisioning uses job-level approval; an explicit approval workflow step is not supported'
                 )
-            create_id = clone_steps[0].id
-            after_create_types = {
-                'configure_vm', 'cloud_init', 'start_vm', 'set_hostname', 'set_tags',
+            clone_id = clone_steps[0].id
+            after_clone_types = {
+                'configure_vm', 'cloud_init', 'start_vm',
                 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
                 'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
             }
             for step in self.workflow:
-                if step.type in after_create_types and create_id not in ancestors(step.id):
+                if step.type in after_clone_types and clone_id not in ancestors(step.id):
                     raise ValueError(f'{step.type} must depend on the direct Proxmox clone_vm step')
             cloud_steps = [step for step in self.workflow if step.type == 'cloud_init']
-            start_steps = [step for step in self.workflow if step.type == 'start_vm']
-            if cloud_steps and start_steps:
-                cloud_id = cloud_steps[0].id
-                for step in start_steps:
-                    if cloud_id not in ancestors(step.id):
-                        raise ValueError('Direct Proxmox start_vm must depend on cloud_init')
+            for start_step in [step for step in self.workflow if step.type == 'start_vm']:
+                if cloud_steps and cloud_steps[0].id not in ancestors(start_step.id):
+                    raise ValueError('Direct Proxmox start_vm must depend on cloud_init')
         else:
-            if plan_steps and not apply_steps:
-                raise ValueError('terraform_plan requires an explicit terraform_apply step')
-            if apply_steps:
-                apply_id = apply_steps[0].id
-                if plan_steps and plan_steps[0].id not in ancestors(apply_id):
-                    raise ValueError('terraform_plan must be an ancestor of terraform_apply')
+            if len(apply_steps) != 1:
+                raise ValueError('Terraform/OpenTofu workflow requires exactly one explicit terraform_apply step')
+            invalid_direct = sorted({step.type for step in self.workflow if step.type in direct_only})
+            if invalid_direct:
+                raise ValueError(
+                    'Terraform/OpenTofu workflow cannot contain Direct Proxmox steps: '
+                    + ', '.join(invalid_direct)
+                )
+            for step in self.workflow:
+                if step.type == 'cloud_init' and (step.conditions or step.retry or step.rollback):
+                    raise ValueError(
+                        'Terraform/OpenTofu cloud_init is declarative and cannot use conditions, retry or rollback'
+                    )
+            apply_id = apply_steps[0].id
+            if plan_steps and plan_steps[0].id not in ancestors(apply_id):
+                raise ValueError('terraform_plan must be an ancestor of terraform_apply')
+            if approval_steps:
+                approval_id = approval_steps[0].id
+                if approval_id not in ancestors(apply_id):
+                    raise ValueError('approval must be an ancestor of terraform_apply')
+                if plan_steps and plan_steps[0].id not in ancestors(approval_id):
+                    raise ValueError('terraform_plan must be an ancestor of approval')
+            vm_runtime_types = {
+                'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+                'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+            }
+            for step in self.workflow:
+                if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
+                    raise ValueError(f'{step.type} must depend on terraform_apply')
 
-                if approval_steps:
-                    approval_id = approval_steps[0].id
-                    if approval_id not in ancestors(apply_id):
-                        raise ValueError('approval must be an ancestor of terraform_apply')
-                    if plan_steps and plan_steps[0].id not in ancestors(approval_id):
-                        raise ValueError('terraform_plan must be an ancestor of approval')
+        ansible_steps = [step for step in self.workflow if step.type == 'run_ansible_playbook']
+        configured_ansible = bool(self.deployment.ansible_runs)
+        if configured_ansible and len(ansible_steps) != 1:
+            raise ValueError(
+                'Configured Ansible requires exactly one explicit run_ansible_playbook workflow step'
+            )
+        if not configured_ansible and ansible_steps:
+            raise ValueError('run_ansible_playbook requires Ansible configuration')
 
-                vm_runtime_types = {
-                    'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
-                    'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
-                }
-                for step in self.workflow:
-                    if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
-                        raise ValueError(f'{step.type} must depend on terraform_apply')
-            elif approval_steps:
-                raise ValueError('approval requires an explicit terraform_apply step')
+        awx_steps = [step for step in self.workflow if step.type == 'register_awx']
+        if self.deployment.awx and len(awx_steps) != 1:
+            raise ValueError('AWX onboarding requires exactly one explicit register_awx workflow step')
+        if not self.deployment.awx and awx_steps:
+            raise ValueError('register_awx requires AWX onboarding configuration')
 
         return self
 

@@ -19,6 +19,7 @@ from app.executors.terraform import (TerraformExecutor, cleanup_qemu_bootstrap, 
                                      terraform_plan_command, terraform_state_resource_attribute, workspace_lock)
 from app.deployments.recreate import recreate_resource_address
 from app.jobs.worker import execute
+from app.api.infrastructure import _job_workflow_progress
 from app.jobs.queue import (reconcile_cancelled_jobs, reconcile_deployment_job_statuses,
                             reconcile_persisted_inventory, reconcile_stale_jobs)
 from app.terraform.identity import reserve_proxmox_vm_id
@@ -26,6 +27,27 @@ from app.terraform.state import persist_state
 from app.inventory_sync import sync_deployment_inventory
 from app.providers.proxmox import ProxmoxProvider
 from app.awx import AwxClient
+
+
+def test_job_workflow_progress_uses_topological_order_not_json_order():
+    job = SimpleNamespace(
+        status='running',
+        payload={
+            'blueprint': {
+                'steps': [
+                    {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['plan']},
+                    {'id': 'plan', 'type': 'terraform_plan', 'depends_on': []},
+                ],
+            },
+            '_current_stage': 'workflow.step.start:plan:terraform_plan',
+            '_workflow_runtime': {'step_states': {}},
+        },
+    )
+
+    index, total, states = _job_workflow_progress(job)
+
+    assert (index, total) == (1, 2)
+    assert states == {}
 
 
 def terraform_state_workspace(tmp_path, vm_id=101):

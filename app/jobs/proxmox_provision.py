@@ -279,6 +279,25 @@ def _disk_size_gib(raw):
     return value * factor
 
 
+def _primary_disk(current):
+    def usable(key):
+        raw = str(current.get(key) or '')
+        return bool(raw) and 'media=cdrom' not in raw.lower()
+
+    boot = str(current.get('boot') or '')
+    order = re.search(r'order=([^;\s]+(?:;[^\s]+)*)', boot)
+    if order:
+        for key in order.group(1).split(';'):
+            if re.fullmatch(r'(?:scsi|virtio|sata|ide)\d+', key) and usable(key):
+                return key
+    for prefix in ('scsi', 'virtio', 'sata', 'ide'):
+        for index in range(32):
+            key = f'{prefix}{index}'
+            if usable(key):
+                return key
+    return None
+
+
 def configure(context, timeout=1800):
     node, vm_id, adapter = identity(context)
     variables = dict(context.deployment.variables or {})
@@ -315,20 +334,28 @@ def configure(context, timeout=1800):
         raise ExecutionFailed('Konfiguracja VM w Proxmox nie powiodła się: ' + detail[:300]) from None
 
     desired_disk = float(variables.get('disk') or 0)
-    current_disk = _disk_size_gib(current.get('scsi0'))
-    if desired_disk > 0 and current_disk is not None and desired_disk > current_disk + 0.01:
-        grow = max(1, int(math.ceil(desired_disk - current_disk)))
-        task = adapter.resize_disk(node, vm_id, disk='scsi0', grow_gib=grow)
-        if task:
-            wait_task(
-                context, adapter, task_node(task, node), task, 'Powiększanie dysku VM',
-                phase='configure', timeout=timeout,
+    if desired_disk > 0:
+        disk_key = _primary_disk(current)
+        if not disk_key:
+            raise ExecutionFailed('Nie udało się wykryć głównego dysku sklonowanej VM')
+        current_disk = _disk_size_gib(current.get(disk_key))
+        if current_disk is None:
+            raise ExecutionFailed(
+                f'Nie udało się odczytać rozmiaru głównego dysku {disk_key}; desired state nie może zostać potwierdzony'
             )
-    elif desired_disk > 0 and current_disk is not None and desired_disk + 0.01 < current_disk:
-        context.log(
-            f'proxmox.provision.disk.shrink_skipped: current={current_disk:.2f}GiB '
-            f'requested={desired_disk:.2f}GiB'
-        )
+        if desired_disk + 0.01 < current_disk:
+            raise ExecutionFailed(
+                f'Żądany dysk {desired_disk:.2f} GiB jest mniejszy od bieżącego '
+                f'{current_disk:.2f} GiB na {disk_key}; Proxmox nie obsługuje bezpiecznego shrink'
+            )
+        if desired_disk > current_disk + 0.01:
+            grow = max(1, int(math.ceil(desired_disk - current_disk)))
+            task = adapter.resize_disk(node, vm_id, disk=disk_key, grow_gib=grow)
+            if task:
+                wait_task(
+                    context, adapter, task_node(task, node), task, 'Powiększanie dysku VM',
+                    phase='configure', timeout=timeout,
+                )
 
     _persist(context, configured=True)
     return True
@@ -475,7 +502,25 @@ def register_inventory(context):
         resource = db.scalar(select(ManagedResource).where(
             ManagedResource.deployment_id == row.id,
         ))
-        metadata = {'node': node, 'vm_id': vm_id, 'management_mode': 'proxmox'}
+        blueprint_variables = dict((((row.workflow or {}).get('blueprint') or {}).get('variables') or {}))
+        raw_tags = variables.get('tags') or []
+        tags = list(raw_tags) if isinstance(raw_tags, list) else [
+            item for item in str(raw_tags).replace(',', ';').split(';') if item
+        ]
+        metadata = {
+            key: value for key, value in {
+                'node': node,
+                'vm_id': vm_id,
+                'management_mode': 'proxmox',
+                'apmid': blueprint_variables.get('apmid'),
+                'environment': blueprint_variables.get('environment'),
+                'organization': blueprint_variables.get('organization'),
+                'project': blueprint_variables.get('project'),
+                'resource_scope_key': blueprint_variables.get('scope_key'),
+                'tags': tags,
+            }.items()
+            if value not in (None, '', [])
+        }
         if resource is None:
             resource = ManagedResource(
                 tenant_id=row.tenant_id,

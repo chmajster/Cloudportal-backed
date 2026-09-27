@@ -16,7 +16,7 @@
     site: 'Site',
   };
   const WORKFLOW_TYPES = [
-    'clone_vm', 'create_vm', 'configure_vm', 'cloud_init', 'start_vm',
+    'clone_vm', 'configure_vm', 'cloud_init', 'start_vm',
     'terraform_plan', 'terraform_apply', 'wait_for_vm', 'wait_for_agent',
     'wait_for_ip', 'wait_for_ssh', 'run_ansible_playbook', 'register_awx', 'create_snapshot',
     'health_check', 'condition', 'approval', 'delay', 'notification',
@@ -94,9 +94,6 @@
 
   function workflowLabel(type) {
     return ({
-      generate_hostname: 'Hostname',
-      allocate_ip: 'IPAM',
-      create_vm: 'Utwórz VM',
       clone_vm: 'Clone VM',
       configure_vm: 'Konfiguracja VM',
       cloud_init: 'Cloud-init',
@@ -105,14 +102,12 @@
       wait_for_agent: 'Wait Agent',
       wait_for_ip: 'Czekaj na IP',
       wait_for_ssh: 'Czekaj na SSH',
-      set_hostname: 'Ustaw hostname',
       run_ansible_playbook: 'Ansible',
       register_awx: 'Rejestracja w AWX',
       terraform_plan: 'Terraform Plan',
       terraform_apply: 'Terraform Apply',
       terraform_destroy: 'Terraform Destroy (rollback)',
       create_snapshot: 'Snapshot',
-      set_tags: 'Tagi',
       health_check: 'Health check',
       condition: 'Warunek',
       approval: 'Akceptacja',
@@ -347,9 +342,9 @@
     }));
     state.advancedWorkflow = true;
 
-    const ansibleRuns = Array.isArray(deployment.ansible_runs) && deployment.ansible_runs.length
+    const ansibleRuns = Array.isArray(deployment.ansible_runs)
       ? deployment.ansible_runs
-      : (deployment.ansible ? [deployment.ansible] : []);
+      : [];
     state.ansibleRuns = ansibleRuns.map(run => ({
       playbook: run.playbook,
       credentials_id: Number(run.credentials_id),
@@ -366,7 +361,7 @@
     state.awxEnabled = Boolean(deployment.awx || workflowTypes.has('register_awx'));
     state.awxCredentialId = awx.credential_id == null ? '' : String(awx.credential_id);
     // Organization/Project are derived from the immutable CloudPortal Tenant/Project scope.
-    // Keep legacy fields empty so saving an old Blueprint removes manual AWX scope overrides.
+    // Manual AWX scope overrides are intentionally not part of the Blueprint model.
     state.awxOrganizationId = '';
     state.awxProjectId = '';
     state.awxInventoryId = awx.inventory_id == null ? '' : String(awx.inventory_id);
@@ -537,7 +532,6 @@
             variables,
           };
         });
-        deployment.ansible = { ...deployment.ansible_runs[0], variables: { ...deployment.ansible_runs[0].variables } };
       }
     }
     return deployment;

@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
+from app.automation.workflow import WorkflowGraphError, ordered_workflow_steps
 from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
                              SSHHostKeyOutput)
@@ -46,11 +47,16 @@ def _job_workflow_progress(j):
     payload = dict(j.payload or {})
     blueprint = payload.get('blueprint') or {}
     if not isinstance(blueprint, dict):
-        return None, 0
+        return None, 0, {}
 
-    steps = [step for step in (blueprint.get('steps') or []) if isinstance(step, dict)]
-    if not steps:
-        return None, 0
+    raw_steps = [step for step in (blueprint.get('steps') or []) if isinstance(step, dict)]
+    if not raw_steps:
+        return None, 0, {}
+
+    try:
+        steps = ordered_workflow_steps(raw_steps)
+    except WorkflowGraphError:
+        steps = raw_steps
 
     rollback_targets = {
         str(step.get('rollback'))
@@ -61,7 +67,16 @@ def _job_workflow_progress(j):
         step for step in steps
         if str(step.get('id') or '') not in rollback_targets
     ]
-    step_ids = [str(step.get('id') or '') for step in active_steps]
+    step_ids = [str(step.get('id') or '') for step in active_steps if step.get('id')]
+
+    runtime = dict(payload.get('_workflow_runtime') or {})
+    states = {
+        str(key): str(value)
+        for key, value in dict(runtime.get('step_states') or {}).items()
+    }
+    for value in (runtime.get('completed_steps') or []):
+        states.setdefault(str(value), 'completed')
+
     stage = str(payload.get('_current_stage') or '').strip()
     current_step_id = None
     for prefix in ('workflow.step.start:', 'workflow.step.completed:'):
@@ -69,31 +84,30 @@ def _job_workflow_progress(j):
             current_step_id = stage[len(prefix):].split(':', 1)[0].strip() or None
             break
 
-    runtime = dict(payload.get('_workflow_runtime') or {})
-    completed = {str(value) for value in (runtime.get('completed_steps') or [])}
-
+    terminal_states = {'completed', 'skipped', 'rollback_only'}
     if current_step_id not in step_ids:
         pending = [
             step_id for step_id in step_ids
-            if step_id and step_id not in completed
+            if states.get(step_id) not in terminal_states
         ]
         current_step_id = pending[0] if pending else None
 
     total = len(step_ids)
     if current_step_id in step_ids:
-        return step_ids.index(current_step_id) + 1, total
+        return step_ids.index(current_step_id) + 1, total, states
     if str(j.status or '').lower() == 'successful':
-        return total, total
-    return None, total
+        return total, total, states
+    return None, total, states
 
 
 def job_public(j):
     result = public(j, JOB_FIELDS)
     stage = (j.payload or {}).get('_current_stage')
     result['current_stage'] = str(stage)[:255] if stage else None
-    workflow_step_index, workflow_step_total = _job_workflow_progress(j)
+    workflow_step_index, workflow_step_total, workflow_step_states = _job_workflow_progress(j)
     result['workflow_step_index'] = workflow_step_index
     result['workflow_step_total'] = workflow_step_total
+    result['workflow_step_states'] = workflow_step_states
     progress = (j.payload or {}).get('_progress') or {}
     raw_percent = progress.get('percent')
     try:

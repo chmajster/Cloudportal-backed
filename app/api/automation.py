@@ -1,6 +1,7 @@
 import re
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from pydantic import ValidationError
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
 from app.catalog import template_definition, validate_template_variables
@@ -45,6 +46,54 @@ def scheme_public(row):
 
 def portal_source(value):
     return {'CloudPortal': 'cloudportal', 'Cloudportal-backed': 'backend', 'API': 'api'}.get(value, 'api')
+
+
+def validate_persisted_blueprint_contract(row):
+    payload = {
+        'slug': row.slug,
+        'name': row.name,
+        'description': row.description,
+        'avatar_id': row.avatar_id,
+        'is_active': row.is_active,
+        'visibility': row.visibility,
+        'allowed_role_ids': row.allowed_role_ids,
+        'allowed_user_ids': row.allowed_user_ids,
+        'manager_role_ids': [role.id for role in row.manager_roles],
+        'variables_schema': row.variables_schema,
+        'deployment': row.deployment,
+        'workflow': row.workflow,
+        'requires_approval': row.requires_approval,
+        'auto_approve_for_executors': row.auto_approve_for_executors,
+        'approval_timeout_hours': row.approval_timeout_hours,
+        'recovery_policy': row.recovery_policy,
+    }
+    try:
+        BlueprintInput.model_validate(payload)
+    except ValidationError as exc:
+        first = exc.errors(include_url=False)[0] if exc.errors() else {}
+        message = str(first.get('msg') or 'Blueprint definition is invalid')
+        raise HTTPException(
+            409,
+            'Blueprint is incompatible with the current workflow contract: ' + message,
+        ) from None
+
+
+def require_blueprint_version(row, if_match):
+    if if_match is None:
+        raise HTTPException(428, 'If-Match with the current Blueprint version is required')
+    raw = str(if_match).strip()
+    if raw.startswith('W/'):
+        raw = raw[2:].strip()
+    raw = raw.strip('"')
+    try:
+        expected = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'If-Match must contain the numeric Blueprint version') from None
+    if expected != int(row.version):
+        raise HTTPException(
+            409,
+            f'Blueprint version conflict: expected {expected}, current {row.version}',
+        )
 
 
 @router.get('/blueprint-avatars', response_model=Items[BlueprintAvatarOutput])
@@ -153,9 +202,9 @@ def validate_blueprint_template_variables(data: BlueprintInput):
     Proxmox Blueprints created by the step-by-step wizard contain only the generated
     hostname placeholder. Replacing that single placeholder lets the canonical
     template model reject invalid IPv4/DNS/VLAN/CPU/RAM/storage data before a
-    Blueprint can be persisted. Legacy self-service Blueprints may template other
-    values, including placeholders nested inside arrays or dictionaries; those
-    remain execution-time validated because their concrete values do not exist yet.
+    Blueprint can be persisted. Blueprints may template runtime values, including placeholders nested inside
+    arrays or dictionaries; those remain execution-time validated because their
+    concrete values do not exist yet.
     """
     variables = dict(data.deployment.variables or {})
     if data.deployment.template != 'proxmox-vm':
@@ -179,9 +228,6 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     existing_template = existing.deployment.get('template') if existing else None
     existing_playbooks = set()
     if existing:
-        legacy_ansible = existing.deployment.get('ansible') or {}
-        if legacy_ansible.get('playbook'):
-            existing_playbooks.add(legacy_ansible['playbook'])
         existing_playbooks.update(
             row.get('playbook')
             for row in (existing.deployment.get('ansible_runs') or [])
@@ -190,7 +236,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     if data.deployment.template != existing_template:
         require_catalog_item_enabled(db, 'templates', data.deployment.template)
     template_meta, _ = template_definition(data.deployment.template)
-    requested_ansible = ([data.deployment.ansible] if data.deployment.ansible else []) + list(data.deployment.ansible_runs)
+    requested_ansible = list(data.deployment.ansible_runs)
     for ansible_run in requested_ansible:
         if ansible_run.playbook not in existing_playbooks:
             require_catalog_item_enabled(db, 'playbooks', ansible_run.playbook)
@@ -206,12 +252,10 @@ def validate_blueprint_references(db, data, blueprint_id=None):
             raise HTTPException(422, 'Direct Proxmox provisioning requires a Proxmox provider and proxmox-vm template')
         if workflow_types & {'terraform_plan', 'terraform_apply'}:
             raise HTTPException(422, 'Direct Proxmox provisioning cannot contain Terraform plan/apply steps')
-        if 'create_vm' in workflow_types:
-            raise HTTPException(422, 'Direct Proxmox create_vm is not implemented; use clone_vm')
-        if 'clone_vm' not in workflow_types:
-            raise HTTPException(422, 'Direct Proxmox provisioning requires clone_vm')
-    elif blueprint_id is None and 'terraform_apply' not in workflow_types:
-        raise HTTPException(422, 'New Terraform/OpenTofu Blueprints must contain an explicit terraform_apply step')
+        if sum(1 for step in data.workflow if step.type == 'clone_vm') != 1:
+            raise HTTPException(422, 'Direct Proxmox provisioning requires exactly one clone_vm step')
+    elif sum(1 for step in data.workflow if step.type == 'terraform_apply') != 1:
+        raise HTTPException(422, 'Terraform/OpenTofu Blueprints require exactly one explicit terraform_apply step')
 
     proxmox_only_steps = {
         'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
@@ -363,6 +407,7 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
 def blueprint(id: int, request: Request, source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
               actor=Depends(require('blueprints.read')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
+    validate_persisted_blueprint_contract(row)
     source = portal_source(source_header)
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
     if source != 'backend' and not can_manage and not available_to(row, actor, source):
@@ -429,9 +474,19 @@ def create_blueprint_bundle(bundle: BlueprintBundleInput, request: Request,
 
 
 @router.put('/blueprints/{id}', response_model=BlueprintOutput)
-def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
-    row = find(db, Blueprint, id)
+def update_blueprint(
+    id: int,
+    data: BlueprintInput,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias='If-Match')] = None,
+    actor=Depends(require('blueprints.update')),
+    db=Depends(get_db, scope='function'),
+):
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(row, actor)
+    require_blueprint_version(row, if_match)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
@@ -443,10 +498,19 @@ def update_blueprint(id: int, data: BlueprintInput, request: Request, actor=Depe
 
 
 @router.put('/blueprints/{id}/bundle', response_model=BlueprintOutput)
-def update_blueprint_bundle(id: int, bundle: BlueprintBundleInput, request: Request,
-                            actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
-    row = find(db, Blueprint, id)
+def update_blueprint_bundle(
+    id: int,
+    bundle: BlueprintBundleInput,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias='If-Match')] = None,
+    actor=Depends(require('blueprints.update')),
+    db=Depends(get_db, scope='function'),
+):
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(row, actor)
+    require_blueprint_version(row, if_match)
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
@@ -459,10 +523,19 @@ def update_blueprint_bundle(id: int, bundle: BlueprintBundleInput, request: Requ
 
 
 @router.put('/blueprints/{id}/enabled', response_model=BlueprintOutput)
-def set_blueprint_enabled(id: int, data: CatalogItemStateInput, request: Request,
-                          actor=Depends(require('blueprints.update')), db=Depends(get_db, scope='function')):
-    row = find(db, Blueprint, id)
+def set_blueprint_enabled(
+    id: int,
+    data: CatalogItemStateInput,
+    request: Request,
+    if_match: Annotated[str | None, Header(alias='If-Match')] = None,
+    actor=Depends(require('blueprints.update')),
+    db=Depends(get_db, scope='function'),
+):
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(row, actor)
+    require_blueprint_version(row, if_match)
     row.is_active = data.enabled
     row.version += 1
     audit(db, request, 'blueprint.enabled' if data.enabled else 'blueprint.disabled', 'blueprints', id)
@@ -488,14 +561,13 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     source = portal_source(source_header)
     if not available_to(row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
+    validate_persisted_blueprint_contract(row)
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
         raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
     workflow_types = {step.get('type') for step in (row.workflow or [])}
     required_workflow_permissions = set()
     if 'create_snapshot' in workflow_types:
         required_workflow_permissions.add('snapshots.create')
-    if 'release_ip' in workflow_types:
-        required_workflow_permissions.add('ipam.release')
     if 'terraform_destroy' in workflow_types:
         required_workflow_permissions.add('deployments.destroy')
     missing_workflow_permissions = required_workflow_permissions - request.state.permissions
@@ -520,15 +592,18 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         parsed.variables = validate_template_variables(
             parsed.template, parsed.variables
         ).model_dump(mode='json')
-        # Persist the Policy Engine's effective classification in the immutable
-        # Blueprint job snapshot as well as in deployment variables. Runtime
-        # facts must never expose the pre-policy APMID/environment after placement
-        # or governance effects changed them.
+        # Classification/governance metadata is persisted in the immutable
+        # Blueprint snapshot, never mixed into Terraform/provider variables.
+        effective_context = policy_result.get('effective_context') or {}
+        effective_resource = effective_context.get('resource') or {}
+        effective_scope = effective_context.get('scope') or {}
         for field in ('apmid', 'environment', 'organization', 'project'):
-            value = parsed.variables.get(field)
+            value = effective_resource.get(field)
+            if value in (None, ''):
+                value = effective_scope.get(field)
             if value not in (None, ''):
                 blueprint_variables[field] = value
-        scope_key = parsed.variables.get('resource_scope_key')
+        scope_key = effective_resource.get('scope_key') or effective_scope.get('key')
         if scope_key not in (None, ''):
             blueprint_variables['scope_key'] = scope_key
         provider = find(db, Provider, parsed.provider_id)
@@ -537,7 +612,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             raise HTTPException(422, 'Policy-selected provider does not match the Terraform template')
         if provider.credentials_id != parsed.credentials_id:
             raise HTTPException(422, 'Credential does not belong to the selected provider')
-        primary_ansible = parsed.ansible or (ansible_runs[0] if ansible_runs else None)
+        primary_ansible = ansible_runs[0] if ansible_runs else None
         credential_ids = {parsed.credentials_id}
         if primary_ansible:
             credential_ids.add(primary_ansible.credentials_id)
@@ -554,7 +629,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             awx_credential = locked_credential(db, awx.credential_id)
             if awx_credential.type != 'awx':
                 raise HTTPException(422, 'AWX onboarding requires an AWX credential')
-        configured_ansible = ansible_runs or ([parsed.ansible] if parsed.ansible else [])
+        configured_ansible = list(ansible_runs)
         if configured_ansible:
             if provider.type != 'proxmox':
                 raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
@@ -564,8 +639,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                 validate_ansible(db, ansible_run)
         deployment = Deployment(name=parsed.name, provider_id=provider.id, provider=provider.type, template=parsed.template,
                                 credentials_id=parsed.credentials_id, variables=parsed.variables,
-                                workflow={'ansible': primary_ansible.model_dump() if primary_ansible else None,
-                                          'ansible_runs': [run.model_dump() for run in configured_ansible],
+                                workflow={'ansible_runs': [run.model_dump() for run in configured_ansible],
                                           'awx': awx.model_dump() if awx else None,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
                                                         'variables': blueprint_variables, 'steps': row.workflow,
@@ -600,8 +674,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         )
         operation = 'proxmox.provision' if direct_proxmox else 'terraform.apply'
         job = new_job(db, request, actor, operation, deployment,
-                      {'ansible': primary_ansible.model_dump() if primary_ansible else None,
-                       'ansible_runs': [run.model_dump() for run in configured_ansible],
+                      {'ansible_runs': [run.model_dump() for run in configured_ansible],
                        'blueprint': deployment.workflow['blueprint']})
         if reservation:
             reservation.status, reservation.resource_id = 'assigned', deployment.id
