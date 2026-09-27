@@ -1058,7 +1058,7 @@
             parts.ui.dualListGroup('Dozwolone role', 'allowed_role_ids', data.roles, state.allowedRoleIds,
               'Pusta lista „Wybrane” oznacza brak ograniczenia po roli.'),
             parts.ui.dualListGroup('Role zarządzające Blueprintem', 'manager_role_ids', data.managerRoles, state.managerRoleIds,
-              'Rola zarządzająca musi mieć blueprints.read/update/delete i może być przypisana tylko do jednego Blueprintu.')
+              'Rola zarządzająca musi mieć blueprints.read/update/delete. Ta sama rola może zarządzać wieloma Blueprintami.')
           );
         }
         if (allowed('users.read') || data.users.length) {
