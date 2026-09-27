@@ -208,7 +208,7 @@ async function settingsView() {
     });
     toast(result.changed
       ? 'Pula workerów została zwiększona do ' + result.worker_count + '.'
-      : 'Pula workerów ma już wymaganą pojemność.');
+      : 'Pula workerów została zrekonsyliowana do ' + result.worker_count + '.');
     await new Promise(resolve => setTimeout(resolve, result.changed ? 3000 : 250));
     await settingsView();
   };
