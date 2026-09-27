@@ -21,6 +21,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'appliances',
         'inventory',
         'day2',
+        'availability',
         'ipam',
         'operations',
         'event-enterprise',
@@ -54,6 +55,7 @@ def test_feature_registry_exposes_expected_router_contracts():
     assert '/blueprints' in paths('automation')
     assert '/appliances/ova-blueprints' in paths('appliances')
     assert '/ipam/pools' in paths('ipam')
+    assert '/availability-plans' in paths('availability')
     assert '/webhooks' in paths('operations')
     assert '/event-schemas' in paths('event-enterprise')
     assert '/event-consumers' in paths('event-enterprise')
