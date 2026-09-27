@@ -431,7 +431,7 @@ def validate_blueprint_references(db, data, blueprint_id=None):
 
 def require_blueprint_manager(db, row, actor):
     if not can_manage_blueprint(db, row, actor):
-        raise HTTPException(403, 'A dedicated manager role for this template is required')
+        raise HTTPException(403, 'A manager role assigned to this Blueprint is required')
 
 
 @router.post('/blueprint-designer/yaml/parse')
