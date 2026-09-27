@@ -89,8 +89,14 @@
         '  - name: ' + JSON.stringify(username),
         '    shell: /bin/sh',
         ...(credential ? [
-          '    # Hasło z Dostępów zostanie zapisane wyłącznie jako solony hash.',
-          '    # Z klucza prywatnego zostanie wyprowadzony tylko klucz publiczny.',
+          ...(credential.supports_cloud_init_password === true
+            ? ['    # Hasło z Credentiala zostanie zapisane wyłącznie jako solony hash.']
+            : []),
+          ...(credential.supports_cloud_init_ssh_key === true
+            ? ['    # Z klucza prywatnego Credentiala zostanie wyprowadzony tylko klucz publiczny.']
+            : (state.sshPublicKey
+                ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)]
+                : [])),
         ] : (state.sshPublicKey ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)] : [])),
         'chpasswd:',
         '  expire: false',
