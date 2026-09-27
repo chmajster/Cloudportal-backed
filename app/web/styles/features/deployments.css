@@ -1326,7 +1326,7 @@
 
 .my-resources-vm-controls {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto auto;
+  grid-template-columns: minmax(220px, 1fr) auto auto auto auto;
   align-items: center;
   gap: 10px;
 }
@@ -1351,6 +1351,7 @@
 }
 
 .my-resources-filter-button.active,
+.my-resources-sort-button.active,
 .my-resources-vm-view-toggle .button.active {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -1374,7 +1375,8 @@
   font-size: .72rem;
 }
 
-.my-resources-filter-panel {
+.my-resources-filter-panel,
+.my-resources-sort-panel {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -1383,8 +1385,21 @@
   background: var(--surface-2);
 }
 
-.my-resources-filter-panel[hidden] {
+.my-resources-filter-panel[hidden],
+.my-resources-sort-panel[hidden] {
   display: none;
+}
+
+.my-resources-sort-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px 12px;
+}
+
+.my-resources-sort-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .my-resources-filter-grid {
@@ -1592,7 +1607,7 @@
 }
 @media (max-width: 1100px) {
   .my-resources-vm-controls {
-    grid-template-columns: minmax(200px, 1fr) auto auto;
+    grid-template-columns: minmax(200px, 1fr) auto auto auto;
   }
 
   .my-resources-vm-result-count {
@@ -1659,8 +1674,18 @@
     grid-column: 1 / -1;
   }
 
-  .my-resources-filter-grid {
+  .my-resources-filter-grid,
+  .my-resources-sort-grid {
     grid-template-columns: 1fr;
+  }
+
+  .my-resources-sort-actions {
+    justify-content: stretch;
+  }
+
+  .my-resources-sort-actions .button {
+    width: 100%;
+    justify-content: center;
   }
 
   .my-resource-grid-list .my-resource-vm-card {
