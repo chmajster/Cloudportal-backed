@@ -1603,7 +1603,7 @@ def ensure_worker_capacity(minimum: int) -> dict:
             if INSTALL_MODE == "docker":
                 _run_worker_command(
                     _docker_compose_base()
-                    + ["up", "-d", "--no-deps", "--scale", f"worker={target}", "worker"],
+                    + ["up", "-d", "--no-deps", "--no-recreate", "--scale", f"worker={target}", "worker"],
                     "rekonsyliacja workerów Docker",
                     timeout=300,
                 )
@@ -1637,7 +1637,7 @@ def ensure_worker_capacity(minimum: int) -> dict:
                 try:
                     _run_worker_command(
                         _docker_compose_base()
-                        + ["up", "-d", "--no-deps", "--scale", f"worker={current}", "worker"],
+                        + ["up", "-d", "--no-deps", "--no-recreate", "--scale", f"worker={current}", "worker"],
                         "rollback skali workerów Docker",
                         timeout=300,
                     )
