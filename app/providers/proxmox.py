@@ -1106,6 +1106,245 @@ class ProxmoxProvider(InfrastructureProvider):
         except httpx.HTTPError:
             raise HTTPException(502, 'Unable to proxy Proxmox noVNC asset') from None
 
+
+    # Proxmox Admin inventory surface. Keep all native API paths in this adapter;
+    # HTTP routes and workers must not issue Proxmox requests directly.
+    def cluster_status(self):
+        rows = self._get('/cluster/status')
+        return rows if isinstance(rows, list) else []
+
+    def cluster_resources(self, resource_type=None):
+        path = '/cluster/resources'
+        if resource_type:
+            path += '?' + urlencode({'type': resource_type})
+        rows = self._get(path)
+        return rows if isinstance(rows, list) else []
+
+    def cluster_ha_status(self):
+        rows = self._get('/cluster/ha/status/current')
+        return rows if isinstance(rows, list) else []
+
+    def cluster_ha_groups(self):
+        rows = self._get('/cluster/ha/groups')
+        return rows if isinstance(rows, list) else []
+
+    def cluster_ha_resources(self):
+        rows = self._get('/cluster/ha/resources')
+        return rows if isinstance(rows, list) else []
+
+    def ceph_status(self):
+        try:
+            value = self._get('/cluster/ceph/status')
+        except HTTPException:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def node_status(self, node):
+        return self._get(f'/nodes/{quote(node, safe="")}/status')
+
+    def node_version(self, node):
+        return self._get(f'/nodes/{quote(node, safe="")}/version')
+
+    def node_services(self, node):
+        rows = self._get(f'/nodes/{quote(node, safe="")}/services')
+        return rows if isinstance(rows, list) else []
+
+    def node_service_action(self, node, service, action):
+        if action not in {'start', 'stop', 'restart'}:
+            raise HTTPException(422, 'Unsupported node service action')
+        if not re.fullmatch(r'[A-Za-z0-9_.@:-]{1,128}', str(service or '')):
+            raise HTTPException(422, 'Invalid node service name')
+        return self._post(
+            f'/nodes/{quote(node, safe="")}/services/{quote(str(service), safe="")}/{action}'
+        )
+
+    def node_network(self, node):
+        rows = self._get(f'/nodes/{quote(node, safe="")}/network')
+        return rows if isinstance(rows, list) else []
+
+    def node_dns(self, node):
+        value = self._get(f'/nodes/{quote(node, safe="")}/dns')
+        return value if isinstance(value, dict) else {}
+
+    def node_subscription(self, node):
+        value = self._get(f'/nodes/{quote(node, safe="")}/subscription')
+        return value if isinstance(value, dict) else {}
+
+    def node_repositories(self, node):
+        try:
+            value = self._get(f'/nodes/{quote(node, safe="")}/apt/repositories')
+        except HTTPException:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def node_syslog(self, node, *, since=None, until=None, limit=500):
+        query = {'limit': max(1, min(5000, int(limit)))}
+        if since is not None:
+            query['since'] = since
+        if until is not None:
+            query['until'] = until
+        rows = self._get(
+            f'/nodes/{quote(node, safe="")}/syslog?' + urlencode(query)
+        )
+        return rows if isinstance(rows, list) else []
+
+    def node_tasks(self, node, *, limit=200, start=0, errors=False, vmid=None):
+        query = {
+            'limit': max(1, min(1000, int(limit))),
+            'start': max(0, int(start)),
+        }
+        if errors:
+            query['errors'] = 1
+        if vmid is not None:
+            query['vmid'] = int(vmid)
+        rows = self._get(f'/nodes/{quote(node, safe="")}/tasks?' + urlencode(query))
+        return rows if isinstance(rows, list) else []
+
+    def storage_status(self, node, storage):
+        value = self._get(
+            f'/nodes/{quote(node, safe="")}/storage/{quote(storage, safe="")}/status'
+        )
+        return value if isinstance(value, dict) else {}
+
+    def storage_content(self, node, storage, *, content=None):
+        path = f'/nodes/{quote(node, safe="")}/storage/{quote(storage, safe="")}/content'
+        if content:
+            path += '?' + urlencode({'content': content})
+        rows = self._get(path)
+        return rows if isinstance(rows, list) else []
+
+    def backup_jobs(self):
+        rows = self._get('/cluster/backup')
+        return rows if isinstance(rows, list) else []
+
+    def lxc_status(self, node, vm_id):
+        return self._get(f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/status/current')
+
+    def lxc_config(self, node, vm_id):
+        return self._get(f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/config')
+
+    def lxc_power(self, node, vm_id, action):
+        if action not in {'start', 'stop', 'shutdown', 'reboot', 'suspend', 'resume'}:
+            raise HTTPException(422, 'Unsupported LXC power action')
+        return self._post(f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/status/{action}')
+
+    def lxc_snapshots(self, node, vm_id):
+        rows = self._get(f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/snapshot')
+        return rows if isinstance(rows, list) else []
+
+    def create_lxc_snapshot(self, node, vm_id, snapname, description=''):
+        return self._post(
+            f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/snapshot',
+            {'snapname': snapname, 'description': description},
+        )
+
+    def delete_lxc_snapshot(self, node, vm_id, snapname):
+        return self._delete(
+            f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/snapshot/{quote(snapname, safe="")}'
+        )
+
+    def rollback_lxc_snapshot(self, node, vm_id, snapname):
+        return self._post(
+            f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/snapshot/{quote(snapname, safe="")}/rollback'
+        )
+
+    def clone_lxc(self, node, vm_id, *, new_vm_id, hostname, target=None, full=True, storage=None, pool=None):
+        data = {'newid': int(new_vm_id), 'hostname': hostname, 'full': int(full)}
+        if target:
+            data['target'] = target
+        if storage:
+            data['storage'] = storage
+        if pool:
+            data['pool'] = pool
+        return self._post(f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/clone', data)
+
+    def update_lxc_config(self, node, vm_id, **values):
+        allowed = {key: value for key, value in values.items() if value is not None}
+        if not allowed:
+            raise HTTPException(422, 'No LXC configuration fields supplied')
+        return self._put(f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/config', allowed)
+
+    def delete_lxc_config_key(self, node, vm_id, key):
+        if not re.fullmatch(r'(?:mp|net)\d+', str(key or '')):
+            raise HTTPException(422, 'Unsupported LXC configuration key')
+        return self._put(
+            f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/config',
+            {'delete': str(key)},
+        )
+
+    def migrate_lxc(self, node, vm_id, *, target, restart=False, with_local_disks=False):
+        return self._post(
+            f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/migrate',
+            {
+                'target': target,
+                'restart': int(restart),
+                'with-local-disks': int(with_local_disks),
+            },
+        )
+
+    def delete_lxc(self, node, vm_id, *, purge=False, destroy_unreferenced_disks=False):
+        return self._delete(
+            f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}',
+            {
+                'purge': int(purge),
+                'destroy-unreferenced-disks': int(destroy_unreferenced_disks),
+            },
+        )
+
+    def lxc_console_session(self, node, vm_id):
+        data = self._post(
+            f'/nodes/{quote(node, safe="")}/lxc/{int(vm_id)}/vncproxy',
+            {'websocket': 1, 'generate-password': 1},
+        )
+        if not isinstance(data, dict) or not data.get('ticket') or not data.get('port'):
+            raise HTTPException(502, 'Proxmox did not return complete LXC console credentials')
+        return {
+            'ticket': data['ticket'],
+            'port': int(data['port']),
+            'password': data.get('password') or '',
+        }
+
+    def firewall_base(self, level, *, node=None, kind=None, object_id=None):
+        if level == 'datacenter':
+            return '/cluster/firewall'
+        if level == 'node' and node:
+            return f'/nodes/{quote(node, safe="")}/firewall'
+        if level in {'vm', 'container'} and node and object_id is not None:
+            resource = 'qemu' if level == 'vm' else 'lxc'
+            return f'/nodes/{quote(node, safe="")}/{resource}/{int(object_id)}/firewall'
+        raise HTTPException(422, 'Invalid firewall scope')
+
+    def firewall_snapshot(self, level, *, node=None, object_id=None):
+        base = self.firewall_base(level, node=node, object_id=object_id)
+        result = {}
+        endpoints = {
+            'rules': '/rules',
+            'aliases': '/aliases',
+            'ipsets': '/ipset',
+            'options': '/options',
+        }
+        if level == 'datacenter':
+            endpoints['groups'] = '/groups'
+        for key, suffix in endpoints.items():
+            try:
+                value = self._get(base + suffix)
+            except HTTPException:
+                value = [] if key != 'options' else {}
+            result[key] = value
+        return result
+
+    def create_firewall_rule(self, level, data, *, node=None, object_id=None):
+        base = self.firewall_base(level, node=node, object_id=object_id)
+        return self._post(base + '/rules', data)
+
+    def update_firewall_rule(self, level, pos, data, *, node=None, object_id=None):
+        base = self.firewall_base(level, node=node, object_id=object_id)
+        return self._put(base + '/rules/' + str(int(pos)), data)
+
+    def delete_firewall_rule(self, level, pos, *, node=None, object_id=None):
+        base = self.firewall_base(level, node=node, object_id=object_id)
+        return self._delete(base + '/rules/' + str(int(pos)))
+
     def task_status(self, node, upid):
         return self._get(
             f'/nodes/{quote(node, safe="")}/tasks/{quote(upid, safe="")}/status'
