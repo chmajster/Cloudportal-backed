@@ -61,7 +61,9 @@
         pools: [],
         playbooks: playbooks.filter(value => value.enabled !== false),
         credentials: [], avatars,
-        roles,
+        globalRoles: roles,
+        roles: [...roles],
+        globalUsers: users.filter(value => value.is_active !== false),
         users: users.filter(value => value.is_active !== false),
         blueprints: [],
         managerRoles: [],
@@ -341,17 +343,22 @@
             state.awxEnabled = state.workflow.some(step => step.type === 'register_awx');
           }
         } else if (state.step === 8) {
-          const ids = name => {
+          const ids = (name, previous, visibleRows) => {
             const list = root.querySelector('[data-dual-list-name="' + CSS.escape(name) + '"]');
-            if (list) return [...list.options].map(option => Number(option.value));
-            return [...root.querySelectorAll('[name="' + name + '"]:checked')].map(input => Number(input.value));
+            if (!list) return [...previous];
+            const visibleIds = new Set((visibleRows || []).map(row => Number(row.id)));
+            const hiddenExisting = previous
+              .map(Number)
+              .filter(id => !visibleIds.has(id));
+            const selectedVisible = [...list.options].map(option => Number(option.value));
+            return [...new Set([...hiddenExisting, ...selectedVisible])];
           };
           state.visibilityBackend = root.querySelector('[name="visibility_backend"]')?.checked ?? state.visibilityBackend;
           state.visibilityCloudportal = root.querySelector('[name="visibility_cloudportal"]')?.checked ?? state.visibilityCloudportal;
           state.visibilityApi = root.querySelector('[name="visibility_api"]')?.checked ?? state.visibilityApi;
-          state.allowedRoleIds = ids('allowed_role_ids');
-          state.allowedUserIds = ids('allowed_user_ids');
-          state.managerRoleIds = ids('manager_role_ids');
+          state.allowedRoleIds = ids('allowed_role_ids', state.allowedRoleIds, data.roles);
+          state.allowedUserIds = ids('allowed_user_ids', state.allowedUserIds, data.users);
+          state.managerRoleIds = ids('manager_role_ids', state.managerRoleIds, data.managerRoles);
           state.requiresApproval = root.querySelector('[name="requires_approval"]')?.checked ?? state.requiresApproval;
           window.BlueprintApprovalPolicyUI.captureState(root, state);
           state.recoveryPolicy = root.querySelector('[name="recovery_policy"]')?.value || state.recoveryPolicy;
@@ -1045,7 +1052,7 @@
               { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
             ], state.recoveryPolicy, { wide: true }))
         );
-        if (allowed('roles.read')) {
+        if (allowed('roles.read') || data.roles.length) {
           content.append(
             parts.ui.dualListGroup('Dozwolone role', 'allowed_role_ids', data.roles, state.allowedRoleIds,
               'Pusta lista „Wybrane” oznacza brak ograniczenia po roli.'),
@@ -1053,7 +1060,7 @@
               'Rola zarządzająca musi mieć blueprints.read/update/delete i może być przypisana tylko do jednego Blueprintu.')
           );
         }
-        if (allowed('users.read')) {
+        if (allowed('users.read') || data.users.length) {
           content.append(parts.ui.dualListGroup('Dozwoleni użytkownicy', 'allowed_user_ids', data.users, state.allowedUserIds,
             'Pusta lista „Wybrane” oznacza brak ograniczenia po użytkowniku.'));
         }
@@ -1352,7 +1359,7 @@
         if (!dom.modal.open) dom.modal.showModal();
       }
 
-      blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, discoverProvider, render });
+      blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, optionalApi, discoverProvider, render });
       try {
         await blueprintScope.loadResources(!editingItem);
         if (editingItem) {

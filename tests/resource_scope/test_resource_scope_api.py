@@ -5,11 +5,11 @@ import pytest
 from sqlalchemy import select, func
 from conftest import new_user
 from app.database import session
-from app.models import Deployment, Job, JobLog, ManagedVM, ManagedResource, Token
+from app.models import Deployment, Job, JobLog, ManagedVM, ManagedResource, Token, User
 from app.projects.models import Project, ProjectMembership
 from app.tenancy.models import TenantMembership
 from app.resource_scope.models import ProjectCredentialAccess
-from app.jobs.worker import execute, validate_authorization
+from app.jobs.worker import _validate_blueprint_authorization, execute, validate_authorization
 from app.executors.base import ExecutionFailed
 from app.executors.terraform import TerraformExecutor
 
@@ -129,6 +129,177 @@ def test_blueprint_creation_scopes_are_rbac_filtered_and_admin_sees_all(system):
     assert revoked.status_code == 200, revoked.text
     assert revoked.json()['items'] == []
 
+
+
+def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
+    client, headers, _ = system
+    p = project(client, headers, 'bp-scoped-rbac')
+    credential, provider = infrastructure(client, headers, 'PVE-BP-RBAC')
+    assign(client, headers, p, credential, provider)
+    user, user_headers = member(client, headers, p, username='bp-scoped-rbac-user')
+
+    roles = client.get('/api/v1/roles?limit=200', headers=headers).json()['items']
+    project_admin_role_id = next(row['id'] for row in roles if row['name'] == 'Project Administrator')
+    payload = {
+        'slug': 'scoped-rbac',
+        'name': 'Scoped RBAC',
+        'allowed_role_ids': [project_admin_role_id],
+        'manager_role_ids': [project_admin_role_id],
+        'deployment': {
+            'name': 'scoped-rbac',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                'name': 'scoped-rbac',
+                'node': 'pve',
+                'template_id': 9000,
+                'storage': 'local-lvm',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+
+    created = client.post('/api/v1/blueprints', headers=scope_headers(headers, p), json=payload)
+    assert created.status_code == 201, created.text
+
+    available = client.get('/api/v1/blueprints?available=true', headers=user_headers)
+    assert available.status_code == 200, available.text
+    assert [row['id'] for row in available.json()['items']] == [created.json()['id']]
+    assert available.json()['items'][0]['can_manage'] is True
+
+    with session() as db:
+        _validate_blueprint_authorization(
+            db,
+            SimpleNamespace(
+                operation='terraform.apply',
+                payload={'blueprint': {'id': created.json()['id']}},
+                source='API',
+            ),
+            db.get(User, user['id']),
+            {'blueprints.execute'},
+        )
+
+    updated_payload = {**payload, 'name': 'Scoped RBAC updated'}
+    updated = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(created.json()['version'])},
+        json=updated_payload,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['name'] == 'Scoped RBAC updated'
+
+    tenant_admin_role_id = next(row['id'] for row in roles if row['name'] == 'Tenant Administrator')
+    denied_role_reference = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(updated.json()['version'])},
+        json={
+            **payload,
+            'name': 'Must not accept tenant-wide role from project-only administrator',
+            'allowed_role_ids': [tenant_admin_role_id],
+        },
+    )
+    assert denied_role_reference.status_code == 403, denied_role_reference.text
+    assert 'role references exceed' in denied_role_reference.text
+
+    outsider, _ = new_user(client, headers, 'bp-rbac-outsider')
+    denied_user_reference = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(updated.json()['version'])},
+        json={
+            **payload,
+            'name': 'Must not accept a user outside the selected project/tenant scope',
+            'allowed_user_ids': [outsider['id']],
+        },
+    )
+    assert denied_user_reference.status_code == 403, denied_user_reference.text
+    assert 'user references exceed' in denied_user_reference.text
+
+    with session() as db:
+        db.get(ProjectMembership, (p['id'], user['id'])).status = 'disabled'
+        db.commit()
+        with pytest.raises(ExecutionFailed, match='Blueprint access has been revoked'):
+            _validate_blueprint_authorization(
+                db,
+                SimpleNamespace(
+                    operation='terraform.apply',
+                    payload={'blueprint': {'id': created.json()['id']}},
+                    source='API',
+                ),
+                db.get(User, user['id']),
+                {'blueprints.execute'},
+            )
+
+    revoked = client.get('/api/v1/blueprints?available=true', headers=user_headers)
+    assert revoked.status_code == 404, revoked.text
+
+
+def test_blueprint_acl_and_manager_roles_honor_tenant_role_assignments(system):
+    client, headers, _ = system
+    p = project(client, headers, 'bp-tenant-rbac')
+    credential, provider = infrastructure(client, headers, 'PVE-BP-TENANT-RBAC')
+    assign(client, headers, p, credential, provider)
+
+    user, raw_user_headers = new_user(client, headers, 'bp-tenant-rbac-user')
+    roles = client.get('/api/v1/roles?limit=200', headers=headers).json()['items']
+    tenant_admin_role_id = next(row['id'] for row in roles if row['name'] == 'Tenant Administrator')
+    membership = client.post(
+        f"/api/v1/tenants/{p['tenant_id']}/members",
+        headers=headers,
+        json={'user_id': user['id'], 'role_ids': [tenant_admin_role_id]},
+    )
+    assert membership.status_code == 201, membership.text
+    user_headers = scope_headers(raw_user_headers, p)
+
+    scopes = client.get(
+        '/api/v1/blueprints/creation-scopes?permission=blueprints.create&limit=200',
+        headers=user_headers,
+    )
+    assert scopes.status_code == 200, scopes.text
+    assert [row['project_id'] for row in scopes.json()['items']] == [p['id']]
+
+    tenant_roles = client.get(
+        f"/api/v1/tenants/{p['tenant_id']}/assignable-roles?limit=200",
+        headers=user_headers,
+    )
+    assert tenant_roles.status_code == 200, tenant_roles.text
+    assert tenant_admin_role_id in {row['id'] for row in tenant_roles.json()['items']}
+
+    payload = {
+        'slug': 'tenant-scoped-rbac',
+        'name': 'Tenant Scoped RBAC',
+        'allowed_role_ids': [tenant_admin_role_id],
+        'manager_role_ids': [tenant_admin_role_id],
+        'deployment': {
+            'name': 'tenant-scoped-rbac',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                'name': 'tenant-scoped-rbac',
+                'node': 'pve',
+                'template_id': 9000,
+                'storage': 'local-lvm',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+
+    created = client.post('/api/v1/blueprints', headers=scope_headers(headers, p), json=payload)
+    assert created.status_code == 201, created.text
+
+    available = client.get('/api/v1/blueprints?available=true', headers=user_headers)
+    assert available.status_code == 200, available.text
+    assert [row['id'] for row in available.json()['items']] == [created.json()['id']]
+    assert available.json()['items'][0]['can_manage'] is True
+
+    updated = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(created.json()['version'])},
+        json={**payload, 'name': 'Tenant Scoped RBAC updated'},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['name'] == 'Tenant Scoped RBAC updated'
 
 
 def test_blueprint_slug_is_unique_per_project_not_globally(system):

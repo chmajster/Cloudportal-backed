@@ -150,7 +150,8 @@ def _validate_blueprint_authorization(db, job, user, permissions):
     if blueprint is None or not blueprint.is_active:
         raise ExecutionFailed('Blueprint is no longer active or available')
 
-    role_ids = {role.id for role in user.roles}
+    from app.automation.service import blueprint_role_ids
+    role_ids = blueprint_role_ids(db, blueprint, user)
     if (
         blueprint.allowed_role_ids or blueprint.allowed_user_ids
     ) and user.id not in blueprint.allowed_user_ids and not (role_ids & set(blueprint.allowed_role_ids)):

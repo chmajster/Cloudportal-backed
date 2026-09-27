@@ -679,6 +679,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'data-dual-list-name': name" in script
     assert "dualListGroup('Dozwolone role'" in script
     assert "dualListGroup('Role zarządzające Blueprintem'" in script
+    assert "typeof item?.can_manage === 'boolean'" in script
     assert "new Set(['Administrator', 'Infrastructure Administrator'])" in script
     assert "state.managerRoleIds = resetSelection" in script
     assert "dualListGroup('Dozwoleni użytkownicy'" in script
@@ -696,6 +697,21 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "scopeAllows('hostnames.read')" in script
     assert "scopeAllows('ipam.read')" in script
     assert "scopeAllows('ansible.read')" in script
+    assert "scopeAllows('projects.roles.assign')" in script
+    assert "'/projects/' + encodeURIComponent(state.projectId) + '/assignable-roles?limit=200'" in script
+    assert "'/tenants/' + encodeURIComponent(state.tenantId) + '/assignable-roles?limit=200'" in script
+    assert "for (const role of [...tenantRoles, ...projectRoles])" in script
+    assert "allowed('roles.read') || data.roles.length" in script
+    assert "globalRoles: roles" in script
+    assert "globalUsers: users.filter" in script
+    assert "'/projects/' + encodeURIComponent(state.projectId) + '/members?limit=200'" in script
+    assert "'/tenants/' + encodeURIComponent(state.tenantId) + '/members?limit=200&status=active'" in script
+    assert "allowed('users.read') || data.users.length" in script
+    assert "if (!list) return [...previous]" in script
+    assert "hiddenExisting" in script
+    assert "state.allowedRoleIds = ids('allowed_role_ids', state.allowedRoleIds, data.roles)" in script
+    assert "state.allowedUserIds = ids('allowed_user_ids', state.allowedUserIds, data.users)" in script
+    assert "state.managerRoleIds = ids('manager_role_ids', state.managerRoleIds, data.managerRoles)" in script
     assert "'X-Tenant-ID': String(state.tenantId)" in script
     assert "'X-Project-ID': String(state.projectId)" in script
     assert "!state.selectEnvironmentOnExecute" in script

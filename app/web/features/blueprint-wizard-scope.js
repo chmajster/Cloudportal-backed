@@ -51,7 +51,7 @@
   }
 
   function create(context) {
-    const { state, data, options, allowed, safeApi, discoverProvider, render } = context;
+    const { state, data, options, allowed, safeApi, optionalApi, discoverProvider, render } = context;
     const managerRequired = new Set(['blueprints.read', 'blueprints.update', 'blueprints.delete']);
     const defaultManagerRoleNames = new Set(['Administrator', 'Infrastructure Administrator']);
 
@@ -148,7 +148,7 @@
 
     async function loadResources(resetManagerSelection = false) {
       const requestOptions = { headers: parts.core.scopeHeaders(state) };
-      const [providers, templates, schemes, pools, credentials, blueprints, playbooks] = await Promise.all([
+      const [providers, templates, schemes, pools, credentials, blueprints, playbooks, roleOptions, userOptions] = await Promise.all([
         safeApi('/providers?limit=200', [], requestOptions),
         safeApi('/templates', [], requestOptions),
         scopeAllows('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
@@ -156,6 +156,40 @@
         safeApi('/credentials?limit=200', [], requestOptions),
         scopeAllows('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
         scopeAllows('ansible.read') ? safeApi('/ansible/playbooks', [], requestOptions) : Promise.resolve([]),
+        allowed('roles.read')
+          ? Promise.resolve(data.globalRoles || [])
+          : Promise.all([
+              scopeAllows('projects.roles.assign')
+                ? optionalApi('/projects/' + encodeURIComponent(state.projectId) + '/assignable-roles?limit=200', [], requestOptions)
+                : Promise.resolve([]),
+              optionalApi('/tenants/' + encodeURIComponent(state.tenantId) + '/assignable-roles?limit=200', [], requestOptions),
+            ]).then(([projectRoles, tenantRoles]) => {
+              const merged = new Map();
+              for (const role of [...tenantRoles, ...projectRoles]) merged.set(Number(role.id), role);
+              return [...merged.values()].sort((left, right) =>
+                String(left.name || '').localeCompare(String(right.name || ''), 'pl'));
+            }),
+        allowed('users.read')
+          ? Promise.resolve(data.globalUsers || [])
+          : Promise.all([
+              scopeAllows('projects.members.read')
+                ? optionalApi('/projects/' + encodeURIComponent(state.projectId) + '/members?limit=200', [], requestOptions)
+                : Promise.resolve([]),
+              optionalApi('/tenants/' + encodeURIComponent(state.tenantId) + '/members?limit=200&status=active', [], requestOptions),
+            ]).then(([projectMembers, tenantMembers]) => {
+              const merged = new Map();
+              for (const member of [...tenantMembers, ...projectMembers]) {
+                const id = Number(member.user_id ?? member.id);
+                if (!Number.isFinite(id)) continue;
+                merged.set(id, {
+                  id,
+                  username: member.username || member.name || ('#' + id),
+                  email: member.email || '',
+                });
+              }
+              return [...merged.values()].sort((left, right) =>
+                String(left.username || '').localeCompare(String(right.username || ''), 'pl'));
+            }),
       ]);
 
       data.providers = providers;
@@ -164,6 +198,8 @@
       data.schemes = schemes.filter(value => value.is_active);
       data.pools = pools;
       data.credentials = credentials;
+      data.roles = roleOptions;
+      data.users = userOptions;
       data.blueprints = blueprints;
       data.playbooks = playbooks.filter(value => value.enabled !== false);
       if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
