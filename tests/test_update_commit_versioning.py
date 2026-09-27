@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +114,75 @@ def test_unknown_local_commit_accepts_channel_head_as_version():
 
     assert result['relation'] == 'unknown_current'
     assert result['update_available'] is True
+
+
+def test_legacy_archive_hash_marker_is_treated_as_unknown_version(monkeypatch):
+    updater = load_updater()
+    target = {'sha': '7' * 40, 'committed_at': '2026-09-19T02:00:00Z'}
+
+    def should_not_call(*args, **kwargs):
+        raise AssertionError('GitHub compare must not run for a non-Git release marker')
+
+    monkeypatch.setattr(updater, '_http_json', should_not_call)
+    result = updater.commit_order('8c0c45e6b17d' + ('a' * 52), target, {})
+
+    assert result['relation'] == 'unknown_current'
+    assert result['update_available'] is True
+    assert result['ahead_by'] == 0
+    assert result['behind_by'] == 0
+
+
+def test_missing_local_git_commit_is_treated_as_unknown_version(monkeypatch):
+    updater = load_updater()
+    current = '8' * 40
+    target = {'sha': '9' * 40, 'committed_at': '2026-09-19T02:00:00Z'}
+
+    def fake_json(url, settings):
+        if '/compare/' in url:
+            raise HTTPError(url, 404, 'Not Found', {}, None)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(updater, '_http_json', fake_json)
+    result = updater.commit_order(current, target, {})
+
+    assert result['relation'] == 'unknown_current'
+    assert result['update_available'] is True
+
+
+def test_read_url_retries_transient_github_500(tmp_path, monkeypatch):
+    updater = load_updater()
+    monkeypatch.setattr(updater, 'STATE_DIR', tmp_path / 'update')
+    monkeypatch.setattr(updater, 'STATE_FILE', tmp_path / 'update' / 'state.json')
+    updater.atomic_json(updater.STATE_FILE, updater.default_state())
+    monkeypatch.setattr(updater.time, 'sleep', lambda seconds: None)
+    calls = {'count': 0}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        calls['count'] += 1
+        if calls['count'] == 1:
+            raise HTTPError(request.full_url, 500, 'Internal Server Error', {}, None)
+        return Response()
+
+    monkeypatch.setattr(updater, 'urlopen', fake_urlopen)
+    result = updater._read_url(
+        'https://api.github.com/repos/chmajster/Cloudportal-backed/commits/main',
+        {},
+        'application/vnd.github+json',
+    )
+
+    assert result == b'{"ok": true}'
+    assert calls['count'] == 2
+    assert any('GitHub API HTTP 500' in line for line in updater.load_state()['output'])
 
 
 def prepare_updater_state(updater, tmp_path, monkeypatch, commit='1' * 40):
