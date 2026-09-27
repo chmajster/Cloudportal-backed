@@ -272,6 +272,12 @@ def validate_authorization(db, job):
         needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
     if job.operation in {'terraform.apply', 'proxmox.provision'}:
         needed.add('deployments.create')
+        if job.deployment_id:
+            from app.availability.models import AvailabilityAssignment
+            if db.scalar(select(AvailabilityAssignment.id).where(
+                AvailabilityAssignment.deployment_id == job.deployment_id
+            ).limit(1)):
+                needed.add('availability.assign')
         blueprint = job.payload.get('blueprint') or {}
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
             needed.add('deployments.destroy')
@@ -2006,6 +2012,8 @@ def run_blueprint_workflow(context, executor):
                             f'workflow.step.resumed: {step_id}:terraform_apply: '
                             'provider apply checkpoint already completed'
                         )
+                        from app.availability.service import apply_pending_for_deployment
+                        apply_pending_for_deployment(context)
                     else:
                         apply_and_sync()
                 elif step_type == 'terraform_destroy':
