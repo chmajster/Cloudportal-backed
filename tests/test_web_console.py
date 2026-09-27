@@ -14,7 +14,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert page.headers['content-type'].startswith('text/html')
     assert 'id="login-form"' in page.text
     assert 'data-theme="light"' in page.text
-    assert page.text.count('data-theme-toggle') == 2
+    assert page.text.count('data-theme-toggle') == 1
     assert 'id="sidebar-backdrop"' in page.text
     assert 'id="modal-close"' in page.text
     assert 'id="refresh-view"' in page.text
@@ -31,7 +31,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="current-context-organization"' in page.text
     assert 'id="current-context-project"' in page.text
     assert 'id="current-context-environment"' in page.text
-    assert 'data-theme-toggle-text' in page.text
+    assert 'id="user-menu-theme"' in page.text
     assert 'href="./favicon.ico"' in page.text
     assert 'type="image/x-icon"' in page.text
     assert 'src="./theme-init.js"' in page.text
@@ -197,9 +197,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
-    assert 'function setUserMenuOpen(' in core
-    assert 'dom.currentUserAvatar.textContent = identityInitials' in core
+    assert 'function setUserMenuOpen(' in bootstrap
+    assert 'currentUserAvatar.textContent = source.slice(0, 2)' in bootstrap
     assert "document.querySelector('#user-menu-account')" in bootstrap
+    assert "document.querySelector('#user-menu-theme')" in bootstrap
     assert "registerCommand('users.create'" in script
     assert "registerCommand('tokens.create'" in script
     assert "button('Dokumentacja OpenAPI'" in script
