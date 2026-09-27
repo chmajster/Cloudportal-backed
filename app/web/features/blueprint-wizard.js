@@ -63,6 +63,7 @@
         credentials: [], avatars,
         globalRoles: roles,
         roles: [...roles],
+        globalUsers: users.filter(value => value.is_active !== false),
         users: users.filter(value => value.is_active !== false),
         blueprints: [],
         managerRoles: [],
@@ -1054,7 +1055,7 @@
               'Rola zarządzająca musi mieć blueprints.read/update/delete i może być przypisana tylko do jednego Blueprintu.')
           );
         }
-        if (allowed('users.read')) {
+        if (allowed('users.read') || data.users.length) {
           content.append(parts.ui.dualListGroup('Dozwoleni użytkownicy', 'allowed_user_ids', data.users, state.allowedUserIds,
             'Pusta lista „Wybrane” oznacza brak ograniczenia po użytkowniku.'));
         }
