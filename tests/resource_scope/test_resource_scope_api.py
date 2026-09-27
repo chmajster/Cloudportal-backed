@@ -131,6 +131,59 @@ def test_blueprint_creation_scopes_are_rbac_filtered_and_admin_sees_all(system):
 
 
 
+def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
+    client, headers, _ = system
+    p = project(client, headers, 'bp-scoped-rbac')
+    credential, provider = infrastructure(client, headers, 'PVE-BP-RBAC')
+    assign(client, headers, p, credential, provider)
+    user, user_headers = member(client, headers, p, username='bp-scoped-rbac-user')
+
+    roles = client.get('/api/v1/roles?limit=200', headers=headers).json()['items']
+    project_admin_role_id = next(row['id'] for row in roles if row['name'] == 'Project Administrator')
+    payload = {
+        'slug': 'scoped-rbac',
+        'name': 'Scoped RBAC',
+        'allowed_role_ids': [project_admin_role_id],
+        'manager_role_ids': [project_admin_role_id],
+        'deployment': {
+            'name': 'scoped-rbac',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                'name': 'scoped-rbac',
+                'node': 'pve',
+                'template_id': 9000,
+                'storage': 'local-lvm',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+
+    created = client.post('/api/v1/blueprints', headers=scope_headers(headers, p), json=payload)
+    assert created.status_code == 201, created.text
+
+    available = client.get('/api/v1/blueprints?available=true', headers=user_headers)
+    assert available.status_code == 200, available.text
+    assert [row['id'] for row in available.json()['items']] == [created.json()['id']]
+
+    updated_payload = {**payload, 'name': 'Scoped RBAC updated'}
+    updated = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(created.json()['version'])},
+        json=updated_payload,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['name'] == 'Scoped RBAC updated'
+
+    with session() as db:
+        db.get(ProjectMembership, (p['id'], user['id'])).status = 'disabled'
+        db.commit()
+
+    revoked = client.get('/api/v1/blueprints?available=true', headers=user_headers)
+    assert revoked.status_code == 404, revoked.text
+
+
 def test_blueprint_slug_is_unique_per_project_not_globally(system):
     client, headers, _ = system
     alpha = project(client, headers, 'bp-slug-alpha')
