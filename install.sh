@@ -2737,9 +2737,9 @@ EOF
           args:
             - |
               i=1
-              while [ "$i" -le "$workers" ]; do
+              while [ "\$i" -le "$workers" ]; do
                 python -m app.jobs.queue &
-                i=$((i+1))
+                i=\$((i+1))
               done
               wait
 EOF
