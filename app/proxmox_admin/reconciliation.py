@@ -47,10 +47,14 @@ def lxc_config_values(params):
 
 
 def find_native(adapter, object_type, object_id):
-    wanted = 'qemu' if object_type == 'vm' else 'lxc'
+    wanted = 'lxc' if object_type == 'container' else 'qemu'
+    expect_template = object_type == 'template'
     for row in adapter.cluster_resources('vm'):
-        if row.get('type') == wanted and int(row.get('vmid', -1)) == int(object_id):
-            return dict(row)
+        if row.get('type') != wanted or int(row.get('vmid', -1)) != int(object_id):
+            continue
+        if wanted == 'qemu' and bool(row.get('template')) != expect_template:
+            continue
+        return dict(row)
     return None
 
 
@@ -167,11 +171,42 @@ def reconcile(adapter, meta, params):
             config = adapter.vm_config(current_node, int(object_id)) or {}
             return params['nic'] not in config, {'resource': native, 'config': config}
 
+        if command == 'vm.iso.attach':
+            config = adapter.vm_config(current_node, int(object_id)) or {}
+            value = str(config.get(params['drive']) or '')
+            return params['volume'] in value and 'media=cdrom' in value, {'resource': native, 'config': config}
+
         if command == 'backup.run':
             backups = adapter.backups(current_node, params['storage'], int(object_id))
             return bool(backups), {'resource': native, 'backups': backups}
 
         return True, {'resource': native}
+
+    if meta['object_type'] == 'template':
+        native = find_native(adapter, 'template', object_id)
+        if command == 'template.delete':
+            return native is None, {'resource': native}
+        if native is None:
+            return False, {'resource': None}
+        current_node = native.get('node') or node
+        if command == 'template.clone':
+            clone = find_native(adapter, 'vm', params['new_vmid'])
+            return clone is not None, {'resource': native, 'clone': clone}
+        if command == 'template.config':
+            config = adapter.vm_config(current_node, int(object_id)) or {}
+            expected = vm_config_values(params)
+            return _config_contains(config, expected), {'resource': native, 'config': config}
+        return True, {'resource': native}
+
+    if command == 'image.upload':
+        rows = adapter.storage_content(params['node'], params['storage'], content='iso')
+        exists = any(str(row.get('volid') or '').endswith('/' + params['filename']) for row in rows)
+        return exists, {'images': rows}
+
+    if command == 'image.delete':
+        rows = adapter.storage_content(params['node'], params['storage'], content='iso')
+        exists = any(str(row.get('volid')) == str(params['volume']) for row in rows)
+        return not exists, {'images': rows}
 
     if command == 'backup.restore':
         restored = find_native(adapter, 'vm', params['vmid'])
