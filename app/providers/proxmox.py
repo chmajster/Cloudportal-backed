@@ -1106,6 +1106,15 @@ class ProxmoxProvider(InfrastructureProvider):
         except httpx.HTTPError:
             raise HTTPException(502, 'Unable to proxy Proxmox noVNC asset') from None
 
+    def recent_tasks(self, *, vm_id=None, typefilter=None, limit=50):
+        query = {'limit': max(1, min(500, int(limit)))}
+        if vm_id not in {None, ''}:
+            query['vmid'] = int(vm_id)
+        if typefilter:
+            query['typefilter'] = str(typefilter)
+        rows = self._get('/cluster/tasks?' + urlencode(query))
+        return rows if isinstance(rows, list) else []
+
     def task_status(self, node, upid):
         return self._get(
             f'/nodes/{quote(node, safe="")}/tasks/{quote(upid, safe="")}/status'
