@@ -134,7 +134,9 @@ def test_vm_history_includes_provisioning_job_stages(client, headers):
 
     with session() as db:
         provider_row = db.get(Provider, p['id'])
-        user_id = db.scalar(select(User.id).order_by(User.id))
+        user = db.scalar(select(User).order_by(User.id))
+        user_id = user.id
+        username = user.username
         deployment = Deployment(
             name='history-vm',
             provider_id=p['id'],
@@ -215,6 +217,12 @@ def test_vm_history_includes_provisioning_job_stages(client, headers):
     assert 'snapshot.created' in titles
     assert 'vm.reboot.wrong-vm' not in titles
     assert all('raw secret output' not in title for title in titles)
+    assert all('actor_username' in row for row in rows)
+    assert all(
+        row['actor_username'] == username
+        for row in rows
+        if row['actor_user_id'] == user_id
+    )
 
 
 
