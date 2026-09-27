@@ -757,11 +757,14 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
   const routedDetails = state.view === 'routed-form'
     && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
-    const [status, snapshotInfo] = await Promise.all([
+    const [status, snapshotInfo, availabilityVisible] = await Promise.all([
       api(`${vmBase(item)}/status`),
       allowed('snapshots.read')
         ? api(`${vmBase(item)}/snapshots`).catch(() => null)
         : Promise.resolve(null),
+      window.AvailabilityPlans?.canReadResource
+        ? window.AvailabilityPlans.canReadResource(item)
+        : Promise.resolve(false),
     ]);
     const snapshotCapability = snapshotInfo?.capability || null;
     if (!routedDetails) {
@@ -777,10 +780,11 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
       ['overview', 'Przegląd'],
       ['monitor', 'Monitor'],
       ['hardware', 'Hardware'],
+      availabilityVisible ? ['availability', 'Dostępność'] : null,
       ['snapshots', 'Snapshoty', 'snapshots.read'],
       ['backups', 'Backupy', 'backups.read'],
       ['audit', 'Historia'],
-    ].filter(([, , permission]) => allowed(permission));
+    ].filter(row => row && allowed(row[2]));
 
     let activeTab = tabs.some(([id]) => id === initialTab) ? initialTab : 'overview';
     const tabBar = node('div', { class: 'vm-tabs', role: 'tablist', 'aria-label': 'Szczegóły VM' });
@@ -803,6 +807,7 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
         if (id === 'overview') result = vmOverviewContent(item, status);
         else if (id === 'monitor') result = await vmMonitorContent(item);
         else if (id === 'hardware') result = vmHardwareContent(item, status);
+        else if (id === 'availability' && window.AvailabilityPlans?.vmContent) result = await window.AvailabilityPlans.vmContent(item);
         else if (id === 'snapshots') result = await vmSnapshotsContent(item);
         else if (id === 'backups') result = await vmBackupsContent(item);
         else if (id === 'audit') result = await vmAuditContent(item);
@@ -1252,7 +1257,7 @@ registerRoutedForm({
 
 registerRoutedForm({
   id: 'inventory-vm-details',
-  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/(?<tab>overview|hardware|snapshots|backups|audit)$/,
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/(?<tab>overview|monitor|hardware|availability|snapshots|backups|audit)$/,
   parent: 'my-resources',
   permission: 'vms.read',
   label: 'Moje zasoby',

@@ -402,6 +402,11 @@ def _execute_unfenced(job_id):
             if action == 'delete_vm':
                 mark_resource_deleted(db, target)
             else:
+                if action == 'apply_availability':
+                    from app.availability.service import mark_assignment_applied
+                    mark_assignment_applied(
+                        db, target.resource_id, params['plan_id'], job_id=context.job.id,
+                    )
                 desired = {key: value for key, value in params.items() if key != 'confirmation'} if get_action(action).mutates_configuration else None
                 try:
                     snapshot, drift = reconcile_resource(db, target, adapter, desired=desired)

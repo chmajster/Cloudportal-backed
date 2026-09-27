@@ -1051,6 +1051,11 @@ async function toolsView() {
     cards.push(window.ProxmoxTemplateTool.card());
   }
 
+  if (window.AvailabilityPlans?.card) {
+    const availabilityCard = await window.AvailabilityPlans.card();
+    if (availabilityCard) cards.push(availabilityCard);
+  }
+
   if (allowed('ansible.read')) cards.push(ansibleHostEntryTool());
   if (allowed('instance_backups.read')) cards.push(instanceBackupTool());
 

@@ -90,7 +90,7 @@ class ProxmoxDay2Adapter:
             'delete_snapshot', 'restore_snapshot',
             'resize_compute', 'add_disk', 'resize_disk', 'detach_disk', 'delete_disk',
             'add_nic', 'edit_nic', 'detach_nic', 'update_cloud_init',
-            'update_tags', 'add_tag', 'remove_tag', 'migrate_vm', 'move_storage',
+            'update_tags', 'add_tag', 'remove_tag', 'apply_availability', 'migrate_vm', 'move_storage',
             'clone_vm', 'delete_vm', 'refresh_state',
         ]
         if snapshot_supported:
@@ -353,6 +353,15 @@ class ProxmoxDay2Adapter:
             else:
                 tags.discard(params['tag'])
             return self.provider.update_vm_config(node, vm_id, tags=';'.join(sorted(tags)))
+        if action == 'apply_availability':
+            return self.provider.set_vm_ha(
+                vm_id,
+                state=params['state'],
+                group=params.get('group'),
+                max_restart=int(params.get('max_restart', 1)),
+                max_relocate=int(params.get('max_relocate', 1)),
+                comment='CloudPortal Availability Plan: ' + str(params.get('plan_id') or ''),
+            )
         if action == 'migrate_vm':
             return self.provider.migrate_vm(node, vm_id, target=params['target_node'], online=bool(params.get('online')), with_local_disks=bool(params.get('with_local_disks')))
         if action == 'move_storage':

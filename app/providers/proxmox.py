@@ -619,6 +619,65 @@ class ProxmoxProvider(InfrastructureProvider):
                 continue
         return result
 
+    def vm_ha_resource(self, vm_id):
+        sid = f'vm:{int(vm_id)}'
+        rows = self._get('/cluster/ha/resources') or []
+        return next((row for row in rows if str(row.get('sid') or '') == sid), None)
+
+    def set_vm_ha(self, vm_id, *, state='started', group=None, max_restart=1, max_relocate=1, comment=None):
+        sid = f'vm:{int(vm_id)}'
+        state = str(state or 'started').strip().lower()
+        if state not in {'started', 'stopped', 'ignored', 'disabled'}:
+            raise HTTPException(422, 'Unsupported Proxmox HA state')
+        payload = {
+            'state': state,
+            'max_restart': max(0, int(max_restart)),
+            'max_relocate': max(0, int(max_relocate)),
+        }
+        if group:
+            payload['group'] = str(group)
+        if comment:
+            payload['comment'] = str(comment)[:128]
+        current = self.vm_ha_resource(vm_id)
+        if current is None:
+            self._post('/cluster/ha/resources', {'sid': sid, **payload})
+        else:
+            if not group and current.get('group'):
+                payload['delete'] = 'group'
+            self._put('/cluster/ha/resources/' + quote(sid, safe=':'), payload)
+
+        live = self.vm_ha_resource(vm_id)
+        if live is None:
+            raise HTTPException(502, 'Proxmox HA configuration was written but could not be read back')
+        live_state = str(live.get('state') or 'started').lower()
+        if live_state == 'enabled':
+            live_state = 'started'
+        if live_state != state:
+            raise HTTPException(502, 'Proxmox HA state does not match the requested Availability Plan')
+        for key, expected in (
+            ('max_restart', payload['max_restart']),
+            ('max_relocate', payload['max_relocate']),
+        ):
+            try:
+                actual = int(live.get(key, 1))
+            except (TypeError, ValueError):
+                raise HTTPException(502, f'Proxmox HA returned an invalid {key} value') from None
+            if actual != expected:
+                raise HTTPException(502, f'Proxmox HA {key} does not match the requested Availability Plan')
+        if group and str(live.get('group') or '') != str(group):
+            raise HTTPException(
+                502,
+                'Proxmox HA group does not match the requested Availability Plan. '
+                'On Proxmox VE 9, legacy HA groups may already be migrated to HA rules.',
+            )
+        return live
+
+    def remove_vm_ha(self, vm_id):
+        sid = f'vm:{int(vm_id)}'
+        if self.vm_ha_resource(vm_id) is None:
+            return None
+        return self._delete('/cluster/ha/resources/' + quote(sid, safe=':'))
+
     def discover(self, resource, node=None):
         if resource == 'nodes':
             return self._get('/nodes')

@@ -758,6 +758,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             403,
             'Missing Blueprint workflow permissions: ' + ', '.join(sorted(missing_workflow_permissions)),
         )
+    if data.availability_plan_id and 'availability.assign' not in request.state.permissions:
+        raise HTTPException(403, 'availability.assign required to select an Availability Plan')
     def create():
         rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs, awx = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
@@ -789,6 +791,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         if scope_key not in (None, ''):
             blueprint_variables['scope_key'] = scope_key
         provider = find(db, Provider, parsed.provider_id)
+        if data.availability_plan_id and provider.type != 'proxmox':
+            raise HTTPException(422, 'Availability Plan currently supports Proxmox VM deployments only')
         template_meta, _ = template_definition(parsed.template)
         if provider.type != template_meta['provider']:
             raise HTTPException(422, 'Policy-selected provider does not match the Terraform template')
@@ -848,6 +852,12 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                 created_by=actor.user_id, executor=parsed.executor)
         db.add(deployment)
         db.flush()
+        if data.availability_plan_id:
+            from app.availability.service import attach_to_deployment
+            attach_to_deployment(
+                db, request.state.resource_scope, deployment,
+                data.availability_plan_id, actor.user_id,
+            )
         direct_proxmox = parsed.executor == 'proxmox'
         deployment.state_location = (
             f'provider://proxmox/{deployment.id}'

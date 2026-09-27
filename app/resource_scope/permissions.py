@@ -4,6 +4,7 @@ RESOURCE_ACTIONS = {
     'jobs': 'read read_all execute cancel',
     'terraform': 'read execute', 'ansible': 'read execute',
     'inventory': 'read read_all import update delete',
+    'availability': 'read create update delete assign',
     'blueprints': 'read create update delete execute approve',
     'hostnames': 'read create update delete reserve release',
     'vms': 'read read_all manage_all power update delete clone migrate template console',
@@ -24,7 +25,7 @@ SCOPE_PERMISSION_ACTIONS = {'governance': ['admin', 'access.read', 'access.manag
 EXECUTION_PERMISSIONS = frozenset({
     'deployments.create', 'deployments.destroy', 'deployments.adopt', 'jobs.execute',
     'terraform.execute', 'ansible.execute', 'blueprints.execute',
-    'inventory.import', 'inventory.update', 'inventory.delete',
+    'inventory.import', 'inventory.update', 'inventory.delete', 'availability.assign',
     'vms.power', 'vms.update', 'vms.delete', 'vms.clone', 'vms.migrate', 'vms.template',
     'snapshots.create', 'snapshots.delete', 'snapshots.rollback', 'backups.create', 'backups.restore',
 })

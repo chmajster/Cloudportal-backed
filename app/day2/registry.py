@@ -200,6 +200,18 @@ ACTIONS = (
     ActionDefinition('update_metadata', 'Zmień metadata', 'metadata', 'Aktualizuje metadata utrzymywane przez Cloudportal.', 'day2.metadata.manage',
                      object_schema({'metadata': {'type': 'object'}}, ('metadata',))),
     ActionDefinition(
+        'apply_availability', 'Zastosuj Availability Plan', 'availability',
+        'Przypisuje VM do konfiguracji Proxmox HA z wybranego Availability Planu.',
+        'availability.assign',
+        object_schema({
+            'plan_id': {'type': 'string', 'minLength': 36, 'maxLength': 36},
+            'state': {'type': 'string', 'enum': ['started', 'stopped', 'ignored', 'disabled']},
+            'group': {'type': ['string', 'null'], 'maxLength': 63},
+            'max_restart': {'type': 'integer', 'minimum': 0, 'maximum': 100},
+            'max_relocate': {'type': 'integer', 'minimum': 0, 'maximum': 100},
+        }, ('plan_id', 'state', 'max_restart', 'max_relocate')),
+    ),
+    ActionDefinition(
         'migrate_vm', 'Migruj VM', 'lifecycle', 'Migruje VM do wybranego węzła.', 'day2.migrate',
         object_schema({'target_node': SLUG, 'online': {'type': 'boolean'}, 'with_local_disks': {'type': 'boolean'}}, ('target_node',)),
         destructive=True, mutates_configuration=True, supports_cancel=True,

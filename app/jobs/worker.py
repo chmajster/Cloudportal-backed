@@ -290,6 +290,12 @@ def validate_authorization(db, job):
         needed = {'jobs.execute', 'ansible.execute' if job.operation == 'ansible.execute' else 'terraform.execute'}
     if job.operation in {'terraform.apply', 'proxmox.provision'}:
         needed.add('deployments.create')
+        if job.deployment_id:
+            from app.availability.models import AvailabilityAssignment
+            if db.scalar(select(AvailabilityAssignment.id).where(
+                AvailabilityAssignment.deployment_id == job.deployment_id
+            ).limit(1)):
+                needed.add('availability.assign')
         blueprint = job.payload.get('blueprint') or {}
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
             needed.add('deployments.destroy')
@@ -1857,6 +1863,8 @@ def run_blueprint_workflow(context, executor):
                 commit_job_reservation(quota_db, quota_job)
                 quota_db.commit()
         runtime['inventory_synced'] = True
+        from app.availability.service import apply_pending_for_deployment
+        apply_pending_for_deployment(context)
         if inventory['vm_id'] is not None:
             context.log(f"inventory.vm.registered: {inventory['node']} / VMID {inventory['vm_id']}")
         else:
@@ -2022,6 +2030,8 @@ def run_blueprint_workflow(context, executor):
                             f'workflow.step.resumed: {step_id}:terraform_apply: '
                             'provider apply checkpoint already completed'
                         )
+                        from app.availability.service import apply_pending_for_deployment
+                        apply_pending_for_deployment(context)
                     else:
                         apply_and_sync()
                 elif step_type == 'terraform_destroy':
@@ -2410,6 +2420,11 @@ def run_proxmox_blueprint_workflow(context):
     if not runtime['applied']:
         raise ExecutionFailed('Direct Proxmox workflow did not create a VM')
     sync_direct_inventory()
+    # HA is intentionally enabled only after configuration/cloud-init/start and
+    # all explicit post-provisioning steps have completed. Registering vm:<VMID>
+    # immediately after clone could let HA start an incompletely configured VM.
+    from app.availability.service import apply_pending_for_deployment
+    apply_pending_for_deployment(context)
 
     context.blueprint_workflow_completed = True
     persist_workflow_runtime(context, runtime)
