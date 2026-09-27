@@ -222,6 +222,44 @@ def load_update_service_module(tmp_path, monkeypatch):
     return module
 
 
+def test_updater_installer_args_leave_native_worker_reconciliation_to_installer(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    (updater.CONFIG_DIR / 'public.conf').write_text(
+        'host=cloudportal.example.test\nport=8443\n',
+        encoding='utf-8',
+    )
+    (updater.CONFIG_DIR / 'backend.env').write_text(
+        'CP_WORKER_COUNT=1\n'
+        'CP_BACKUP_RETENTION_DAYS=14\n'
+        'CP_BACKUP_SCHEDULE_ENABLED=false\n',
+        encoding='utf-8',
+    )
+
+    args = updater.installer_args('main')
+
+    assert '--workers' not in args
+    assert args[args.index('--host') + 1] == 'cloudportal.example.test'
+    assert args[args.index('--port') + 1] == '8443'
+
+
+def test_updater_installer_args_leave_docker_worker_reconciliation_to_installer(tmp_path, monkeypatch):
+    monkeypatch.setenv('CP_UPDATER_INSTALL_MODE', 'docker')
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    (updater.CONFIG_DIR / 'docker.env').write_text(
+        'CP_PUBLIC_HOST=cloudportal.example.test\n'
+        'CP_HTTPS_PORT=9443\n'
+        'CP_WORKER_COUNT=1\n',
+        encoding='utf-8',
+    )
+
+    args = updater.installer_args('main')
+
+    assert '--docker' in args
+    assert '--workers' not in args
+    assert args[args.index('--host') + 1] == 'cloudportal.example.test'
+    assert args[args.index('--port') + 1] == '9443'
+
+
 def test_runtime_state_unlocks_orphaned_running_state(tmp_path, monkeypatch):
     updater = load_update_service_module(tmp_path, monkeypatch)
     updater.STATE_DIR.mkdir(parents=True, exist_ok=True)
