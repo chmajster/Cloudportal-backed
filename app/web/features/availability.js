@@ -129,9 +129,11 @@ async function availabilityPlansView() {
   const scope = await currentScope();
   const result = await api('/availability-plans?limit=200', { headers: scope.headers });
   const plans = result.items || [];
+  const scopedPermissions = result.permissions || [];
+  const scopeAllows = permission => allowed(permission) || scopedPermissions.includes(permission);
   const actions = [];
 
-  if (allowed('availability.create')) {
+  if (scopeAllows('availability.create')) {
     actions.push(button('Nowy plan', () => planForm(null, scope.headers, availabilityPlansView), 'primary'));
   }
 
@@ -156,10 +158,10 @@ async function availabilityPlansView() {
       { label: 'Status', value: plan => plan.is_active ? badge('Aktywny', 'ok') : badge('Wyłączony', 'warning') },
     ], plans, plan => {
       const rowActions = [];
-      if (allowed('availability.update')) {
+      if (scopeAllows('availability.update')) {
         rowActions.push(button('Edytuj', () => planForm(plan, scope.headers, availabilityPlansView)));
       }
-      if (allowed('availability.delete')) {
+      if (scopeAllows('availability.delete')) {
         rowActions.push(button('Usuń', () => confirmAction(
           'Usuń Availability Plan',
           `Plan „${plan.name}” zostanie usunięty. Przypisanego planu nie można usunąć — najpierw należy zmienić przypisania.`,
@@ -192,7 +194,8 @@ async function availabilityPlansView() {
 async function card() {
   try {
     const scope = await currentScope();
-    const plans = (await api('/availability-plans?active_only=true&limit=200', { headers: scope.headers })).items || [];
+    const result = await api('/availability-plans?active_only=true&limit=200', { headers: scope.headers });
+    const plans = result.items || [];
     return node('article', { class: 'panel tool-card tool-card-featured' },
       node('div', { class: 'tool-card-head' },
         node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('shield')),
@@ -207,6 +210,7 @@ async function card() {
           `${scope.tenant_name} / ${scope.project_name}`),
         button(plans.length ? 'Otwórz plany' : 'Skonfiguruj', () => navigate('availability-plans'), 'primary')));
   } catch (error) {
+    if (error?.status === 403 || error?.status === 404) return null;
     return node('article', { class: 'panel tool-card' },
       node('div', { class: 'tool-card-head' },
         node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('shield')),
@@ -230,6 +234,8 @@ async function vmContent(item) {
   ]);
   const assignment = assignmentResult.assignment || null;
   const plans = plansResult.items || [];
+  const scopedPermissions = plansResult.permissions || [];
+  const scopeAllows = permission => allowed(permission) || scopedPermissions.includes(permission);
   const status = assignmentStatus(assignment?.status);
 
   const current = node('section', { class: 'panel' },
@@ -265,7 +271,7 @@ async function vmContent(item) {
     plans.length
       ? node('div', { class: 'form-grid' }, selector)
       : node('div', { class: 'empty', text: 'Brak aktywnych Availability Planów w tym projekcie.' }),
-    plans.length && allowed('availability.assign')
+    plans.length && scopeAllows('availability.assign')
       ? node('div', { class: 'form-actions' },
         button('Zastosuj plan', async () => {
           try {
@@ -291,9 +297,22 @@ async function vmContent(item) {
   return node('div', { class: 'vm-detail-stack' }, current, form);
 }
 
+async function canReadResource(item) {
+  try {
+    await api('/availability-plans/resources/' + encodeURIComponent(item.id), {
+      headers: resourceHeaders(item),
+    });
+    return true;
+  } catch (error) {
+    if (error?.status === 403 || error?.status === 404) return false;
+    throw error;
+  }
+}
+
 window.AvailabilityPlans = Object.freeze({
   card,
   vmContent,
+  canReadResource,
   scopeHeaders,
 });
 
@@ -303,7 +322,7 @@ registerView({
   iconName: 'shield',
   navigation: false,
   navigationParent: 'tools',
-  permission: 'availability.read',
+  permission: null,
   order: 159,
 }, availabilityPlansView);
 })();
