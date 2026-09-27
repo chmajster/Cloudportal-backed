@@ -60,6 +60,7 @@ from app.proxmox_admin.service import (
     node_syslog,
     proxmox_admin_settings,
     queue_operation,
+    reconcile_required_job,
     save_proxmox_admin_settings,
     search,
     storage_content,
@@ -331,8 +332,8 @@ def vm_history(
             'id': row.id,
             'sequence': row.sequence,
             'type': row.type,
-            'occurred_at': row.occurred_at.isoformat() + 'Z' if row.occurred_at else None,
-            'data': row.data,
+            'created_at': row.created_at.isoformat() + 'Z' if row.created_at else None,
+            'data': row.payload,
         } for row in events],
         'jobs': jobs,
     }
@@ -1118,6 +1119,18 @@ def job_log(
         'timestamp': row.timestamp.isoformat() + 'Z' if row.timestamp else None,
         'message': row.message,
     } for row in rows]}
+
+
+@router.post('/jobs/{job_id}/reconcile')
+def reconcile_job(
+    job_id: str,
+    request: Request,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    job_row = db.get(Job, job_id)
+    return reconcile_required_job(db, request, actor, job_row)
 
 
 @router.post('/jobs/{job_id}/cancel')
