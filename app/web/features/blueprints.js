@@ -227,7 +227,7 @@ async function blueprintsView() {
             toast(result.queued
               ? 'Usunięcie Blueprintu dodane do kolejki. Wykona się po zakończeniu aktywnego provisioning.'
               : 'Blueprint usunięty.');
-            await blueprintsView();
+            navigate('blueprints');
           }
         ), 'danger'));
       }

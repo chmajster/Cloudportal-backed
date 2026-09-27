@@ -734,6 +734,16 @@ def test_blueprint_vm_step_separates_metadata_and_cloud_init_access():
 
 
 
+def test_blueprint_delete_returns_to_blueprint_list_route():
+    source = (ROOT / 'app' / 'web' / 'features' / 'blueprints.js').read_text()
+    start = source.index("result.push(button('Usuń'")
+    end = source.index("return result;", start)
+    delete_block = source[start:end]
+    assert "method: 'DELETE'" in delete_block
+    assert "navigate('blueprints')" in delete_block
+    assert "await blueprintsView()" not in delete_block
+
+
 def test_blueprint_console_uses_project_scope_and_single_wizard_editor():
     source = (ROOT / 'app' / 'web' / 'features' / 'blueprints.js').read_text()
     view_start = source.index('async function blueprintsView()')
