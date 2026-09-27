@@ -1,6 +1,6 @@
 """HTTP API for Availability Plans and VM assignment."""
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.availability.models import AvailabilityAssignment, AvailabilityPlan
 from app.availability.schemas import AvailabilityAssignmentInput, AvailabilityPlanInput
@@ -78,7 +78,7 @@ def create_plan(data: AvailabilityPlanInput, request: Request,
     exists = db.scalar(select(AvailabilityPlan.id).where(
         AvailabilityPlan.tenant_id == scope.tenant_id,
         AvailabilityPlan.project_id == scope.project_id,
-        func.lower(AvailabilityPlan.name) == data.name.strip().lower(),
+        AvailabilityPlan.normalized_name == data.name.strip().casefold(),
     ).limit(1))
     if exists:
         raise HTTPException(409, 'Availability Plan with this name already exists in the selected project')
@@ -86,6 +86,7 @@ def create_plan(data: AvailabilityPlanInput, request: Request,
         tenant_id=scope.tenant_id,
         project_id=scope.project_id,
         created_by=actor.user_id,
+        normalized_name=data.name.strip().casefold(),
         **data.model_dump(),
     )
     row.name = row.name.strip()
@@ -104,13 +105,14 @@ def update_plan(plan_id: str, data: AvailabilityPlanInput, request: Request,
         AvailabilityPlan.tenant_id == scope.tenant_id,
         AvailabilityPlan.project_id == scope.project_id,
         AvailabilityPlan.id != row.id,
-        func.lower(AvailabilityPlan.name) == data.name.strip().lower(),
+AvailabilityPlan.normalized_name == data.name.strip().casefold(),
     ).limit(1))
     if duplicate:
         raise HTTPException(409, 'Availability Plan with this name already exists in the selected project')
     for key, value in data.model_dump().items():
         setattr(row, key, value)
     row.name = row.name.strip()
+    row.normalized_name = row.name.casefold()
     audit(db, request, 'availability_plan.updated', 'availability_plans', row.id)
     db.flush()
     return plan_public(row)
