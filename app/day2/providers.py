@@ -90,7 +90,7 @@ class ProxmoxDay2Adapter:
             'delete_snapshot', 'restore_snapshot',
             'resize_compute', 'add_disk', 'resize_disk', 'detach_disk', 'delete_disk',
             'add_nic', 'edit_nic', 'detach_nic', 'update_cloud_init',
-            'update_tags', 'add_tag', 'remove_tag', 'migrate_vm', 'move_storage',
+            'update_tags', 'add_tag', 'remove_tag', 'apply_availability', 'migrate_vm', 'move_storage',
             'clone_vm', 'delete_vm', 'refresh_state',
         ]
         if snapshot_supported:
