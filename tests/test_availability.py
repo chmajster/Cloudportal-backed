@@ -174,5 +174,7 @@ def test_availability_ui_contract_is_wired():
     assert "navigationParent: 'tools'" in source
     assert "'/availability-plans/resources/'" in source
     assert "availability_plan_id" in blueprints
-    assert "['availability', 'Dostępność', 'availability.read']" in inventory
+    assert "availabilityVisible ? ['availability', 'Dostępność'] : null" in inventory
+    assert "canReadResource" in source
+    assert "permission: null" in source[source.rfind("registerView({"):]
     assert "window.AvailabilityPlans.card()" in tools
