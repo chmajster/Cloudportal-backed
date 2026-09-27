@@ -29,3 +29,22 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync('app/web/features/proj
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
     subprocess.run(['node', '-e', script], check=True, timeout=15)
+
+def test_global_context_switcher_drives_default_http_scope_and_blueprints():
+    context_source = Path('app/web/features/project-context.js').read_text()
+    http_source = Path('app/web/shared/http.js').read_text()
+    blueprint_source = Path('app/web/features/blueprints.js').read_text()
+
+    assert "global-context-trigger" in context_source
+    assert "'Organizacja / Tenant'" in context_source
+    assert "'Projekt'" in context_source
+    assert "document.addEventListener('cloudportal:app-shown'" in context_source
+    assert "'X-Tenant-ID': String(currentScope.tenant_id)" in context_source
+    assert "'X-Project-ID': String(currentScope.id)" in context_source
+    assert "globalThis.CPProjectContext.headers()" in http_source
+    assert "...inheritedScope" in http_source
+    assert "options.scope === false" in http_source
+    assert "scopes.find(scope => String(scope.project_id) === contextProjectId)" in blueprint_source
+    assert "globalThis.CPProjectContext.choose({" in blueprint_source
+    assert "Zmiana tego pola aktualizuje również globalny kontekst pracy" in blueprint_source
+
