@@ -25,12 +25,12 @@ class SelectionOutput(BaseModel):
 router = APIRouter(tags=['projects'])
 
 
-@router.get('/project-context', response_model=SelectionOutput, response_model_exclude_none=True)
+@router.get('/project-context', response_model=SelectionOutput, response_model_exclude_unset=True)
 def current_selection(actor=Depends(authenticate), db=Depends(get_db, scope='function')):
     return context.context_get(db, Principal.from_token(actor))
 
 
-@router.put('/project-context', response_model=SelectionOutput, response_model_exclude_none=True)
+@router.put('/project-context', response_model=SelectionOutput, response_model_exclude_unset=True)
 def select_context(data: SelectionInput, request: Request, actor=Depends(authenticate),
                    db=Depends(get_db, scope='function')):
     result = context.context_set(db, Principal.from_token(actor), data)
@@ -38,7 +38,7 @@ def select_context(data: SelectionInput, request: Request, actor=Depends(authent
     return result
 
 
-@router.delete('/project-context', response_model=SelectionOutput, response_model_exclude_none=True)
+@router.delete('/project-context', response_model=SelectionOutput, response_model_exclude_unset=True)
 def clear_context(request: Request, expected_version: int | None = Query(default=None, ge=0),
                   actor=Depends(authenticate), db=Depends(get_db, scope='function')):
     result = context.context_clear(db, Principal.from_token(actor), expected_version)
