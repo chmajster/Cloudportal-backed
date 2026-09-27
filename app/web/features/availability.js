@@ -66,7 +66,7 @@ function planForm(item, headers, onSaved) {
     field('Nazwa', 'name', {
       value: item?.name || '',
       required: true,
-      maxLength: 100,
+      maxlength: 100,
       help: 'Nazwa musi być unikalna tylko w bieżącej Organizacji i Projekcie.',
     }),
     selectField('Stan HA', 'state', [
@@ -78,7 +78,7 @@ function planForm(item, headers, onSaved) {
     field('Grupa HA', 'group', {
       value: item?.group || '',
       placeholder: 'opcjonalnie, np. production',
-      help: 'Opcjonalna istniejąca grupa HA w klastrze Proxmox.',
+      help: 'Opcjonalna grupa HA. W Proxmox VE 9 po migracji grup do HA rules pozostaw to pole puste.',
     }),
     field('Max restart', 'max_restart', {
       type: 'number', min: 0, max: 100, value: item?.max_restart ?? 1, required: true,
@@ -92,7 +92,7 @@ function planForm(item, headers, onSaved) {
       tag: 'textarea',
       wide: true,
       value: item?.description || '',
-      maxLength: 2000,
+      maxlength: 2000,
       placeholder: 'Przeznaczenie planu, wymagania SLA, uwagi administracyjne…',
     }),
     checkboxField('Plan aktywny i dostępny do przypisywania', 'is_active', item ? item.is_active !== false : true),
@@ -280,8 +280,7 @@ async function vmContent(item) {
             toast(queued === 'waiting_approval'
               ? 'Zmiana AV oczekuje na akceptację.'
               : 'Zmiana Availability Planu została dodana do kolejki.');
-            const refreshed = await vmContent(item);
-            form.parentNode?.replaceChildren(...refreshed.childNodes);
+            navigate('/resources/vm/' + encodeURIComponent(item.id) + '/availability');
           } catch (error) {
             toast(error.message, 'error');
           }
