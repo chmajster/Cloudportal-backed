@@ -14,7 +14,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert page.headers['content-type'].startswith('text/html')
     assert 'id="login-form"' in page.text
     assert 'data-theme="light"' in page.text
-    assert page.text.count('data-theme-toggle') == 2
+    assert page.text.count('data-theme-toggle') == 1
     assert 'id="sidebar-backdrop"' in page.text
     assert 'id="modal-close"' in page.text
     assert 'id="refresh-view"' in page.text
@@ -25,6 +25,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-title"' in page.text
     assert 'id="sidebar-profile"' in page.text
     assert 'class="page-context"' in page.text
+    assert 'id="user-menu-toggle"' in page.text
+    assert 'id="user-menu-dropdown"' in page.text
+    assert 'id="current-user-avatar"' in page.text
+    assert 'id="current-context-organization"' in page.text
+    assert 'id="current-context-project"' in page.text
+    assert 'id="current-context-environment"' in page.text
+    assert 'id="user-menu-theme"' in page.text
     assert 'href="./favicon.ico"' in page.text
     assert 'type="image/x-icon"' in page.text
     assert 'src="./theme-init.js"' in page.text
@@ -87,6 +94,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/projects.js',
         'features/tools.js',
         'features/updates.js',
+        'features/user-menu.js',
     } <= set(manifest['scripts'])
     # Automatic discovery must serve every domain file, including future additions.
     from pathlib import Path
@@ -105,6 +113,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/projects.css',
         'styles/features/page-surfaces.css',
         'styles/features/updates.css',
+        'styles/features/user-menu.css',
     } <= set(manifest['styles'])
 
     script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
@@ -190,6 +199,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
+    assert "registerExtension('user-menu'" in script
+    assert 'function setOpen(' in script
+    assert 'avatar.textContent = identityInitials(state.identity.user)' in script
+    assert "document.querySelector('#user-menu-account')" in script
+    assert "document.querySelector('#user-menu-theme')" in script
     assert "registerCommand('users.create'" in script
     assert "registerCommand('tokens.create'" in script
     assert "button('Dokumentacja OpenAPI'" in script
@@ -1140,6 +1154,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.global-search-close' in stylesheet
     assert '.sr-only' in stylesheet
     assert '.sidebar-profile-card' in stylesheet
+    assert '.user-menu-toggle' in stylesheet
+    assert '.user-menu-dropdown' in stylesheet
+    assert '.user-menu-context' in stylesheet
+    assert '.user-menu-action' in stylesheet
     assert '.nav-link.active::before' in stylesheet
     assert '.dashboard-metrics' in stylesheet
     assert '.observability-hero' in stylesheet

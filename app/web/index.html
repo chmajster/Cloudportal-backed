@@ -73,11 +73,33 @@
           <span class="global-search-label">Szukaj w Cloudportal...</span>
           <kbd>Ctrl K</kbd>
         </button>
-        <div class="user-menu">
+        <div class="user-menu" id="user-menu">
           <button id="refresh-view" class="icon-button" type="button" aria-label="Odśwież widok" title="Odśwież widok"></button>
-          <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Włącz ciemny motyw" title="Włącz ciemny motyw"></button>
-          <div><strong id="current-user"></strong><small id="current-roles"></small></div>
-          <button id="logout" class="button ghost" type="button">Wyloguj</button>
+          <div class="user-account">
+            <button id="user-menu-toggle" class="user-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu-dropdown">
+              <span id="current-user-avatar" class="user-menu-avatar" aria-hidden="true"></span>
+              <span class="user-menu-copy"><strong id="current-user"></strong><small id="current-roles"></small></span>
+              <span class="user-menu-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div id="user-menu-dropdown" class="user-menu-dropdown" role="menu" aria-label="Menu użytkownika" hidden>
+              <div class="user-menu-context" aria-label="Bieżący kontekst pracy">
+                <div class="user-menu-context-head">
+                  <span>Kontekst pracy</span>
+                  <span class="status-dot ok" aria-hidden="true"></span>
+                </div>
+                <dl>
+                  <div><dt>Organizacja</dt><dd id="current-context-organization">—</dd></div>
+                  <div><dt>Projekt / LEO</dt><dd id="current-context-project">—</dd></div>
+                  <div><dt>ENV</dt><dd id="current-context-environment">—</dd></div>
+                </dl>
+              </div>
+              <div class="user-menu-actions">
+                <button id="user-menu-account" class="user-menu-action" type="button" role="menuitem">Moje konto</button>
+                <button id="user-menu-theme" class="user-menu-action" type="button" role="menuitem">Zmień motyw</button>
+                <button id="logout" class="user-menu-action danger" type="button" role="menuitem">Wyloguj</button>
+              </div>
+            </div>
+          </div>
         </div>
       </header>
       <main id="content" class="content" tabindex="-1"></main>
