@@ -1417,6 +1417,8 @@ def test_blueprint_delete_is_queued_until_active_provisioning_finishes(client, h
     assert deletion_body['job_id']
     assert provisioning_job_id in deletion_body['blocking_job_ids']
 
+    from app.automation.deletion import blueprint_delete_ready
+
     with session() as db:
         assert db.get(Blueprint, blueprint_id) is not None
         delete_job = db.get(Job, deletion_body['job_id'])
@@ -1424,6 +1426,7 @@ def test_blueprint_delete_is_queued_until_active_provisioning_finishes(client, h
         assert delete_job.operation == 'blueprint.delete'
         assert delete_job.status == 'queued'
         assert delete_job.payload['_current_stage'] == 'blueprint.delete.waiting_for_provisioning'
+        assert blueprint_delete_ready(db, delete_job) is False
 
     blocked_execution = client.post(
         f'/api/v1/blueprints/{blueprint_id}/execute',
@@ -1444,6 +1447,9 @@ def test_blueprint_delete_is_queued_until_active_provisioning_finishes(client, h
         deployment.active_job_id = None
         deployment.status = 'successful'
         db.commit()
+
+    with session() as db:
+        assert blueprint_delete_ready(db, db.get(Job, deletion_body['job_id'])) is True
 
     worker._execute_unfenced(deletion_body['job_id'])
 
