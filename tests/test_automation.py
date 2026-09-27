@@ -1490,3 +1490,35 @@ def test_blueprint_delete_remains_immediate_without_active_provisioning(client, 
         'blocking_job_ids': [],
     }
 
+def test_dispatch_candidates_do_not_starve_regular_jobs_behind_deferred_blueprint_deletes(client):
+    from app.database import session
+    from app.jobs.queue import queued_dispatch_candidates
+    from app.models import Job
+
+    with session() as db:
+        for index in range(100):
+            db.add(Job(
+                operation='blueprint.delete',
+                payload={'blueprint_id': 10000 + index},
+                created_by=1,
+                token_id=None,
+                request_id=str(uuid.uuid4()),
+                source='API',
+            ))
+        db.flush()
+        runnable = Job(
+            operation='ansible.execute',
+            payload={},
+            created_by=1,
+            token_id=None,
+            request_id=str(uuid.uuid4()),
+            source='API',
+        )
+        db.add(runnable)
+        db.commit()
+        runnable_id = runnable.id
+
+    with session() as db:
+        candidates = queued_dispatch_candidates(db, batch_size=100)
+        assert any(job.id == runnable_id for job in candidates)
+
