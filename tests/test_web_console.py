@@ -94,6 +94,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/projects.js',
         'features/tools.js',
         'features/updates.js',
+        'features/user-menu.js',
     } <= set(manifest['scripts'])
     # Automatic discovery must serve every domain file, including future additions.
     from pathlib import Path
@@ -112,6 +113,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'styles/features/projects.css',
         'styles/features/page-surfaces.css',
         'styles/features/updates.css',
+        'styles/features/user-menu.css',
     } <= set(manifest['styles'])
 
     script_paths = ['core.js', 'loader.js', *manifest['shared'], *manifest['scripts'], 'app.js']
@@ -197,10 +199,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
-    assert 'function setUserMenuOpen(' in bootstrap
-    assert 'currentUserAvatar.textContent = source.slice(0, 2)' in bootstrap
-    assert "document.querySelector('#user-menu-account')" in bootstrap
-    assert "document.querySelector('#user-menu-theme')" in bootstrap
+    assert "registerExtension('user-menu'" in script
+    assert 'function setOpen(' in script
+    assert 'avatar.textContent = identityInitials(state.identity.user)' in script
+    assert "document.querySelector('#user-menu-account')" in script
+    assert "document.querySelector('#user-menu-theme')" in script
     assert "registerCommand('users.create'" in script
     assert "registerCommand('tokens.create'" in script
     assert "button('Dokumentacja OpenAPI'" in script
