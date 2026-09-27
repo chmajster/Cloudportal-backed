@@ -1609,6 +1609,7 @@ def ensure_worker_capacity(minimum: int) -> dict:
                 )
             elif INSTALL_MODE == "systemd":
                 systemctl = shutil.which("systemctl") or "systemctl"
+                units_to_ensure = []
                 for index in range(1, target + 1):
                     unit = f"cloudportal-worker@{index}.service"
                     active_before = _service_active(unit)
@@ -1619,12 +1620,13 @@ def ensure_worker_capacity(minimum: int) -> dict:
                         check=False,
                     ).returncode == 0
                     systemd_state[unit] = (active_before, enabled_before)
-                    if active_before and enabled_before:
-                        continue
+                    if not (active_before and enabled_before):
+                        units_to_ensure.append(unit)
+                if units_to_ensure:
                     _run_worker_command(
-                        [systemctl, "enable", "--now", unit],
-                        f"uruchomienie {unit}",
-                        timeout=120,
+                        [systemctl, "enable", "--now", *units_to_ensure],
+                        "rekonsyliacja workerów systemd",
+                        timeout=300,
                     )
             else:
                 raise RuntimeError(
