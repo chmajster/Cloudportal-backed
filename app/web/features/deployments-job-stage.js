@@ -53,6 +53,7 @@ function jobStageInfo(item) {
     'terraform.plan': 'Terraform plan',
     'terraform.plan.reuse': 'Użycie zapisanego planu Terraform',
     'terraform.apply': 'Terraform apply',
+    'terraform.proxmox.clone': 'Klonowanie VM w Proxmox',
     'terraform.destroy.force_stop': 'Twarde zatrzymywanie VM',
     'terraform.destroy': 'Terraform destroy',
     'proxmox.clone_template.validating': 'Walidacja VM i docelowego VMID',
