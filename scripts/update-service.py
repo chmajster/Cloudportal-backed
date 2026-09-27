@@ -60,6 +60,9 @@ MAX_CANDIDATE_ARCHIVE = 128 * 1024 * 1024
 MAX_CANDIDATE_FILES = 20_000
 MAX_CANDIDATE_EXTRACTED = 768 * 1024 * 1024
 CI_POLL_SECONDS = 15
+HTTP_RETRY_ATTEMPTS = 3
+HTTP_RETRY_BASE_SECONDS = 1.0
+HTTP_RETRY_STATUS = {429, 500, 502, 503, 504}
 
 lock = threading.RLock()
 update_thread: threading.Thread | None = None
@@ -237,15 +240,43 @@ def _read_url(url: str, settings: dict, accept: str) -> bytes:
         command = [
             "curl", "-fsSL", "--proto", "=https", "--tlsv1.2",
             "--connect-timeout", "15", "--max-time", "180", "--retry", "3",
+            "--retry-all-errors",
             "--config", github_config, "-H", "Accept: " + accept, url,
         ]
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.decode("utf-8", "replace").strip() or "GitHub download failed")
         return result.stdout
+
     request = Request(url, headers={**_github_headers(settings), "Accept": accept})
-    with urlopen(request, timeout=60) as response:
-        return response.read()
+    for attempt in range(1, HTTP_RETRY_ATTEMPTS + 1):
+        try:
+            with urlopen(request, timeout=60) as response:
+                return response.read()
+        except HTTPError as exc:
+            if exc.code not in HTTP_RETRY_STATUS or attempt >= HTTP_RETRY_ATTEMPTS:
+                raise
+            retry_after = 0.0
+            try:
+                retry_after = float(exc.headers.get("Retry-After", "0") or 0)
+            except (TypeError, ValueError, AttributeError):
+                retry_after = 0.0
+            delay = max(retry_after, HTTP_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
+            append_output(
+                f"GitHub API HTTP {exc.code}; ponawiam próbę "
+                f"{attempt + 1}/{HTTP_RETRY_ATTEMPTS} za {delay:g}s."
+            )
+            time.sleep(delay)
+        except (URLError, TimeoutError, OSError):
+            if attempt >= HTTP_RETRY_ATTEMPTS:
+                raise
+            delay = HTTP_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            append_output(
+                f"Połączenie z GitHub nie powiodło się; ponawiam próbę "
+                f"{attempt + 1}/{HTTP_RETRY_ATTEMPTS} za {delay:g}s."
+            )
+            time.sleep(delay)
+    raise RuntimeError("GitHub request retry loop exhausted")
 
 
 def _http_json(url: str, settings: dict) -> dict:
@@ -1195,16 +1226,25 @@ def remote_commit(ref: str, settings: dict) -> dict:
     }
 
 
+def _unknown_current_order() -> dict:
+    return {
+        "relation": "unknown_current",
+        "update_available": True,
+        "ahead_by": 0,
+        "behind_by": 0,
+        "current_commit_at": None,
+    }
+
+
 def commit_order(current_sha: str, target: dict, settings: dict) -> dict:
     target_sha = target["sha"]
-    if not current_sha:
-        return {
-            "relation": "unknown_current",
-            "update_available": True,
-            "ahead_by": 0,
-            "behind_by": 0,
-            "current_commit_at": None,
-        }
+    if not re.fullmatch(r"[0-9a-f]{40}", current_sha or ""):
+        # Older installers could persist an archive SHA-256 or another
+        # non-Git release marker in commit_sha. Such values cannot be used
+        # with GitHub's compare endpoint, but they must not block a repair
+        # update. Treat the local version as unknown and pin the next
+        # installation to the verified channel HEAD.
+        return _unknown_current_order()
     if current_sha == target_sha:
         return {
             "relation": "identical",
@@ -1218,7 +1258,15 @@ def commit_order(current_sha: str, target: dict, settings: dict) -> dict:
         "https://api.github.com/repos/" + REPOSITORY + "/compare/"
         + quote(current_sha, safe="") + "..." + quote(target_sha, safe="")
     )
-    comparison = _http_json(compare_url, settings)
+    try:
+        comparison = _http_json(compare_url, settings)
+    except HTTPError as exc:
+        if exc.code in {404, 422}:
+            # The marker is syntactically a SHA but is no longer resolvable in
+            # the repository (for example after a legacy archive-based
+            # install). Recover exactly like an unknown local commit.
+            return _unknown_current_order()
+        raise
     status = str(comparison.get("status") or "")
     ahead_by = int(comparison.get("ahead_by") or 0)
     behind_by = int(comparison.get("behind_by") or 0)
