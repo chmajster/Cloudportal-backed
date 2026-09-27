@@ -208,7 +208,7 @@ class AuditOutput(Output):
     resource_id: str | None
     result: str
     request_id: str
-    details: dict[str, Any] = {}
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class TemplateOutput(Output):
