@@ -248,12 +248,12 @@ def terraform_plan_command(binary, operation, recreate_address=None):
 
 
 _TERRAFORM_PROXMOX_VM_CREATE = re.compile(
-    r'(?:^|\\.)proxmox_virtual_environment_vm\\.[^:]+:\\s+'
+    r'(?:^|\.)proxmox_virtual_environment_vm\.[^:]+:\s+'
     r'(Creating|Still creating|Creation complete)',
     re.IGNORECASE,
 )
 _TERRAFORM_PERCENT = re.compile(
-    r'(?<![0-9.])(100(?:\\.0+)?|[0-9]{1,2}(?:\\.[0-9]+)?)\\s*%'
+    r'(?<![0-9.])(100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)\s*%'
 )
 
 
