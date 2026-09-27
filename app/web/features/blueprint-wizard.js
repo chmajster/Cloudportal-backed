@@ -392,14 +392,15 @@
             ], state.executor)));
 
         const scopeFields = blueprintScope.renderFields();
+        const active = checkboxField('Aktywny', 'is_active', state.active);
+        active.classList.add('blueprint-wizard-active-toggle');
 
         const content = node('div', { class: 'form-grid' },
           node('div', { class: 'blueprint-wizard-info wide' },
             node('strong', { text: 'Blueprint definiuje sposób automatycznego tworzenia maszyny wirtualnej i jej konfiguracji.' }),
             node('span', { text: 'Zakres: ' + blueprintScope.tenantLabel(state.tenantId) + ' · ' + blueprintScope.projectLabel(state.projectId) })),
           ...scopeFields,
-          name,
-          checkboxField('Aktywny', 'is_active', state.active),
+          node('div', { class: 'blueprint-wizard-name-active-row wide' }, name, active),
           field('Krótki opis', 'description', {
             tag: 'textarea', value: state.description, wide: true,
             placeholder: 'Do czego służy ten Blueprint i kiedy powinien być używany?',
