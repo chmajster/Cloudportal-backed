@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import os
+import re
+import secrets
 import uuid
+from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy import select
 
 from app.api.common import Limit, idempotent
 from app.api.proxmox_management import issue_console_session
+from app.config import settings
 from app.database import get_db
 from app.day2.models import BulkDay2ActionRequest
 from app.models import Audit, EventRecord, Job, JobLog, now
@@ -26,6 +31,8 @@ from app.proxmox_admin.schemas import (
     FirewallRuleDeleteInput,
     FirewallRuleInput,
     FirewallRuleUpdateInput,
+    ISOAttachInput,
+    ISODeleteInput,
     LXCConfigInput,
     MigrateInput,
     NICInput,
@@ -47,6 +54,7 @@ from app.proxmox_admin.service import (
     get_admin_job,
     get_proxmox_provider,
     list_admin_jobs,
+    list_images,
     list_backups,
     list_containers,
     list_nodes,
@@ -880,6 +888,65 @@ def templates(
     return list_templates(db, provider_id, request)
 
 
+@router.post('/templates/{node}/{vmid}/clone', status_code=202)
+def template_clone(
+    node: str,
+    vmid: int,
+    data: CloneInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.templates.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='template.clone',
+        object_type='template', object_id=vmid, node=node, parameters=_payload(data),
+    )
+
+
+@router.put('/templates/{node}/{vmid}/config', status_code=202)
+def template_config(
+    node: str,
+    vmid: int,
+    data: VMConfigInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.templates.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='template.config',
+        object_type='template', object_id=vmid, node=node, parameters=_payload(data),
+    )
+
+
+@router.delete('/templates/{node}/{vmid}', status_code=202)
+def template_delete(
+    node: str,
+    vmid: int,
+    data: DeleteResourceInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.templates.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    template = next(
+        (item for item in list_templates(db, provider_id, request)['items']
+         if int(item.get('vmid', -1)) == int(vmid) and str(item.get('node') or '') == str(node)),
+        None,
+    )
+    if template is None:
+        raise HTTPException(404, {'code': 'RESOURCE_NOT_FOUND', 'message': 'Proxmox template not found'})
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='template.delete',
+        object_type='template', object_id=vmid, node=node, parameters=_payload(data),
+        confirmation_expected=str(template.get('name') or vmid), resource=template,
+    )
+
+
 @router.get('/snapshots')
 def snapshots(
     provider_id: ProviderID,
@@ -889,6 +956,800 @@ def snapshots(
 ):
     _ready(db)
     return list_snapshots(db, provider_id, request)
+
+
+@router.get('/iso-images')
+def iso_images(
+    provider_id: ProviderID,
+    actor=Depends(require('proxmox_admin.images.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return list_images(db, provider_id)
+
+
+@router.post('/iso-images/upload', status_code=202)
+def iso_upload(
+    request: Request,
+    provider_id: Annotated[int, Form(ge=1)],
+    node: Annotated[str, Form(pattern=r'^[A-Za-z0-9_.-]{1,63}    provider_id: ProviderID,
+    actor=Depends(require('proxmox_admin.backups.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return list_backups(db, provider_id)
+
+
+@router.post('/vms/{node}/{vmid}/backup', status_code=202)
+def backup_run(
+    node: str,
+    vmid: int,
+    data: BackupRunInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.backups.run')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    target = _target(db, provider_id, request, node, vmid, 'vm')
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='backup.run',
+        object_type='vm', object_id=vmid, node=node, parameters=_payload(data), resource=target,
+    )
+
+
+@router.post('/backups/restore', status_code=202)
+def backup_restore(
+    data: BackupRestoreInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.backups.restore')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='backup.restore',
+        object_type='backup', object_id=data.archive, node=data.node, parameters=_payload(data),
+        confirmation_expected=f'RESTORE {data.vmid}',
+        resource={'name': data.archive, 'target_vmid': data.vmid},
+    )
+
+
+@router.delete('/backups', status_code=202)
+def backup_delete(
+    data: BackupDeleteInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.backups.delete')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='backup.delete',
+        object_type='backup', object_id=data.volume, node=data.node, parameters=_payload(data),
+        confirmation_expected=data.volume,
+        resource={'name': data.volume, 'storage': data.storage},
+    )
+
+
+@router.get('/cluster')
+def cluster(
+    provider_id: ProviderID,
+    actor=Depends(require('proxmox_admin.cluster.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return cluster_detail(db, provider_id)
+
+
+@router.get('/tasks')
+def tasks(
+    provider_id: ProviderID,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    errors: bool = False,
+    actor=Depends(require('proxmox_admin.tasks.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return list_tasks(db, provider_id, limit=limit, errors=errors)
+
+
+@router.get('/tasks/{node}/{upid}')
+def task(
+    node: str,
+    upid: str,
+    provider_id: ProviderID,
+    actor=Depends(require('proxmox_admin.tasks.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return task_detail(db, provider_id, node, upid)
+
+
+@router.get('/firewall/{level}')
+def firewall(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    provider_id: ProviderID,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return firewall_snapshot(db, provider_id, level, node=node, object_id=object_id)
+
+
+def _firewall_params(level, node, object_id, values):
+    return {
+        **values,
+        '_level': level,
+        '_node': node,
+        '_object_id': object_id,
+    }
+
+
+@router.post('/firewall/{level}/rules', status_code=202)
+def firewall_rule_create(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    data: FirewallRuleInput,
+    provider_id: ProviderID,
+    request: Request,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='firewall.rule.create',
+        object_type='firewall', object_id=f'{level}:{node or ""}:{object_id or ""}',
+        node=node, parameters=_firewall_params(level, node, object_id, _payload(data)),
+        confirmation_expected='FIREWALL',
+        resource={'name': 'Proxmox Firewall', 'level': level},
+    )
+
+
+@router.put('/firewall/{level}/rules', status_code=202)
+def firewall_rule_update(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    data: FirewallRuleUpdateInput,
+    provider_id: ProviderID,
+    request: Request,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='firewall.rule.update',
+        object_type='firewall', object_id=f'{level}:{node or ""}:{object_id or ""}',
+        node=node, parameters=_firewall_params(level, node, object_id, _payload(data)),
+        confirmation_expected='FIREWALL',
+        resource={'name': 'Proxmox Firewall', 'level': level},
+    )
+
+
+@router.delete('/firewall/{level}/rules', status_code=202)
+def firewall_rule_delete(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    data: FirewallRuleDeleteInput,
+    provider_id: ProviderID,
+    request: Request,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='firewall.rule.delete',
+        object_type='firewall', object_id=f'{level}:{node or ""}:{object_id or ""}',
+        node=node, parameters=_firewall_params(level, node, object_id, _payload(data)),
+        confirmation_expected='FIREWALL',
+        resource={'name': 'Proxmox Firewall', 'level': level},
+    )
+
+
+@router.get('/search')
+def global_search(
+    provider_id: ProviderID,
+    query: Annotated[str, Query(min_length=1, max_length=200)],
+    request: Request,
+    actor=Depends(require('proxmox_admin.search')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return search(db, provider_id, request, query)
+
+
+@router.get('/jobs')
+def jobs(
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return {'items': list_admin_jobs(db, limit=limit)}
+
+
+@router.get('/jobs/{job_id}')
+def job(
+    job_id: str,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return get_admin_job(db, job_id)
+
+
+@router.get('/jobs/{job_id}/log')
+def job_log(
+    job_id: str,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    get_admin_job(db, job_id)
+    rows = db.scalars(
+        select(JobLog).where(JobLog.job_id == job_id).order_by(JobLog.id.asc()).limit(5000)
+    ).all()
+    return {'items': [{
+        'timestamp': row.timestamp.isoformat() + 'Z' if row.timestamp else None,
+        'message': row.message,
+    } for row in rows]}
+
+
+@router.post('/jobs/{job_id}/reconcile')
+def reconcile_job(
+    job_id: str,
+    request: Request,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    job_row = db.get(Job, job_id)
+    return reconcile_required_job(db, request, actor, job_row)
+
+
+@router.post('/jobs/{job_id}/cancel')
+def cancel_job(
+    job_id: str,
+    request: Request,
+    actor=Depends(require('jobs.cancel')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    job_row = db.get(Job, job_id)
+    if job_row is None or not job_row.operation.startswith('pxadmin.'):
+        raise HTTPException(404, {'code': 'JOB_NOT_FOUND', 'message': 'Proxmox Admin job not found'})
+    return cancel_admin_job(db, request, job_row)
+
+
+@router.post('/bulk', status_code=202)
+def bulk(
+    data: BulkInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.bulk')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    request_id = str(getattr(request.state, 'request_id', '') or uuid.uuid4())
+    payload = {'provider_id': provider_id, **data.model_dump(mode='json')}
+
+    def create():
+        bulk_row = BulkDay2ActionRequest(
+            action='pxadmin.' + data.action,
+            resource_ids=[f'{target.node}:{target.vmid}' for target in data.targets],
+            requested_by=actor.user_id,
+            status='QUEUED',
+            request_id=request_id,
+        )
+        db.add(bulk_row)
+        db.flush()
+        children = []
+        errors = []
+        for target_ref in data.targets:
+            try:
+                with db.begin_nested():
+                    target = _target(db, provider_id, request, target_ref.node, target_ref.vmid, 'vm')
+                    if data.action in {'start', 'shutdown', 'reboot', 'stop'}:
+                        values = {'action': data.action}
+                        expected = _target_name(target) if data.action == 'stop' else None
+                        if expected:
+                            values['confirmation'] = expected
+                        result = queue_operation(
+                            db, request, actor, provider_id=provider_id, command='vm.power',
+                            object_type='vm', object_id=target_ref.vmid, node=target_ref.node,
+                            parameters=values, confirmation_expected=expected, resource=target,
+                        )
+                    elif data.action == 'snapshot':
+                        result = queue_operation(
+                            db, request, actor, provider_id=provider_id, command='vm.snapshot.create',
+                            object_type='vm', object_id=target_ref.vmid, node=target_ref.node,
+                            parameters={'name': data.snapshot, 'description': 'Bulk Proxmox Admin snapshot', 'include_ram': False},
+                            resource=target,
+                        )
+                    else:
+                        current_tags = [item for item in str(target.get('tags') or '').replace(',', ';').split(';') if item]
+                        if data.action == 'add_tag' and data.tag not in current_tags:
+                            current_tags.append(data.tag)
+                        if data.action == 'remove_tag':
+                            current_tags = [item for item in current_tags if item != data.tag]
+                        result = queue_operation(
+                            db, request, actor, provider_id=provider_id, command='vm.config',
+                            object_type='vm', object_id=target_ref.vmid, node=target_ref.node,
+                            parameters={'tags': ';'.join(current_tags)}, resource=target,
+                        )
+                    children.append(result)
+            except HTTPException as error:
+                detail = error.detail if isinstance(error.detail, dict) else {'message': str(error.detail)}
+                errors.append({
+                    'node': target_ref.node,
+                    'vmid': target_ref.vmid,
+                    'code': detail.get('code') or f'HTTP_{error.status_code}',
+                    'message': detail.get('message') or 'Bulk child rejected',
+                })
+        bulk_row.status = 'PARTIAL' if errors else 'QUEUED'
+        bulk_row.result = {'children': children, 'errors': errors}
+        audit(
+            db, request, 'proxmox.bulk.requested', 'proxmox_bulk', bulk_row.id,
+            details={'provider_id': provider_id, 'action': data.action, 'children': children, 'errors': errors},
+        )
+        return {'id': bulk_row.id, 'status': bulk_row.status, **bulk_row.result}
+
+    return idempotent(db, request, actor, payload, create, required=True)
+
+
+@router.get('/bulk/{bulk_id}')
+def bulk_status(
+    bulk_id: str,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    row = db.get(BulkDay2ActionRequest, bulk_id)
+    if row is None or not str(row.action or '').startswith('pxadmin.'):
+        raise HTTPException(404, {'code': 'BULK_NOT_FOUND', 'message': 'Proxmox Admin bulk operation not found'})
+    child_ids = [item.get('job_id') for item in (row.result or {}).get('children', []) if item.get('job_id')]
+    summary = bulk_summary(db, child_ids)
+    if summary['completed'] == summary['total'] and summary['total']:
+        row.status = 'PARTIAL' if summary['failed'] else 'SUCCEEDED'
+    elif summary['running']:
+        row.status = 'RUNNING'
+    return {'id': row.id, 'status': row.status, **summary, 'errors': (row.result or {}).get('errors', [])}
+)],
+    storage: Annotated[str, Form(pattern=r'^[A-Za-z0-9_.-]{1,64}    provider_id: ProviderID,
+    actor=Depends(require('proxmox_admin.backups.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return list_backups(db, provider_id)
+
+
+@router.post('/vms/{node}/{vmid}/backup', status_code=202)
+def backup_run(
+    node: str,
+    vmid: int,
+    data: BackupRunInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.backups.run')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    target = _target(db, provider_id, request, node, vmid, 'vm')
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='backup.run',
+        object_type='vm', object_id=vmid, node=node, parameters=_payload(data), resource=target,
+    )
+
+
+@router.post('/backups/restore', status_code=202)
+def backup_restore(
+    data: BackupRestoreInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.backups.restore')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='backup.restore',
+        object_type='backup', object_id=data.archive, node=data.node, parameters=_payload(data),
+        confirmation_expected=f'RESTORE {data.vmid}',
+        resource={'name': data.archive, 'target_vmid': data.vmid},
+    )
+
+
+@router.delete('/backups', status_code=202)
+def backup_delete(
+    data: BackupDeleteInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.backups.delete')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='backup.delete',
+        object_type='backup', object_id=data.volume, node=data.node, parameters=_payload(data),
+        confirmation_expected=data.volume,
+        resource={'name': data.volume, 'storage': data.storage},
+    )
+
+
+@router.get('/cluster')
+def cluster(
+    provider_id: ProviderID,
+    actor=Depends(require('proxmox_admin.cluster.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return cluster_detail(db, provider_id)
+
+
+@router.get('/tasks')
+def tasks(
+    provider_id: ProviderID,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    errors: bool = False,
+    actor=Depends(require('proxmox_admin.tasks.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return list_tasks(db, provider_id, limit=limit, errors=errors)
+
+
+@router.get('/tasks/{node}/{upid}')
+def task(
+    node: str,
+    upid: str,
+    provider_id: ProviderID,
+    actor=Depends(require('proxmox_admin.tasks.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return task_detail(db, provider_id, node, upid)
+
+
+@router.get('/firewall/{level}')
+def firewall(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    provider_id: ProviderID,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return firewall_snapshot(db, provider_id, level, node=node, object_id=object_id)
+
+
+def _firewall_params(level, node, object_id, values):
+    return {
+        **values,
+        '_level': level,
+        '_node': node,
+        '_object_id': object_id,
+    }
+
+
+@router.post('/firewall/{level}/rules', status_code=202)
+def firewall_rule_create(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    data: FirewallRuleInput,
+    provider_id: ProviderID,
+    request: Request,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='firewall.rule.create',
+        object_type='firewall', object_id=f'{level}:{node or ""}:{object_id or ""}',
+        node=node, parameters=_firewall_params(level, node, object_id, _payload(data)),
+        confirmation_expected='FIREWALL',
+        resource={'name': 'Proxmox Firewall', 'level': level},
+    )
+
+
+@router.put('/firewall/{level}/rules', status_code=202)
+def firewall_rule_update(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    data: FirewallRuleUpdateInput,
+    provider_id: ProviderID,
+    request: Request,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='firewall.rule.update',
+        object_type='firewall', object_id=f'{level}:{node or ""}:{object_id or ""}',
+        node=node, parameters=_firewall_params(level, node, object_id, _payload(data)),
+        confirmation_expected='FIREWALL',
+        resource={'name': 'Proxmox Firewall', 'level': level},
+    )
+
+
+@router.delete('/firewall/{level}/rules', status_code=202)
+def firewall_rule_delete(
+    level: Literal['datacenter', 'node', 'vm', 'container'],
+    data: FirewallRuleDeleteInput,
+    provider_id: ProviderID,
+    request: Request,
+    node: str | None = None,
+    object_id: int | None = None,
+    actor=Depends(require('proxmox_admin.firewall.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='firewall.rule.delete',
+        object_type='firewall', object_id=f'{level}:{node or ""}:{object_id or ""}',
+        node=node, parameters=_firewall_params(level, node, object_id, _payload(data)),
+        confirmation_expected='FIREWALL',
+        resource={'name': 'Proxmox Firewall', 'level': level},
+    )
+
+
+@router.get('/search')
+def global_search(
+    provider_id: ProviderID,
+    query: Annotated[str, Query(min_length=1, max_length=200)],
+    request: Request,
+    actor=Depends(require('proxmox_admin.search')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return search(db, provider_id, request, query)
+
+
+@router.get('/jobs')
+def jobs(
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return {'items': list_admin_jobs(db, limit=limit)}
+
+
+@router.get('/jobs/{job_id}')
+def job(
+    job_id: str,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return get_admin_job(db, job_id)
+
+
+@router.get('/jobs/{job_id}/log')
+def job_log(
+    job_id: str,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    get_admin_job(db, job_id)
+    rows = db.scalars(
+        select(JobLog).where(JobLog.job_id == job_id).order_by(JobLog.id.asc()).limit(5000)
+    ).all()
+    return {'items': [{
+        'timestamp': row.timestamp.isoformat() + 'Z' if row.timestamp else None,
+        'message': row.message,
+    } for row in rows]}
+
+
+@router.post('/jobs/{job_id}/reconcile')
+def reconcile_job(
+    job_id: str,
+    request: Request,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    job_row = db.get(Job, job_id)
+    return reconcile_required_job(db, request, actor, job_row)
+
+
+@router.post('/jobs/{job_id}/cancel')
+def cancel_job(
+    job_id: str,
+    request: Request,
+    actor=Depends(require('jobs.cancel')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    job_row = db.get(Job, job_id)
+    if job_row is None or not job_row.operation.startswith('pxadmin.'):
+        raise HTTPException(404, {'code': 'JOB_NOT_FOUND', 'message': 'Proxmox Admin job not found'})
+    return cancel_admin_job(db, request, job_row)
+
+
+@router.post('/bulk', status_code=202)
+def bulk(
+    data: BulkInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.bulk')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    request_id = str(getattr(request.state, 'request_id', '') or uuid.uuid4())
+    payload = {'provider_id': provider_id, **data.model_dump(mode='json')}
+
+    def create():
+        bulk_row = BulkDay2ActionRequest(
+            action='pxadmin.' + data.action,
+            resource_ids=[f'{target.node}:{target.vmid}' for target in data.targets],
+            requested_by=actor.user_id,
+            status='QUEUED',
+            request_id=request_id,
+        )
+        db.add(bulk_row)
+        db.flush()
+        children = []
+        errors = []
+        for target_ref in data.targets:
+            try:
+                with db.begin_nested():
+                    target = _target(db, provider_id, request, target_ref.node, target_ref.vmid, 'vm')
+                    if data.action in {'start', 'shutdown', 'reboot', 'stop'}:
+                        values = {'action': data.action}
+                        expected = _target_name(target) if data.action == 'stop' else None
+                        if expected:
+                            values['confirmation'] = expected
+                        result = queue_operation(
+                            db, request, actor, provider_id=provider_id, command='vm.power',
+                            object_type='vm', object_id=target_ref.vmid, node=target_ref.node,
+                            parameters=values, confirmation_expected=expected, resource=target,
+                        )
+                    elif data.action == 'snapshot':
+                        result = queue_operation(
+                            db, request, actor, provider_id=provider_id, command='vm.snapshot.create',
+                            object_type='vm', object_id=target_ref.vmid, node=target_ref.node,
+                            parameters={'name': data.snapshot, 'description': 'Bulk Proxmox Admin snapshot', 'include_ram': False},
+                            resource=target,
+                        )
+                    else:
+                        current_tags = [item for item in str(target.get('tags') or '').replace(',', ';').split(';') if item]
+                        if data.action == 'add_tag' and data.tag not in current_tags:
+                            current_tags.append(data.tag)
+                        if data.action == 'remove_tag':
+                            current_tags = [item for item in current_tags if item != data.tag]
+                        result = queue_operation(
+                            db, request, actor, provider_id=provider_id, command='vm.config',
+                            object_type='vm', object_id=target_ref.vmid, node=target_ref.node,
+                            parameters={'tags': ';'.join(current_tags)}, resource=target,
+                        )
+                    children.append(result)
+            except HTTPException as error:
+                detail = error.detail if isinstance(error.detail, dict) else {'message': str(error.detail)}
+                errors.append({
+                    'node': target_ref.node,
+                    'vmid': target_ref.vmid,
+                    'code': detail.get('code') or f'HTTP_{error.status_code}',
+                    'message': detail.get('message') or 'Bulk child rejected',
+                })
+        bulk_row.status = 'PARTIAL' if errors else 'QUEUED'
+        bulk_row.result = {'children': children, 'errors': errors}
+        audit(
+            db, request, 'proxmox.bulk.requested', 'proxmox_bulk', bulk_row.id,
+            details={'provider_id': provider_id, 'action': data.action, 'children': children, 'errors': errors},
+        )
+        return {'id': bulk_row.id, 'status': bulk_row.status, **bulk_row.result}
+
+    return idempotent(db, request, actor, payload, create, required=True)
+
+
+@router.get('/bulk/{bulk_id}')
+def bulk_status(
+    bulk_id: str,
+    actor=Depends(require('proxmox_admin.view')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    row = db.get(BulkDay2ActionRequest, bulk_id)
+    if row is None or not str(row.action or '').startswith('pxadmin.'):
+        raise HTTPException(404, {'code': 'BULK_NOT_FOUND', 'message': 'Proxmox Admin bulk operation not found'})
+    child_ids = [item.get('job_id') for item in (row.result or {}).get('children', []) if item.get('job_id')]
+    summary = bulk_summary(db, child_ids)
+    if summary['completed'] == summary['total'] and summary['total']:
+        row.status = 'PARTIAL' if summary['failed'] else 'SUCCEEDED'
+    elif summary['running']:
+        row.status = 'RUNNING'
+    return {'id': row.id, 'status': row.status, **summary, 'errors': (row.result or {}).get('errors', [])}
+)],
+    file: UploadFile = File(...),
+    actor=Depends(require('proxmox_admin.images.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    filename = Path(str(file.filename or '')).name
+    if filename != str(file.filename or '') or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,200}\.iso', filename, re.IGNORECASE):
+        raise HTTPException(422, {'code': 'INVALID_ISO_NAME', 'message': 'ISO filename is invalid'})
+    upload_root = settings().data_dir / 'proxmox-admin' / 'uploads'
+    upload_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    staged = upload_root / (secrets.token_hex(24) + '.iso')
+    max_bytes = 32 * 1024 * 1024 * 1024
+    written = 0
+    try:
+        with staged.open('xb') as target:
+            os.chmod(staged, 0o600)
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(413, {'code': 'ISO_TOO_LARGE', 'message': 'ISO exceeds 32 GiB upload limit'})
+                target.write(chunk)
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+    if written == 0:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(422, {'code': 'EMPTY_ISO', 'message': 'ISO file is empty'})
+
+    payload = {
+        'node': node,
+        'storage': storage,
+        'filename': filename,
+        'staged_path': str(staged),
+        'size': written,
+    }
+    try:
+        return _enqueue(
+            db, request, actor, provider_id=provider_id, command='image.upload',
+            object_type='image', object_id=filename, node=node, parameters=payload,
+            resource={'name': filename, 'storage': storage, 'size': written},
+        )
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+@router.delete('/iso-images', status_code=202)
+def iso_delete(
+    data: ISODeleteInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.images.manage')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='image.delete',
+        object_type='image', object_id=data.volume, node=data.node, parameters=_payload(data),
+        confirmation_expected=data.volume,
+        resource={'name': data.volume, 'storage': data.storage},
+    )
+
+
+@router.post('/vms/{node}/{vmid}/iso', status_code=202)
+def vm_iso_attach(
+    node: str,
+    vmid: int,
+    data: ISOAttachInput,
+    provider_id: ProviderID,
+    request: Request,
+    actor=Depends(require('proxmox_admin.vm.modify')),
+    db=Depends(get_db, scope='function'),
+):
+    _ready(db)
+    target = _target(db, provider_id, request, node, vmid, 'vm')
+    return _enqueue(
+        db, request, actor, provider_id=provider_id, command='vm.iso.attach',
+        object_type='vm', object_id=vmid, node=node, parameters=_payload(data), resource=target,
+    )
 
 
 @router.get('/backups')
