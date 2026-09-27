@@ -155,6 +155,7 @@
 - Kubernetes musi mieć trwałe PVC dla danych i spójny bootstrap/migration/rollout order.
 - Każdy nowy tryb instalacji musi mieć status, uninstall/purge semantics i osobne testy platformowe.
 - Docker candidate build używa tych samych nazw obrazów Compose co aktywny release. Rollback po nieudanym kandydacie musi odbudować obrazy z katalogu poprzedniego release przed `compose up`; samo uruchomienie starego `docker-compose.yml` może wystartować na obrazie kandydata.
+- Rollback aplikacji po wykonaniu migracji wymaga przywrócenia bazy do rewizji zgodnej z poprzednim release. Przed mutacją produkcyjnej DB zatrzymaj warstwę aplikacyjną i wykonaj rollback dump; po błędzie odtwórz DB przed uruchomieniem starego `migrate`/API.
 - Przy błędzie usługi `migrate` instalator ma pokazać jej log. Nie wolno raportować „poprzedni release przywrócony”, jeżeli rollback sam zakończył się błędem.
 
 ## 1.12. Migracje i baza
