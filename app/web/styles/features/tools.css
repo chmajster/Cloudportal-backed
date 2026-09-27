@@ -50,11 +50,99 @@
   text-transform: uppercase;
 }
 
+.tools-hero-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.tools-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-2);
+}
+
+.tools-view-button {
+  min-width: 70px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+.tools-view-button:hover {
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+
+.tools-view-button.active,
+.tools-view-button[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--surface);
+  color: var(--accent);
+}
+
 .tools-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
   gap: 18px;
 }
+
+.tools-grid.tools-list {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.tools-grid.tools-list .tool-card {
+  max-width: none;
+  gap: 12px;
+  padding: 15px 17px;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.tools-grid.tools-list .tool-card-head {
+  align-items: center;
+}
+
+.tools-grid.tools-list .tool-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.tools-grid.tools-list .tool-title h2 {
+  margin-top: 1px;
+}
+
+.tools-grid.tools-list .tool-title p {
+  line-height: 1.35;
+}
+
+.tools-grid.tools-list .tool-meta-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tools-grid.tools-list .tool-meta-item {
+  padding: 8px 9px;
+}
+
+.tools-grid.tools-list .tool-card-footer {
+  padding-top: 10px;
+}
+
 .tool-card:only-child {
   max-width: 980px;
 }
@@ -266,6 +354,16 @@
     flex-direction: column;
     padding: 18px;
   }
+  .tools-hero-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .tools-view-toggle {
+    flex: 1 1 auto;
+  }
+  .tools-view-button {
+    flex: 1 1 0;
+  }
   .tools-count {
     grid-auto-flow: column;
     min-width: 0;
@@ -309,7 +407,8 @@
 }
 
 @media (max-width: 500px) {
-  .tool-meta-grid {
+  .tool-meta-grid,
+  .tools-grid.tools-list .tool-meta-grid {
     grid-template-columns: 1fr;
   }
 }
