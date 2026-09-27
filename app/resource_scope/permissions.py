@@ -13,7 +13,7 @@ RESOURCE_ACTIONS = {
     'providers': 'read', 'credentials': 'read test',
     'quotas': 'read manage tenant.manage',
     'policies': 'read manage simulate audit exception.manage',
-    # pro­mox_admin.scope.all is intentionally global-only and therefore omitted here.
+    # proxmox_admin.scope.all is intentionally global-only and therefore omitted here.
     # A project role can receive only permissions that remain confined to the selected scope.
     'proxmox_admin': (
         'view dashboard.view providers.view nodes.view nodes.services.manage '
