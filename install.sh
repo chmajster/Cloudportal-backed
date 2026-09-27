@@ -2609,10 +2609,38 @@ k8s_emit_app_env() {
 EOF
 }
 
+k8s_emit_master_key_init() {
+  cat <<EOF
+      initContainers:
+        - name: prepare-master-key
+          image: $k8s_image
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+          command: ["/bin/sh", "-c"]
+          args:
+            - install -o 10001 -g 10001 -m 0600 /source/master.key /runtime/master.key
+          volumeMounts:
+            - {name: master-key-source, mountPath: /source, readOnly: true}
+            - {name: runtime-secrets, mountPath: /runtime}
+EOF
+}
+
+k8s_emit_master_key_volumes() {
+  cat <<'EOF'
+        - name: master-key-source
+          secret:
+            secretName: cloudportal-secrets
+            items: [{key: master-key, path: master.key, mode: 0400}]
+        - {name: runtime-secrets, emptyDir: {}}
+EOF
+}
+
 k8s_emit_app_mounts() {
   cat <<'EOF'
           volumeMounts:
-            - {name: master-key, mountPath: /etc/cloudportal-backed/master.key, subPath: master.key, readOnly: true}
+            - {name: runtime-secrets, mountPath: /etc/cloudportal-backed/master.key, subPath: master.key, readOnly: true}
             - {name: app-data, mountPath: /var/lib/cloudportal-backed}
 EOF
 }
@@ -2636,6 +2664,9 @@ spec:
     spec:
       restartPolicy: Never
       securityContext: {fsGroup: 10001}
+EOF
+    k8s_emit_master_key_init
+    cat <<EOF
       containers:
         - name: $mode
           image: $k8s_image
@@ -2652,24 +2683,33 @@ EOF
     k8s_emit_app_env
     cat <<'EOF'
           volumeMounts:
-            - {name: master-key, mountPath: /etc/cloudportal-backed/master.key, subPath: master.key, readOnly: true}
+            - {name: runtime-secrets, mountPath: /etc/cloudportal-backed/master.key, subPath: master.key, readOnly: true}
       volumes:
-        - name: master-key
-          secret:
-            secretName: cloudportal-secrets
-            items: [{key: master-key, path: master.key, mode: 0440}]
 EOF
+    k8s_emit_master_key_volumes
   } | k8s_ns apply -f - >/dev/null
-  if ! k8s_ns wait --for=condition=complete "job/$name" --timeout=600s; then
-    k8s_ns describe "job/$name" || true
-    k8s_ns logs "job/$name" --all-containers=true --tail=200 || true
-    return 1
-  fi
+
+  local attempt complete failed
+  for attempt in $(seq 1 150); do
+    complete=$(k8s_ns get "job/$name" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
+    [[ "$complete" == True ]] && return 0
+    failed=$(k8s_ns get "job/$name" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)
+    if [[ "$failed" == True ]]; then
+      k8s_ns describe "job/$name" || true
+      k8s_ns logs "job/$name" --all-containers=true --tail=200 || true
+      return 1
+    fi
+    sleep 2
+  done
+  ui_fail "Timeout oczekiwania na Job $name."
+  k8s_ns describe "job/$name" || true
+  k8s_ns logs "job/$name" --all-containers=true --tail=200 || true
+  return 1
 }
 
 k8s_apply_app() {
   local revision
-  revision=$(date -u +%Y%m%dT%H%M%SZ)-$
+  revision=$(date -u +%Y%m%dT%H%M%SZ)-$BASHPID
   {
     cat <<EOF
 apiVersion: v1
@@ -2718,6 +2758,9 @@ spec:
         cloudportal.io/rollout-revision: "$revision"
     spec:
       securityContext: {fsGroup: 10001}
+EOF
+    k8s_emit_master_key_init
+    cat <<EOF
       containers:
         - name: api
           image: $k8s_image
@@ -2765,10 +2808,9 @@ EOF
             - {name: nginx, mountPath: /etc/nginx/conf.d/default.conf, subPath: default.conf, readOnly: true}
             - {name: tls, mountPath: /etc/nginx/tls, readOnly: true}
       volumes:
-        - name: master-key
-          secret:
-            secretName: cloudportal-secrets
-            items: [{key: master-key, path: master.key, mode: 0440}]
+EOF
+    k8s_emit_master_key_volumes
+    cat <<'EOF'
         - {name: app-data, persistentVolumeClaim: {claimName: cloudportal-app-data}}
         - {name: nginx, configMap: {name: cloudportal-nginx}}
         - {name: tls, secret: {secretName: cloudportal-tls}}
