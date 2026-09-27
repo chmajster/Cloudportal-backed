@@ -132,8 +132,15 @@ def test_docker_updater_is_unix_socket_only_and_does_not_require_host_8766():
 def test_docker_candidate_failure_logs_migrate_and_rebuilds_previous_release():
     assert "ui_info 'Log usługi migrate:'" in INSTALLER
     assert 'docker_compose_for "$release" "$candidate_env" logs --tail=120 migrate' in INSTALLER
+    assert 'docker_prepare_candidate_rollback_backup()' in INSTALLER
+    assert 'pg_dump -U cloudportal -d cloudportal -Fc > "$rollback_dump"' in INSTALLER
+    assert 'docker_restore_candidate_rollback_database()' in INSTALLER
+    assert "DROP DATABASE IF EXISTS cloudportal;" in INSTALLER
+    assert "CREATE DATABASE cloudportal OWNER cloudportal;" in INSTALLER
+    assert 'pg_restore -U cloudportal -d cloudportal --no-owner --no-privileges < "$rollback_dump"' in INSTALLER
     assert "ui_info 'Odbudowuję obrazy poprzedniego release" in INSTALLER
     assert 'docker_compose_for "$previous_release" "$docker_env" build' in INSTALLER
-    assert "ui_ok 'Poprzedni release Docker został odbudowany i przywrócony.'" in INSTALLER
+    assert "ui_ok 'Poprzedni release Docker wraz z bazą danych został przywrócony.'" in INSTALLER
+    assert 'to była świeża instalacja' in INSTALLER
     assert 'automatyczny rollback również się nie powiódł' in INSTALLER
 
