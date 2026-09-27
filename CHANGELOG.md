@@ -153,6 +153,8 @@
 - Deinstalacja domyślnie zachowuje bazę/dane; purge jest osobną, jawną operacją.
 - Kubernetes musi mieć trwałe PVC dla danych i spójny bootstrap/migration/rollout order.
 - Każdy nowy tryb instalacji musi mieć status, uninstall/purge semantics i osobne testy platformowe.
+- Docker candidate build używa tych samych nazw obrazów Compose co aktywny release. Rollback po nieudanym kandydacie musi odbudować obrazy z katalogu poprzedniego release przed `compose up`; samo uruchomienie starego `docker-compose.yml` może wystartować na obrazie kandydata.
+- Przy błędzie usługi `migrate` instalator ma pokazać jej log. Nie wolno raportować „poprzedni release przywrócony”, jeżeli rollback sam zakończył się błędem.
 
 ## 1.12. Migracje i baza
 
@@ -161,6 +163,7 @@
 - Migracje muszą być testowane zarówno na pustej bazie, jak i upgrade z realnego poprzedniego head.
 - Przy lightweight `sa.table()` określ typy kolumn JSON/JSONB; brak typu może przekazać surowy dict do psycopg i zakończyć migrację błędem.
 - Po merge równoległych gałęzi sprawdź, czy Alembic ma jeden poprawny head albo jawny merge revision.
+- Regresja 2026-09-27: `0c4e71a9d2f8` i `ab91c4e7d260` równolegle wskazywały na `f9d6c2a81e44`, przez co Docker `migrate` kończył `alembic upgrade head` kodem 255. Naprawa wymaga nowej merge revision, nigdy edycji już scalonych migracji, oraz testu repozytorium wymuszającego dokładnie jeden head.
 - Nie zakładaj historycznego stałego head w testach migracji.
 
 ## 1.13. noVNC i WebSocket
