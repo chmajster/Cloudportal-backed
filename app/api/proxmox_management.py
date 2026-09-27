@@ -556,10 +556,13 @@ def delete_vm(provider_id: int, node: NODE, vmid: VMID, request: Request,
     return idempotent(db, request, actor, payload, execute, required=True)
 
 
-@router.post('/providers/{provider_id}/vms/{node}/{vmid}/console')
-def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
-                    actor=Depends(require('vms.console')), db=Depends(get_db, scope='function')):
-    result = adapter(db, provider_id).console_session(node, vmid)
+def issue_console_session(provider_id, node, vmid, request, actor, db, *, object_type='vm', permission='vms.console'):
+    proxmox = adapter(db, provider_id)
+    result = (
+        proxmox.lxc_console_session(node, vmid)
+        if object_type == 'container'
+        else proxmox.console_session(node, vmid)
+    )
     session_id = secrets.token_urlsafe(32)
     payload = {
         'provider_id': provider_id,
@@ -571,23 +574,35 @@ def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
         'vmid': vmid,
         'port': int(result['port']),
         'ticket': result['ticket'],
+        'object_type': object_type,
+        'permission': permission,
     }
     try:
         redis_client().setex(console_key(session_id), CONSOLE_SESSION_TTL, json.dumps(payload))
     except Exception:
         raise HTTPException(503, 'Console session store is unavailable') from None
-    audit(db, request, 'vm.console_session_issued', 'vms', f'{provider_id}:{node}:{vmid}')
+    audit(
+        db,
+        request,
+        'vm.console_session_issued' if object_type == 'vm' else 'container.console_session_issued',
+        'vms' if object_type == 'vm' else 'containers',
+        f'{provider_id}:{node}:{vmid}',
+        details={'permission': permission, 'object_type': object_type},
+    )
     return {
         'mode': 'novnc',
-        # Keep the session-scoped field for tabs that loaded the previous UI.
-        # New UI imports local_rfb_module so normal operation is independent of
-        # Proxmox static-file MIME, redirects and noVNC patch level.
         'rfb_module': f'/api/v1/console-sessions/{session_id}/novnc/core/rfb.js',
         'local_rfb_module': '/ui/vendor/novnc/core/rfb.js',
         'ws_path': f'/api/v1/console-sessions/{session_id}/websocket',
         'password': result['password'],
         'expires_in': CONSOLE_SESSION_TTL,
     }
+
+
+@router.post('/providers/{provider_id}/vms/{node}/{vmid}/console')
+def console_session(provider_id: int, node: NODE, vmid: VMID, request: Request,
+                    actor=Depends(require('vms.console')), db=Depends(get_db, scope='function')):
+    return issue_console_session(provider_id, node, vmid, request, actor, db)
 
 
 @router.get('/console-sessions/{session_id}/novnc/{asset_path:path}', include_in_schema=False)
@@ -626,7 +641,8 @@ async def console_websocket(websocket: WebSocket, session_id: str):
         proxmox = await run_in_threadpool(console_adapter, record)
         headers = await run_in_threadpool(proxmox.console_auth_headers)
         upstream_url = proxmox.console_websocket_url(
-            record['node'], record['vmid'], record['port'], record['ticket']
+            record['node'], record['vmid'], record['port'], record['ticket'],
+            kind='lxc' if record.get('object_type') == 'container' else 'qemu',
         )
         tls = None
         if upstream_url.startswith('wss://'):
