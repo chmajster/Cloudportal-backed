@@ -707,6 +707,11 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "'/projects/' + encodeURIComponent(state.projectId) + '/members?limit=200'" in script
     assert "'/tenants/' + encodeURIComponent(state.tenantId) + '/members?limit=200&status=active'" in script
     assert "allowed('users.read') || data.users.length" in script
+    assert "if (!list) return [...previous]" in script
+    assert "hiddenExisting" in script
+    assert "state.allowedRoleIds = ids('allowed_role_ids', state.allowedRoleIds, data.roles)" in script
+    assert "state.allowedUserIds = ids('allowed_user_ids', state.allowedUserIds, data.users)" in script
+    assert "state.managerRoleIds = ids('manager_role_ids', state.managerRoleIds, data.managerRoles)" in script
     assert "'X-Tenant-ID': String(state.tenantId)" in script
     assert "'X-Project-ID': String(state.projectId)" in script
     assert "!state.selectEnvironmentOnExecute" in script
