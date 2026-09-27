@@ -553,8 +553,6 @@ def register_inventory(context):
         db.commit()
 
     _persist(context, inventory_synced=True)
-    from app.availability.service import apply_pending_for_deployment
-    apply_pending_for_deployment(context)
     context.log(f'inventory.vm.registered: {node} / VMID {vm_id} / management=proxmox')
     return {'node': node, 'vm_id': vm_id}
 
