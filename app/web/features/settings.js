@@ -181,12 +181,13 @@ function blueprintApprovalTimeoutForm(blueprintSettings) {
 }
 
 async function settingsView() {
-  const [config, health, updateSettings, blueprintSettings, executionSettings] = await Promise.all([
+  const [config, health, updateSettings, blueprintSettings, executionSettings, executionCapabilities] = await Promise.all([
     api('/settings/ldap'),
     api('/health', { auth: false, allow: [503] }),
     allowed('updates.read') ? api('/updates/settings').catch(() => null) : Promise.resolve(null),
     api('/settings/blueprints'),
     api('/settings/execution'),
+    api('/settings/execution/capabilities'),
   ]);
 
   const user = state.identity?.user || {};
@@ -199,6 +200,8 @@ async function settingsView() {
   const onlineWorkers = Number(workers.online || 0);
   const effectiveParallelism = onlineWorkers > 0 ? Math.min(parallelLimit, onlineWorkers) : 0;
   const workerCapacityShortfall = onlineWorkers < parallelLimit;
+  const workerReconciliationSupported = executionCapabilities?.worker_reconciliation_supported === true;
+  const installMode = executionCapabilities?.install_mode || 'unknown';
 
   const reconcileWorkerCapacity = async () => {
     const result = await api('/settings/execution/reconcile', {
@@ -263,12 +266,14 @@ async function settingsView() {
     workerCapacityShortfall
       ? node('p', {
           class: 'muted',
-          text: 'Pula workerów jest mniejsza niż ustawiony limit. Zadania nie osiągną pełnej równoległości, dopóki pula nie zostanie dostosowana.',
+          text: workerReconciliationSupported
+            ? 'Pula workerów jest mniejsza niż ustawiony limit. Zadania nie osiągną pełnej równoległości, dopóki pula nie zostanie dostosowana.'
+            : 'Pula workerów jest mniejsza niż ustawiony limit. W trybie ' + installMode + ' liczbą workerów zarządza orkiestrator, więc CloudPortal nie skaluje ich z tego panelu.',
         })
       : null,
     node('div', { class: 'settings-card-actions' },
       button('Odśwież stan', () => settingsView()),
-      allowed('settings.update') && workerCapacityShortfall
+      allowed('settings.update') && workerCapacityShortfall && workerReconciliationSupported
         ? button('Dostosuj workery', () => reconcileWorkerCapacity().catch(error => toast(error.message, 'error')), 'primary')
         : null,
       allowed('settings.update') ? button('Zmień równoległość', () => navigate('/admin/settings/execution')) : null)
