@@ -34,18 +34,63 @@ def blueprint_public(row):
     return result
 
 
-def can_manage_blueprint(blueprint: Blueprint, actor) -> bool:
+def blueprint_role_ids(db, blueprint: Blueprint, actor) -> set[int]:
+    """Return roles effective for Blueprint access in its tenant/project scope.
+
+    Global role assignments remain valid, while tenant/project assignments are
+    considered only for active memberships in the Blueprint's persisted scope.
+    This keeps Blueprint ACL and manager-role checks aligned with scoped RBAC.
+    """
+    role_ids = {
+        int(role.id) for role in (getattr(actor.user, 'roles', []) or [])
+        if getattr(role, 'id', None) is not None
+    }
+    user_id = getattr(actor, 'user_id', None) or getattr(actor.user, 'id', None)
+    tenant_id = getattr(blueprint, 'tenant_id', None)
+    project_id = getattr(blueprint, 'project_id', None)
+    if db is None or user_id is None or not tenant_id:
+        return role_ids
+
+    from app.tenancy.models import TenantMembership, TenantRoleAssignment
+
+    tenant_membership = db.get(TenantMembership, (str(tenant_id), int(user_id)))
+    if tenant_membership is None or tenant_membership.status != 'active':
+        return role_ids
+
+    role_ids.update(int(value) for value in db.scalars(
+        select(TenantRoleAssignment.role_id).where(
+            TenantRoleAssignment.tenant_id == str(tenant_id),
+            TenantRoleAssignment.user_id == int(user_id),
+        )
+    ).all())
+
+    if project_id:
+        from app.projects.models import ProjectMembership, ProjectRoleAssignment
+
+        project_membership = db.get(ProjectMembership, (str(project_id), int(user_id)))
+        if project_membership is not None and project_membership.status == 'active':
+            role_ids.update(int(value) for value in db.scalars(
+                select(ProjectRoleAssignment.role_id).where(
+                    ProjectRoleAssignment.tenant_id == str(tenant_id),
+                    ProjectRoleAssignment.project_id == str(project_id),
+                    ProjectRoleAssignment.user_id == int(user_id),
+                )
+            ).all())
+
+    return role_ids
+
+
+def can_manage_blueprint(db, blueprint: Blueprint, actor) -> bool:
     required = {role.id for role in blueprint.manager_roles}
     if not required:
         return True
-    actor_roles = {role.id for role in actor.user.roles}
-    return bool(required & actor_roles)
+    return bool(required & blueprint_role_ids(db, blueprint, actor))
 
 
-def available_to(blueprint: Blueprint, actor, source: str = 'api') -> bool:
+def available_to(db, blueprint: Blueprint, actor, source: str = 'api') -> bool:
     if not blueprint.is_active or not blueprint.visibility.get(source, False):
         return False
-    role_ids = {role.id for role in actor.user.roles}
+    role_ids = blueprint_role_ids(db, blueprint, actor)
     return (not blueprint.allowed_role_ids and not blueprint.allowed_user_ids
             or actor.user_id in blueprint.allowed_user_ids
             or bool(role_ids & set(blueprint.allowed_role_ids)))
