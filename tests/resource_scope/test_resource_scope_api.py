@@ -202,6 +202,19 @@ def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
     assert denied_role_reference.status_code == 403, denied_role_reference.text
     assert 'role references exceed' in denied_role_reference.text
 
+    outsider, _ = new_user(client, headers, 'bp-rbac-outsider')
+    denied_user_reference = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(updated.json()['version'])},
+        json={
+            **payload,
+            'name': 'Must not accept a user outside the selected project/tenant scope',
+            'allowed_user_ids': [outsider['id']],
+        },
+    )
+    assert denied_user_reference.status_code == 403, denied_user_reference.text
+    assert 'user references exceed' in denied_user_reference.text
+
     with session() as db:
         db.get(ProjectMembership, (p['id'], user['id'])).status = 'disabled'
         db.commit()
