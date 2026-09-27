@@ -28,9 +28,11 @@ def hostname_public(row):
     return as_public(row, HOSTNAME_FIELDS)
 
 
-def blueprint_public(row):
+def blueprint_public(row, *, can_manage: bool | None = None):
     result = as_public(row, BLUEPRINT_FIELDS)
     result['manager_role_ids'] = sorted(role.id for role in row.manager_roles)
+    if can_manage is not None:
+        result['can_manage'] = bool(can_manage)
     return result
 
 
@@ -41,11 +43,12 @@ def blueprint_role_ids(db, blueprint: Blueprint, actor) -> set[int]:
     considered only for active memberships in the Blueprint's persisted scope.
     This keeps Blueprint ACL and manager-role checks aligned with scoped RBAC.
     """
+    user = getattr(actor, 'user', actor)
     role_ids = {
-        int(role.id) for role in (getattr(actor.user, 'roles', []) or [])
+        int(role.id) for role in (getattr(user, 'roles', []) or [])
         if getattr(role, 'id', None) is not None
     }
-    user_id = getattr(actor, 'user_id', None) or getattr(actor.user, 'id', None)
+    user_id = getattr(actor, 'user_id', None) or getattr(user, 'id', None)
     tenant_id = getattr(blueprint, 'tenant_id', None)
     project_id = getattr(blueprint, 'project_id', None)
     if db is None or user_id is None or not tenant_id:
@@ -80,20 +83,24 @@ def blueprint_role_ids(db, blueprint: Blueprint, actor) -> set[int]:
     return role_ids
 
 
-def can_manage_blueprint(db, blueprint: Blueprint, actor) -> bool:
+def can_manage_blueprint(db, blueprint: Blueprint, actor, role_ids: set[int] | None = None) -> bool:
     required = {role.id for role in blueprint.manager_roles}
     if not required:
         return True
-    return bool(required & blueprint_role_ids(db, blueprint, actor))
+    effective_roles = role_ids if role_ids is not None else blueprint_role_ids(db, blueprint, actor)
+    return bool(required & effective_roles)
 
 
-def available_to(db, blueprint: Blueprint, actor, source: str = 'api') -> bool:
+def available_to(db, blueprint: Blueprint, actor, source: str = 'api',
+                 role_ids: set[int] | None = None) -> bool:
     if not blueprint.is_active or not blueprint.visibility.get(source, False):
         return False
-    role_ids = blueprint_role_ids(db, blueprint, actor)
+    user = getattr(actor, 'user', actor)
+    user_id = getattr(actor, 'user_id', None) or getattr(user, 'id', None)
+    effective_roles = role_ids if role_ids is not None else blueprint_role_ids(db, blueprint, actor)
     return (not blueprint.allowed_role_ids and not blueprint.allowed_user_ids
-            or actor.user_id in blueprint.allowed_user_ids
-            or bool(role_ids & set(blueprint.allowed_role_ids)))
+            or user_id in blueprint.allowed_user_ids
+            or bool(effective_roles & set(blueprint.allowed_role_ids)))
 
 
 def _hostname(scheme, values, number):
