@@ -244,6 +244,25 @@ async function executeBlueprint(item, scope = null) {
       }
     }
 
+    if (scopeAllows('availability.read') && scopeAllows('availability.assign')) {
+      const availability = await api('/availability-plans?active_only=true&limit=200', { headers: scopeHeaders });
+      const plans = availability.items || [];
+      if (plans.length) {
+        fields.append(formSection(
+          'Dostępność VM',
+          'Opcjonalnie wybierz Availability Plan. Po utworzeniu VM CloudPortal zastosuje rzeczywistą konfigurację Proxmox HA.',
+          selectField('Availability Plan', 'availability_plan_id', [
+            { value: '', label: 'Bez Availability Planu' },
+            ...plans.map(plan => ({
+              value: plan.id,
+              label: plan.name + ' · ' + (plan.state || 'started')
+                + (plan.group ? ' · grupa ' + plan.group : ''),
+            })),
+          ], ''),
+        ));
+      }
+    }
+
     let scheme = null;
     if (item.deployment?.hostname_scheme_id && scopeAllows('hostnames.read')) {
       const result = await api('/hostname-schemes?limit=200', { headers: scopeHeaders });
@@ -294,6 +313,8 @@ async function executeBlueprint(item, scope = null) {
         }
         if (runtimeClassification.apmid) payload.apmid = runtimeClassification.apmid;
         if (runtimeClassification.environment) payload.environment = runtimeClassification.environment;
+        const availabilityPlanId = String(form.elements.availability_plan_id?.value || '').trim();
+        if (availabilityPlanId) payload.availability_plan_id = availabilityPlanId;
 
         const result = await api(`/blueprints/${item.id}/execute`, {
           method: 'POST',
