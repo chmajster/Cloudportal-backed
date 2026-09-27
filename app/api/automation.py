@@ -278,6 +278,52 @@ def validate_blueprint_role_scope(db, data, request: Request, actor, blueprint_i
         )
 
 
+
+def validate_blueprint_user_scope(db, data, request: Request, actor, blueprint_id=None):
+    """Reject newly added Blueprint user ACL references outside readable scope."""
+    requested = {int(value) for value in data.allowed_user_ids}
+    if blueprint_id is not None:
+        existing = db.get(Blueprint, blueprint_id)
+        if existing is None:
+            raise HTTPException(404, 'Blueprint not found')
+        requested -= {int(value) for value in (existing.allowed_user_ids or [])}
+
+    if not requested or 'users.read' in request.state.permissions:
+        return
+
+    scope = request.state.resource_scope
+    principal = Principal.from_token(actor)
+    visible_user_ids = set()
+
+    from app.projects import service as project_service
+    from app.tenancy import service as tenant_service
+
+    loaders = (
+        lambda: project_service.member_list(
+            db, principal, scope.project_id, limit=1000, offset=0),
+        lambda: tenant_service.member_list(
+            db, principal, scope.tenant_id, limit=1000, offset=0, status='active'),
+    )
+    for load in loaders:
+        try:
+            result = load()
+        except HTTPException as exc:
+            if exc.status_code not in {403, 404}:
+                raise
+            continue
+        visible_user_ids.update(
+            int(row['user_id']) for row in result.get('items', [])
+            if row.get('user_id') is not None
+        )
+
+    denied = sorted(user_id for user_id in requested if user_id not in visible_user_ids)
+    if denied:
+        raise HTTPException(
+            403,
+            'Blueprint user references exceed users visible in the selected organization/project: '
+            + ', '.join(map(str, denied)),
+        )
+
 def validate_blueprint_references(db, data, blueprint_id=None):
     if data.avatar_id:
         blueprint_avatar(db, data.avatar_id)
@@ -522,6 +568,7 @@ def blueprint_with_inline_hostname_scheme(db, data: BlueprintInput, hostname_sch
 @router.post('/blueprints', status_code=201, response_model=BlueprintOutput)
 def create_blueprint(data: BlueprintInput, request: Request, actor=Depends(require('blueprints.create')), db=Depends(get_db, scope='function')):
     validate_blueprint_role_scope(db, data, request, actor)
+    validate_blueprint_user_scope(db, data, request, actor)
     manager_roles = validate_blueprint_references(db, data)
     def create():
         values = data.model_dump(mode='json', exclude={'manager_role_ids'})
@@ -540,6 +587,7 @@ def create_blueprint_bundle(bundle: BlueprintBundleInput, request: Request,
     def create():
         data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
         validate_blueprint_role_scope(db, data, request, actor)
+        validate_blueprint_user_scope(db, data, request, actor)
         manager_roles = validate_blueprint_references(db, data)
         values = data.model_dump(mode='json', exclude={'manager_role_ids'})
         row = Blueprint(**values, created_by=actor.user_id)
@@ -566,6 +614,7 @@ def update_blueprint(
     require_blueprint_manager(db, row, actor)
     require_blueprint_version(row, if_match)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
+    validate_blueprint_user_scope(db, data, request, actor, blueprint_id=id)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
@@ -592,6 +641,7 @@ def update_blueprint_bundle(
     require_blueprint_version(row, if_match)
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
+    validate_blueprint_user_scope(db, data, request, actor, blueprint_id=id)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
