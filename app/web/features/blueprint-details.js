@@ -299,6 +299,7 @@
     parent: 'blueprints',
     permission: null,
     label: 'Blueprinty',
+    surface: false,
   }, match => blueprintDetails(Number(match.params.id), match.searchParams));
 
   registerExtension('blueprint-details', () => {});
