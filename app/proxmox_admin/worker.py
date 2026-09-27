@@ -16,6 +16,7 @@ from app.day2.service import (
 from app.instance_operation import normal_instance_operation
 from app.models import Audit, Job, JobLog, Token, now
 from app.operations.service import queue_job_webhooks, queue_webhook_event
+from app.proxmox_admin.reconciliation import lxc_config_values, reconcile, vm_config_values
 from app.proxmox_admin.service import (
     COMMAND_PERMISSIONS,
     _ensure_visible_object,
@@ -216,51 +217,6 @@ def _wait_result(ctx, adapter, node, result):
     return _wait_task(ctx, adapter, node, result)
 
 
-def _vm_config_values(params):
-    mapping = {
-        'cores': 'cores',
-        'sockets': 'sockets',
-        'memory_mb': 'memory',
-        'balloon_mb': 'balloon',
-        'tags': 'tags',
-        'description': 'description',
-        'boot': 'boot',
-        'onboot': 'onboot',
-        'protection': 'protection',
-        'agent': 'agent',
-    }
-    values = {}
-    for key, target in mapping.items():
-        if key not in params or params[key] is None:
-            continue
-        value = params[key]
-        if isinstance(value, bool):
-            value = int(value)
-        values[target] = value
-    return values
-
-
-def _lxc_config_values(params):
-    mapping = {
-        'cores': 'cores',
-        'memory_mb': 'memory',
-        'swap_mb': 'swap',
-        'tags': 'tags',
-        'description': 'description',
-        'onboot': 'onboot',
-        'protection': 'protection',
-    }
-    values = {}
-    for key, target in mapping.items():
-        if key not in params or params[key] is None:
-            continue
-        value = params[key]
-        if isinstance(value, bool):
-            value = int(value)
-        values[target] = value
-    return values
-
-
 def _nic_value(adapter, node, vmid, params):
     current = adapter.vm_config(node, vmid) or {}
     existing = str(current.get(params['nic']) or '')
@@ -287,7 +243,7 @@ def _invoke(adapter, meta, params):
     if command == 'vm.power':
         return adapter.vm_power(node, object_id, params['action'])
     if command == 'vm.config':
-        return adapter.update_vm_config(node, object_id, **_vm_config_values(params))
+        return adapter.update_vm_config(node, object_id, **vm_config_values(params))
     if command == 'vm.cloudinit':
         return adapter.update_vm_config(node, object_id, **{k: v for k, v in params.items() if v is not None})
     if command == 'vm.clone':
@@ -348,7 +304,7 @@ def _invoke(adapter, meta, params):
     if command == 'lxc.power':
         return adapter.lxc_power(node, object_id, params['action'])
     if command == 'lxc.config':
-        return adapter.update_lxc_config(node, object_id, **_lxc_config_values(params))
+        return adapter.update_lxc_config(node, object_id, **lxc_config_values(params))
     if command == 'lxc.clone':
         return adapter.clone_lxc(
             node, object_id, new_vm_id=params['new_vmid'], hostname=params['name'],
@@ -399,163 +355,6 @@ def _invoke(adapter, meta, params):
         return adapter.delete_firewall_rule(level, pos, node=firewall_node, object_id=firewall_object_id)
 
     raise ProxmoxAdminFailure('UNSUPPORTED_OPERATION', 'Persisted Proxmox Admin command is not supported')
-
-
-def _find_native(adapter, object_type, object_id):
-    wanted = 'qemu' if object_type == 'vm' else 'lxc'
-    for row in adapter.cluster_resources('vm'):
-        if row.get('type') == wanted and int(row.get('vmid', -1)) == int(object_id):
-            return dict(row)
-    return None
-
-
-def _config_contains(actual, expected):
-    for key, value in expected.items():
-        if value is None:
-            continue
-        actual_value = actual.get(key)
-        if isinstance(value, bool):
-            if int(actual_value or 0) != int(value):
-                return False
-        elif str(actual_value) != str(value):
-            return False
-    return True
-
-
-def _reconcile(adapter, meta, params):
-    command = meta['command']
-    node = meta.get('node')
-    object_id = meta.get('object_id')
-
-    if meta['object_type'] in {'vm', 'container'}:
-        native = _find_native(adapter, meta['object_type'], object_id)
-        if command in {'vm.delete', 'lxc.delete'}:
-            return native is None, {'resource': native}
-        if native is None:
-            return False, {'resource': None}
-
-        current_node = native.get('node') or node
-        if command in {'vm.migrate', 'lxc.migrate'}:
-            return str(current_node) == str(params['target']), {'resource': native}
-
-        if command == 'vm.clone' or command == 'lxc.clone':
-            clone_kind = meta['object_type']
-            clone = _find_native(adapter, clone_kind, params['new_vmid'])
-            return clone is not None, {'resource': native, 'clone': clone}
-
-        if command == 'vm.template':
-            return bool(native.get('template')), {'resource': native}
-
-        if command.endswith('snapshot.create') or command.endswith('snapshot.delete'):
-            snapshots = (
-                adapter.snapshots(current_node, int(object_id))
-                if meta['object_type'] == 'vm'
-                else adapter.lxc_snapshots(current_node, int(object_id))
-            )
-            names = {str(row.get('name')) for row in snapshots}
-            expected = params['name'] in names if command.endswith('create') else params['name'] not in names
-            return expected, {'resource': native, 'snapshots': snapshots}
-
-        if command.endswith('snapshot.rollback'):
-            state = (
-                adapter.vm_status(current_node, int(object_id))
-                if meta['object_type'] == 'vm'
-                else adapter.lxc_status(current_node, int(object_id))
-            )
-            return bool(state), {'resource': native, 'status': state}
-
-        if command == 'vm.power':
-            status = adapter.vm_status(current_node, int(object_id)) or {}
-            expected = {
-                'start': {'running'},
-                'shutdown': {'stopped'},
-                'stop': {'stopped'},
-                'reboot': {'running'},
-                'reset': {'running'},
-                'suspend': {'paused', 'suspended'},
-                'resume': {'running'},
-            }[params['action']]
-            return str(status.get('status') or '').lower() in expected, {'resource': native, 'status': status}
-
-        if command == 'lxc.power':
-            status = adapter.lxc_status(current_node, int(object_id)) or {}
-            expected = {
-                'start': {'running'}, 'shutdown': {'stopped'}, 'stop': {'stopped'},
-                'reboot': {'running'}, 'suspend': {'paused', 'suspended'}, 'resume': {'running'},
-            }[params['action']]
-            return str(status.get('status') or '').lower() in expected, {'resource': native, 'status': status}
-
-        if command == 'vm.config':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            expected = _vm_config_values(params)
-            return _config_contains(config, expected), {'resource': native, 'config': config}
-
-        if command == 'vm.cloudinit':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            expected = {key: value for key, value in params.items() if value is not None}
-            return _config_contains(config, expected), {'resource': native, 'config': config}
-
-        if command == 'lxc.config':
-            config = adapter.lxc_config(current_node, int(object_id)) or {}
-            expected = _lxc_config_values(params)
-            return _config_contains(config, expected), {'resource': native, 'config': config}
-
-        if command == 'vm.disk.resize':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            return params['disk'] in config, {'resource': native, 'config': config}
-
-        if command == 'vm.disk.add':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            return params['disk'] in config, {'resource': native, 'config': config}
-
-        if command == 'vm.disk.remove':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            return params['disk'] not in config, {'resource': native, 'config': config}
-
-        if command == 'vm.disk.move':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            return str(config.get(params['disk']) or '').startswith(params['storage'] + ':'), {'resource': native, 'config': config}
-
-        if command == 'vm.nic.set':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            value = str(config.get(params['nic']) or '')
-            return params['bridge'] in value, {'resource': native, 'config': config}
-
-        if command == 'vm.nic.remove':
-            config = adapter.vm_config(current_node, int(object_id)) or {}
-            return params['nic'] not in config, {'resource': native, 'config': config}
-
-        if command == 'backup.run':
-            backups = adapter.backups(current_node, params['storage'], int(object_id))
-            return bool(backups), {'resource': native, 'backups': backups}
-
-        return True, {'resource': native}
-
-    if command == 'backup.restore':
-        restored = _find_native(adapter, 'vm', params['vmid'])
-        return restored is not None, {'resource': restored}
-
-    if command == 'backup.delete':
-        rows = adapter.storage_content(params['node'], params['storage'], content='backup')
-        exists = any(str(row.get('volid')) == str(params['volume']) for row in rows)
-        return not exists, {'backups': rows}
-
-    if command == 'node.service':
-        services = adapter.node_services(node)
-        service = next((row for row in services if str(row.get('service')) == str(object_id)), None)
-        action = params['action']
-        if action == 'stop':
-            ok = service is not None and str(service.get('state') or '').lower() not in {'running', 'active'}
-        else:
-            ok = service is not None and str(service.get('state') or '').lower() in {'running', 'active'}
-        return ok, {'service': service}
-
-    if command.startswith('firewall.rule.'):
-        level = params.get('_level')
-        snapshot = adapter.firewall_snapshot(level, node=params.get('_node'), object_id=params.get('_object_id'))
-        return True, {'firewall': snapshot}
-
-    return False, {}
 
 
 def _audit_worker(db, job, meta, *, action, result):
@@ -706,7 +505,7 @@ def _execute_unfenced(job_id):
         result = _invoke(adapter, meta, dict(meta.get('parameters') or {}))
         _wait_result(ctx, adapter, meta.get('node') or dict(meta.get('parameters') or {}).get('node'), result)
         ctx.check()
-        ok, after = _reconcile(adapter, meta, dict(meta.get('parameters') or {}))
+        ok, after = reconcile(adapter, meta, dict(meta.get('parameters') or {}))
         if not ok:
             raise ProxmoxAdminFailure(
                 'RECONCILIATION_MISMATCH',
@@ -730,7 +529,7 @@ def _execute_unfenced(job_id):
                 except (ProxmoxAdminFailure, ProxmoxAdminCancelled):
                     pass
                 try:
-                    _, after = _reconcile(adapter, meta, dict(meta.get('parameters') or {}))
+                    _, after = reconcile(adapter, meta, dict(meta.get('parameters') or {}))
                 except Exception:
                     after = None
             else:
@@ -761,7 +560,7 @@ def _execute_unfenced(job_id):
                 meta = _meta(job) if job else {}
                 _, _, adapter = get_proxmox_provider(db, meta['provider_id']) if job else (None, None, None)
             if adapter is not None:
-                _, after = _reconcile(adapter, meta, dict(meta.get('parameters') or {}))
+                _, after = reconcile(adapter, meta, dict(meta.get('parameters') or {}))
                 if after is not None and not error.reconciliation_required:
                     uncertain = False
         except Exception:
