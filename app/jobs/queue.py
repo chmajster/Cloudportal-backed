@@ -361,6 +361,10 @@ def _dispatch_once_unfenced():
                 break
             if job.id in active_rq_jobs or not provider_retry_ready(job):
                 continue
+            if job.operation == 'blueprint.delete':
+                from app.automation.deletion import blueprint_delete_ready
+                if not blueprint_delete_ready(db, job):
+                    continue
             worker_target = 'app.day2.worker.execute' if job.operation.startswith('day2.') else 'app.jobs.worker.execute'
             q.enqueue(worker_target, job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)
