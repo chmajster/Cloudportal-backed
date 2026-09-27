@@ -204,10 +204,12 @@ async function blueprintsView() {
       if (scopeAllows('blueprints.delete') && canManage) {
         result.push(button('Usuń', () => confirmAction(
           'Usuń Blueprint',
-          `Definicja ${item.name} zostanie usunięta. Istniejące wdrożenia zachowają snapshot.`,
+          `Definicja ${item.name} zostanie usunięta. Jeżeli z tego Blueprintu trwa provisioning, usunięcie trafi do kolejki i wykona się automatycznie po zakończeniu aktywnego zadania. Istniejące wdrożenia zachowają snapshot.`,
           async () => {
-            await api(`/blueprints/${item.id}`, { method: 'DELETE', headers: scopeHeaders });
-            toast('Blueprint usunięty.');
+            const result = await api(`/blueprints/${item.id}`, { method: 'DELETE', headers: scopeHeaders });
+            toast(result.queued
+              ? 'Usunięcie Blueprintu dodane do kolejki. Wykona się po zakończeniu aktywnego provisioning.'
+              : 'Blueprint usunięty.');
             await blueprintsView();
           }
         ), 'danger'));
