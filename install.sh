@@ -2615,12 +2615,15 @@ k8s_emit_master_key_init() {
         - name: prepare-master-key
           image: $k8s_image
           securityContext:
-            runAsUser: 0
-            runAsGroup: 0
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
           command: ["/bin/sh", "-c"]
           args:
-            - install -o 10001 -g 10001 -m 0600 /source/master.key /runtime/master.key
+            - install -m 0600 /source/master.key /runtime/master.key
           volumeMounts:
             - {name: master-key-source, mountPath: /source, readOnly: true}
             - {name: runtime-secrets, mountPath: /runtime}
@@ -2632,7 +2635,7 @@ k8s_emit_master_key_volumes() {
         - name: master-key-source
           secret:
             secretName: cloudportal-secrets
-            items: [{key: master-key, path: master.key, mode: 0400}]
+            items: [{key: master-key, path: master.key, mode: 0440}]
         - {name: runtime-secrets, emptyDir: {}}
 EOF
 }
