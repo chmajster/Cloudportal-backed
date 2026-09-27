@@ -777,6 +777,7 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
       ['overview', 'Przegląd'],
       ['monitor', 'Monitor'],
       ['hardware', 'Hardware'],
+      ['availability', 'Dostępność', 'availability.read'],
       ['snapshots', 'Snapshoty', 'snapshots.read'],
       ['backups', 'Backupy', 'backups.read'],
       ['audit', 'Historia'],
@@ -803,6 +804,7 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
         if (id === 'overview') result = vmOverviewContent(item, status);
         else if (id === 'monitor') result = await vmMonitorContent(item);
         else if (id === 'hardware') result = vmHardwareContent(item, status);
+        else if (id === 'availability' && window.AvailabilityPlans?.vmContent) result = await window.AvailabilityPlans.vmContent(item);
         else if (id === 'snapshots') result = await vmSnapshotsContent(item);
         else if (id === 'backups') result = await vmBackupsContent(item);
         else if (id === 'audit') result = await vmAuditContent(item);
@@ -1252,7 +1254,7 @@ registerRoutedForm({
 
 registerRoutedForm({
   id: 'inventory-vm-details',
-  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/(?<tab>overview|hardware|snapshots|backups|audit)$/,
+  pattern: /^\/resources\/vm\/(?<id>[^/]+)\/(?<tab>overview|monitor|hardware|availability|snapshots|backups|audit)$/,
   parent: 'my-resources',
   permission: 'vms.read',
   label: 'Moje zasoby',
