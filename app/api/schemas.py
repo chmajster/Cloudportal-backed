@@ -1030,7 +1030,140 @@ class BlueprintInput(Input):
 
 class BlueprintExecuteInput(Input):
     variables: Annotated[dict[str, Any], Field(max_length=100)] = Field(default_factory=dict)
-    availability_plan_id: Annotated[str | None, Field(min_length=36, max_length=36, pattern=r'^[0-9a-fA-F-]{36}    hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
+    availability_plan_id: Annotated[str | None, Field(min_length=36, max_length=36, pattern=r'^[0-9a-fA-F-]{36}    apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
+    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
+
+
+class ScheduledOperationInput(Input):
+    name: Name
+    deployment_id: Annotated[str, Field(min_length=36, max_length=36)]
+    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy']
+    next_run_at: datetime
+    interval_seconds: int | None = Field(default=None, ge=60, le=31536000)
+
+    @field_validator('next_run_at')
+    @classmethod
+    def future_run(cls, value):
+        from datetime import timezone
+        current = datetime.now(timezone.utc)
+        candidate = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if candidate <= current:
+            raise ValueError('next_run_at must be in the future')
+        return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+class WebhookEndpointInput(Input):
+    name: Name
+    url: Annotated[str, Field(min_length=9, max_length=2048)]
+    events: Annotated[list[str], Field(min_length=1, max_length=64)]
+
+    @field_validator('events')
+    @classmethod
+    def event_patterns(cls, value):
+        import re
+        result = []
+        for item in value:
+            normalized = str(item).strip().lower()
+            valid = (
+                normalized == '*'
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+',
+                        normalized,
+                    )
+                )
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*\.\*',
+                        normalized,
+                    )
+                )
+            )
+            if not valid:
+                raise ValueError('Webhook event must be an event name, prefix wildcard such as job.* or *')
+            if normalized not in result:
+                result.append(normalized)
+        return result
+    is_active: bool = True
+
+    @field_validator('url')
+    @classmethod
+    def https_webhook(cls, value):
+        parsed = urlsplit(value)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise ValueError('Webhook URL must be HTTPS without embedded credentials or fragment')
+        return value
+)] = None
+    hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
+    apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
+    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
+
+
+class ScheduledOperationInput(Input):
+    name: Name
+    deployment_id: Annotated[str, Field(min_length=36, max_length=36)]
+    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy']
+    next_run_at: datetime
+    interval_seconds: int | None = Field(default=None, ge=60, le=31536000)
+
+    @field_validator('next_run_at')
+    @classmethod
+    def future_run(cls, value):
+        from datetime import timezone
+        current = datetime.now(timezone.utc)
+        candidate = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if candidate <= current:
+            raise ValueError('next_run_at must be in the future')
+        return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+class WebhookEndpointInput(Input):
+    name: Name
+    url: Annotated[str, Field(min_length=9, max_length=2048)]
+    events: Annotated[list[str], Field(min_length=1, max_length=64)]
+
+    @field_validator('events')
+    @classmethod
+    def event_patterns(cls, value):
+        import re
+        result = []
+        for item in value:
+            normalized = str(item).strip().lower()
+            valid = (
+                normalized == '*'
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+',
+                        normalized,
+                    )
+                )
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*\.\*',
+                        normalized,
+                    )
+                )
+            )
+            if not valid:
+                raise ValueError('Webhook event must be an event name, prefix wildcard such as job.* or *')
+            if normalized not in result:
+                result.append(normalized)
+        return result
+    is_active: bool = True
+
+    @field_validator('url')
+    @classmethod
+    def https_webhook(cls, value):
+        parsed = urlsplit(value)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise ValueError('Webhook URL must be HTTPS without embedded credentials or fragment')
+        return value
+)] = None
+    hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
     environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
 
