@@ -2354,8 +2354,11 @@ k8s_valid_image() {
 }
 
 k8s_preflight() {
+  local require_openssl=${1:-0}
   command -v kubectl >/dev/null 2>&1 || { ui_fail 'Brak kubectl.'; return 1; }
-  command -v openssl >/dev/null 2>&1 || { ui_fail 'Brak openssl.'; return 1; }
+  if ((require_openssl)); then
+    command -v openssl >/dev/null 2>&1 || { ui_fail 'Brak openssl.'; return 1; }
+  fi
   k8s_ctl version --request-timeout=10s >/dev/null 2>&1 || {
     ui_fail 'kubectl nie może połączyć się z API Kubernetes.'
     return 1
@@ -2812,7 +2815,7 @@ k8s_install() {
   workers=$((10#$workers))
 
   ui_stage 1 "$stages" 'Pretest Kubernetes'
-  k8s_preflight
+  k8s_preflight 1
   ui_ok 'Połączenie z API Kubernetes działa.'
 
   ui_stage 2 "$stages" 'Namespace i sekrety'
