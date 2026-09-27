@@ -1591,30 +1591,25 @@ def ensure_worker_capacity(minimum: int) -> dict:
             raise RuntimeError("Nie można zmieniać puli workerów podczas aktywnej aktualizacji")
 
         path, current = _configured_worker_count()
-        if current >= minimum:
-            return {
-                "changed": False,
-                "previous_worker_count": current,
-                "worker_count": current,
-                "install_mode": INSTALL_MODE,
-            }
-
+        target = max(current, minimum)
+        config_changed = target != current
         original = path.read_text(encoding="utf-8")
         source_stat = path.stat()
-        _set_worker_count(path, minimum)
+        if config_changed:
+            _set_worker_count(path, target)
 
         systemd_state = {}
         try:
             if INSTALL_MODE == "docker":
                 _run_worker_command(
                     _docker_compose_base()
-                    + ["up", "-d", "--no-deps", "--scale", f"worker={minimum}", "worker"],
-                    "skalowanie workerów Docker",
+                    + ["up", "-d", "--no-deps", "--scale", f"worker={target}", "worker"],
+                    "rekonsyliacja workerów Docker",
                     timeout=300,
                 )
             elif INSTALL_MODE == "systemd":
                 systemctl = shutil.which("systemctl") or "systemctl"
-                for index in range(current + 1, minimum + 1):
+                for index in range(1, target + 1):
                     unit = f"cloudportal-worker@{index}.service"
                     active_before = _service_active(unit)
                     enabled_before = subprocess.run(
@@ -1624,6 +1619,8 @@ def ensure_worker_capacity(minimum: int) -> dict:
                         check=False,
                     ).returncode == 0
                     systemd_state[unit] = (active_before, enabled_before)
+                    if active_before and enabled_before:
+                        continue
                     _run_worker_command(
                         [systemctl, "enable", "--now", unit],
                         f"uruchomienie {unit}",
@@ -1634,7 +1631,8 @@ def ensure_worker_capacity(minimum: int) -> dict:
                     f"Dynamiczna zmiana workerów nie jest obsługiwana dla trybu {INSTALL_MODE!r}"
                 )
         except Exception:
-            _atomic_config_text(path, original, source_stat)
+            if config_changed:
+                _atomic_config_text(path, original, source_stat)
             if INSTALL_MODE == "docker":
                 try:
                     _run_worker_command(
@@ -1667,11 +1665,13 @@ def ensure_worker_capacity(minimum: int) -> dict:
                         pass
             raise
 
-        _schedule_api_refresh_after_worker_change()
+        if config_changed:
+            _schedule_api_refresh_after_worker_change()
         return {
-            "changed": True,
+            "changed": config_changed,
+            "reconciled": True,
             "previous_worker_count": current,
-            "worker_count": minimum,
+            "worker_count": target,
             "install_mode": INSTALL_MODE,
         }
 
