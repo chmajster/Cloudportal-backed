@@ -328,8 +328,8 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     return manager_roles
 
 
-def require_blueprint_manager(row, actor):
-    if not can_manage_blueprint(row, actor):
+def require_blueprint_manager(db, row, actor):
+    if not can_manage_blueprint(db, row, actor):
         raise HTTPException(403, 'A dedicated manager role for this template is required')
 
 
@@ -399,7 +399,7 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
     source = portal_source(source_header)
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
     if available or source != 'backend' and not can_manage:
-        rows = [row for row in rows if available_to(row, actor, source)]
+        rows = [row for row in rows if available_to(db, row, actor, source)]
     return {'items': [blueprint_public(row) for row in rows]}
 
 
@@ -410,7 +410,7 @@ def blueprint(id: int, request: Request, source_header: Annotated[str | None, He
     validate_persisted_blueprint_contract(row)
     source = portal_source(source_header)
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
-    if source != 'backend' and not can_manage and not available_to(row, actor, source):
+    if source != 'backend' and not can_manage and not available_to(db, row, actor, source):
         raise HTTPException(404, 'Blueprint not found')
     return blueprint_public(row)
 
@@ -422,7 +422,7 @@ def blueprint_yaml(id: int, request: Request,
     row = find(db, Blueprint, id)
     source = portal_source(source_header)
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
-    if source != 'backend' and not can_manage and not available_to(row, actor, source):
+    if source != 'backend' and not can_manage and not available_to(db, row, actor, source):
         raise HTTPException(404, 'Blueprint not found')
     public = blueprint_public(row)
     payload = {name: public[name] for name in BlueprintInput.model_fields}
@@ -485,7 +485,7 @@ def update_blueprint(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(row, actor)
+    require_blueprint_manager(db, row, actor)
     require_blueprint_version(row, if_match)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
@@ -509,7 +509,7 @@ def update_blueprint_bundle(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(row, actor)
+    require_blueprint_manager(db, row, actor)
     require_blueprint_version(row, if_match)
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
@@ -534,7 +534,7 @@ def set_blueprint_enabled(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(row, actor)
+    require_blueprint_manager(db, row, actor)
     require_blueprint_version(row, if_match)
     row.is_active = data.enabled
     row.version += 1
@@ -546,7 +546,7 @@ def set_blueprint_enabled(
 @router.delete('/blueprints/{id}', response_model=DeletedOutput)
 def delete_blueprint(id: int, request: Request, actor=Depends(require('blueprints.delete')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
-    require_blueprint_manager(row, actor)
+    require_blueprint_manager(db, row, actor)
     db.delete(row)
     audit(db, request, 'blueprint.deleted', 'blueprints', id)
     return {'deleted': True}
@@ -559,7 +559,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     from app.api.infrastructure import deployment_public, job_public, locked_credential, new_job, validate_ansible
     row = find(db, Blueprint, id)
     source = portal_source(source_header)
-    if not available_to(row, actor, source):
+    if not available_to(db, row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
     validate_persisted_blueprint_contract(row)
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
