@@ -640,10 +640,37 @@ class ProxmoxProvider(InfrastructureProvider):
             payload['comment'] = str(comment)[:128]
         current = self.vm_ha_resource(vm_id)
         if current is None:
-            return self._post('/cluster/ha/resources', {'sid': sid, **payload})
-        if not group and current.get('group'):
-            payload['delete'] = 'group'
-        return self._put('/cluster/ha/resources/' + quote(sid, safe=':'), payload)
+            self._post('/cluster/ha/resources', {'sid': sid, **payload})
+        else:
+            if not group and current.get('group'):
+                payload['delete'] = 'group'
+            self._put('/cluster/ha/resources/' + quote(sid, safe=':'), payload)
+
+        live = self.vm_ha_resource(vm_id)
+        if live is None:
+            raise HTTPException(502, 'Proxmox HA configuration was written but could not be read back')
+        live_state = str(live.get('state') or 'started').lower()
+        if live_state == 'enabled':
+            live_state = 'started'
+        if live_state != state:
+            raise HTTPException(502, 'Proxmox HA state does not match the requested Availability Plan')
+        for key, expected in (
+            ('max_restart', payload['max_restart']),
+            ('max_relocate', payload['max_relocate']),
+        ):
+            try:
+                actual = int(live.get(key, 1))
+            except (TypeError, ValueError):
+                raise HTTPException(502, f'Proxmox HA returned an invalid {key} value') from None
+            if actual != expected:
+                raise HTTPException(502, f'Proxmox HA {key} does not match the requested Availability Plan')
+        if group and str(live.get('group') or '') != str(group):
+            raise HTTPException(
+                502,
+                'Proxmox HA group does not match the requested Availability Plan. '
+                'On Proxmox VE 9, legacy HA groups may already be migrated to HA rules.',
+            )
+        return live
 
     def remove_vm_ha(self, vm_id):
         sid = f'vm:{int(vm_id)}'
