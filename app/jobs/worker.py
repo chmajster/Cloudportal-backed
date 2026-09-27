@@ -2280,12 +2280,7 @@ def run_proxmox_blueprint_workflow(context):
                 context.stage(f'workflow.step.start:{step_id}:{step_type}')
                 context.progress(None, 'Wykonywanie: ' + step_type, phase=step_type)
 
-                if step_type in BLUEPRINT_PRECOMPILED_STEPS:
-                    context.log(
-                        f'workflow.step.precompiled: {step_id}:{step_type}; '
-                        'value was resolved before the job was queued'
-                    )
-                elif step_type == 'clone_vm':
+                if step_type == 'clone_vm':
                     proxmox_provision.clone(context, timeout=timeout)
                     runtime['applied'] = True
                     sync_direct_inventory()
