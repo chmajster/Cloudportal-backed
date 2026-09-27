@@ -1402,3 +1402,149 @@ def test_blueprint_template_guest_credential_is_reused_without_rewriting_cloud_i
         headers=headers,
     )
     assert protected.status_code == 409
+
+def test_blueprint_delete_is_queued_until_active_provisioning_finishes(client, headers):
+    from app.database import session
+    from app.jobs import worker
+    from app.models import Blueprint, Deployment, Job
+
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'delete-after-provisioning',
+        'name': 'Delete after provisioning',
+        'deployment': {
+            'name': 'delete-after-provisioning',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'delete-after-provisioning',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+    blueprint_id = created.json()['id']
+
+    execution = client.post(
+        f'/api/v1/blueprints/{blueprint_id}/execute',
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    provisioning_job_id = execution.json()['job']['id']
+    deployment_id = execution.json()['id']
+
+    deletion = client.delete(f'/api/v1/blueprints/{blueprint_id}', headers=headers)
+    assert deletion.status_code == 202, deletion.text
+    deletion_body = deletion.json()
+    assert deletion_body['deleted'] is False
+    assert deletion_body['queued'] is True
+    assert deletion_body['job_id']
+    assert provisioning_job_id in deletion_body['blocking_job_ids']
+
+    from app.automation.deletion import blueprint_delete_ready
+
+    with session() as db:
+        assert db.get(Blueprint, blueprint_id) is not None
+        delete_job = db.get(Job, deletion_body['job_id'])
+        assert delete_job is not None
+        assert delete_job.operation == 'blueprint.delete'
+        assert delete_job.status == 'queued'
+        assert delete_job.payload['_current_stage'] == 'blueprint.delete.waiting_for_provisioning'
+        assert blueprint_delete_ready(db, delete_job) is False
+
+    blocked_execution = client.post(
+        f'/api/v1/blueprints/{blueprint_id}/execute',
+        headers=key(headers),
+        json={},
+    )
+    assert blocked_execution.status_code == 409
+    assert 'deletion is queued' in blocked_execution.text
+
+    duplicate = client.delete(f'/api/v1/blueprints/{blueprint_id}', headers=headers)
+    assert duplicate.status_code == 202
+    assert duplicate.json()['job_id'] == deletion_body['job_id']
+
+    with session() as db:
+        provisioning_job = db.get(Job, provisioning_job_id)
+        provisioning_job.status = 'successful'
+        deployment = db.get(Deployment, deployment_id)
+        deployment.active_job_id = None
+        deployment.status = 'successful'
+        db.commit()
+
+    with session() as db:
+        assert blueprint_delete_ready(db, db.get(Job, deletion_body['job_id'])) is True
+
+    worker._execute_unfenced(deletion_body['job_id'])
+
+    with session() as db:
+        assert db.get(Blueprint, blueprint_id) is None
+        delete_job = db.get(Job, deletion_body['job_id'])
+        assert delete_job.status == 'successful'
+        assert delete_job.error is None
+
+
+def test_blueprint_delete_remains_immediate_without_active_provisioning(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'delete-immediately',
+        'name': 'Delete immediately',
+        'deployment': {
+            'name': 'delete-immediately',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'delete-immediately',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    deletion = client.delete(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=headers,
+    )
+    assert deletion.status_code == 200, deletion.text
+    assert deletion.json() == {
+        'deleted': True,
+        'queued': False,
+        'job_id': None,
+        'blocking_job_ids': [],
+    }
+
+def test_dispatch_candidates_do_not_starve_regular_jobs_behind_deferred_blueprint_deletes(client):
+    from app.database import session
+    from app.jobs.queue import queued_dispatch_candidates
+    from app.models import Job
+
+    with session() as db:
+        for index in range(100):
+            db.add(Job(
+                operation='blueprint.delete',
+                payload={'blueprint_id': 10000 + index},
+                created_by=1,
+                token_id=None,
+                request_id=str(uuid.uuid4()),
+                source='API',
+            ))
+        db.flush()
+        runnable = Job(
+            operation='ansible.execute',
+            payload={},
+            created_by=1,
+            token_id=None,
+            request_id=str(uuid.uuid4()),
+            source='API',
+        )
+        db.add(runnable)
+        db.commit()
+        runnable_id = runnable.id
+
+    with session() as db:
+        candidates = queued_dispatch_candidates(db, batch_size=100)
+        assert any(job.id == runnable_id for job in candidates)
+

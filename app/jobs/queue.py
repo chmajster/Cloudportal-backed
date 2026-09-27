@@ -324,19 +324,39 @@ def reconcile_stale_jobs(db):
     return len(rows)
 
 
+def queued_dispatch_candidates(db, batch_size=100):
+    """Return runnable candidates without allowing deferred Blueprint deletes to starve the queue."""
+    common = (
+        Job.status == 'queued',
+        Job.cancel_requested.is_(False),
+    )
+    regular_jobs = db.scalars(
+        select(Job)
+        .where(*common, Job.operation != 'blueprint.delete')
+        .order_by(Job.created_at.asc(), Job.id.asc())
+        .with_for_update(skip_locked=True)
+        .limit(batch_size)
+    ).all()
+    blueprint_delete_jobs = db.scalars(
+        select(Job)
+        .where(*common, Job.operation == 'blueprint.delete')
+        .order_by(Job.created_at.asc(), Job.id.asc())
+        .with_for_update(skip_locked=True)
+        .limit(batch_size)
+    ).all()
+    return sorted(
+        [*regular_jobs, *blueprint_delete_jobs],
+        key=lambda job: (job.created_at, job.id),
+    )
+
+
 def _dispatch_once_unfenced():
     materialize_scheduled_jobs()
     q = queue()
     with session() as db:
         acquire_dispatch_capacity_lock(db)
         expire_waiting_approvals(db)
-        jobs = db.scalars(
-            select(Job)
-            .where(Job.status == 'queued', Job.cancel_requested.is_(False))
-            .order_by(Job.created_at.asc())
-            .with_for_update(skip_locked=True)
-            .limit(100)
-        ).all()
+        jobs = queued_dispatch_candidates(db)
 
         # A job already present in RQ reserves one concurrency slot even while
         # its PostgreSQL status is still "queued". Without this reservation a
@@ -361,6 +381,10 @@ def _dispatch_once_unfenced():
                 break
             if job.id in active_rq_jobs or not provider_retry_ready(job):
                 continue
+            if job.operation == 'blueprint.delete':
+                from app.automation.deletion import blueprint_delete_ready
+                if not blueprint_delete_ready(db, job):
+                    continue
             worker_target = 'app.day2.worker.execute' if job.operation.startswith('day2.') else 'app.jobs.worker.execute'
             q.enqueue(worker_target, job.id, job_id=job.id,
                       job_timeout=settings().execution_timeout + 120, result_ttl=86400, failure_ttl=86400)

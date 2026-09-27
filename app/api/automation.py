@@ -1,6 +1,6 @@
 import re
 from typing import Annotated, Literal
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
@@ -12,7 +12,9 @@ from app.api.outputs import (BlueprintAvatarOutput, BlueprintCreationScopeOutput
                              VMClassificationSettingsOutput)
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput,
                              DeploymentInput, HostnameGenerateInput, HostnameSchemeInput)
-from app.automation.schemas import BlueprintBundleInput
+from app.automation.deletion import (active_blueprint_provisioning_jobs, pending_blueprint_delete_job,
+                                     queue_blueprint_delete)
+from app.automation.schemas import BlueprintBundleInput, BlueprintDeleteOutput
 from app.automation.service import (available_to, blueprint_public, blueprint_role_ids, can_manage_blueprint,
                                     compile_blueprint, generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
@@ -670,13 +672,58 @@ def set_blueprint_enabled(
     return blueprint_public(row)
 
 
-@router.delete('/blueprints/{id}', response_model=DeletedOutput)
-def delete_blueprint(id: int, request: Request, actor=Depends(require('blueprints.delete')), db=Depends(get_db, scope='function')):
-    row = find(db, Blueprint, id)
+@router.delete('/blueprints/{id}', response_model=BlueprintDeleteOutput)
+def delete_blueprint(
+    id: int,
+    request: Request,
+    response: Response,
+    actor=Depends(require('blueprints.delete')),
+    db=Depends(get_db, scope='function'),
+):
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(db, row, actor)
+
+    existing = pending_blueprint_delete_job(db, id)
+    blocking_jobs = active_blueprint_provisioning_jobs(db, id)
+    if existing is not None:
+        response.status_code = 202
+        return {
+            'deleted': False,
+            'queued': True,
+            'job_id': existing.id,
+            'blocking_job_ids': [job.id for job in blocking_jobs],
+        }
+
+    if blocking_jobs:
+        job = queue_blueprint_delete(
+            db,
+            row,
+            actor_id=actor.user_id,
+            token_id=actor.id,
+            request_id=request.state.request_id,
+            ip=request.client.host if request.client else '',
+            source=getattr(request.state, 'source', 'API'),
+            blocking_jobs=blocking_jobs,
+        )
+        audit(db, request, 'blueprint.delete_queued', 'blueprints', id)
+        response.status_code = 202
+        return {
+            'deleted': False,
+            'queued': True,
+            'job_id': job.id,
+            'blocking_job_ids': [item.id for item in blocking_jobs],
+        }
+
     db.delete(row)
     audit(db, request, 'blueprint.deleted', 'blueprints', id)
-    return {'deleted': True}
+    return {
+        'deleted': True,
+        'queued': False,
+        'job_id': None,
+        'blocking_job_ids': [],
+    }
 
 
 @router.post('/blueprints/{id}/execute', status_code=202, response_model=CreatedDeploymentOutput)
@@ -684,7 +731,15 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                       source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
                       actor=Depends(require('blueprints.execute')), db=Depends(get_db, scope='function')):
     from app.api.infrastructure import deployment_public, job_public, locked_credential, new_job, validate_ansible
-    row = find(db, Blueprint, id)
+    row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
+    if row is None:
+        raise HTTPException(404, 'Blueprint not found')
+    pending_delete = pending_blueprint_delete_job(db, id)
+    if pending_delete is not None:
+        raise HTTPException(
+            409,
+            f'Blueprint deletion is queued in job {pending_delete.id}; new executions are blocked',
+        )
     source = portal_source(source_header)
     if not available_to(db, row, actor, source):
         raise HTTPException(403, 'Blueprint is not available to this identity and portal')
