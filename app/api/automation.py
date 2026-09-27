@@ -739,6 +739,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         if scope_key not in (None, ''):
             blueprint_variables['scope_key'] = scope_key
         provider = find(db, Provider, parsed.provider_id)
+        if data.availability_plan_id and provider.type != 'proxmox':
+            raise HTTPException(422, 'Availability Plan currently supports Proxmox VM deployments only')
         template_meta, _ = template_definition(parsed.template)
         if provider.type != template_meta['provider']:
             raise HTTPException(422, 'Policy-selected provider does not match the Terraform template')
