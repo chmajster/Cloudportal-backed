@@ -198,6 +198,20 @@ async function settingsView() {
   const parallelLimit = Number(executionSettings.max_parallel_jobs || 10);
   const onlineWorkers = Number(workers.online || 0);
   const effectiveParallelism = onlineWorkers > 0 ? Math.min(parallelLimit, onlineWorkers) : 0;
+  const workerCapacityShortfall = onlineWorkers < parallelLimit;
+
+  const reconcileWorkerCapacity = async () => {
+    const result = await api('/settings/execution/reconcile', {
+      method: 'POST',
+      body: {},
+      idempotent: true,
+    });
+    toast(result.changed
+      ? 'Pula workerów została zwiększona do ' + result.worker_count + '.'
+      : 'Pula workerów ma już wymaganą pojemność.');
+    await new Promise(resolve => setTimeout(resolve, result.changed ? 3000 : 250));
+    await settingsView();
+  };
 
   const appearance = settingsCard(
     'sun',
@@ -240,15 +254,24 @@ async function settingsView() {
     node('div', { class: 'settings-values settings-system-grid' },
       node('div', { class: 'settings-value' }, node('span', { text: 'Backend' }), settingsHealth(health?.status || (health?.ok ? 'ok' : 'unknown'))),
       node('div', { class: 'settings-value' }, node('span', { text: 'PostgreSQL' }), settingsHealth(checks.database)),
-      node('div', { class: 'settings-value' }, node('span', { text: 'Redis' }), settingsHealth(checks.redis)),
+      node('div', { class: 'settings-value' }, node('span', { text: 'Redis' }), settingsHealth(checks.queue)),
       node('div', { class: 'settings-value' }, node('span', { text: 'Dispatcher' }), settingsHealth(checks.dispatcher)),
       settingsValue('Workery online', workers.online !== undefined ? String(workers.online) : '—'),
       settingsValue('Workery oczekiwane', workers.expected !== undefined ? String(workers.expected) : '—'),
       settingsValue('Limit równoległych zadań', String(parallelLimit)),
       settingsValue('Efektywny limit', workers.online !== undefined ? String(effectiveParallelism) : '—')),
+    workerCapacityShortfall
+      ? node('p', {
+          class: 'muted',
+          text: 'Pula workerów jest mniejsza niż ustawiony limit. Zadania nie osiągną pełnej równoległości, dopóki pula nie zostanie dostosowana.',
+        })
+      : null,
     node('div', { class: 'settings-card-actions' },
       button('Odśwież stan', () => settingsView()),
-      allowed('settings.update') ? button('Zmień równoległość', () => navigate('/admin/settings/execution'), 'primary') : null)
+      allowed('settings.update') && workerCapacityShortfall
+        ? button('Dostosuj workery', () => reconcileWorkerCapacity().catch(error => toast(error.message, 'error')), 'primary')
+        : null,
+      allowed('settings.update') ? button('Zmień równoległość', () => navigate('/admin/settings/execution')) : null)
   );
 
   const updates = settingsCard(
