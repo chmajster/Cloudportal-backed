@@ -81,11 +81,16 @@ def test_availability_plan_name_is_unique_only_inside_organization_and_project(c
 
 def test_blueprint_execute_contract_accepts_optional_availability_plan():
     plan_id = str(uuid4())
-    data = BlueprintExecuteInput(availability_plan_id=plan_id)
+    data = BlueprintExecuteInput(
+        availability_plan_id=plan_id,
+        hostname_values={'env': 'prod'},
+    )
     assert data.availability_plan_id == plan_id
+    assert data.hostname_values == {'env': 'prod'}
 
     empty = BlueprintExecuteInput()
     assert empty.availability_plan_id is None
+    assert empty.hostname_values == {}
 
 
 def test_proxmox_provider_creates_and_reads_back_ha_resource(monkeypatch):

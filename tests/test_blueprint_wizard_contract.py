@@ -760,11 +760,11 @@ def test_blueprint_console_uses_project_scope_and_single_wizard_editor():
 
 def test_blueprint_hostname_pattern_is_deferred_until_transactional_save():
     source = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-hostname.js').read_text()
-    wizard = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard.js').read_text()
+    save = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-save.js').read_text()
     assert "state.hostnameSchemeId = '__pending__'" in source
     assert "api('/hostname-schemes', {" not in source
-    assert "'/blueprints/bundle'" in wizard
-    assert "/blueprints/${editingItem.id}/bundle" in wizard
+    assert "'/blueprints/bundle'" in save
+    assert "/blueprints/${editingItem.id}/bundle" in save
 
 
 def test_blueprint_wizard_uses_scoped_hostname_permissions_and_immutable_edit_scope():
@@ -779,7 +779,7 @@ def test_blueprint_wizard_uses_scoped_hostname_permissions_and_immutable_edit_sc
     assert "projectSelect.disabled = projects.length === 1 || Boolean(options.item)" in scope
 
 def test_wizard_offers_replace_when_blueprint_name_or_slug_already_exists():
-    source = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard.js').read_text()
+    source = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-save.js').read_text()
     stylesheet = (ROOT / 'app' / 'web' / 'styles' / 'features' / 'blueprints.css').read_text()
 
     assert 'async function findExistingBlueprintConflicts(payload)' in source

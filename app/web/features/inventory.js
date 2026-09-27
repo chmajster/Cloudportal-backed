@@ -1,6 +1,18 @@
 'use strict';
 
 (() => {
+function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
+  const rows = Object.entries(value || {}).map(([key, item]) => ({ key, value: item }));
+  dom.modalTitle.textContent = title;
+  dom.modalEyebrow.textContent = eyebrow;
+  dom.modalBody.replaceChildren(rows.length ? table([
+    { label: 'Pole', value: row => node('strong', { text: FIELD_LABELS[row.key] || row.key.replaceAll('_', ' ') }) },
+    { label: 'Wartość', value: row => node('span', { class: typeof row.value === 'string' && row.value.length > 40 ? 'mono' : '', text: displayValue(row.value) }) },
+  ], rows) : node('p', { class: 'muted', text: 'Brak dodatkowych danych.' }));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
 async function inventoryView() {
   const [vms, resources, providerResult] = await Promise.all([
     api('/inventory/vms?refresh=true&limit=200'),

@@ -34,6 +34,7 @@
 - DAG musi walidować brakujące zależności, self-reference, cykle, rollback targets i zmianę ID kroków.
 - Zmiana ID/usunięcie kroku w edytorze musi aktualizować/usuwać wszystkie referencje `depends_on` i rollback.
 - Job/deployment ma przechowywać snapshot konfiguracji potrzebnej do wykonania; późniejsza edycja Blueprintu, playbooka lub katalogu nie może zmieniać już zakolejkowanego wykonania.
+- Regresja PR #276: dodanie opcjonalnego pola do `BlueprintExecuteInput` skleiło deklarację `availability_plan_id` z istniejącym `hostname_values`, powodując SyntaxError całego backendu. Przy zmianie kontraktu Pydantic zachowuj sąsiednie pola i dodawaj test instancjonujący nowy oraz istniejący parametr jednocześnie.
 - Usunięcie/wyłączenie Blueprintu nie może powodować zniknięcia definicji potrzebnej aktywnemu jobowi. Operacje kolidujące z aktywnym provisioningiem powinny być blokowane lub kolejkowane po nim.
 - Po refaktorze workflow przeszukaj repo pod kątem starych symboli. PR #263: usunięto `BLUEPRINT_PRECOMPILED_STEPS`, ale worker nadal go używał, co dawało `NameError` opakowany jako ogólny błąd `clone_vm`.
 
@@ -153,6 +154,9 @@
 - Deinstalacja domyślnie zachowuje bazę/dane; purge jest osobną, jawną operacją.
 - Kubernetes musi mieć trwałe PVC dla danych i spójny bootstrap/migration/rollout order.
 - Każdy nowy tryb instalacji musi mieć status, uninstall/purge semantics i osobne testy platformowe.
+- Docker candidate build używa tych samych nazw obrazów Compose co aktywny release. Rollback po nieudanym kandydacie musi odbudować obrazy z katalogu poprzedniego release przed `compose up`; samo uruchomienie starego `docker-compose.yml` może wystartować na obrazie kandydata.
+- Rollback aplikacji po wykonaniu migracji wymaga przywrócenia bazy do rewizji zgodnej z poprzednim release. Przed mutacją produkcyjnej DB zatrzymaj warstwę aplikacyjną i wykonaj rollback dump; po błędzie odtwórz DB przed uruchomieniem starego `migrate`/API.
+- Przy błędzie usługi `migrate` instalator ma pokazać jej log. Nie wolno raportować „poprzedni release przywrócony”, jeżeli rollback sam zakończył się błędem.
 
 ## 1.12. Migracje i baza
 
@@ -161,6 +165,7 @@
 - Migracje muszą być testowane zarówno na pustej bazie, jak i upgrade z realnego poprzedniego head.
 - Przy lightweight `sa.table()` określ typy kolumn JSON/JSONB; brak typu może przekazać surowy dict do psycopg i zakończyć migrację błędem.
 - Po merge równoległych gałęzi sprawdź, czy Alembic ma jeden poprawny head albo jawny merge revision.
+- Regresja 2026-09-27: `0c4e71a9d2f8` i `ab91c4e7d260` równolegle wskazywały na `f9d6c2a81e44`, przez co Docker `migrate` kończył `alembic upgrade head` kodem 255. Naprawa wymaga nowej merge revision, nigdy edycji już scalonych migracji, oraz testu repozytorium wymuszającego dokładnie jeden head.
 - Nie zakładaj historycznego stałego head w testach migracji.
 
 ## 1.13. noVNC i WebSocket

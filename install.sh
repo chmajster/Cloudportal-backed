@@ -1212,9 +1212,55 @@ docker_updater_status_probe() {
     "https://127.0.0.1:$public_port/update-status" >/dev/null
 }
 
+docker_prepare_candidate_rollback_backup() {
+  local previous_release=$1 rollback_dump=$2
+
+  [[ -n "$previous_release" && -f "$previous_release/docker-compose.yml" && -r "$docker_env" ]] || return 0
+
+  ui_info 'Zatrzymuję warstwę aplikacyjną poprzedniego release przed migracją produkcyjnej bazy.'
+  if ! docker_compose_for "$previous_release" "$docker_env" stop proxy dispatcher worker api; then
+    ui_fail 'Nie udało się zatrzymać poprzedniej warstwy aplikacyjnej przed backupem rollback.'
+    return 1
+  fi
+
+  ui_info 'Tworzę spójny backup PostgreSQL do rollbacku kandydata.'
+  if ! docker_compose_for "$previous_release" "$docker_env" exec -T postgres       pg_dump -U cloudportal -d cloudportal -Fc > "$rollback_dump"; then
+    rm -f "$rollback_dump"
+    ui_fail 'Nie udało się utworzyć backupu PostgreSQL przed migracją kandydata.'
+    docker_compose_for "$previous_release" "$docker_env" start api worker dispatcher proxy || true
+    return 1
+  fi
+  chmod 0600 "$rollback_dump"
+  ui_ok 'Backup rollback PostgreSQL jest gotowy; produkcyjna warstwa aplikacyjna pozostaje zatrzymana do zakończenia aktualizacji.'
+}
+
+docker_restore_candidate_rollback_database() {
+  local candidate_release=$1 candidate_env=$2 rollback_dump=$3
+
+  [[ -s "$rollback_dump" ]] || {
+    ui_fail 'Brak backupu PostgreSQL wymaganego do bezpiecznego rollbacku.'
+    return 1
+  }
+
+  ui_info 'Zatrzymuję usługi aplikacyjne kandydata przed odtworzeniem bazy.'
+  docker_compose_for "$candidate_release" "$candidate_env" stop proxy dispatcher worker api >/dev/null 2>&1 || true
+
+  ui_info 'Przywracam PostgreSQL dokładnie do stanu sprzed migracji kandydata.'
+  if ! docker_compose_for "$candidate_release" "$candidate_env" exec -T postgres       psql -U cloudportal -d postgres -v ON_ERROR_STOP=1       -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'cloudportal' AND pid <> pg_backend_pid();"       -c 'DROP DATABASE IF EXISTS cloudportal;'       -c 'CREATE DATABASE cloudportal OWNER cloudportal;' >/dev/null; then
+    ui_fail 'Nie udało się odtworzyć pustej bazy cloudportal podczas rollbacku.'
+    return 1
+  fi
+
+  if ! docker_compose_for "$candidate_release" "$candidate_env" exec -T postgres       pg_restore -U cloudportal -d cloudportal --no-owner --no-privileges < "$rollback_dump"; then
+    ui_fail 'pg_restore poprzedniego stanu PostgreSQL zakończył się błędem.'
+    return 1
+  fi
+  ui_ok 'PostgreSQL został przywrócony do stanu sprzed aktualizacji.'
+}
+
 docker_rollback_candidate() {
   local candidate_release=$1 candidate_env=$2 previous_release=$3 previous_workers=$4
-  local tls_changed=$5 tls_backup_dir=$6 had_previous_tls=$7
+  local tls_changed=$5 tls_backup_dir=$6 had_previous_tls=$7 rollback_dump=$8
 
   ui_warn 'Przywracam ostatni aktywny stan Docker po nieudanej walidacji kandydata.'
 
@@ -1228,13 +1274,37 @@ docker_rollback_candidate() {
   fi
 
   if [[ -n "$previous_release" && -f "$previous_release/docker-compose.yml" && -r "$docker_env" ]]; then
-    docker_compose_for "$previous_release" "$docker_env" up -d --remove-orphans --scale "worker=${previous_workers:-$default_workers}" || true
-    if ((tls_changed)); then
-      docker_compose_for "$previous_release" "$docker_env" restart proxy || true
+    docker_restore_candidate_rollback_database "$candidate_release" "$candidate_env" "$rollback_dump" || return 1
+
+    ui_info 'Odbudowuję obrazy poprzedniego release, ponieważ build kandydata używa tych samych nazw obrazów Compose.'
+    if ! docker_compose_for "$previous_release" "$docker_env" build; then
+      ui_fail 'Nie udało się odbudować obrazów poprzedniego release podczas rollbacku.'
+      return 1
     fi
-  else
-    docker_compose_for "$candidate_release" "$candidate_env" down --remove-orphans >/dev/null 2>&1 || true
+
+    ui_info 'Weryfikuję poprzedni head Alembica na odtworzonej bazie.'
+    if ! docker_compose_for "$previous_release" "$docker_env" up --no-deps --force-recreate         --abort-on-container-exit --exit-code-from migrate migrate; then
+      ui_fail 'Migracje poprzedniego release nie potwierdziły odtworzonego stanu bazy.'
+      docker_compose_for "$previous_release" "$docker_env" logs --tail=120 migrate || true
+      return 1
+    fi
+
+    if ! docker_compose_for "$previous_release" "$docker_env" up -d --no-deps --remove-orphans         --scale "worker=${previous_workers:-$default_workers}" api worker dispatcher proxy; then
+      ui_fail 'Nie udało się uruchomić poprzedniego release Docker po odtworzeniu bazy i obrazów.'
+      docker_compose_for "$previous_release" "$docker_env" logs --tail=120 migrate api worker dispatcher proxy || true
+      return 1
+    fi
+    if ((tls_changed)) && ! docker_compose_for "$previous_release" "$docker_env" restart proxy; then
+      ui_fail 'Poprzedni release działa, ale nie udało się przeładować proxy po przywróceniu TLS.'
+      return 1
+    fi
+    ui_ok 'Poprzedni release Docker wraz z bazą danych został przywrócony.'
+    return 0
   fi
+
+  docker_compose_for "$candidate_release" "$candidate_env" down --remove-orphans >/dev/null 2>&1 || true
+  ui_warn 'Brak poprzedniego release do przywrócenia; kandydat został zatrzymany.'
+  return 0
 }
 
 docker_status_check() {
@@ -2236,6 +2306,14 @@ EOF
   docker_compose_for "$release" "$candidate_env" run --rm --no-deps -T bootstrap python -m app.bootstrap --key-only
   ui_ok 'Master key jest gotowy; migracje wykona usługa migrate podczas startu kandydata.'
 
+  local rollback_db_dump="$docker_tmp_dir/pre-candidate-database.dump"
+  if [[ -n "$previous_release" ]]; then
+    docker_prepare_candidate_rollback_backup "$previous_release" "$rollback_db_dump" || {
+      ui_fail 'Aktualizacja została przerwana przed migracją; poprzedni release pozostaje bez zmian.'
+      exit 1
+    }
+  fi
+
   if ((docker_tls_changed)); then
     tls_backup_dir="$docker_tmp_dir/tls-backup"
     if [[ -f "$docker_tls/server.crt" || -f "$docker_tls/server.key" || -f "$docker_tls/source" || -f "$docker_tls/host" ]]; then
@@ -2253,13 +2331,31 @@ EOF
 
   ui_stage 6 "$stages" 'Start stacka i healthcheck'
   if ! docker_compose_for "$release" "$candidate_env" up -d --remove-orphans --scale "worker=$workers"; then
-    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
-    ui_fail 'Nie udało się uruchomić kandydata Docker; poprzedni aktywny release pozostaje źródłem prawdy.'
+    ui_fail 'Nie udało się uruchomić kandydata Docker.'
+    ui_info 'Log usługi migrate:'
+    docker_compose_for "$release" "$candidate_env" logs --tail=120 migrate || true
+    if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls" "$rollback_db_dump"; then
+      if [[ -n "$previous_release" ]]; then
+        ui_fail 'Kandydat Docker został odrzucony; poprzedni release i baza danych zostały przywrócone.'
+      else
+        ui_fail 'Kandydat Docker został odrzucony; to była świeża instalacja, więc kandydat został zatrzymany bez rollbacku do wcześniejszego release.'
+      fi
+    else
+      ui_fail 'Kandydat Docker nie wystartował, a automatyczny rollback również się nie powiódł.'
+      ui_info "Diagnostyka: docker compose -p $docker_project ps -a && docker compose -p $docker_project logs --tail=150 migrate api"
+    fi
     exit 1
   fi
   if ((docker_tls_changed)) && ! docker_compose_for "$release" "$candidate_env" restart proxy; then
-    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
-    ui_fail 'Nie udało się przeładować proxy z nowym TLS; przywrócono poprzedni stan.'
+    if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls" "$rollback_db_dump"; then
+      if [[ -n "$previous_release" ]]; then
+        ui_fail 'Nie udało się przeładować proxy z nowym TLS; poprzedni release i baza danych zostały przywrócone.'
+      else
+        ui_fail 'Nie udało się przeładować proxy z nowym TLS podczas świeżej instalacji; kandydat został zatrzymany.'
+      fi
+    else
+      ui_fail 'Nie udało się przeładować proxy z nowym TLS, a rollback poprzedniego release również się nie powiódł.'
+    fi
     exit 1
   fi
   local ready=0
@@ -2280,7 +2376,15 @@ EOF
     ui_fail 'Kandydat Docker wystartował, ale HTTPS healthcheck nie przeszedł.'
     docker_compose_for "$release" "$candidate_env" ps || true
     docker_compose_for "$release" "$candidate_env" logs --tail=100 api proxy || true
-    docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls"
+    if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls" "$rollback_db_dump"; then
+      if [[ -n "$previous_release" ]]; then
+        ui_fail 'HTTPS healthcheck kandydata nie przeszedł; poprzedni release i baza danych zostały przywrócone.'
+      else
+        ui_fail 'HTTPS healthcheck świeżej instalacji nie przeszedł; kandydat został zatrzymany.'
+      fi
+    else
+      ui_fail 'HTTPS healthcheck kandydata nie przeszedł, a rollback poprzedniego release również się nie powiódł.'
+    fi
     exit 1
   }
   ui_ok 'Healthcheck HTTPS kandydata zakończony pomyślnie.'

@@ -1,6 +1,40 @@
 'use strict';
 
 (() => {
+function showTemplateFields(template) {
+  const schema = template.variables_schema || {};
+  const required = new Set(schema.required || []);
+  const rows = Object.entries(schema.properties || {}).map(([name, spec]) => {
+    const base = schemaVariant(spec);
+    const type = schemaType(spec);
+    const enums = schemaEnum(spec);
+    let constraints = '—';
+    if (enums?.length) constraints = enums.join(', ');
+    else if (base.minimum !== undefined || base.maximum !== undefined) constraints = `${base.minimum ?? '—'} – ${base.maximum ?? '—'}`;
+    return {
+      name,
+      label: FIELD_LABELS[name] || spec.title || name,
+      type,
+      required: required.has(name),
+      default: spec.default,
+      constraints,
+    };
+  });
+  const typeLabels = { string: 'Tekst', integer: 'Liczba całkowita', number: 'Liczba', boolean: 'Tak / nie', array: 'Lista' };
+  dom.modal.classList.add('modal-wide');
+  dom.modalTitle.textContent = `Pola: ${template.name}`;
+  dom.modalEyebrow.textContent = `Szablon v${template.version}`;
+  dom.modalBody.replaceChildren(rows.length ? table([
+    { label: 'Pole', value: row => node('div', {}, node('strong', { text: row.label }), node('div', { class: 'mono muted', text: row.name })) },
+    { label: 'Typ', value: row => typeLabels[row.type] || row.type },
+    { label: 'Wymagane', value: row => row.required ? badge('Tak', 'warning') : 'Nie' },
+    { label: 'Domyślnie', value: row => displayValue(row.default) },
+    { label: 'Opcje / zakres', value: row => row.constraints },
+  ], rows) : node('p', { class: 'muted', text: 'Szablon nie ma parametrów wejściowych.' }));
+  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
+  if (!dom.modal.open) dom.modal.showModal();
+}
+
 function openProxmoxTemplateWizard(item = null) {
   if (!hasCommand('blueprints.proxmoxTemplateWizard')) {
     toast('Kreator szablonu IaC nie jest dostępny.', 'error');
