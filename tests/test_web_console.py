@@ -25,6 +25,13 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'id="global-search-title"' in page.text
     assert 'id="sidebar-profile"' in page.text
     assert 'class="page-context"' in page.text
+    assert 'id="user-menu-toggle"' in page.text
+    assert 'id="user-menu-dropdown"' in page.text
+    assert 'id="current-user-avatar"' in page.text
+    assert 'id="current-context-organization"' in page.text
+    assert 'id="current-context-project"' in page.text
+    assert 'id="current-context-environment"' in page.text
+    assert 'data-theme-toggle-text' in page.text
     assert 'href="./favicon.ico"' in page.text
     assert 'type="image/x-icon"' in page.text
     assert 'src="./theme-init.js"' in page.text
@@ -190,6 +197,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
+    assert 'function setUserMenuOpen(' in core
+    assert 'dom.currentUserAvatar.textContent = identityInitials' in core
+    assert "document.querySelector('#user-menu-account')" in bootstrap
     assert "registerCommand('users.create'" in script
     assert "registerCommand('tokens.create'" in script
     assert "button('Dokumentacja OpenAPI'" in script
@@ -1140,6 +1150,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.global-search-close' in stylesheet
     assert '.sr-only' in stylesheet
     assert '.sidebar-profile-card' in stylesheet
+    assert '.user-menu-toggle' in stylesheet
+    assert '.user-menu-dropdown' in stylesheet
+    assert '.user-menu-context' in stylesheet
+    assert '.user-menu-action' in stylesheet
     assert '.nav-link.active::before' in stylesheet
     assert '.dashboard-metrics' in stylesheet
     assert '.observability-hero' in stylesheet
