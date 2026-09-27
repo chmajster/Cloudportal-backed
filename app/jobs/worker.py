@@ -2407,6 +2407,11 @@ def run_proxmox_blueprint_workflow(context):
     if not runtime['applied']:
         raise ExecutionFailed('Direct Proxmox workflow did not create a VM')
     sync_direct_inventory()
+    # HA is intentionally enabled only after configuration/cloud-init/start and
+    # all explicit post-provisioning steps have completed. Registering vm:<VMID>
+    # immediately after clone could let HA start an incompletely configured VM.
+    from app.availability.service import apply_pending_for_deployment
+    apply_pending_for_deployment(context)
 
     context.blueprint_workflow_completed = True
     persist_workflow_runtime(context, runtime)
