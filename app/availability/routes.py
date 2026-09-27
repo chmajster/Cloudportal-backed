@@ -105,7 +105,7 @@ def update_plan(plan_id: str, data: AvailabilityPlanInput, request: Request,
         AvailabilityPlan.tenant_id == scope.tenant_id,
         AvailabilityPlan.project_id == scope.project_id,
         AvailabilityPlan.id != row.id,
-AvailabilityPlan.normalized_name == data.name.strip().casefold(),
+        AvailabilityPlan.normalized_name == data.name.strip().casefold(),
     ).limit(1))
     if duplicate:
         raise HTTPException(409, 'Availability Plan with this name already exists in the selected project')
