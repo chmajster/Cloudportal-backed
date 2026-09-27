@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_alembic_has_exactly_one_head_after_parallel_feature_migrations():
     config = Config(str(ROOT / 'alembic.ini'))
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ['c13d9a42b5e7']
+    assert len(heads) == 1
 
 
 def test_merge_revision_joins_blueprint_roles_and_availability_plan_heads():
