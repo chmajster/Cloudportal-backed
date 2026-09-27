@@ -403,3 +403,43 @@ def test_job_execution_concurrency_settings(client, headers):
     with session() as db:
         raw = db.get(Setting, 'job_execution').value
         assert raw == {'max_parallel_jobs': 3}
+
+
+def test_job_execution_capacity_reconcile_uses_configured_parallel_limit(client, headers, monkeypatch):
+    import app.api.administration as administration
+
+    saved = client.put(
+        '/api/v1/settings/execution',
+        headers=headers,
+        json={'max_parallel_jobs': 4},
+    )
+    assert saved.status_code == 200, saved.text
+
+    calls = []
+
+    def fake_updater_request(path, method='GET', payload=None):
+        calls.append((path, method, payload))
+        return {
+            'changed': True,
+            'previous_worker_count': 1,
+            'worker_count': 4,
+            'install_mode': 'docker',
+        }
+
+    monkeypatch.setattr(administration, 'updater_request', fake_updater_request)
+
+    reconciled = client.post(
+        '/api/v1/settings/execution/reconcile',
+        headers=headers,
+        json={},
+    )
+
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json() == {
+        'changed': True,
+        'previous_worker_count': 1,
+        'worker_count': 4,
+        'install_mode': 'docker',
+        'max_parallel_jobs': 4,
+    }
+    assert calls == [('/workers/ensure', 'POST', {'minimum': 4})]
