@@ -1091,6 +1091,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.detail-section' in stylesheet
     assert '.task-progress' in stylesheet
     assert '.advanced-options' in stylesheet
+    assert '.advanced-options-body.form-grid { align-items: start; }' in stylesheet
     assert '.task-id-details' in stylesheet
     assert '.editor-card' in stylesheet
     assert '.designer-heading' in stylesheet
