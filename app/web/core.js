@@ -1082,6 +1082,22 @@ function routeNavigationParent(route) {
   if (route?.id === 'routed-form') return (window.routedFormParent?.() || route.navigationParent || '');
   return route?.navigationParent || '';
 }
+function navigationHref(route) {
+  const path = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(route.id) : route.id;
+  return '#' + String(path || route.id);
+}
+function navigationLinkClick(event, route) {
+  if (
+    event.defaultPrevented
+    || event.button !== 0
+    || event.metaKey
+    || event.ctrlKey
+    || event.shiftKey
+    || event.altKey
+  ) return;
+  event.preventDefault();
+  navigate(route.id);
+}
 function renderNavigation() {
   dom.navigation.replaceChildren();
   const currentRoute = routes.find(route => route.id === state.view);
@@ -1093,9 +1109,12 @@ function renderNavigation() {
     if (group && group !== previousGroup) dom.navigation.append(node('div', { class: 'nav-group-label', 'aria-hidden': 'true', text: group }));
     previousGroup = group;
     const exact = state.view === route.id;
-    const item = node('button', {
-      class: `nav-link ${exact || routeNavigationParent(currentRoute) === route.id ? 'active' : ''}`, type: 'button',
-      title: route.label, 'aria-current': exact ? 'page' : null, onClick: () => navigate(route.id),
+    const item = node('a', {
+      class: `nav-link ${exact || routeNavigationParent(currentRoute) === route.id ? 'active' : ''}`,
+      href: navigationHref(route),
+      title: route.label,
+      'aria-current': exact ? 'page' : null,
+      onClick: event => navigationLinkClick(event, route),
     }, node('span', { class: 'nav-icon', 'aria-hidden': 'true' }, appRouteIcon(route)), node('span', { class: 'nav-label', text: route.label }));
     item.dataset.route = route.id;
     dom.navigation.append(item);

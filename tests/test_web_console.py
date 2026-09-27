@@ -196,6 +196,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'const visibleAvailable = available' in core
     assert '.filter(navigationRouteVisible)' in script
     assert 'routeNavigationParent(currentRoute) === route.id' in core
+    assert "const item = node('a', {" in core
+    assert 'href: navigationHref(route)' in core
+    assert 'onClick: event => navigationLinkClick(event, route)' in core
+    assert 'event.button !== 0' in core
+    assert 'event.metaKey' in core
+    assert 'event.ctrlKey' in core
+    assert 'event.shiftKey' in core
+    assert 'event.altKey' in core
     assert 'appRouteIcon(route)' in core
     assert "text: route.icon" not in core
     assert 'function renderSidebarProfile()' in core
