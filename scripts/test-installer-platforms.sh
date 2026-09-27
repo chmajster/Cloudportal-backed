@@ -5,6 +5,8 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 fixture=$(mktemp)
 trap 'rm -f "$fixture"' EXIT
 
+bash -n "$repo_root/install.sh"
+
 check_supported() {
   local id=$1 version=$2 family=$3 store=$4 python=$5 output
   printf 'ID=%s\nVERSION_ID=%s\nNAME="Test %s"\n' "$id" "$version" "$id" > "$fixture"
@@ -30,7 +32,14 @@ grep -Fq -- '--status' <<< "$help_long"
 grep -Fq -- '--no-auto-repair' <<< "$help_long"
 grep -Fq -- '--uninstall' <<< "$help_long"
 grep -Fq -- '--docker' <<< "$help_long"
+grep -Fq -- '--k8s' <<< "$help_long"
+grep -Fq -- '--k8s-image' <<< "$help_long"
 grep -Fq 'docker_mode=0' "$repo_root/install.sh"
+grep -Fq 'k8s_mode=0' "$repo_root/install.sh"
+grep -Fq -- '--k8s) k8s_mode=1' "$repo_root/install.sh"
+grep -Fq 'k8s_install()' "$repo_root/install.sh"
+grep -Fq 'k8s_status()' "$repo_root/install.sh"
+grep -Fq 'k8s_uninstall()' "$repo_root/install.sh"
 grep -Fq -- '--docker) docker_mode=1' "$repo_root/install.sh"
 grep -Fq 'docker_compose_detect()' "$repo_root/install.sh"
 grep -Fq 'docker_install()' "$repo_root/install.sh"

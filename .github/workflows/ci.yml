@@ -276,3 +276,112 @@ jobs:
       - name: Remove installer diagnostics
         if: always()
         run: sudo rm -f /tmp/cloudportal-install-output /tmp/cloudportal-reinstall-output /tmp/cloudportal-uninstall-output /tmp/cloudportal-purge-output
+
+
+  k8s-installer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kind
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/kind https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
+          chmod 0755 /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+          kind version
+          kubectl version --client
+      - name: Build image and create cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --build-arg BUILD_COMMIT="$GITHUB_SHA" -t cloudportal-backed:k8s-ci .
+          kind create cluster --name cloudportal-ci
+          kind load docker-image cloudportal-backed:k8s-ci --name cloudportal-ci
+          kubectl get nodes -o wide
+          kubectl get storageclass
+      - name: Kubernetes installer lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          ./install.sh --k8s             --k8s-image cloudportal-backed:k8s-ci             --k8s-namespace cloudportal-ci             --host localhost             --port 8443             --workers 2             --non-interactive > /tmp/cloudportal-k8s-install-output 2>&1
+
+          grep -Fq 'Instalacja Kubernetes Cloudportal-backed zakończona.' /tmp/cloudportal-k8s-install-output
+          health_line=$(grep -nF 'Healthcheck API i HTTPS zakończony.' /tmp/cloudportal-k8s-install-output | head -n1 | cut -d: -f1)
+          token_line=$(grep -nF 'Initial API Token:' /tmp/cloudportal-k8s-install-output | head -n1 | cut -d: -f1)
+          test -n "$health_line"
+          test -n "$token_line"
+          test "$health_line" -lt "$token_line"
+
+          ./install.sh --k8s --k8s-namespace cloudportal-ci --status > /tmp/cloudportal-k8s-status-output 2>&1
+          grep -Fq 'PostgreSQL: Ready' /tmp/cloudportal-k8s-status-output
+          grep -Fq 'Redis: Ready' /tmp/cloudportal-k8s-status-output
+          grep -Fq 'Cloudportal: Ready' /tmp/cloudportal-k8s-status-output
+          grep -Fq 'API healthcheck: OK' /tmp/cloudportal-k8s-status-output
+
+          kubectl -n cloudportal-ci port-forward svc/cloudportal 10443:8443 > /tmp/cloudportal-k8s-port-forward.log 2>&1 &
+          pf_pid=$!
+          trap 'kill "$pf_pid" >/dev/null 2>&1 || true' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -kfsS --connect-timeout 2 --max-time 5 https://127.0.0.1:10443/api/v1/health >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          kill "$pf_pid" >/dev/null 2>&1 || true
+          wait "$pf_pid" 2>/dev/null || true
+          trap - EXIT
+
+          master_before=$(kubectl -n cloudportal-ci get secret cloudportal-secrets -o jsonpath='{.data.master-key}')
+          revision_before=$(kubectl -n cloudportal-ci get statefulset cloudportal-app -o jsonpath='{.spec.template.metadata.annotations.cloudportal\.io/rollout-revision}')
+
+          ./install.sh --k8s             --k8s-image cloudportal-backed:k8s-ci             --k8s-namespace cloudportal-ci             --host 127.0.0.1             --port 8443             --workers 3             --non-interactive > /tmp/cloudportal-k8s-reinstall-output 2>&1
+
+          ! grep -Fq 'Initial API Token:' /tmp/cloudportal-k8s-reinstall-output
+          master_after=$(kubectl -n cloudportal-ci get secret cloudportal-secrets -o jsonpath='{.data.master-key}')
+          revision_after=$(kubectl -n cloudportal-ci get statefulset cloudportal-app -o jsonpath='{.spec.template.metadata.annotations.cloudportal\.io/rollout-revision}')
+          test "$master_before" = "$master_after"
+          test "$revision_before" != "$revision_after"
+          kubectl -n cloudportal-ci get configmap cloudportal-runtime -o jsonpath='{.data.CP_WORKER_COUNT}' | grep -Fxq 3
+          kubectl -n cloudportal-ci get configmap cloudportal-runtime -o jsonpath='{.data.CP_PUBLIC_HOST}' | grep -Fxq 127.0.0.1
+
+          ./install.sh --k8s --k8s-namespace cloudportal-ci --non-interactive --uninstall --yes > /tmp/cloudportal-k8s-uninstall-output 2>&1
+          ! kubectl -n cloudportal-ci get statefulset cloudportal-app >/dev/null 2>&1
+          kubectl -n cloudportal-ci get pvc cloudportal-app-data cloudportal-postgres-data cloudportal-redis-data >/dev/null
+          kubectl -n cloudportal-ci get secret cloudportal-secrets cloudportal-tls >/dev/null
+
+          ./install.sh --k8s             --k8s-image cloudportal-backed:k8s-ci             --k8s-namespace cloudportal-ci             --host 127.0.0.1             --port 8443             --workers 2             --non-interactive > /tmp/cloudportal-k8s-preserved-reinstall-output 2>&1
+          ! grep -Fq 'Initial API Token:' /tmp/cloudportal-k8s-preserved-reinstall-output
+          test "$master_before" = "$(kubectl -n cloudportal-ci get secret cloudportal-secrets -o jsonpath='{.data.master-key}')"
+
+          ./install.sh --k8s --k8s-namespace cloudportal-ci --non-interactive --uninstall --purge-data --yes > /tmp/cloudportal-k8s-purge-output 2>&1
+          ! kubectl -n cloudportal-ci get pvc cloudportal-app-data >/dev/null 2>&1
+          ! kubectl -n cloudportal-ci get pvc cloudportal-postgres-data >/dev/null 2>&1
+          ! kubectl -n cloudportal-ci get pvc cloudportal-redis-data >/dev/null 2>&1
+          ! kubectl -n cloudportal-ci get secret cloudportal-secrets >/dev/null 2>&1
+          ! kubectl -n cloudportal-ci get secret cloudportal-tls >/dev/null 2>&1
+      - name: Sanitized Kubernetes diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          for output in /tmp/cloudportal-k8s-*-output; do
+            if test -f "$output"; then
+              echo "Kubernetes installer diagnostics: $output"
+              sed -E                 -e 's/(Initial (API Token|password):).*/\1 [REDACTED]/I'                 "$output" | tail -n 180
+            fi
+          done
+          kubectl -n cloudportal-ci get all,pvc,configmap,secret -o wide || true
+          kubectl -n cloudportal-ci describe pods || true
+          kubectl -n cloudportal-ci logs pod/cloudportal-app-0 -c api --tail=120 || true
+          kubectl -n cloudportal-ci logs pod/cloudportal-app-0 -c dispatcher --tail=120 || true
+          kubectl -n cloudportal-ci logs pod/cloudportal-app-0 -c workers --tail=120 || true
+          kubectl -n cloudportal-ci logs pod/cloudportal-app-0 -c proxy --tail=120 || true
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name cloudportal-ci

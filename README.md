@@ -176,6 +176,45 @@ API nie przyjmuje HCL, dowolnych ścieżek plików, pluginów, zmiennych `ansibl
 
 Anulowanie kończy grupę procesów i zachowuje state. Joby mają jawny retry lineage (`retry_of`, `attempt`). Blueprint może mieć `recovery_policy=preserve` albo `destroy_on_failure`; automatyczny recovery jest osobnym, audytowalnym `terraform.destroy` jobem, a nie ukrytym rollbackiem. Blueprint może też wymagać `blueprints.approve`. Logi: `GET /jobs/{id}/logs?after=ID&limit=200`.
 
+## Instalacja w Kubernetes
+
+Instalator obsługuje Kubernetes przez `--k8s`. Wymagane są `kubectl`, dostęp do klastra oraz obraz Cloudportal-backed dostępny dla węzłów klastra. Repozytorium nie publikuje obecnie domyślnego obrazu do GHCR, dlatego obraz podaje się jawnie przez `--k8s-image`.
+
+Przykład:
+
+```bash
+docker build -t registry.example/cloudportal-backed:1.0 .
+docker push registry.example/cloudportal-backed:1.0
+
+./install.sh --k8s \
+  --k8s-image registry.example/cloudportal-backed:1.0 \
+  --k8s-namespace cloudportal \
+  --host localhost \
+  --port 8443 \
+  --workers 10 \
+  --non-interactive
+```
+
+Domyślnie tworzony jest `ClusterIP`. Dostęp lokalny:
+
+```bash
+kubectl -n cloudportal port-forward svc/cloudportal 8443:8443
+```
+
+Dla ekspozycji poza klaster użyj `--k8s-service-type NodePort` albo `--k8s-service-type LoadBalancer`. Dla NodePort można podać `--k8s-node-port 30443`. `--k8s-storage-class NAME` ustawia StorageClass dla trwałych PVC PostgreSQL, Redis i `CP_DATA_DIR`.
+
+Stan i deinstalacja:
+
+```bash
+./install.sh --k8s --k8s-namespace cloudportal --status
+./install.sh --k8s --k8s-namespace cloudportal --uninstall --yes
+./install.sh --k8s --k8s-namespace cloudportal --uninstall --purge-data --yes
+```
+
+Zwykłe `--uninstall` zachowuje PVC, master key, hasło PostgreSQL i TLS. `--purge-data` usuwa trwałe dane i sekrety Cloudportal. Ponowne uruchomienie instalatora z innym `--k8s-image` wykonuje migracje i rollout nowej wersji.
+
+Architektura K8s używa jednego StatefulSet dla API, dispatchera, procesów workerów i Nginx/TLS, dzięki czemu `CP_DATA_DIR` może korzystać ze standardowego `ReadWriteOnce` zamiast wymagać pamięci masowej RWX.
+
 ## Uruchomienie w Docker Compose
 
 Alternatywa dla instalacji natywnej systemd. Najprościej użyć tego samego instalatora z parametrem `--docker`:

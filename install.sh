@@ -49,6 +49,7 @@ Tryby:
   --gui, -gui                 Interaktywny interfejs dialog.
   --non-interactive           Tryb bez pytań; przy --uninstall wymaga także --yes.
   --docker                    Zainstaluj/obsłuż Cloudportal jako stack Docker Compose zamiast usług systemd.
+  --k8s                       Zainstaluj/obsłuż Cloudportal w bieżącym klastrze Kubernetes.
   --recovery-admin            Recovery lokalnego administratora; alias: --recovery-password.
   --recovery-password         Utwórz lub odzyskaj lokalne konto Administrator bez reinstalacji.
 
@@ -63,6 +64,12 @@ Konfiguracja:
   --host HOST                 Host/DNS backendu.
   --port PORT                 Port HTTPS, domyślnie 8443.
   --workers N                 Liczba workerów 1-64; domyślnie 10.
+  --k8s-image IMAGE           Obraz aplikacji dla Kubernetes; wymagany przy instalacji --k8s.
+  --k8s-namespace NAME        Namespace Kubernetes; domyślnie cloudportal.
+  --k8s-context NAME          Context kubectl; domyślnie bieżący context.
+  --k8s-storage-class NAME    StorageClass dla PVC; domyślnie StorageClass klastra.
+  --k8s-service-type TYPE     ClusterIP, NodePort albo LoadBalancer; domyślnie ClusterIP.
+  --k8s-node-port PORT        Stały NodePort 30000-32767; tylko z --k8s-service-type NodePort.
   --enable-backups            Włącz codzienny backup PostgreSQL.
   --disable-backups           Wyłącz timer backupu.
   --backup-retention-days N   Retencja backupów, domyślnie 14 dni.
@@ -89,6 +96,8 @@ Przykłady:
   sudo ./install.sh --non-interactive --port 8443
   sudo ./install.sh --docker --non-interactive --port 8443
   sudo ./install.sh --docker --status
+  ./install.sh --k8s --k8s-image registry.example/cloudportal-backed:1.0 --non-interactive
+  ./install.sh --k8s --status
   sudo ./install.sh --status
   sudo ./install.sh --enable-auto-update --auto-update-interval 12
   sudo ./install.sh --docker --enable-auto-update --auto-update-interval 12
@@ -106,7 +115,10 @@ installer_error() {
   local rc=$1 line=$2
   ui_fail "Etap „$CURRENT_STAGE” przerwany (kod $rc, linia $line)."
   ui_info 'Sprawdź komunikat bezpośrednio powyżej.'
-  if [[ ${docker_mode:-0} == 1 ]]; then
+  if [[ ${k8s_mode:-0} == 1 ]]; then
+    ui_info 'Kubernetes: kubectl get pods -n cloudportal -o wide'
+    ui_info 'Logi: uruchom ./install.sh --k8s --status i kubectl logs -n cloudportal statefulset/cloudportal-app -c api.'
+  elif [[ ${docker_mode:-0} == 1 ]]; then
     ui_info 'Docker: sudo docker ps --filter label=com.docker.compose.project=cloudportal-backed'
     ui_info 'Logi: uruchom sudo ./install.sh --docker --status, a następnie sudo docker compose logs.'
   else
@@ -150,6 +162,13 @@ recovery_password_file=''
 recovery_password=''
 assume_yes=0
 docker_mode=0
+k8s_mode=0
+k8s_image=''
+k8s_namespace='cloudportal'
+k8s_context=''
+k8s_storage_class=''
+k8s_service_type='ClusterIP'
+k8s_node_port=''
 docker_auto_repair=1
 docker_auto_repair_explicit=0
 update_in_progress=${CLOUDPORTAL_UPDATE_IN_PROGRESS:-0}
@@ -163,13 +182,14 @@ install_progress() {
 }
 while (($#)); do
   case "$1" in
-    --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days|--auto-update-interval|--recovery-username|--recovery-email|--recovery-project|--recovery-password-file)
+    --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days|--auto-update-interval|--recovery-username|--recovery-email|--recovery-project|--recovery-password-file|--k8s-image|--k8s-namespace|--k8s-context|--k8s-storage-class|--k8s-service-type|--k8s-node-port)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing value for $1" >&2; exit 2; }
       case "$1" in
         --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2; workers_explicit=1;; --ref) ref=$2;;
         --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2;;
         --auto-update-interval) auto_update_interval=$2; auto_update_interval_explicit=1;;
         --recovery-username) recovery_username=$2;; --recovery-email) recovery_email=$2;; --recovery-project) recovery_project=$2;; --recovery-password-file) recovery_password_file=$2;;
+        --k8s-image) k8s_image=$2;; --k8s-namespace) k8s_namespace=$2;; --k8s-context) k8s_context=$2;; --k8s-storage-class) k8s_storage_class=$2;; --k8s-service-type) k8s_service_type=$2;; --k8s-node-port) k8s_node_port=$2;;
       esac
       shift 2;;
     --enable-auto-update|--disable-auto-update|--auto-update-status)
@@ -186,6 +206,7 @@ while (($#)); do
     --gui|-gui) gui=1; shift;;
     --non-interactive) non_interactive=1; shift;;
     --docker) docker_mode=1; shift;;
+    --k8s) k8s_mode=1; shift;;
     --recovery-admin|--recovery-password) recovery_mode=1; shift;;
     --check-platform) check_platform=1; shift;;
     --takeover) takeover_running_install=1; shift;;
@@ -231,12 +252,16 @@ interactive_action_menu() {
   [12] Włącz automatyczne aktualizacje cron — Docker
   [13] Wyłącz automatyczne aktualizacje cron
   [14] Status automatycznych aktualizacji cron
+  [15] Instalacja / aktualizacja — Kubernetes
+  [16] Status — Kubernetes
+  [17] Odinstaluj Kubernetes — zachowaj PVC i sekrety
+  [18] Odinstaluj Kubernetes całkowicie — usuń PVC i sekrety
   [0] Wyjście
 EOF
 
   local choice=''
   while :; do
-    printf 'Wybierz operację [0-14]: ' >&3
+    printf 'Wybierz operację [0-18]: ' >&3
     if ! IFS= read -r choice <&3; then
       exec 3>&-
       ui_fail 'Nie udało się odczytać wyboru z terminala.'
@@ -315,13 +340,37 @@ EOF
         exec 3>&-
         return 0
         ;;
+      15)
+        k8s_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      16)
+        k8s_mode=1
+        status_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      17)
+        k8s_mode=1
+        uninstall_mode=1
+        exec 3>&-
+        return 0
+        ;;
+      18)
+        k8s_mode=1
+        uninstall_mode=1
+        purge_data=1
+        exec 3>&-
+        return 0
+        ;;
       0)
         exec 3>&-
         ui_info 'Nie wykonano żadnych zmian.'
         exit 0
         ;;
       *)
-        ui_warn 'Nieprawidłowy wybór. Wpisz numer od 0 do 14.'
+        ui_warn 'Nieprawidłowy wybór. Wpisz numer od 0 do 18.'
         ;;
     esac
   done
@@ -336,6 +385,10 @@ mode_count=$((status_mode + uninstall_mode + check_platform + recovery_mode + au
 ((gui == 0 || uninstall_mode == 0)) || { ui_fail '--gui/-gui nie może być użyte razem z --uninstall.'; exit 2; }
 ((gui == 0 || recovery_mode == 0)) || { ui_fail '--gui/-gui nie jest obsługiwane w trybie recovery.'; exit 2; }
 ((gui == 0 || docker_mode == 0)) || { ui_fail '--gui/-gui nie jest obsługiwane w trybie --docker.'; exit 2; }
+((gui == 0 || k8s_mode == 0)) || { ui_fail '--gui/-gui nie jest obsługiwane w trybie --k8s.'; exit 2; }
+((docker_mode == 0 || k8s_mode == 0)) || { ui_fail 'Wybierz tylko jeden backend instalacji: --docker albo --k8s.'; exit 2; }
+((k8s_mode == 0 || auto_update_mode == 0)) || { ui_fail 'Hostowy cron auto-update nie jest obsługiwany w trybie --k8s; aktualizuj obraz przez ponowne uruchomienie instalatora.'; exit 2; }
+((k8s_mode == 0 || recovery_mode == 0)) || { ui_fail 'Recovery przez install.sh nie jest jeszcze obsługiwane w trybie --k8s.'; exit 2; }
 ((docker_auto_repair_explicit == 0 || (docker_mode == 1 && status_mode == 1))) || { ui_fail '--no-auto-repair wymaga --docker --status.'; exit 2; }
 ((gui == 0 || auto_update_mode == 0)) || { ui_fail '--gui nie łączy się z zarządzaniem cron.'; exit 2; }
 if ((auto_update_interval_explicit)) && [[ "$auto_update_action" != enable ]]; then
@@ -386,7 +439,7 @@ case "$ID:$VERSION_ID" in
     key_value_command=valkey-server
     ;;
   *)
-    if ((uninstall_mode || status_mode || docker_mode || recovery_mode || auto_update_mode)); then
+    if ((uninstall_mode || status_mode || docker_mode || k8s_mode || recovery_mode || auto_update_mode)); then
       os_family=unknown
       python_command=python3
       key_value_package=unknown
@@ -403,7 +456,7 @@ case "$(uname -m)" in
   x86_64) arch=amd64;;
   aarch64|arm64) arch=arm64;;
   *)
-    if ((uninstall_mode || status_mode || recovery_mode || auto_update_mode)); then
+    if ((uninstall_mode || status_mode || k8s_mode || recovery_mode || auto_update_mode)); then
       arch=$(uname -m)
       ui_warn "Architektura $arch nie jest wspierana do instalacji; tryb status/deinstalacji będzie kontynuowany."
     else
@@ -419,7 +472,7 @@ if ((check_platform)); then
   drain_script_input
   exit 0
 fi
-if [[ "$auto_update_action" != status ]] && ((status_mode == 0 || (docker_mode == 1 && status_mode == 1 && docker_auto_repair == 1))); then
+if ((k8s_mode == 0)) && [[ "$auto_update_action" != status ]] && ((status_mode == 0 || (docker_mode == 1 && status_mode == 1 && docker_auto_repair == 1))); then
   [[ $EUID -eq 0 ]] || {
     if ((docker_mode == 1 && status_mode == 1)); then
       ui_fail 'Auto-naprawa Docker wymaga roota. Uruchom przez sudo albo użyj --no-auto-repair.'
@@ -2273,6 +2326,666 @@ EOF
   trap - EXIT
 }
 
+
+# Kubernetes backend. API, dispatcher, worker processes and TLS proxy share one
+# StatefulSet so CP_DATA_DIR uses a normal ReadWriteOnce PVC.
+k8s_ctl() {
+  if [[ -n "$k8s_context" ]]; then
+    kubectl --context "$k8s_context" "$@"
+  else
+    kubectl "$@"
+  fi
+}
+
+k8s_ns() {
+  k8s_ctl -n "$k8s_namespace" "$@"
+}
+
+k8s_valid_namespace() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$ ]]
+}
+
+k8s_valid_name() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ ]]
+}
+
+k8s_valid_image() {
+  [[ -n "$1" && "$1" != *[[:space:]]* && "$1" =~ ^[A-Za-z0-9._:/@+-]+$ ]]
+}
+
+k8s_preflight() {
+  local require_openssl=${1:-0}
+  command -v kubectl >/dev/null 2>&1 || { ui_fail 'Brak kubectl.'; return 1; }
+  if ((require_openssl)); then
+    command -v openssl >/dev/null 2>&1 || { ui_fail 'Brak openssl.'; return 1; }
+  fi
+  k8s_ctl version --request-timeout=10s >/dev/null 2>&1 || {
+    ui_fail 'kubectl nie może połączyć się z API Kubernetes.'
+    return 1
+  }
+}
+
+k8s_prepare_namespace() {
+  if k8s_ctl get namespace "$k8s_namespace" >/dev/null 2>&1; then
+    return 0
+  fi
+  k8s_ctl create namespace "$k8s_namespace" --dry-run=client -o yaml | k8s_ctl apply -f - >/dev/null
+}
+
+k8s_prepare_secrets() {
+  local password master database_url tls_dir old_tls_host san
+  if k8s_ns get secret cloudportal-secrets >/dev/null 2>&1; then
+    [[ -n "$(k8s_ns get secret cloudportal-secrets -o jsonpath='{.data.postgres-password}' 2>/dev/null)" ]] || {
+      ui_fail 'Secret cloudportal-secrets nie zawiera postgres-password.'
+      return 1
+    }
+    [[ -n "$(k8s_ns get secret cloudportal-secrets -o jsonpath='{.data.master-key}' 2>/dev/null)" ]] || {
+      ui_fail 'Secret cloudportal-secrets nie zawiera master-key. Przywróć klucz z backupu.'
+      return 1
+    }
+    [[ -n "$(k8s_ns get secret cloudportal-secrets -o jsonpath='{.data.database-url}' 2>/dev/null)" ]] || {
+      ui_fail 'Secret cloudportal-secrets nie zawiera database-url.'
+      return 1
+    }
+    ui_info 'Zachowuję istniejący master key i hasło PostgreSQL.'
+  else
+    password=$(openssl rand -hex 32)
+    master=$(openssl rand -base64 32 | tr -d '\r\n')
+    database_url="postgresql+psycopg://cloudportal:$password@cloudportal-postgres:5432/cloudportal"
+    k8s_ns create secret generic cloudportal-secrets       --from-literal=postgres-password="$password"       --from-literal=master-key="$master"       --from-literal=database-url="$database_url"       --dry-run=client -o yaml | k8s_ns apply -f - >/dev/null
+    unset password master database_url
+    ui_ok 'Utworzono secret z hasłem PostgreSQL i master key.'
+  fi
+
+  old_tls_host=$(k8s_ns get secret cloudportal-tls -o jsonpath='{.metadata.annotations.cloudportal\.io/tls-host}' 2>/dev/null || true)
+  if [[ -z "$cert_file" && -z "$cert_key" && "$old_tls_host" == "$backend_host" ]] && k8s_ns get secret cloudportal-tls >/dev/null 2>&1; then
+    ui_info 'Zachowuję istniejący secret TLS.'
+    return 0
+  fi
+
+  tls_dir=$(mktemp -d)
+  if [[ -n "$cert_file" || -n "$cert_key" ]]; then
+    [[ -r "$cert_file" && -r "$cert_key" ]] || { rm -rf "$tls_dir"; ui_fail 'Podaj oba pliki TLS.'; return 1; }
+    install -m 0600 "$cert_file" "$tls_dir/server.crt"
+    install -m 0600 "$cert_key" "$tls_dir/server.key"
+    docker_certificate_key_matches "$tls_dir/server.crt" "$tls_dir/server.key" || {
+      rm -rf "$tls_dir"
+      ui_fail 'Certyfikat TLS i klucz nie pasują do siebie.'
+      return 1
+    }
+    docker_certificate_matches_host "$tls_dir/server.crt" || {
+      rm -rf "$tls_dir"
+      ui_fail "Certyfikat TLS nie obejmuje hosta $backend_host."
+      return 1
+    }
+  else
+    san="DNS:$backend_host"
+    [[ ! "$backend_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || san="IP:$backend_host"
+    openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365       -keyout "$tls_dir/server.key" -out "$tls_dir/server.crt"       -subj "/CN=$backend_host" -addext "subjectAltName=$san" >/dev/null 2>&1
+  fi
+  k8s_ns create secret tls cloudportal-tls --cert="$tls_dir/server.crt" --key="$tls_dir/server.key"     --dry-run=client -o yaml | k8s_ns apply -f - >/dev/null
+  k8s_ns annotate secret cloudportal-tls "cloudportal.io/tls-host=$backend_host" --overwrite >/dev/null
+  rm -rf "$tls_dir"
+}
+
+k8s_storage_class_line() {
+  [[ -z "$k8s_storage_class" ]] || printf '  storageClassName: %s\n' "$k8s_storage_class"
+}
+
+k8s_apply_infra() {
+  {
+    cat <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cloudportal-app-data
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  accessModes: [ReadWriteOnce]
+EOF
+    k8s_storage_class_line
+    cat <<'EOF'
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cloudportal-postgres-data
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  accessModes: [ReadWriteOnce]
+EOF
+    k8s_storage_class_line
+    cat <<'EOF'
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cloudportal-redis-data
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  accessModes: [ReadWriteOnce]
+EOF
+    k8s_storage_class_line
+    cat <<'EOF'
+  resources: {requests: {storage: 2Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudportal-postgres
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  selector: {app.kubernetes.io/name: cloudportal-postgres}
+  ports: [{name: postgres, port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudportal-postgres
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app.kubernetes.io/name: cloudportal-postgres}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudportal-postgres
+        app.kubernetes.io/part-of: cloudportal-backed
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - {name: POSTGRES_DB, value: cloudportal}
+            - {name: POSTGRES_USER, value: cloudportal}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: cloudportal-secrets, key: postgres-password}}
+          ports: [{name: postgres, containerPort: 5432}]
+          readinessProbe:
+            exec: {command: ["/bin/sh", "-c", "pg_isready -U cloudportal -d cloudportal"]}
+            periodSeconds: 5
+            failureThreshold: 30
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+      volumes: [{name: data, persistentVolumeClaim: {claimName: cloudportal-postgres-data}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudportal-redis
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  selector: {app.kubernetes.io/name: cloudportal-redis}
+  ports: [{name: redis, port: 6379, targetPort: 6379}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudportal-redis
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app.kubernetes.io/name: cloudportal-redis}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudportal-redis
+        app.kubernetes.io/part-of: cloudportal-backed
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--appendonly", "yes"]
+          ports: [{name: redis, containerPort: 6379}]
+          readinessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            periodSeconds: 5
+            failureThreshold: 30
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, persistentVolumeClaim: {claimName: cloudportal-redis-data}}]
+EOF
+  } | k8s_ns apply -f - >/dev/null
+}
+
+k8s_apply_config() {
+  k8s_ns create configmap cloudportal-runtime     --from-literal=CP_REDIS_URL=redis://cloudportal-redis:6379/0     --from-literal=CP_MASTER_KEY_FILE=/etc/cloudportal-backed/master.key     --from-literal=CP_DATA_DIR=/var/lib/cloudportal-backed     --from-literal=CP_WORKER_COUNT="$workers"     --from-literal=CP_PUBLIC_HOST="$backend_host"     --from-literal=CP_HTTPS_PORT="$backend_port"     --from-literal=CP_INSTALL_MODE=k8s     --dry-run=client -o yaml | k8s_ns apply -f - >/dev/null
+
+  k8s_ns apply -f - >/dev/null <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudportal-nginx
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+data:
+  default.conf: |
+    server {
+      listen 8443 ssl;
+      ssl_certificate /etc/nginx/tls/server.crt;
+      ssl_certificate_key /etc/nginx/tls/server.key;
+      ssl_protocols TLSv1.2 TLSv1.3;
+      client_max_body_size 1m;
+      location ~ ^/api/v1/(?:appliances/ova-blueprints|instance-backups/upload)$ {
+        client_max_body_size 100g;
+        client_body_timeout 7200s;
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 7200s;
+        proxy_send_timeout 7200s;
+      }
+      location ~ ^/api/v1/console-sessions/[A-Za-z0-9_-]+/websocket$ {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+      }
+      location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 60s;
+      }
+    }
+YAML
+}
+
+k8s_emit_app_env() {
+  cat <<'EOF'
+          envFrom:
+            - configMapRef: {name: cloudportal-runtime}
+          env:
+            - name: CP_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: cloudportal-secrets, key: database-url}}
+EOF
+}
+
+k8s_emit_master_key_init() {
+  cat <<EOF
+      initContainers:
+        - name: prepare-master-key
+          image: $k8s_image
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          command: ["/bin/sh", "-c"]
+          args:
+            - install -m 0600 /source/master.key /runtime/master.key
+          volumeMounts:
+            - {name: master-key-source, mountPath: /source, readOnly: true}
+            - {name: runtime-secrets, mountPath: /runtime}
+EOF
+}
+
+k8s_emit_master_key_volumes() {
+  cat <<'EOF'
+        - name: master-key-source
+          secret:
+            secretName: cloudportal-secrets
+            items: [{key: master-key, path: master.key, mode: 0440}]
+        - {name: runtime-secrets, emptyDir: {}}
+EOF
+}
+
+k8s_emit_app_mounts() {
+  cat <<'EOF'
+          volumeMounts:
+            - {name: runtime-secrets, mountPath: /etc/cloudportal-backed/master.key, subPath: master.key, readOnly: true}
+            - {name: app-data, mountPath: /var/lib/cloudportal-backed}
+EOF
+}
+
+k8s_run_job() {
+  local name=$1
+  local mode=$2
+  k8s_ns delete job "$name" --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  {
+    cat <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $name
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: cloudportal-backed}
+    spec:
+      restartPolicy: Never
+      securityContext: {fsGroup: 10001}
+EOF
+    k8s_emit_master_key_init
+    cat <<EOF
+      containers:
+        - name: $mode
+          image: $k8s_image
+EOF
+    if [[ "$mode" == migrate ]]; then
+      cat <<'EOF'
+          command: ["alembic", "upgrade", "head"]
+EOF
+    else
+      cat <<EOF
+          command: ["python", "-m", "app.bootstrap", "--url", "https://$backend_host:$backend_port"]
+EOF
+    fi
+    k8s_emit_app_env
+    cat <<'EOF'
+          volumeMounts:
+            - {name: runtime-secrets, mountPath: /etc/cloudportal-backed/master.key, subPath: master.key, readOnly: true}
+      volumes:
+EOF
+    k8s_emit_master_key_volumes
+  } | k8s_ns apply -f - >/dev/null
+
+  local attempt complete failed
+  for attempt in $(seq 1 150); do
+    complete=$(k8s_ns get "job/$name" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
+    [[ "$complete" == True ]] && return 0
+    failed=$(k8s_ns get "job/$name" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)
+    if [[ "$failed" == True ]]; then
+      k8s_ns describe "job/$name" || true
+      k8s_ns logs "job/$name" --all-containers=true --tail=200 || true
+      return 1
+    fi
+    sleep 2
+  done
+  ui_fail "Timeout oczekiwania na Job $name."
+  k8s_ns describe "job/$name" || true
+  k8s_ns logs "job/$name" --all-containers=true --tail=200 || true
+  return 1
+}
+
+k8s_apply_app() {
+  local revision
+  revision=$(date -u +%Y%m%dT%H%M%SZ)-$BASHPID
+  {
+    cat <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudportal
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  type: $k8s_service_type
+  selector: {app.kubernetes.io/name: cloudportal-app}
+  ports:
+    - name: https
+      port: $backend_port
+      targetPort: https
+EOF
+    if [[ -n "$k8s_node_port" ]]; then
+      printf '      nodePort: %s\n' "$k8s_node_port"
+    fi
+    cat <<EOF
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudportal-app-headless
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  clusterIP: None
+  selector: {app.kubernetes.io/name: cloudportal-app}
+  ports: [{name: api, port: 8765, targetPort: api}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cloudportal-app
+  labels: {app.kubernetes.io/part-of: cloudportal-backed}
+spec:
+  serviceName: cloudportal-app-headless
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: cloudportal-app}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudportal-app
+        app.kubernetes.io/part-of: cloudportal-backed
+      annotations:
+        cloudportal.io/rollout-revision: "$revision"
+    spec:
+      securityContext: {fsGroup: 10001}
+EOF
+    k8s_emit_master_key_init
+    cat <<EOF
+      containers:
+        - name: api
+          image: $k8s_image
+          ports: [{name: api, containerPort: 8765}]
+EOF
+    k8s_emit_app_env
+    cat <<'EOF'
+          readinessProbe:
+            httpGet: {path: /api/v1/health, port: api}
+            periodSeconds: 5
+            failureThreshold: 30
+EOF
+    k8s_emit_app_mounts
+    cat <<EOF
+        - name: dispatcher
+          image: $k8s_image
+          command: ["python", "-m", "app.jobs.queue", "--dispatcher"]
+EOF
+    k8s_emit_app_env
+    k8s_emit_app_mounts
+    cat <<EOF
+        - name: workers
+          image: $k8s_image
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              i=1
+              while [ "\$i" -le "$workers" ]; do
+                python -m app.jobs.queue &
+                i=\$((i+1))
+              done
+              wait
+EOF
+    k8s_emit_app_env
+    k8s_emit_app_mounts
+    cat <<'EOF'
+        - name: proxy
+          image: nginx:1.28-alpine
+          ports: [{name: https, containerPort: 8443}]
+          readinessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 5
+            failureThreshold: 30
+          volumeMounts:
+            - {name: nginx, mountPath: /etc/nginx/conf.d/default.conf, subPath: default.conf, readOnly: true}
+            - {name: tls, mountPath: /etc/nginx/tls, readOnly: true}
+      volumes:
+EOF
+    k8s_emit_master_key_volumes
+    cat <<'EOF'
+        - {name: app-data, persistentVolumeClaim: {claimName: cloudportal-app-data}}
+        - {name: nginx, configMap: {name: cloudportal-nginx}}
+        - name: tls
+          secret:
+            secretName: cloudportal-tls
+            items:
+              - {key: tls.crt, path: server.crt, mode: 0444}
+              - {key: tls.key, path: server.key, mode: 0400}
+EOF
+  } | k8s_ns apply -f - >/dev/null
+}
+
+k8s_install() {
+  ui_header 'Cloudportal-backed — instalacja Kubernetes'
+  local stages=7 bootstrap_output service_type node_port lb_address
+
+  if [[ -z "$k8s_image" ]]; then
+    if ((non_interactive)); then
+      ui_fail '--k8s --non-interactive wymaga --k8s-image IMAGE.'
+      exit 2
+    fi
+    printf 'Obraz Kubernetes (registry/repo:tag lub @digest): ' >/dev/tty
+    IFS= read -r k8s_image </dev/tty || true
+  fi
+
+  [[ -n "$backend_host" ]] || backend_host=localhost
+  [[ -n "$backend_port" ]] || backend_port=8443
+  [[ -n "$workers" ]] || workers=$default_workers
+
+  k8s_valid_image "$k8s_image" || { ui_fail 'Nieprawidłowy --k8s-image.'; exit 2; }
+  k8s_valid_namespace "$k8s_namespace" || { ui_fail 'Nieprawidłowy --k8s-namespace.'; exit 2; }
+  [[ -z "$k8s_storage_class" ]] || k8s_valid_name "$k8s_storage_class" || { ui_fail 'Nieprawidłowy --k8s-storage-class.'; exit 2; }
+  [[ "$k8s_service_type" == ClusterIP || "$k8s_service_type" == NodePort || "$k8s_service_type" == LoadBalancer ]] || {
+    ui_fail '--k8s-service-type: ClusterIP, NodePort albo LoadBalancer.'
+    exit 2
+  }
+  if [[ -n "$k8s_node_port" ]]; then
+    [[ "$k8s_service_type" == NodePort ]] || { ui_fail '--k8s-node-port wymaga NodePort.'; exit 2; }
+    [[ "$k8s_node_port" =~ ^[0-9]{5}$ ]] && ((10#$k8s_node_port >= 30000 && 10#$k8s_node_port <= 32767)) || {
+      ui_fail '--k8s-node-port musi mieścić się w zakresie 30000-32767.'
+      exit 2
+    }
+  fi
+  docker_valid_host "$backend_host" || { ui_fail 'Nieprawidłowy --host.'; exit 2; }
+  docker_valid_port "$backend_port" || { ui_fail 'Nieprawidłowy --port.'; exit 2; }
+  docker_valid_workers "$workers" || { ui_fail 'Nieprawidłowe --workers; dozwolone 1-64.'; exit 2; }
+  [[ -z "$backup_schedule" ]] || { ui_fail 'Hostowy timer backupu nie jest obsługiwany w trybie --k8s.'; exit 2; }
+  backend_port=$((10#$backend_port))
+  workers=$((10#$workers))
+
+  ui_stage 1 "$stages" 'Pretest Kubernetes'
+  k8s_preflight 1
+  ui_ok 'Połączenie z API Kubernetes działa.'
+
+  ui_stage 2 "$stages" 'Namespace i sekrety'
+  k8s_prepare_namespace
+  k8s_prepare_secrets
+  k8s_apply_config
+  ui_ok "Namespace gotowy: $k8s_namespace"
+
+  ui_stage 3 "$stages" 'PVC, PostgreSQL i Redis'
+  k8s_apply_infra
+  k8s_ns rollout status deployment/cloudportal-postgres --timeout=300s
+  k8s_ns rollout status deployment/cloudportal-redis --timeout=300s
+  ui_ok 'PostgreSQL i Redis są gotowe.'
+
+  ui_stage 4 "$stages" 'Migracje'
+  k8s_run_job cloudportal-migrate migrate || { ui_fail 'Migracje nie powiodły się.'; exit 1; }
+  ui_ok 'Migracje zakończone.'
+
+  ui_stage 5 "$stages" 'Aplikacja, workery i TLS'
+  k8s_apply_app
+  if ! k8s_ns rollout status statefulset/cloudportal-app --timeout=600s; then
+    k8s_ns describe statefulset/cloudportal-app || true
+    k8s_ns get pods -l app.kubernetes.io/name=cloudportal-app -o wide || true
+    k8s_ns logs pod/cloudportal-app-0 -c api --tail=120 || true
+    exit 1
+  fi
+  ui_ok "Aplikacja gotowa; procesy workerów: $workers."
+
+  ui_stage 6 "$stages" 'Healthcheck'
+  k8s_ns exec pod/cloudportal-app-0 -c api -- python -c     'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=5).read()' >/dev/null
+  k8s_ns exec pod/cloudportal-app-0 -c proxy --     wget --no-check-certificate -qO- https://127.0.0.1:8443/api/v1/health >/dev/null
+  ui_ok 'Healthcheck API i HTTPS zakończony.'
+
+  ui_stage 7 "$stages" 'Bootstrap i podsumowanie'
+  k8s_run_job cloudportal-bootstrap bootstrap || { ui_fail 'Bootstrap nie powiódł się.'; exit 1; }
+  bootstrap_output=$(k8s_ns logs job/cloudportal-bootstrap --all-containers=true 2>/dev/null || true)
+  [[ -z "$bootstrap_output" ]] || printf '%s\n' "$bootstrap_output"
+  ui_ok 'Bootstrap zakończony.'
+
+  service_type=$(k8s_ns get service cloudportal -o jsonpath='{.spec.type}')
+  node_port=$(k8s_ns get service cloudportal -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)
+  lb_address=$(k8s_ns get service cloudportal -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+  [[ -n "$lb_address" ]] || lb_address=$(k8s_ns get service cloudportal -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+  [[ -n "$lb_address" ]] || lb_address='oczekuje na adres'
+
+  ui_header 'Podsumowanie'
+  ui_ok 'Instalacja Kubernetes Cloudportal-backed zakończona.'
+  ui_info "Namespace: $k8s_namespace"
+  ui_info "Obraz: $k8s_image"
+  ui_info "Service: $service_type"
+  if [[ "$service_type" == ClusterIP ]]; then
+    ui_info "Port-forward: kubectl -n $k8s_namespace port-forward svc/cloudportal $backend_port:$backend_port"
+    ui_info "Panel: https://$backend_host:$backend_port/ui/"
+  elif [[ "$service_type" == NodePort ]]; then
+    ui_info "NodePort: $node_port; host TLS: $backend_host"
+  else
+    ui_info "LoadBalancer: $lb_address; port: $backend_port; host TLS: $backend_host"
+  fi
+  ui_info "Status: ./install.sh --k8s --k8s-namespace $k8s_namespace --status"
+}
+
+k8s_status() {
+  ui_header 'Cloudportal-backed — status Kubernetes'
+  k8s_preflight || return 1
+  k8s_ctl get namespace "$k8s_namespace" >/dev/null 2>&1 || { ui_fail "Brak namespace $k8s_namespace."; return 1; }
+
+  local failed=0
+  if k8s_ns rollout status deployment/cloudportal-postgres --timeout=1s >/dev/null 2>&1; then ui_ok 'PostgreSQL: Ready'; else ui_fail 'PostgreSQL: FAIL'; failed=1; fi
+  if k8s_ns rollout status deployment/cloudportal-redis --timeout=1s >/dev/null 2>&1; then ui_ok 'Redis: Ready'; else ui_fail 'Redis: FAIL'; failed=1; fi
+  if k8s_ns rollout status statefulset/cloudportal-app --timeout=1s >/dev/null 2>&1; then ui_ok 'Cloudportal: Ready'; else ui_fail 'Cloudportal: FAIL'; failed=1; fi
+
+  if ((failed == 0)); then
+    k8s_ns exec pod/cloudportal-app-0 -c api -- python -c       'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health", timeout=5).read()' >/dev/null 2>&1       && ui_ok 'API healthcheck: OK' || { ui_fail 'API healthcheck: FAIL'; failed=1; }
+  fi
+
+  k8s_ns get pods,svc,pvc,jobs -l app.kubernetes.io/part-of=cloudportal-backed -o wide || true
+  ((failed == 0)) || return 1
+}
+
+k8s_uninstall() {
+  ui_header 'Cloudportal-backed — deinstalacja Kubernetes'
+  k8s_preflight || return 1
+  k8s_ctl get namespace "$k8s_namespace" >/dev/null 2>&1 || { ui_info 'Brak zasobów do usunięcia.'; return 0; }
+
+  if ((assume_yes == 0)); then
+    if ((non_interactive)); then
+      ui_fail '--non-interactive --k8s --uninstall wymaga --yes.'
+      return 2
+    fi
+    if ((purge_data)); then
+      printf 'Wpisz USUN, aby usunąć także PVC i master key: ' >/dev/tty
+      local confirmation=''
+      IFS= read -r confirmation </dev/tty || true
+      [[ "$confirmation" == USUN ]] || { ui_warn 'Anulowano.'; return 1; }
+    else
+      printf 'Usunąć workloady Kubernetes, zachowując PVC i sekrety? [t/N] ' >/dev/tty
+      local confirmation=''
+      IFS= read -r confirmation </dev/tty || true
+      [[ "$confirmation" =~ ^[TtYy]$ ]] || { ui_warn 'Anulowano.'; return 1; }
+    fi
+  fi
+
+  ui_stage 1 2 'Workloady i Service'
+  k8s_ns delete statefulset cloudportal-app --ignore-not-found --wait=true >/dev/null
+  k8s_ns delete deployment cloudportal-postgres cloudportal-redis --ignore-not-found --wait=true >/dev/null
+  k8s_ns delete job cloudportal-migrate cloudportal-bootstrap --ignore-not-found --wait=true >/dev/null
+  k8s_ns delete service cloudportal cloudportal-app-headless cloudportal-postgres cloudportal-redis --ignore-not-found >/dev/null
+  k8s_ns delete configmap cloudportal-runtime cloudportal-nginx --ignore-not-found >/dev/null
+  ui_ok 'Workloady usunięte.'
+
+  ui_stage 2 2 'Dane'
+  if ((purge_data)); then
+    k8s_ns delete pvc cloudportal-app-data cloudportal-postgres-data cloudportal-redis-data --ignore-not-found --wait=true >/dev/null
+    k8s_ns delete secret cloudportal-secrets cloudportal-tls --ignore-not-found >/dev/null
+    ui_ok 'PVC i sekrety usunięte.'
+  else
+    ui_info 'PVC, master key, hasło PostgreSQL i TLS zostały zachowane.'
+  fi
+}
+
 if ((auto_update_mode)); then
   if [[ "$auto_update_action" != status ]]; then
     command -v flock >/dev/null 2>&1 || { ui_fail 'Zarządzanie cron wymaga flock.'; exit 1; }
@@ -2284,6 +2997,19 @@ if ((auto_update_mode)); then
   fi
   auto_update_manage
   drain_script_input
+  exit 0
+fi
+
+if ((k8s_mode)); then
+  if ((status_mode)); then
+    k8s_status
+    exit $?
+  fi
+  if ((uninstall_mode)); then
+    k8s_uninstall
+    exit $?
+  fi
+  k8s_install
   exit 0
 fi
 
