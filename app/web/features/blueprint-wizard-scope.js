@@ -148,7 +148,7 @@
 
     async function loadResources(resetManagerSelection = false) {
       const requestOptions = { headers: parts.core.scopeHeaders(state) };
-      const [providers, templates, schemes, pools, credentials, blueprints, playbooks] = await Promise.all([
+      const [providers, templates, schemes, pools, credentials, blueprints, playbooks, roleOptions] = await Promise.all([
         safeApi('/providers?limit=200', [], requestOptions),
         safeApi('/templates', [], requestOptions),
         scopeAllows('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
@@ -156,6 +156,11 @@
         safeApi('/credentials?limit=200', [], requestOptions),
         scopeAllows('blueprints.read') ? safeApi('/blueprints?limit=200', [], requestOptions) : Promise.resolve([]),
         scopeAllows('ansible.read') ? safeApi('/ansible/playbooks', [], requestOptions) : Promise.resolve([]),
+        allowed('roles.read')
+          ? Promise.resolve(data.globalRoles || [])
+          : (scopeAllows('projects.roles.assign')
+              ? safeApi('/projects/' + encodeURIComponent(state.projectId) + '/assignable-roles?limit=200', [], requestOptions)
+              : Promise.resolve([])),
       ]);
 
       data.providers = providers;
@@ -164,6 +169,7 @@
       data.schemes = schemes.filter(value => value.is_active);
       data.pools = pools;
       data.credentials = credentials;
+      data.roles = roleOptions;
       data.blueprints = blueprints;
       data.playbooks = playbooks.filter(value => value.enabled !== false);
       if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
