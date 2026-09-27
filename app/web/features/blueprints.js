@@ -57,6 +57,21 @@ function blueprintExecutionPath(item, scope = null) {
     + '/execute' + blueprintScopeQuery(scope);
 }
 
+async function toggleBlueprintEnabled(item, scopeHeaders) {
+  const enabled = !item.is_active;
+  try {
+    await api(`/blueprints/${item.id}/enabled`, {
+      method: 'PUT',
+      body: { enabled },
+      headers: { ...scopeHeaders, 'If-Match': String(item.version) },
+    });
+    toast(`${enabled ? 'Włączono' : 'Wyłączono'} Blueprint „${item.name}”.`);
+    await blueprintsView();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
 async function blueprintsView() {
   const scopeResult = await api('/blueprints/creation-scopes?permission=blueprints.read&limit=200');
   const scopes = scopeResult.items || [];
@@ -169,6 +184,13 @@ async function blueprintsView() {
       );
       if (executionControl) result.push(executionControl);
       const canManage = canManageBlueprintByRole(item);
+      if (scopeAllows('blueprints.update') && canManage) {
+        result.push(button(
+          item.is_active ? 'Wyłącz' : 'Włącz',
+          () => toggleBlueprintEnabled(item, scopeHeaders),
+          item.is_active ? 'danger' : 'primary'
+        ));
+      }
       if (scopeAllows('blueprints.update') && canManage && canDesignBlueprint) {
         if (window.BlueprintVRADesigner && allowed('blueprints.update')) {
           result.push(button('Designer vRA / YAML', () => window.BlueprintVRADesigner.open(item)));
