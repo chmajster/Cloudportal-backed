@@ -21,6 +21,26 @@ DATA_URI = re.compile(
 )
 
 
+DEFAULT_AVATAR_SEED_VERSION = 'linux-os-v1'
+DEFAULT_BLUEPRINT_AVATARS = (
+    {
+        'id': 'ubuntu',
+        'name': 'Ubuntu',
+        'data_uri': 'data:image/x-icon;base64,AAABAAEAQEAAAAEAIACDAQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAABAAAAAQAgGAAAAqmlx3gAAAUpJREFUeNrtm0ESgyAMRYXhDK7rneopPZTreol21Q5jFUUSSMzPyg1oXn4SQHWv5+PdGTbfGTcAAAAAAAAAAAAAAAAAAAAAsGlBuwP9NP+ul3HIHu+0bodjx9eWA8J8CjRRQGn0UuNzVRDultO36gL9NJ+KtjoAuZFdQzgaf8siyKUEcW3wyNF1dMWtA74PVFrAqPp81RSIH7pUsiknKdPBS85bVW2Qq0jtQaC6H6sCqCK4NQ/V3IEi4jWkynWv7C5wVno1oeBApBYA7nU5FAAAwgFoKWxQACeAZRz+lLClDOqCyXU4cnkh1CodqHabKjZDqXnE7QW4FLHnqAoFcB6KiOwCscNaToRwJtgKwBV5xw6aezfIVWS9huinZF86f7AYddEAaq8w8YGE9d2g0/7HiNlvhFS3QQAAAAAAAAAAAAAAAAAAAABobh8w6pg2+PBJ/wAAAABJRU5ErkJggg==',
+    },
+    {
+        'id': 'sles',
+        'name': 'SUSE Linux Enterprise Server (SLES)',
+        'data_uri': 'data:image/x-icon;base64,AAABAAEAQEAAAAEAIABLAwAAFgAAAIlQTkcNChoKAAAADUlIRFIAAABAAAAAQAgGAAAAqmlx3gAAAxJJREFUeNrtm01ME0EUx/9dKU3btMXSFpBQy4clRBGBECI9EGMgXIxH0Vs1RoPEsyReTQ/ewY+DJB40xoMmEg2NBj9CYoy2iikGA0mh2jblS2gLLkI92Viz1e4nxb536k4nM//3m7dvZmdnVYdGL6VQwMagwI0AEAACQAAIAAEgAASgYK1IysZ8XR7FhDd7ByRpRyXFs4CSjksNQhSA7XRcKhCCAXA5L1VYKtm/IAB/dq6k41JrYXay81z9870tme247/IpETJCRz9fnOfSwycKaCX4P4y+mCigCCAABIAAEADaD+BpnsZeHDBVoUxjwtomi0U2julEFI+++jAWC6TrXdzXA7ejEwAwOO3FzZlnnO39Xo/L7ode48rkg/S1Q2/FuZqjnBoUAdBT3pT+rWa0MKq1cOitWGITGQDksAZjJYbbzqOYKeLUoAiAFFIYmLiL57FJaBg1qvVWdJcdxNomK9rBv0UKALgdnShmirJqOGnvkB/A6sY6vNEJbKVSWN/cgH85CP9yUJF79tcoZ9PAF4CgJGhUazHYchrH97SiWm+DCirFklbs+4qkGgRvirab69BurgMAfNtI4knkPa7PPMUSmxDlYF9tF/pquzLKLry7hfGFKQDAwy9v0VHqzKpBkWkwtLaYcW1S63Ci6jCGWs5gl0remXU0+gGXP97LqkGRCDj26iqchgq07q6Gq9QJl6UeAFBvqECjqUpUPvhXEgSAkbAPI2EfpwbFFkJTq2HcmR1Hv28YjyP+dLlFY1AsH2TTIHsEtJlrMJdcwAIbh11nQYOhMv1fMDEvq9Oexl4ssnGMxQJZNcgO4EbrWc7yF7FP+ByP5Jzc/MtBuN9c41XPqjGip7wJp+yu7VsKB1ZCsGlMKCnW4cfWFmaT8xiNTuB28KXsYT807cUR2340l+zl1NBf182rvZzfC+yELTEhOulxmAAQAAJAAHIxoa+e8nkGoAjgCyCfo0DoOoWRqtN8cV72JCj2QILczvNdpdIZITolRucEpftoqmBPitJSmAAQAAJAAAgAASAABGAH2k/nP2uuq/MQTAAAAABJRU5ErkJggg==',
+    },
+    {
+        'id': 'rhel',
+        'name': 'Red Hat Enterprise Linux (RHEL)',
+        'data_uri': 'data:image/x-icon;base64,AAABAAEAQEAAAAEAIAAKAQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAABAAAAAQAgGAAAAqmlx3gAAANFJREFUeNrt2ssNwyAMAFBAXSD779iOQE85R+InHJ4HIPAwNkjJ35RqOjhKOjwAAAAAAAAAAAAAAAAAYElcda/HZ175HH5a/C/n9wL07vwsnBIl7WcdHUUwUtGbkQUlyuLDZcCsxY8et5y683d8VnxkdAu7ah02pi4QYcdnHjMZEHnyI7IgNMCIo1Z2ntyK8btfgzv0/B6MZoAdLzstELrAm666LfOSAQA2veoqgovCPcBvcoogAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcEr8ASRIQVGQnZ/VAAAAAElFTkSuQmCC',
+    },
+)
+
+
 def normalize_blueprint_avatar_data_uri(value: str) -> str:
     text = str(value or '').strip()
     match = DATA_URI.fullmatch(text)
@@ -64,21 +84,55 @@ def normalize_blueprint_avatar_data_uri(value: str) -> str:
     return 'data:image/x-icon;base64,' + encoded
 
 
+def _seed_default_blueprint_avatars(items):
+    seeded = [deepcopy(item) for item in items if isinstance(item, dict)]
+    existing_ids = {str(item.get('id') or '').strip() for item in seeded}
+    changed = False
+    for item in DEFAULT_BLUEPRINT_AVATARS:
+        if item['id'] in existing_ids:
+            continue
+        seeded.append(deepcopy(item))
+        existing_ids.add(item['id'])
+        changed = True
+    return seeded, changed
+
+
+def _store_items(row, items):
+    raw = deepcopy(row.value) if isinstance(row.value, dict) else {}
+    versions = {
+        str(value)
+        for value in raw.get('default_seed_versions', [])
+        if isinstance(value, str) and value
+    }
+    versions.add(DEFAULT_AVATAR_SEED_VERSION)
+    raw['items'] = items
+    raw['default_seed_versions'] = sorted(versions)
+    row.value = raw
+
+
 def _locked_store(db):
     row = db.scalar(select(Setting).where(Setting.key == SETTING_KEY).with_for_update())
     if row is None:
-        row = Setting(key=SETTING_KEY, value={'items': []})
+        row = Setting(key=SETTING_KEY, value={'items': [], 'default_seed_versions': []})
         db.add(row)
         db.flush()
+
     raw = row.value if isinstance(row.value, dict) else {}
-    items = raw.get('items') if isinstance(raw, dict) else []
-    return row, [deepcopy(item) for item in items if isinstance(item, dict)]
+    items = [deepcopy(item) for item in raw.get('items', []) if isinstance(item, dict)]
+    versions = {
+        str(value)
+        for value in raw.get('default_seed_versions', [])
+        if isinstance(value, str) and value
+    }
+    if DEFAULT_AVATAR_SEED_VERSION not in versions:
+        items, _ = _seed_default_blueprint_avatars(items)
+        _store_items(row, items)
+        db.flush()
+    return row, items
 
 
 def list_blueprint_avatars(db):
-    row = db.get(Setting, SETTING_KEY)
-    raw = row.value if row and isinstance(row.value, dict) else {}
-    items = raw.get('items') if isinstance(raw, dict) else []
+    _, items = _locked_store(db)
     result = []
     for item in items or []:
         if not isinstance(item, dict):
@@ -136,7 +190,7 @@ def save_blueprint_avatar(db, data, *, avatar_id: str | None = None):
     else:
         items[existing_index] = record
 
-    row.value = {'items': items}
+    _store_items(row, items)
     db.flush()
     return deepcopy(record)
 
@@ -161,6 +215,6 @@ def delete_blueprint_avatar(db, avatar_id: str):
         )
 
     del items[index]
-    row.value = {'items': items}
+    _store_items(row, items)
     db.flush()
     return {'deleted': True}
