@@ -17,12 +17,13 @@ class AvailabilityPlan(ResourceScope, Timestamp, Base):
             name='fk_availability_plans_project_scope', ondelete='RESTRICT',
         ),
         UniqueConstraint('tenant_id', 'project_id', 'id', name='uq_availability_plans_scoped_id'),
-        UniqueConstraint('tenant_id', 'project_id', 'name', name='uq_availability_plans_scope_name'),
+        UniqueConstraint('tenant_id', 'project_id', 'normalized_name', name='uq_availability_plans_scope_name'),
         Index('ix_availability_plans_project_scope', 'tenant_id', 'project_id'),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(100))
+    normalized_name: Mapped[str] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(Text, default='')
     state: Mapped[str] = mapped_column(String(16), default='started')
     group: Mapped[str | None] = mapped_column(String(63))
