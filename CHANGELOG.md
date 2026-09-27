@@ -34,6 +34,7 @@
 - DAG musi walidować brakujące zależności, self-reference, cykle, rollback targets i zmianę ID kroków.
 - Zmiana ID/usunięcie kroku w edytorze musi aktualizować/usuwać wszystkie referencje `depends_on` i rollback.
 - Job/deployment ma przechowywać snapshot konfiguracji potrzebnej do wykonania; późniejsza edycja Blueprintu, playbooka lub katalogu nie może zmieniać już zakolejkowanego wykonania.
+- Regresja PR #276: dodanie opcjonalnego pola do `BlueprintExecuteInput` skleiło deklarację `availability_plan_id` z istniejącym `hostname_values`, powodując SyntaxError całego backendu. Przy zmianie kontraktu Pydantic zachowuj sąsiednie pola i dodawaj test instancjonujący nowy oraz istniejący parametr jednocześnie.
 - Usunięcie/wyłączenie Blueprintu nie może powodować zniknięcia definicji potrzebnej aktywnemu jobowi. Operacje kolidujące z aktywnym provisioningiem powinny być blokowane lub kolejkowane po nim.
 - Po refaktorze workflow przeszukaj repo pod kątem starych symboli. PR #263: usunięto `BLUEPRINT_PRECOMPILED_STEPS`, ale worker nadal go używał, co dawało `NameError` opakowany jako ogólny błąd `clone_vm`.
 
