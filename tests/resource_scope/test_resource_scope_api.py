@@ -208,6 +208,74 @@ def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
     assert revoked.status_code == 404, revoked.text
 
 
+def test_blueprint_acl_and_manager_roles_honor_tenant_role_assignments(system):
+    client, headers, _ = system
+    p = project(client, headers, 'bp-tenant-rbac')
+    credential, provider = infrastructure(client, headers, 'PVE-BP-TENANT-RBAC')
+    assign(client, headers, p, credential, provider)
+
+    user, raw_user_headers = new_user(client, headers, 'bp-tenant-rbac-user')
+    roles = client.get('/api/v1/roles?limit=200', headers=headers).json()['items']
+    tenant_admin_role_id = next(row['id'] for row in roles if row['name'] == 'Tenant Administrator')
+    membership = client.post(
+        f"/api/v1/tenants/{p['tenant_id']}/members",
+        headers=headers,
+        json={'user_id': user['id'], 'role_ids': [tenant_admin_role_id]},
+    )
+    assert membership.status_code == 201, membership.text
+    user_headers = scope_headers(raw_user_headers, p)
+
+    scopes = client.get(
+        '/api/v1/blueprints/creation-scopes?permission=blueprints.create&limit=200',
+        headers=user_headers,
+    )
+    assert scopes.status_code == 200, scopes.text
+    assert [row['project_id'] for row in scopes.json()['items']] == [p['id']]
+
+    tenant_roles = client.get(
+        f"/api/v1/tenants/{p['tenant_id']}/assignable-roles?limit=200",
+        headers=user_headers,
+    )
+    assert tenant_roles.status_code == 200, tenant_roles.text
+    assert tenant_admin_role_id in {row['id'] for row in tenant_roles.json()['items']}
+
+    payload = {
+        'slug': 'tenant-scoped-rbac',
+        'name': 'Tenant Scoped RBAC',
+        'allowed_role_ids': [tenant_admin_role_id],
+        'manager_role_ids': [tenant_admin_role_id],
+        'deployment': {
+            'name': 'tenant-scoped-rbac',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                'name': 'tenant-scoped-rbac',
+                'node': 'pve',
+                'template_id': 9000,
+                'storage': 'local-lvm',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    }
+
+    created = client.post('/api/v1/blueprints', headers=scope_headers(headers, p), json=payload)
+    assert created.status_code == 201, created.text
+
+    available = client.get('/api/v1/blueprints?available=true', headers=user_headers)
+    assert available.status_code == 200, available.text
+    assert [row['id'] for row in available.json()['items']] == [created.json()['id']]
+    assert available.json()['items'][0]['can_manage'] is True
+
+    updated = client.put(
+        f"/api/v1/blueprints/{created.json()['id']}",
+        headers=user_headers | {'If-Match': str(created.json()['version'])},
+        json={**payload, 'name': 'Tenant Scoped RBAC updated'},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['name'] == 'Tenant Scoped RBAC updated'
+
+
 def test_blueprint_slug_is_unique_per_project_not_globally(system):
     client, headers, _ = system
     alpha = project(client, headers, 'bp-slug-alpha')
