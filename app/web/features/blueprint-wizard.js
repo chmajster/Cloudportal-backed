@@ -61,7 +61,8 @@
         pools: [],
         playbooks: playbooks.filter(value => value.enabled !== false),
         credentials: [], avatars,
-        roles,
+        globalRoles: roles,
+        roles: [...roles],
         users: users.filter(value => value.is_active !== false),
         blueprints: [],
         managerRoles: [],
@@ -1045,7 +1046,7 @@
               { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
             ], state.recoveryPolicy, { wide: true }))
         );
-        if (allowed('roles.read')) {
+        if (allowed('roles.read') || blueprintScope.allows('projects.roles.assign')) {
           content.append(
             parts.ui.dualListGroup('Dozwolone role', 'allowed_role_ids', data.roles, state.allowedRoleIds,
               'Pusta lista „Wybrane” oznacza brak ograniczenia po roli.'),
