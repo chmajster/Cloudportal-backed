@@ -866,3 +866,202 @@ tbody tr:hover { background: var(--row-hover); }
     height: 18px;
   }
 }
+
+
+/* Topbar account menu */
+.user-account {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.user-menu-toggle {
+  min-height: 46px;
+  max-width: 260px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 9px 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.user-menu-toggle:hover,
+.user-menu-toggle:focus-visible,
+.user-menu.open .user-menu-toggle {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
+  outline: none;
+}
+.user-menu-avatar {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: .72rem;
+  font-weight: 850;
+  letter-spacing: .02em;
+}
+.user-menu-copy {
+  min-width: 0;
+  display: block;
+}
+.user-menu-copy strong,
+.user-menu-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-menu-copy strong {
+  font-size: .78rem;
+}
+.user-menu-copy small {
+  margin-top: 2px;
+  max-width: none;
+  font-size: .65rem;
+}
+.user-menu-chevron {
+  color: var(--muted);
+  font-size: 1rem;
+  transform: translateY(-1px);
+  transition: transform .15s ease;
+}
+.user-menu.open .user-menu-chevron {
+  transform: rotate(180deg) translateY(1px);
+}
+.user-menu-dropdown {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(340px, calc(100vw - 24px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  text-align: left;
+}
+.user-menu-context {
+  padding: 11px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-2);
+}
+.user-menu-context-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: .64rem;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.user-menu-context .status-dot {
+  width: 7px;
+  height: 7px;
+}
+.user-menu-context dl {
+  margin: 0;
+  display: grid;
+  gap: 7px;
+}
+.user-menu-context dl > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.user-menu-context dt {
+  color: var(--muted);
+  font-size: .68rem;
+}
+.user-menu-context dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: .72rem;
+  font-weight: 800;
+  text-align: right;
+}
+.user-menu-actions {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+}
+.user-menu-action {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: .76rem;
+  font-weight: 750;
+  text-align: left;
+  cursor: pointer;
+}
+.user-menu-action:hover,
+.user-menu-action:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+.user-menu-action.danger {
+  color: var(--danger);
+}
+.user-menu-action.danger:hover,
+.user-menu-action.danger:focus-visible {
+  background: var(--danger-soft);
+}
+.user-menu-dropdown #logout {
+  padding: 9px 11px;
+  font-size: .76rem;
+  gap: 9px;
+}
+.user-menu-dropdown #logout .button-icon,
+.user-menu-action .button-icon {
+  width: 17px;
+  height: 17px;
+}
+@media (max-width: 1120px) {
+  .user-menu-toggle {
+    grid-template-columns: 34px 16px;
+    padding-right: 8px;
+  }
+  .user-menu-copy {
+    display: none;
+  }
+}
+@media (max-width: 620px) {
+  .user-menu-dropdown {
+    position: fixed;
+    top: 68px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+  }
+  .user-menu-dropdown #logout {
+    padding: 9px 11px;
+    font-size: .76rem;
+  }
+}
