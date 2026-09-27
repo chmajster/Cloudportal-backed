@@ -18,7 +18,7 @@ from app.automation.service import (available_to, blueprint_public, blueprint_ro
 from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
 from app.blueprint_avatars import blueprint_avatar, list_blueprint_avatars
 from app.database import get_db
-from app.models import (Blueprint, BlueprintManagerRole, Credential, Deployment, HostnameReservation, HostnameScheme,
+from app.models import (Blueprint, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
 from app.projects.authorization import effective_permissions as project_effective_permissions, visible_projects
@@ -423,9 +423,6 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         required_permissions = {'blueprints.read', 'blueprints.update', 'blueprints.delete'}
         if not required_permissions <= permissions:
             raise HTTPException(422, f'Role {role.name} must include blueprint read, update and delete permissions')
-        assignment = db.scalar(select(BlueprintManagerRole).where(BlueprintManagerRole.role_id == role_id))
-        if assignment is not None and assignment.blueprint_id != blueprint_id:
-            raise HTTPException(409, f'Role {role.name} is already dedicated to another template')
         manager_roles.append(role)
     for user_id in set(data.allowed_user_ids):
         find(db, User, user_id)
