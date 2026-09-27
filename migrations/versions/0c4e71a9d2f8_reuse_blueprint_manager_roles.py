@@ -11,6 +11,7 @@ depends_on = None
 def upgrade():
     with op.batch_alter_table('blueprint_manager_roles') as batch:
         batch.drop_constraint('uq_blueprint_manager_roles_role_id', type_='unique')
+        batch.create_index('ix_blueprint_manager_roles_role_id', ['role_id'], unique=False)
 
 
 def downgrade():
@@ -24,4 +25,5 @@ def downgrade():
             'Cannot downgrade while one manager role is assigned to multiple Blueprints'
         )
     with op.batch_alter_table('blueprint_manager_roles') as batch:
+        batch.drop_index('ix_blueprint_manager_roles_role_id')
         batch.create_unique_constraint('uq_blueprint_manager_roles_role_id', ['role_id'])
