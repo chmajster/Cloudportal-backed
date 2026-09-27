@@ -87,7 +87,7 @@ def _reauthorize(db, job, *, write=True):
 
     permissions = (set(identity.global_permissions) - set(RESOURCE_PERMISSIONS)) | set(scoped)
     if meta.get('command') in {
-        'node.service', 'backup.restore', 'backup.delete',
+        'node.service', 'backup.restore', 'backup.delete', 'image.upload', 'image.delete', 'template.delete',
         'firewall.rule.create', 'firewall.rule.update', 'firewall.rule.delete',
     } and 'proxmox_admin.scope.all' not in permissions:
         raise ProxmoxAdminFailure(
