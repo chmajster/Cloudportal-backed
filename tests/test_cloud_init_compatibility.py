@@ -52,6 +52,14 @@ def test_legacy_blueprint_editors_are_replaced_by_step_by_step_wizard():
     assert "registerCommand('blueprints.proxmoxTemplateWizard', item => item ? window.BlueprintWizard.open({ item }) : window.BlueprintWizard.open())" in source
 
 
+def test_blueprint_list_exposes_scoped_enable_disable_action():
+    source = (ROOT / 'app/web/features/blueprints.js').read_text()
+    assert 'async function toggleBlueprintEnabled(item, scopeHeaders)' in source
+    assert "`/blueprints/${item.id}/enabled`" in source
+    assert "headers: { ...scopeHeaders, 'If-Match': String(item.version) }" in source
+    assert "item.is_active ? 'Wyłącz' : 'Włącz'" in source
+
+
 def test_quick_workflow_builds_required_cloud_init_before_awx():
     helper = ROOT / 'app/web/features/blueprint-form-utils.js'
     script = 'global.window = {}; global.registerExtension = (_name, initialize) => initialize();\n'
