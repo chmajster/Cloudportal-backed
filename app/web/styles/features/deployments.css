@@ -1027,9 +1027,60 @@
 .my-resource-card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px 12px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.my-resource-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 25px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.15;
+}
+
+.my-resource-meta-chip-label {
+  flex: 0 0 auto;
   color: var(--muted);
-  font-size: .7rem;
+  font-size: .57rem;
+  font-weight: 850;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+
+.my-resource-meta-chip-value {
+  min-width: 0;
+  overflow: hidden;
+  font-size: .69rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.my-resource-meta-chip.platform,
+.my-resource-meta-chip.mode {
+  background: var(--surface-2);
+}
+
+.my-resource-meta-chip.classification {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+}
+
+.my-resource-meta-chip.scope {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.my-resource-meta-chip.identity {
+  background: var(--surface-2);
 }
 
 .my-resource-card-created {
@@ -1696,6 +1747,15 @@
       "created"
       "provisioning"
       "actions";
+  }
+
+  .my-resource-meta-chip {
+    max-width: 100%;
+  }
+
+  .my-resource-meta-chip-value {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .my-resource-grid-list .my-resource-provisioning-state {
