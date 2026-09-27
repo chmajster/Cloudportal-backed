@@ -72,7 +72,7 @@ function searchSources() {
       }),
     },
     {
-      permission: 'credentials.read', path: '/credentials?limit=200', route: 'credentials', kind: 'Dane dostępowe',
+      permission: 'credentials.read', path: '/credentials?limit=200', route: 'credentials', kind: 'Dostęp',
       map: item => ({
         title: item.name,
         subtitle: CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type,
