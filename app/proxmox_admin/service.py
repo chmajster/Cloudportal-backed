@@ -10,8 +10,9 @@ from sqlalchemy import select
 
 from app.day2.diff import redact
 from app.day2.models import Day2ActionRequest
-from app.day2.service import acquire_resource_lock, day2_settings
+from app.day2.service import acquire_resource_lock, day2_settings, release_resource_lock
 from app.models import (
+    Audit,
     Credential,
     Job,
     JobLog,
@@ -22,8 +23,9 @@ from app.models import (
     User,
     now,
 )
-from app.operations.service import queue_webhook_event
+from app.operations.service import queue_job_webhooks, queue_webhook_event
 from app.policy_engine.service import evaluate_context
+from app.proxmox_admin.reconciliation import reconcile
 from app.projects.models import Project
 from app.providers.registry import provider_for
 from app.resource_scope.authorization import DEFAULT_SCOPE
@@ -946,6 +948,106 @@ def cancel_admin_job(db, request, job):
         db, request, 'proxmox.job.cancel_requested', 'jobs', job.id,
         details={'job': job.id, 'result': job.status},
     )
+    return public_job(job)
+
+
+def reconcile_required_job(db, request, actor, job):
+    ensure_enabled(db)
+    if job is None or not job.operation.startswith('pxadmin.'):
+        raise HTTPException(404, {'code': 'JOB_NOT_FOUND', 'message': 'Proxmox Admin job not found'})
+    if job.status != 'reconciliation_required':
+        raise HTTPException(409, {
+            'code': 'RECONCILIATION_NOT_REQUIRED',
+            'message': 'This job is not waiting for reconciliation',
+        })
+    meta = dict((job.payload or {}).get('_proxmox_admin') or {})
+    permission = str(meta.get('permission') or '')
+    if permission not in request_permissions(request):
+        raise HTTPException(403, {
+            'code': 'PERMISSION_DENIED',
+            'message': f'Permission required: {permission}',
+        })
+    _, _, adapter = get_proxmox_provider(db, meta['provider_id'])
+    upid = meta.get('upid')
+    if upid:
+        task = adapter.task_status(meta.get('node'), upid) or {}
+        if str(task.get('status') or '').lower() != 'stopped':
+            raise HTTPException(409, {
+                'code': 'PROXMOX_TASK_STILL_RUNNING',
+                'message': 'The Proxmox task is still running; the resource cannot be reconciled yet',
+            })
+        meta['task'] = {
+            'status': task.get('status'),
+            'exitstatus': task.get('exitstatus'),
+            'starttime': task.get('starttime'),
+            'endtime': task.get('endtime'),
+            **({'progress': task.get('progress')} if task.get('progress') is not None else {}),
+        }
+    ok, after = reconcile(adapter, meta, dict(meta.get('parameters') or {}))
+    meta['after'] = redact(after)
+    meta['reconciliation_required'] = False
+    meta['finished_at'] = now().isoformat() + 'Z'
+    payload = dict(job.payload or {})
+    payload['_proxmox_admin'] = meta
+    job.payload = payload
+    job.status = 'successful' if ok else 'failed'
+    job.error = None if ok else (
+        'RECONCILIATION_MISMATCH: live Proxmox state does not match the requested post-condition'
+    )
+    request_row = db.get(Day2ActionRequest, meta.get('action_request_id'))
+    if request_row is not None:
+        request_row.status = 'SUCCEEDED' if ok else 'FAILED'
+        request_row.finished_at = now()
+        request_row.error_code = None if ok else 'RECONCILIATION_MISMATCH'
+        request_row.error_message = job.error
+        request_row.result = {
+            **(request_row.result or {}),
+            'reconciliation_required': False,
+            'after': meta['after'],
+        }
+        release_resource_lock(db, meta['lock_resource_id'], request_row.id)
+
+    details = {
+        'actor': actor.user_id,
+        'operation': meta.get('command'),
+        'resource': meta.get('object_type'),
+        'resource_id': meta.get('object_id'),
+        'provider': meta.get('provider_name'),
+        'node': meta.get('node'),
+        'organization': job.tenant_id,
+        'project': job.project_id,
+        'before': meta.get('before'),
+        'requested_change': meta.get('parameters'),
+        'after': meta.get('after'),
+        'job': job.id,
+        'proxmox_upid': meta.get('upid'),
+        'result': job.status,
+    }
+    audit(
+        db, request, 'proxmox.resource.reconciled', 'proxmox_resources', meta.get('resource_key'),
+        result='success' if ok else 'failed', details=details,
+    )
+    queue_webhook_event(db, 'proxmox.resource.reconciled', meta.get('resource_key'), {
+        'job': {'id': job.id, 'request_id': job.request_id},
+        'provider_id': meta.get('provider_id'),
+        'node': meta.get('node'),
+        'object_type': meta.get('object_type'),
+        'object_id': meta.get('object_id'),
+        'state': meta.get('after'),
+        'matches_requested_state': ok,
+    })
+    queue_webhook_event(
+        db,
+        _event_name(meta.get('command'), 'completed' if ok else 'failed'),
+        meta.get('resource_key'),
+        {
+            'job': {'id': job.id, 'request_id': job.request_id},
+            'upid': meta.get('upid'),
+            'result': job.status,
+        },
+    )
+    db.add(JobLog(job_id=job.id, message='proxmox.admin.manual_reconciliation: ' + job.status))
+    queue_job_webhooks(db, job)
     return public_job(job)
 
 
