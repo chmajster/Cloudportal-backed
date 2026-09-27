@@ -2114,13 +2114,13 @@ docker_install() {
   fi
   backend_host=${backend_host:-${previous_docker_host:-$(hostname -f 2>/dev/null || hostname)}}
   backend_port=${backend_port:-${previous_docker_port:-8443}}
-  if ((update_in_progress)) && [[ "${previous_docker_workers:-}" == 1 ]] && [[ -z "$workers" || "$workers" == 1 ]]; then
-    # Starsze wersje updatera przekazywały --workers 1, przez co jawny argument
-    # blokował migrację starego domyślnego ustawienia do bieżącej wartości.
-    workers=$default_workers
-    ui_info "Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers."
-  elif [[ -z "$workers" ]]; then
-    workers=${previous_docker_workers:-$default_workers}
+  if [[ -z "$workers" ]]; then
+    if ((update_in_progress)) && [[ "${previous_docker_workers:-}" == 1 ]]; then
+      workers=$default_workers
+      ui_info "Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers."
+    else
+      workers=${previous_docker_workers:-$default_workers}
+    fi
   fi
 
   docker_valid_host "$backend_host" || { ui_fail 'Nieprawidłowy host. Użyj nazwy DNS lub adresu bez schematu URL.'; exit 2; }
@@ -3164,13 +3164,13 @@ if [[ -r "$config/backend.env" ]]; then
   previous_backup_schedule=$(sed -n 's/^CP_BACKUP_SCHEDULE_ENABLED=//p' "$config/backend.env")
   previous_backup_retention_days=$(sed -n 's/^CP_BACKUP_RETENTION_DAYS=//p' "$config/backend.env")
 fi
-if ((update_in_progress)) && [[ "${previous_workers:-}" == 1 ]] && [[ -z "$workers" || "$workers" == 1 ]]; then
-  # Zgodność z updaterami sprzed migracji domyślnej liczby workerów: nawet jeżeli
-  # stary updater poda --workers 1, aktualizacja ma odtworzyć bieżący domyślny pool.
-  workers=$default_workers
-  ui_info "Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers."
-elif [[ -z "$workers" ]]; then
-  workers=${previous_workers:-$default_workers}
+if [[ -z "$workers" ]]; then
+  if ((update_in_progress)) && [[ "${previous_workers:-}" == 1 ]]; then
+    workers=$default_workers
+    ui_info "Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers."
+  else
+    workers=${previous_workers:-$default_workers}
+  fi
 fi
 backup_schedule=${backup_schedule:-${previous_backup_schedule:-false}}
 backup_retention_days=${backup_retention_days:-${previous_backup_retention_days:-14}}
