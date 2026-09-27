@@ -292,6 +292,27 @@ def _invoke(adapter, meta, params):
         )
     if command == 'vm.nic.remove':
         return adapter.delete_vm_config_key(node, object_id, params['nic'])
+    if command == 'vm.iso.attach':
+        return adapter.update_vm_config(
+            node, object_id, **{params['drive']: params['volume'] + ',media=cdrom'}
+        )
+    if command == 'template.clone':
+        return adapter.clone_vm(
+            node, object_id, new_vm_id=params['new_vmid'], name=params['name'],
+            target=params.get('target'), full=params.get('full', True),
+            storage=params.get('storage'), pool=params.get('pool'),
+        )
+    if command == 'template.config':
+        return adapter.update_vm_config(node, object_id, **vm_config_values(params))
+    if command == 'template.delete':
+        return adapter.delete_vm(
+            node, object_id, purge=params.get('purge', False),
+            destroy_unreferenced_disks=params.get('destroy_unreferenced_disks', False),
+        )
+    if command == 'image.upload':
+        return adapter.upload_iso(params['node'], params['storage'], params['staged_path'], params['filename'])
+    if command == 'image.delete':
+        return adapter.delete_storage_volume(params['node'], params['storage'], params['volume'])
     if command == 'vm.snapshot.create':
         return adapter.create_snapshot(
             node, object_id, params['name'], params.get('description', ''), params.get('include_ram', False)
