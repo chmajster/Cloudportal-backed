@@ -354,6 +354,7 @@ class BlueprintOutput(Output):
     allowed_role_ids: list[int]
     allowed_user_ids: list[int]
     manager_role_ids: list[int]
+    can_manage: bool | None = None
     variables_schema: dict[str, Any]
     deployment: dict[str, Any]
     workflow: list[dict[str, Any]]
