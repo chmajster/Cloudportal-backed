@@ -7,6 +7,7 @@
 .advanced-options > summary { padding: 10px 12px; cursor: pointer; color: var(--muted); font-size: .76rem; font-weight: 800; }
 .advanced-options > summary:hover { color: var(--text); background: var(--surface-3); }
 .advanced-options-body { padding: 12px; border-top: 1px solid var(--line); }
+.advanced-options-body.form-grid { align-items: start; }
 .template-variable-grid:empty::before { content: 'Brak pól w tym szablonie.'; color: var(--muted); font-size: .8rem; }
 .blueprint-designer, .hostname-values { align-items: start; }
 .designer-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; padding: 12px 0 6px; border-bottom: 1px solid var(--line); }
