@@ -421,6 +421,7 @@ def test_job_execution_capacity_reconcile_uses_configured_parallel_limit(client,
         calls.append((path, method, payload))
         return {
             'changed': True,
+            'reconciled': True,
             'previous_worker_count': 1,
             'worker_count': 4,
             'install_mode': 'docker',
@@ -437,6 +438,7 @@ def test_job_execution_capacity_reconcile_uses_configured_parallel_limit(client,
     assert reconciled.status_code == 200, reconciled.text
     assert reconciled.json() == {
         'changed': True,
+        'reconciled': True,
         'previous_worker_count': 1,
         'worker_count': 4,
         'install_mode': 'docker',
