@@ -68,7 +68,13 @@ def list_plans(request: Request, active_only: bool = False, limit: int = Query(d
     if active_only:
         query = query.where(AvailabilityPlan.is_active.is_(True))
     rows = db.scalars(query.order_by(AvailabilityPlan.name.asc()).limit(limit)).all()
-    return {'items': [plan_public(row) for row in rows]}
+    return {
+        'items': [plan_public(row) for row in rows],
+        'permissions': sorted(
+            permission for permission in request.state.permissions
+            if str(permission).startswith('availability.')
+        ),
+    }
 
 
 @router.post('', status_code=201)
