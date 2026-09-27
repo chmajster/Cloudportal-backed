@@ -539,15 +539,33 @@ def list_snapshots(db, provider_id, request):
     return fetched({'items': items})
 
 
+def _job_by_upid(db, provider_id):
+    result = {}
+    rows = db.scalars(
+        select(Job).where(Job.operation.like('pxadmin.%')).order_by(Job.created_at.desc()).limit(2000)
+    ).all()
+    for job in rows:
+        meta = dict((job.payload or {}).get('_proxmox_admin') or {})
+        if int(meta.get('provider_id') or 0) != int(provider_id):
+            continue
+        upid = meta.get('upid')
+        if upid:
+            result[str(upid)] = job.id
+    return result
+
+
 def list_tasks(db, provider_id, *, limit=200, errors=False):
     _, _, adapter = get_proxmox_provider(db, provider_id)
+    jobs_by_upid = _job_by_upid(db, provider_id)
     items = []
     nodes = [row for row in adapter.cluster_resources('node') if row.get('node')]
     per_node = max(1, min(200, int(limit)))
     for node in nodes:
         try:
             for row in adapter.node_tasks(node['node'], limit=per_node, errors=errors):
-                items.append({**dict(row), 'node': row.get('node') or node['node']})
+                item = {**dict(row), 'node': row.get('node') or node['node']}
+                item['cloudportal_job_id'] = jobs_by_upid.get(str(item.get('upid') or ''))
+                items.append(item)
         except HTTPException:
             continue
     items.sort(key=lambda row: int(row.get('starttime') or 0), reverse=True)
@@ -559,6 +577,7 @@ def task_detail(db, provider_id, node, upid):
     return fetched({
         'status': adapter.task_status(node, upid),
         'log': adapter.task_log(node, upid, start=0, limit=5000),
+        'cloudportal_job_id': _job_by_upid(db, provider_id).get(str(upid)),
     })
 
 
@@ -728,8 +747,21 @@ def evaluate_operation_policy(db, actor, permissions, scope, command, resource, 
 
 
 def _event_name(command, suffix):
-    normalized = command.replace('lxc.', 'container.').replace('.snapshot.', '.snapshot_').replace('.', '_')
-    return f'proxmox.{normalized}.{suffix}'
+    normalized = str(command).replace('lxc.', 'container.', 1)
+    if normalized.startswith('vm.power'):
+        return f'proxmox.vm.power_{suffix}'
+    if normalized.startswith('vm.migrate'):
+        return f'proxmox.vm.migration_{suffix}'
+    if normalized.startswith('vm.snapshot.'):
+        action = normalized.rsplit('.', 1)[-1]
+        return f'proxmox.snapshot.{action}_{suffix}'
+    if normalized.startswith('container.snapshot.'):
+        action = normalized.rsplit('.', 1)[-1]
+        return f'proxmox.container.snapshot.{action}_{suffix}'
+    if normalized.startswith('backup.'):
+        action = normalized.rsplit('.', 1)[-1]
+        return f'proxmox.backup.{action}_{suffix}'
+    return f'proxmox.{normalized}_{suffix}'
 
 
 def queue_operation(
