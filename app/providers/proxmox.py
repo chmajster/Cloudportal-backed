@@ -1053,7 +1053,7 @@ class ProxmoxProvider(InfrastructureProvider):
         except (httpx.HTTPError, KeyError, ValueError):
             raise HTTPException(502, 'Unable to authenticate Proxmox console proxy') from None
 
-    def console_websocket_url(self, node, vm_id, port, ticket):
+    def console_websocket_url(self, node, vm_id, port, ticket, kind='qemu'):
         origin = self.endpoint.removesuffix('/api2/json')
         if origin.startswith('https://'):
             websocket_origin = 'wss://' + origin[len('https://'):]
@@ -1061,7 +1061,9 @@ class ProxmoxProvider(InfrastructureProvider):
             websocket_origin = 'ws://' + origin[len('http://'):]
         else:
             raise HTTPException(502, 'Unsupported Proxmox endpoint protocol')
-        path = f'/api2/json/nodes/{quote(node, safe="")}/qemu/{int(vm_id)}/vncwebsocket'
+        if kind not in {'qemu', 'lxc'}:
+            raise HTTPException(422, 'Unsupported Proxmox console resource type')
+        path = f'/api2/json/nodes/{quote(node, safe="")}/{kind}/{int(vm_id)}/vncwebsocket'
         query = urlencode({'port': int(port), 'vncticket': ticket})
         return websocket_origin + path + '?' + query
 
