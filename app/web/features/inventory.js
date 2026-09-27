@@ -757,11 +757,14 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
   const routedDetails = state.view === 'routed-form'
     && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
-    const [status, snapshotInfo] = await Promise.all([
+    const [status, snapshotInfo, availabilityVisible] = await Promise.all([
       api(`${vmBase(item)}/status`),
       allowed('snapshots.read')
         ? api(`${vmBase(item)}/snapshots`).catch(() => null)
         : Promise.resolve(null),
+      window.AvailabilityPlans?.canReadResource
+        ? window.AvailabilityPlans.canReadResource(item)
+        : Promise.resolve(false),
     ]);
     const snapshotCapability = snapshotInfo?.capability || null;
     if (!routedDetails) {
@@ -777,11 +780,11 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
       ['overview', 'Przegląd'],
       ['monitor', 'Monitor'],
       ['hardware', 'Hardware'],
-      ['availability', 'Dostępność', 'availability.read'],
+      availabilityVisible ? ['availability', 'Dostępność'] : null,
       ['snapshots', 'Snapshoty', 'snapshots.read'],
       ['backups', 'Backupy', 'backups.read'],
       ['audit', 'Historia'],
-    ].filter(([, , permission]) => allowed(permission));
+    ].filter(row => row && allowed(row[2]));
 
     let activeTab = tabs.some(([id]) => id === initialTab) ? initialTab : 'overview';
     const tabBar = node('div', { class: 'vm-tabs', role: 'tablist', 'aria-label': 'Szczegóły VM' });
