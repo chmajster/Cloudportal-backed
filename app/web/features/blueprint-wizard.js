@@ -1342,7 +1342,7 @@
           class: 'panel blueprint-wizard-replace-existing',
           role: 'alert',
         },
-          node('div', { class: 'blueprint-wizard-replace-icon', 'aria-hidden': 'true' }, appIcon('alert-triangle')),
+          node('div', { class: 'blueprint-wizard-replace-icon', 'aria-hidden': 'true' }, appIcon('workflow')),
           node('div', { class: 'stack' },
             node('div', {},
               node('p', { class: 'eyebrow', text: 'Produkt już istnieje' }),
