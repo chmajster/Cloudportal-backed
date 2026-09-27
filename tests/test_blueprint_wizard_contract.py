@@ -711,6 +711,29 @@ console.log(JSON.stringify({
     assert result['trueValue'] is True
 
 
+def test_blueprint_vm_step_separates_metadata_and_cloud_init_access():
+    wizard = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard.js').read_text()
+    cloud_init = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-cloud-init.js').read_text()
+
+    assert "node('strong', { text: 'Parametry VM' })" in wizard
+    assert "node('strong', { text: 'Klasyfikacja VM' })" in wizard
+    assert "node('strong', { text: 'Metadata / Tagi' })" in wizard
+    assert "field('Dodatkowe tagi Proxmox', 'tags'" in wizard
+    assert "'managed-by-cloudportal'" in wizard
+    assert "'deployment-<generowany-przy-wdrożeniu>'" in wizard
+    assert "Zaawansowane parametry VM" not in wizard
+    assert "field('Użytkownik SSH', 'ssh_username'" not in wizard
+    assert "field('Klucz publiczny SSH', 'ssh_public_key'" not in wizard
+
+    assert "node('strong', { text: 'Cloud-init i dostęp SSH' })" in cloud_init
+    assert "'cloud_init_access_credential_id'" in cloud_init
+    assert "field('Użytkownik SSH', 'cloud_init_ssh_username'" in cloud_init
+    assert "field('Klucz publiczny SSH', 'cloud_init_ssh_public_key'" in cloud_init
+    assert "Pola użytkownika SSH i klucza publicznego są ukryte" in cloud_init
+    assert "klucz publiczny: automatycznie z klucza prywatnego" in cloud_init
+
+
+
 def test_blueprint_console_uses_project_scope_and_single_wizard_editor():
     source = (ROOT / 'app' / 'web' / 'features' / 'blueprints.js').read_text()
     view_start = source.index('async function blueprintsView()')
