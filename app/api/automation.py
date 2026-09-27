@@ -13,8 +13,8 @@ from app.api.outputs import (BlueprintAvatarOutput, BlueprintCreationScopeOutput
 from app.api.schemas import (BlueprintExecuteInput, BlueprintInput, CatalogItemStateInput,
                              DeploymentInput, HostnameGenerateInput, HostnameSchemeInput)
 from app.automation.schemas import BlueprintBundleInput
-from app.automation.service import (available_to, blueprint_public, can_manage_blueprint, compile_blueprint,
-                                    generate_hostname, guest_credential_cloud_init, hostname_public)
+from app.automation.service import (available_to, blueprint_public, blueprint_role_ids, can_manage_blueprint,
+                                    compile_blueprint, generate_hostname, guest_credential_cloud_init, hostname_public)
 from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
 from app.blueprint_avatars import blueprint_avatar, list_blueprint_avatars
 from app.database import get_db
@@ -398,9 +398,23 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
     rows = paginate(db, Blueprint, offset, limit)
     source = portal_source(source_header)
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
+    role_cache = {}
+
+    def roles_for(row):
+        key = (str(row.tenant_id), str(row.project_id))
+        if key not in role_cache:
+            role_cache[key] = blueprint_role_ids(db, row, actor)
+        return role_cache[key]
+
     if available or source != 'backend' and not can_manage:
-        rows = [row for row in rows if available_to(db, row, actor, source)]
-    return {'items': [blueprint_public(row) for row in rows]}
+        rows = [row for row in rows if available_to(db, row, actor, source, roles_for(row))]
+    return {'items': [
+        blueprint_public(
+            row,
+            can_manage=can_manage_blueprint(db, row, actor, roles_for(row)),
+        )
+        for row in rows
+    ]}
 
 
 @router.get('/blueprints/{id}', response_model=BlueprintOutput)
@@ -410,9 +424,13 @@ def blueprint(id: int, request: Request, source_header: Annotated[str | None, He
     validate_persisted_blueprint_contract(row)
     source = portal_source(source_header)
     can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
-    if source != 'backend' and not can_manage and not available_to(db, row, actor, source):
+    role_ids = blueprint_role_ids(db, row, actor)
+    if source != 'backend' and not can_manage and not available_to(db, row, actor, source, role_ids):
         raise HTTPException(404, 'Blueprint not found')
-    return blueprint_public(row)
+    return blueprint_public(
+        row,
+        can_manage=can_manage_blueprint(db, row, actor, role_ids),
+    )
 
 
 @router.get('/blueprints/{id}/yaml')
