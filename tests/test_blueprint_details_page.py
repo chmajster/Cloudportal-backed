@@ -26,6 +26,7 @@ def test_blueprint_details_route_preserves_project_scope():
     assert "'X-Tenant-ID': String(scope.tenant_id)" in source
     assert "'X-Project-ID': String(scope.project_id)" in source
     assert "api('/blueprints/' + encodeURIComponent(id), { headers: scopeHeaders(scope) })" in source
+    assert "surface: false" in source
 
 
 def test_blueprint_details_page_contains_summary_workflow_and_governance():
