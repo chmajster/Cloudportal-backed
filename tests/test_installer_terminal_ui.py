@@ -214,5 +214,8 @@ def test_default_worker_concurrency_is_ten_and_legacy_auto_update_is_migrated():
     assert "default_workers=10" in INSTALLER
     assert "workers=${previous_workers:-$default_workers}" in INSTALLER
     assert "workers=${previous_docker_workers:-$default_workers}" in INSTALLER
+    assert INSTALLER.count('[[ -z "$workers" || "$workers" == 1 ]]') == 2
+    assert 'Starsze wersje updatera przekazywały --workers 1' in INSTALLER
+    assert 'stary updater poda --workers 1' in INSTALLER
     assert 'Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers.' in INSTALLER
     assert '--workers N                 Liczba workerów 1-64; domyślnie 10.' in INSTALLER
