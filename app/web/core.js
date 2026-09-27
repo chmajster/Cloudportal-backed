@@ -1165,50 +1165,6 @@ async function navigate(view) {
   catch (error) { dom.content.replaceChildren(node('div', { class: 'panel' }, node('h2', { text: 'Nie udało się załadować widoku' }), node('p', { class: 'form-error', text: error.message }), button('Spróbuj ponownie', () => navigate(route.id), 'primary'))); }
   dom.content.focus();
 }
-function showObjectDetails(title, value, eyebrow = 'Szczegóły') {
-  const rows = Object.entries(value || {}).map(([key, item]) => ({ key, value: item }));
-  dom.modalTitle.textContent = title;
-  dom.modalEyebrow.textContent = eyebrow;
-  dom.modalBody.replaceChildren(rows.length ? table([
-    { label: 'Pole', value: row => node('strong', { text: FIELD_LABELS[row.key] || row.key.replaceAll('_', ' ') }) },
-    { label: 'Wartość', value: row => node('span', { class: typeof row.value === 'string' && row.value.length > 40 ? 'mono' : '', text: displayValue(row.value) }) },
-  ], rows) : node('p', { class: 'muted', text: 'Brak dodatkowych danych.' }));
-  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-  if (!dom.modal.open) dom.modal.showModal();
-}
-function showTemplateFields(template) {
-  const schema = template.variables_schema || {};
-  const required = new Set(schema.required || []);
-  const rows = Object.entries(schema.properties || {}).map(([name, spec]) => {
-    const base = schemaVariant(spec);
-    const type = schemaType(spec);
-    const enums = schemaEnum(spec);
-    let constraints = '—';
-    if (enums?.length) constraints = enums.join(', ');
-    else if (base.minimum !== undefined || base.maximum !== undefined) constraints = `${base.minimum ?? '—'} – ${base.maximum ?? '—'}`;
-    return {
-      name,
-      label: FIELD_LABELS[name] || spec.title || name,
-      type,
-      required: required.has(name),
-      default: spec.default,
-      constraints,
-    };
-  });
-  const typeLabels = { string: 'Tekst', integer: 'Liczba całkowita', number: 'Liczba', boolean: 'Tak / nie', array: 'Lista' };
-  dom.modal.classList.add('modal-wide');
-  dom.modalTitle.textContent = `Pola: ${template.name}`;
-  dom.modalEyebrow.textContent = `Szablon v${template.version}`;
-  dom.modalBody.replaceChildren(rows.length ? table([
-    { label: 'Pole', value: row => node('div', {}, node('strong', { text: row.label }), node('div', { class: 'mono muted', text: row.name })) },
-    { label: 'Typ', value: row => typeLabels[row.type] || row.type },
-    { label: 'Wymagane', value: row => row.required ? badge('Tak', 'warning') : 'Nie' },
-    { label: 'Domyślnie', value: row => displayValue(row.default) },
-    { label: 'Opcje / zakres', value: row => row.constraints },
-  ], rows) : node('p', { class: 'muted', text: 'Szablon nie ma parametrów wejściowych.' }));
-  dom.modalActions.replaceChildren(button('Zamknij', closeModal));
-  if (!dom.modal.open) dom.modal.showModal();
-}
 function splitValues(value) {
   return String(value || '').split(/[\n,]+/).map(item => item.trim()).filter(Boolean);
 }
