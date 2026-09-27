@@ -322,8 +322,21 @@ def test_blueprint_manager_role_is_required_and_dedicated_to_one_template(client
         'slug': 'second-role-protected-template',
         'name': 'Second role protected template',
     })
-    assert second.status_code == 409
-    assert 'already dedicated to another template' in second.text
+    assert second.status_code == 201, second.text
+    assert second.json()['manager_role_ids'] == [manager_role.json()['id']]
+
+    second_update = client.put(
+        '/api/v1/blueprints/' + str(second.json()['id']),
+        headers={**manager_headers, 'If-Match': str(second.json()['version'])},
+        json={
+            **payload,
+            'slug': 'second-role-protected-template',
+            'name': 'Second role protected template',
+            'description': 'same manager role reused',
+        },
+    )
+    assert second_update.status_code == 200, second_update.text
+    assert second_update.json()['description'] == 'same manager role reused'
 
     denied_delete = client.delete('/api/v1/blueprints/' + str(blueprint['id']), headers=other_headers)
     assert denied_delete.status_code == 403
