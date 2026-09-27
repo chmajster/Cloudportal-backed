@@ -13,6 +13,7 @@ RESOURCE_ACTIONS = {
     'providers': 'read', 'credentials': 'read test',
     'quotas': 'read manage tenant.manage',
     'policies': 'read manage simulate audit exception.manage',
+    'dcst': 'view create edit delete apply disable reconcile view_audit allow_unrestricted_rule admin',
 }
 RESOURCE_PERMISSIONS = frozenset(f'{area}.{action}' for area, actions in RESOURCE_ACTIONS.items()
                                  for action in actions.split())
@@ -27,4 +28,5 @@ EXECUTION_PERMISSIONS = frozenset({
     'inventory.import', 'inventory.update', 'inventory.delete',
     'vms.power', 'vms.update', 'vms.delete', 'vms.clone', 'vms.migrate', 'vms.template',
     'snapshots.create', 'snapshots.delete', 'snapshots.rollback', 'backups.create', 'backups.restore',
+    'dcst.create', 'dcst.edit', 'dcst.delete', 'dcst.apply', 'dcst.disable', 'dcst.reconcile',
 })
