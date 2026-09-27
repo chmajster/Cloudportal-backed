@@ -1046,7 +1046,7 @@
               { value: 'destroy_on_failure', label: 'Automatycznie usuń nieudane wdrożenie' },
             ], state.recoveryPolicy, { wide: true }))
         );
-        if (allowed('roles.read') || blueprintScope.allows('projects.roles.assign')) {
+        if (allowed('roles.read') || data.roles.length) {
           content.append(
             parts.ui.dualListGroup('Dozwolone role', 'allowed_role_ids', data.roles, state.allowedRoleIds,
               'Pusta lista „Wybrane” oznacza brak ograniczenia po roli.'),
@@ -1353,7 +1353,7 @@
         if (!dom.modal.open) dom.modal.showModal();
       }
 
-      blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, discoverProvider, render });
+      blueprintScope = parts.scope.create({ state, data, options, allowed, safeApi, optionalApi, discoverProvider, render });
       try {
         await blueprintScope.loadResources(!editingItem);
         if (editingItem) {
