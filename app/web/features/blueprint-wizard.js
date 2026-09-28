@@ -1347,6 +1347,8 @@
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         const scheme = data.schemes.find(value => String(value.id) === String(state.hostnameSchemeId));
         const pool = data.pools.find(value => String(value.id) === String(state.ipamPoolId));
+        const resourcePool = data.resourcePools.find(value => String(value.id) === String(state.resourcePoolId));
+        const dynamicPlacement = ['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase());
         const ansibleRunNames = (state.ansibleRuns || []).map(run =>
           data.playbooks.find(value => value.id === run.playbook)?.name || run.playbook
         );
@@ -1363,8 +1365,10 @@
             ['Opis', state.description || '—'],
           ]],
           ['Platforma', [
-            ['Provider', provider?.name || '—'],
-            ['Node', state.providerType === 'proxmox' ? state.node : '—'],
+            ['Provider', dynamicPlacement ? ((provider?.name || state.providerType || '—') + ' · tylko discovery template') : (provider?.name || '—')],
+            ['Node', state.providerType === 'proxmox'
+              ? (dynamicPlacement ? ((state.node || '—') + ' · tylko discovery') : state.node)
+              : '—'],
             ['Template', state.providerType === 'proxmox'
               ? ((state.selectedTemplateName || 'Template') + ' · VMID ' + state.selectedTemplateVmid)
               : (data.templates.find(value => value.id === state.terraformTemplateId)?.name || '—')],
@@ -1373,8 +1377,8 @@
             ['CPU', state.cpu],
             ['RAM', (Number(state.memory) / 1024) + ' GB'],
             ['Dysk', state.disk + ' GB'],
-            ['Storage', state.storage],
-            ['Network', state.network],
+            ['Storage', dynamicPlacement ? (state.storageClass || 'wybierany przez Placement Engine') : state.storage],
+            ['Network', dynamicPlacement ? (state.logicalNetwork || 'wybierany przez Placement Engine') : state.network],
             ['Environment', state.selectEnvironmentOnExecute
               ? 'Wybierany podczas tworzenia VM'
               : (state.environment ? state.environment.toUpperCase() : '—')],
@@ -1414,6 +1418,17 @@
             ['Użytkownicy', userNames.join(', ') || 'Bez ograniczenia'],
             ['Approval', state.requiresApproval ? 'Wymagany' : 'Nie'],
             ...window.BlueprintApprovalPolicyUI.summaryRows(state),
+          ]],
+          ['Placement', [
+            ['Mode', state.placementMode || 'FIXED'],
+            ['Resource Pool', state.placementMode === 'POOL' ? (resourcePool?.name || '—')
+              : state.placementMode === 'POLICY' ? 'Wybierana przez Placement Rules' : '—'],
+            ['Logical Network', dynamicPlacement ? (state.logicalNetwork || 'Bez wymuszenia') : 'Stały network z targetu'],
+            ['Storage Class', dynamicPlacement ? (state.storageClass || 'Bez wymuszenia') : 'Stały storage z targetu'],
+            ['Preferred location', dynamicPlacement ? (state.placementLocation || '—') : '—'],
+            ['Affinity', state.placementAffinityType
+              ? state.placementAffinityType + ' · ' + (state.placementAffinityGroup || '—')
+              : 'Brak'],
           ]],
         ];
 
