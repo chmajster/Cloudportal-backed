@@ -724,14 +724,16 @@ def recreate_deployment(id: str, request: Request, actor=Depends(require('deploy
 
 @router.post('/deployments/{id}/destroy', status_code=202, response_model=JobOutput)
 @router.delete('/deployments/{id}', status_code=202, response_model=JobOutput)
-def destroy_deployment(id: str, request: Request, actor=Depends(require('deployments.destroy')), db=Depends(get_db, scope='function')):
+def destroy_deployment(id: str, request: Request, force: bool = False,
+                       actor=Depends(require('deployments.destroy')), db=Depends(get_db, scope='function')):
     def create():
         d = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
         if not d:
             raise HTTPException(404, 'Deployment not found')
         operation = 'proxmox.destroy' if d.executor == 'proxmox' else 'terraform.destroy'
-        return job_public(new_job(db, request, actor, operation, d))
-    return idempotent(db, request, actor, {'id': id}, create, required=True)
+        payload = {'force': True} if force and operation == 'proxmox.destroy' else None
+        return job_public(new_job(db, request, actor, operation, d, payload))
+    return idempotent(db, request, actor, {'id': id, 'force': force}, create, required=True)
 
 
 @router.post('/jobs', status_code=202, response_model=JobOutput)

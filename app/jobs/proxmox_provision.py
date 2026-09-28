@@ -17,6 +17,10 @@ POLL_SECONDS = 2
 PERCENT = re.compile(r'(?<![0-9.])(100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)\s*%')
 
 
+class ProxmoxTaskFailed(ExecutionFailed):
+    """Provider task failed or timed out after it was accepted by Proxmox."""
+
+
 def parse_task_progress(rows):
     """Return the newest real percentage printed by a Proxmox task, or None."""
     latest = None
@@ -116,7 +120,7 @@ def wait_task(context, adapter, node, upid, label, *, phase, timeout=7200):
             if stopped:
                 exit_status = str(status.get('exitstatus') or '')
                 if exit_status != 'OK':
-                    raise ExecutionFailed(
+                    raise ProxmoxTaskFailed(
                         f'{label} zakończył się błędem Proxmox: '
                         + (exit_status or 'nieznany status')
                     )
@@ -129,7 +133,7 @@ def wait_task(context, adapter, node, upid, label, *, phase, timeout=7200):
         except Exception:
             pass
         raise
-    raise ExecutionFailed(f'Przekroczono czas oczekiwania na operację Proxmox: {label}')
+    raise ProxmoxTaskFailed(f'Przekroczono czas oczekiwania na operację Proxmox: {label}')
 
 
 def _wait_target(context, adapter, node, vm_id, timeout=180):
@@ -559,24 +563,58 @@ def register_inventory(context):
 
 def destroy(context, timeout=1800):
     node, vm_id, adapter = identity(context)
+    force = (context.job.payload or {}).get('force') is True
     context.stage('proxmox.destroy.check')
     try:
         status = _status_or_none(adapter, node, vm_id)
-    except Exception:
-        raise ExecutionFailed('Nie udało się sprawdzić VM przed usunięciem') from None
+    except Exception as exc:
+        if not force:
+            raise ExecutionFailed('Nie udało się sprawdzić VM przed usunięciem') from None
+        status = {}
+        context.log(
+            f'proxmox.destroy.force_precheck_failed: {node}/{vm_id}; '
+            f'{type(exc).__name__}: {str(exc)[:200]}'
+        )
     if status is None:
         context.log(f'proxmox.destroy.absent: {node}/{vm_id}')
         return True
 
-    if str(status.get('status') or '').lower() != 'stopped':
+    if force or str(status.get('status') or '').lower() != 'stopped':
         context.stage('proxmox.destroy.force_stop')
         context.progress(None, 'Twarde zatrzymywanie VM', phase='destroy')
-        task = adapter.vm_power(node, vm_id, 'stop')
-        if task:
-            wait_task(
-                context, adapter, task_node(task, node), task, 'Twarde zatrzymywanie VM',
-                phase='destroy', timeout=min(timeout, 300),
+        try:
+            task = adapter.vm_power(node, vm_id, 'stop')
+            if task:
+                wait_task(
+                    context, adapter, task_node(task, node), task, 'Twarde zatrzymywanie VM',
+                    phase='destroy', timeout=min(timeout, 300),
+                )
+        except Cancelled:
+            raise
+        except ProxmoxTaskFailed as exc:
+            if not force:
+                raise
+            context.log(
+                f'proxmox.destroy.force_stop_failed: {node}/{vm_id}; '
+                f'{type(exc).__name__}: {str(exc)[:200]}'
             )
+        except ExecutionFailed:
+            # Force may ignore provider stop failures, but it must never bypass
+            # runtime authorization revocation or a control-plane timeout.
+            raise
+        except Exception as exc:
+            if not force:
+                raise
+            context.log(
+                f'proxmox.destroy.force_stop_failed: {node}/{vm_id}; '
+                f'{type(exc).__name__}: {str(exc)[:200]}'
+            )
+
+    if force:
+        # Force bypasses provider prechecks, never CloudPortal control-plane guards.
+        # Re-read cancellation and runtime authorization without the normal 1s throttle
+        # immediately before submitting the destructive provider call.
+        context.check(force=True)
 
     context.stage('proxmox.destroy.delete')
     context.progress(None, 'Usuwanie VM przez Proxmox API', phase='destroy')

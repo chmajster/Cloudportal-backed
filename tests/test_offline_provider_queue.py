@@ -168,6 +168,29 @@ def test_provider_offline_retry_limit_becomes_terminal_failure(client, headers, 
     assert 'retry attempts' in terminal['error']
 
 
+def test_direct_proxmox_destroy_force_is_persisted_in_job_payload(client, headers):
+    deployment = _deployment(client, headers)
+    with session() as db:
+        dep = db.get(Deployment, deployment['id'])
+        initial = db.get(Job, dep.active_job_id)
+        initial.status = 'successful'
+        dep.active_job_id = None
+        dep.status = 'successful'
+        dep.executor = 'proxmox'
+        db.commit()
+
+    destroy = client.post(
+        '/api/v1/deployments/' + deployment['id'] + '/destroy?force=true',
+        headers={**headers, 'Idempotency-Key': str(uuid.uuid4())},
+    )
+    assert destroy.status_code == 202, destroy.text
+
+    with session() as db:
+        job = db.get(Job, destroy.json()['id'])
+        assert job.operation == 'proxmox.destroy'
+        assert job.payload['force'] is True
+
+
 def test_proxmox_destroy_waits_for_provider_reconnect(client, headers, monkeypatch, tmp_path):
     deployment = _deployment(client, headers)
     with session() as db:
