@@ -894,6 +894,8 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '/settings/ldap/diagnostics' in script
     assert 'Diagnostyka LDAP' in script
     assert 'Przetestuj pełne logowanie' in script
+    assert 'const content = [' in script
+    assert 'host.replaceChildren(...content)' in script
     assert 'Routing logowania CloudPortal' in script
     assert 'Test nie wykonuje JIT provisioning' in script
     assert '.settings-ldap-diagnostic-steps' in stylesheet
