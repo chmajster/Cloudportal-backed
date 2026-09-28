@@ -568,6 +568,8 @@ function apmidTool(tenants = []) {
   );
 }
 
+const IMMUTABLE_APMIDS = new Set(['LEO']);
+
 function normalizeApmid(value) {
   return String(value || '').trim().toUpperCase();
 }
@@ -715,14 +717,17 @@ async function apmidView() {
     }
 
     apmids.forEach((value, index) => {
+      const locked = IMMUTABLE_APMIDS.has(value);
       const environments = config.apmid_environments?.[value] || [];
       const variants = environments.map(environment => value + '.' + String(environment).toUpperCase());
       const valueBox = node('div', { class: 'apmid-list-value' },
         node('strong', { class: 'mono', text: value }),
         node('small', { class: 'muted', text:
-          variants.length
-            ? 'Automatyczne warianty: ' + variants.join(', ')
-            : 'Brak aktywnych Environment — APMID nie ma wariantów.' }));
+          locked
+            ? 'Domyślny APMID systemowy — zawsze obecny w każdej organizacji'
+            : variants.length
+              ? 'Automatyczne warianty: ' + variants.join(', ')
+              : 'Brak aktywnych Environment — APMID nie ma wariantów.' }));
       if (variants.length) {
         valueBox.append(node('div', { class: 'apmid-environment-tags' },
           ...variants.map(variant => badge(variant, 'info'))));
@@ -734,7 +739,7 @@ async function apmidView() {
         valueBox,
         actions);
 
-      if (editable) {
+      if (editable && !locked) {
         actions.append(
           button('Edytuj', () => {
             valueBox.replaceChildren(apmidInputForm(value, 'Zapisz', async nextValue => {
@@ -761,6 +766,7 @@ async function apmidView() {
           ), 'danger')
         );
       }
+      if (locked) actions.append(badge('Domyślny · zablokowany', 'info'));
 
       list.append(row);
     });
@@ -775,7 +781,7 @@ async function apmidView() {
           node('span', { class: 'tools-eyebrow', text: 'Organizacja · ' + tenant.name }),
           node('h2', { text: 'APMID' }),
           node('p', { class: 'muted', text:
-            'Każdy APMID automatycznie ma wszystkie aktywne Environment. '
+            'LEO jest obowiązkowym APMID systemowym. Każdy APMID automatycznie ma wszystkie aktywne Environment. '
             + (enabledEnvironments.length
               ? 'Aktywne: ' + enabledEnvironments.join(', ') + '.'
               : 'Obecnie brak aktywnych Environment.') })),
