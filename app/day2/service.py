@@ -93,7 +93,13 @@ def load_target(db, resource_id: str):
             resource_type='vm',
             name=vm.name or f'vm-{vm.vm_id}',
             deployment_id=vm.deployment_id,
-            management_mode='TERRAFORM_MANAGED' if vm.management_mode == 'terraform' else 'PROVIDER_MANAGED',
+            management_mode=(
+                'TERRAFORM_MANAGED'
+                if vm.management_mode == 'terraform'
+                else 'INVENTORY_ONLY'
+                if vm.management_mode == 'inventory_only'
+                else 'PROVIDER_MANAGED'
+            ),
             node=vm.node,
             vm_id=vm.vm_id,
         )
@@ -104,11 +110,16 @@ def load_target(db, resource_id: str):
         raise failure('RESOURCE_NOT_FOUND', status_code=404)
     provider, credential = _provider_and_credential(db, resource.provider_id)
     deployment = db.get(Deployment, resource.deployment_id) if resource.deployment_id else None
+    onboarding_mode = str((resource.metadata_json or {}).get('onboarding_mode') or '')
     management_mode = (
         'TERRAFORM_MANAGED'
         if deployment and deployment.executor in {'terraform', 'opentofu'}
         else 'PROVIDER_MANAGED'
         if deployment and deployment.executor == 'proxmox'
+        else 'INVENTORY_ONLY'
+        if resource.management_source == 'onboarded' and onboarding_mode == 'INVENTORY_IMPORT'
+        else 'PROVIDER_MANAGED'
+        if resource.management_source == 'onboarded' and onboarding_mode in {'MANAGED', 'FULL_ADOPTION'}
         else 'EXTERNAL'
     )
     target = Day2Target(
@@ -279,6 +290,8 @@ def _availability_reason(db, target, action, adapter, permissions, config, state
             return 'Deployment requires a successful Terraform reconciliation plan before Day-2 mutations'
     if not config['enable_day2_actions']:
         return 'Day-2 Actions are disabled globally'
+    if target.management_mode == 'INVENTORY_ONLY' and action.id not in {'refresh_state', 'update_metadata'}:
+        return 'Inventory-only resources do not allow provider or guest Day-2 mutations'
     if action.permission not in permissions:
         return 'Missing permission: ' + action.permission
     if target.resource_type not in action.resource_types:
