@@ -25,3 +25,12 @@ def test_runtime_apmid_options_remain_scope_header_aware():
     source = Path('app/web/features/blueprint-runtime-apmid.js').read_text()
 
     assert "api('/vm-classification/options', { headers: scopeHeaders })" in source
+
+def test_policy_editor_refreshes_apmids_when_organization_changes():
+    source = Path('app/web/features/operations.js').read_text()
+
+    assert "'/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'" in source
+    assert "async function reloadClassification(preserveSelection = true)" in source
+    assert "reloadClassification(false)" in source
+    assert "Lista pochodzi z wybranej organizacji." in source
+
