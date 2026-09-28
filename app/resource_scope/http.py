@@ -35,7 +35,19 @@ def require(permission):
         )
         if decision.decision != 'ALLOW':
             from app.security.core import audit
-            audit(db, request, 'authorization.denied', permission, result='denied')
+            audit(
+                db,
+                request,
+                'authorization.denied',
+                permission,
+                result='denied',
+                scope=scope_from_resource_scope(scope),
+                details={
+                    'required_permission': permission,
+                    'decision': decision.decision,
+                    'reason': decision.reason,
+                },
+            )
             db.commit()
             status = 409 if decision.decision == 'REQUIRES_APPROVAL' else 403
             error = 'approval_required' if status == 409 else 'permission_denied'
