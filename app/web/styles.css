@@ -146,9 +146,6 @@ button { color: inherit; }
 .login-copy > p:last-child { color: var(--muted); max-width: 390px; line-height: 1.6; }
 .eyebrow { margin: 0 0 5px; color: var(--accent); font-size: .72rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
 .login-footnote { color: var(--muted); font-size: .76rem; margin-top: 24px; }
-.login-separator { display: flex; align-items: center; gap: 12px; margin: 18px 0; color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
-.login-separator::before, .login-separator::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.login-separator span { flex: 0 0 auto; }
 
 .stack { display: grid; gap: 18px; }
 label { display: grid; gap: 7px; color: var(--label); font-size: .83rem; font-weight: 650; }
