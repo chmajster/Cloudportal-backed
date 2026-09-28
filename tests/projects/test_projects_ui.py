@@ -11,7 +11,7 @@ def test_project_ui_server_scope_safe_text_and_stale_results():
     assert "async function deleteProject(item)" in source
     assert "action('Zmień nazwę', () => renameProject(row))" in source
     assert "action('Usuń', () => deleteProject(row), 'danger')" in source
-    assert "pattern: /^\\/projects\\/(?<id>[^/]+)$/" in source
+    assert "pattern: /^\\/projects\\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/" in source
     assert "details(match.params.id)" in source
     assert "const id = Number(match.params.id);" not in source
     script = r'''
