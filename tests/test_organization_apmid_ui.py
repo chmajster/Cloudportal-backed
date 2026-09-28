@@ -31,7 +31,7 @@ def test_runtime_apmid_options_remain_scope_header_aware():
 def test_policy_editor_refreshes_apmids_when_organization_changes():
     source = Path('app/web/features/operations.js').read_text()
 
-    assert "'/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'" in source
+    assert "scopeOptions?.classifications?.[String(tenantId)]" in source
     assert "async function reloadClassification(preserveSelection = true)" in source
     assert "reloadClassification(false)" in source
     assert "Lista pochodzi z wybranej organizacji." in source
