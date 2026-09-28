@@ -630,9 +630,14 @@ async function accountView() {
       accountValue('Role', roles),
       accountValue('Ostatnie logowanie', formatDate(user.last_login_at))));
 
-  const passwordMessage = user.must_change_password
-    ? 'Konto używa początkowego hasła administratora. Ustaw własne hasło, aby odblokować pełny dostęp.'
-    : 'Zmiana hasła unieważni aktywne sesje i tokeny resetu. Po zapisaniu zalogujesz się ponownie.';
+  const externalAuth = user.auth_source !== 'local';
+  const passwordMessage = externalAuth
+    ? (user.auth_source === 'oidc'
+      ? 'Uwierzytelnianie i hasło są zarządzane przez dostawcę SSO / OIDC.'
+      : 'Uwierzytelnianie i hasło są zarządzane przez katalog LDAP.')
+    : user.must_change_password
+      ? 'Konto używa początkowego hasła administratora. Ustaw własne hasło, aby odblokować pełny dostęp.'
+      : 'Zmiana hasła unieważni aktywne sesje i tokeny resetu. Po zapisaniu zalogujesz się ponownie.';
 
   const security = node('section', { class: 'panel account-card account-security-card' },
     node('div', { class: 'account-card-heading' },
@@ -640,9 +645,10 @@ async function accountView() {
       node('div', {},
         node('span', { class: 'account-kicker', text: 'Ochrona dostępu' }),
         node('h2', { text: 'Bezpieczeństwo konta' })),
-      user.must_change_password ? badge('Wymagana zmiana', 'warning') : badge('Hasło ustawione', 'ok')),
-    node('p', { class: user.must_change_password ? 'form-error account-security-copy' : 'muted account-security-copy', text: passwordMessage }),
-    node('div', { class: 'account-security-actions' },
+      externalAuth ? authSourceBadge(user)
+        : user.must_change_password ? badge('Wymagana zmiana', 'warning') : badge('Hasło ustawione', 'ok')),
+    node('p', { class: !externalAuth && user.must_change_password ? 'form-error account-security-copy' : 'muted account-security-copy', text: passwordMessage }),
+    externalAuth ? null : node('div', { class: 'account-security-actions' },
       button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => navigate('/account/password' + (user.must_change_password ? '?required=1' : '')), 'primary')));
 
   const permissionPanel = node('section', { class: 'panel account-permissions-panel' },
@@ -663,6 +669,11 @@ async function accountView() {
 }
 
 function changePassword(required = false) {
+  if (state.identity?.user?.auth_source !== 'local') {
+    toast('Hasło tego konta jest zarządzane przez zewnętrznego dostawcę tożsamości.', 'error');
+    navigate('account');
+    return;
+  }
   const currentPassword = field('Obecne hasło', 'current_password', {
     type: 'password',
     autocomplete: 'current-password',
