@@ -35,12 +35,12 @@ PERMISSIONS = {
         'vms': 'read read_all manage_all power update delete clone migrate template console',
         'machines': (
             'read create update delete delete.force '
-            'power.on power.off power.reset power.hard_stop '
+            'power.on power.off power.reset power.hard_stop power.suspend power.resume '
             'snapshot.create snapshot.delete snapshot.restore '
-            'disk.add disk.resize disk.delete '
-            'network.add network.update network.delete '
-            'console.open rebuild rebuild.force clone migrate '
-            'credentials.inject tags.update metadata.update'
+            'compute.resize disk.add disk.resize disk.delete disk.migrate '
+            'network.add network.update network.delete console.open '
+            'cloud_init.update credentials.inject packages.manage tags.update metadata.update '
+            'rebuild rebuild.force clone migrate actions.cancel actions.retry'
         ),
         'snapshots': 'read create delete rollback',
         'backups': 'read create restore',
@@ -104,8 +104,13 @@ def seed(db):
     }
     machine_operator = {
         p for p in ALL_PERMISSIONS
-        if p.startswith(('machines.read', 'machines.power.', 'machines.snapshot.', 'machines.console.',
-                         'machines.tags.', 'machines.metadata.'))
+        if p.startswith((
+            'machines.read', 'machines.power.', 'machines.snapshot.', 'machines.compute.',
+            'machines.disk.', 'machines.network.', 'machines.console.', 'machines.cloud_init.',
+            'machines.credentials.', 'machines.packages.', 'machines.tags.', 'machines.metadata.',
+            'machines.clone', 'machines.migrate', 'machines.actions.',
+        ))
+        and p not in {'machines.delete.force', 'machines.rebuild.force'}
     }
     viewer = {
         p for p in ALL_PERMISSIONS
