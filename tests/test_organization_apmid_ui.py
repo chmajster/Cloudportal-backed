@@ -1,0 +1,27 @@
+from pathlib import Path
+
+
+def test_apmid_tool_is_scoped_to_organization_and_shows_generated_variants():
+    source = Path('app/web/features/tools.js').read_text()
+
+    assert "APMID per organizacja" in source
+    assert "loadVisibleTenants()" in source
+    assert "'/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'" in source
+    assert "scope.permissions.includes('tenants.update')" in source
+    assert "value + '.' + String(environment).toUpperCase()" in source
+    assert "XD.DEV, XD.PROD i XD.NONPROD" in source
+    assert "permission: null" in source
+    assert "IMMUTABLE_APMIDS" not in source
+
+
+def test_blueprint_wizard_loads_classification_from_selected_tenant():
+    source = Path('app/web/features/blueprint-wizard-scope.js').read_text()
+
+    assert "'/tenants/' + encodeURIComponent(state.tenantId) + '/vm-classification'" in source
+    assert "data.vmClassification = vmClassification || data.vmClassification;" in source
+
+
+def test_runtime_apmid_options_remain_scope_header_aware():
+    source = Path('app/web/features/blueprint-runtime-apmid.js').read_text()
+
+    assert "api('/vm-classification/options', { headers: scopeHeaders })" in source
