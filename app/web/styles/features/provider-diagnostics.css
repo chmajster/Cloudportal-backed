@@ -1,0 +1,115 @@
+.provider-diagnostic-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 18px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+
+.provider-diagnostic-hero h2,
+.provider-diagnostic-provider h2 {
+  margin: 4px 0 8px;
+}
+
+.provider-diagnostic-legend,
+.provider-diagnostic-actions,
+.provider-diagnostic-provider-title,
+.provider-diagnostic-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-diagnostic-list {
+  display: grid;
+  gap: 18px;
+}
+
+.provider-diagnostic-provider {
+  padding: 20px;
+}
+
+.provider-diagnostic-provider-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.provider-diagnostic-provider-title h2 {
+  margin: 0;
+}
+
+.provider-diagnostic-summary {
+  margin: 16px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--panel-subtle, rgba(127, 127, 127, .08));
+  font-size: 13px;
+}
+
+.provider-diagnostic-empty {
+  padding: 16px 0 4px;
+}
+
+.provider-diagnostic-checks {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.provider-diagnostic-check {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 14px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.provider-diagnostic-check.fail {
+  border-color: color-mix(in srgb, var(--danger, #d9534f) 45%, var(--border));
+}
+
+.provider-diagnostic-check.warn {
+  border-color: color-mix(in srgb, var(--warning, #d99b21) 45%, var(--border));
+}
+
+.provider-diagnostic-check-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-diagnostic-check-copy p {
+  margin: 4px 0 0;
+}
+
+.provider-diagnostic-detail {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .provider-diagnostic-hero,
+  .provider-diagnostic-provider-head {
+    flex-direction: column;
+  }
+
+  .provider-diagnostic-check {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-diagnostic-check-title {
+    flex-direction: column;
+    gap: 4px;
+  }
+}

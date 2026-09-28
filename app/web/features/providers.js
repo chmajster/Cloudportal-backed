@@ -18,6 +18,7 @@ async function providersView() {
     ], providers, item => {
       const actions = [];
       actions.push(button('Przeglądaj zasoby', () => navigate('/providers/' + encodeURIComponent(item.id) + '/resources')));
+      if (allowed('providers.update')) actions.push(button('Diagnostyka', () => navigate('/admin/tools/provider-diagnostics?provider=' + encodeURIComponent(item.id))));
       if (allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => navigate('/providers/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'provider'))));
       if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Platforma „${item.name}” zostanie usunięta. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
