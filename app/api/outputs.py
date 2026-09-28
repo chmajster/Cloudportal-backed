@@ -24,7 +24,7 @@ class UserOutput(Output):
     is_active: bool
     is_locked: bool
     is_service_account: bool
-    auth_source: Literal['local', 'ldap']
+    auth_source: Literal['local', 'ldap', 'oidc']
     must_change_password: bool
     created_at: datetime
     updated_at: datetime
@@ -48,6 +48,34 @@ class BlueprintAvatarOutput(Output):
     id: str
     name: str
     data_uri: str
+
+
+class SSOSettingsOutput(Output):
+    enabled: bool
+    provider_name: str
+    issuer: str
+    client_id: str
+    client_secret_configured: bool
+    redirect_uri: str
+    scopes: list[str]
+    token_endpoint_auth_method: Literal['client_secret_post', 'client_secret_basic', 'none']
+    verify_tls: bool
+    allow_insecure_http: bool
+    username_claim: str
+    email_claim: str
+    first_name_claim: str
+    last_name_claim: str
+
+
+class SSOTestOutput(Output):
+    ok: bool
+    message: str
+    issuer: str
+    authorization_endpoint: str
+    token_endpoint: str
+    userinfo_endpoint: str
+    jwks_uri: str
+    signing_keys: int
 
 
 class LDAPSettingsOutput(Output):
