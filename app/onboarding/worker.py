@@ -68,6 +68,16 @@ def _job_item(context, item_id, *, status=None, error=None, result=None, identit
         db.commit()
 
 
+def _emit(context, action, resource, resource_id, payload=None, *, result='success'):
+    with session() as db:
+        job = db.get(Job, context.job.id)
+        bind_job_scope(db, job)
+        worker_audit_event(
+            db, job, action, resource, resource_id, payload or {}, result=result
+        )
+        db.commit()
+
+
 def _provider_for_discovered(db, row):
     provider = db.get(Provider, row.provider_id)
     if provider is None:
@@ -695,6 +705,13 @@ def _process_item_once(context, row, config):
     _stage(context, row.id, 1, 'OK')
 
     _stage(context, row.id, 2)
+    _emit(
+        context,
+        'vm.onboarding.validating',
+        'discovered_resource',
+        row.discovered_resource_id,
+        {'external_id': row.external_id, 'mode': config.get('mode')},
+    )
     if live.get('external_id') != row.external_id:
         raise ExecutionFailed('Provider resource identity changed during onboarding')
     _stage(context, row.id, 2, 'OK')
@@ -730,10 +747,38 @@ def _process_item_once(context, row, config):
 
     _stage(context, row.id, 8)
     guest_result = _guest_and_agent(context, identity_id, config, adapter, live)
+    if not guest_result.get('skipped'):
+        _emit(
+            context,
+            'vm.onboarding.guest_discovered',
+            'resource_external_identity',
+            identity_id,
+            {'external_id': row.external_id},
+        )
     _stage(context, row.id, 8, 'OK' if not guest_result.get('skipped') else 'WARN', '(skipped)' if guest_result.get('skipped') else None)
 
     _stage(context, row.id, 9)
+    if (config.get('integrations') or {}).get('add_to_awx'):
+        _emit(
+            context,
+            'vm.onboarding.awx.started',
+            'resource_external_identity',
+            identity_id,
+            {'external_id': row.external_id},
+        )
     awx_result = _awx_onboard(context, identity_id, config, live)
+    if not awx_result.get('skipped'):
+        _emit(
+            context,
+            'vm.onboarding.awx.completed',
+            'resource_external_identity',
+            identity_id,
+            {
+                'external_id': row.external_id,
+                'inventory_id': awx_result.get('inventory_id'),
+                'host_id': awx_result.get('host_id'),
+            },
+        )
     _stage(context, row.id, 9, 'OK' if not awx_result.get('skipped') else 'WARN', '(skipped)' if awx_result.get('skipped') else None)
 
     _stage(context, row.id, 10)
