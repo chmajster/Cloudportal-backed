@@ -306,6 +306,69 @@ def test_ldap_settings_secret_and_jit_rbac(client, headers, monkeypatch):
     assert client.post('/api/v1/users/' + str(alice['id']) + '/reset-password', headers=headers).status_code == 409
 
 
+def test_ldap_authentication_tolerates_missing_optional_attributes(monkeypatch):
+    from app.auth import ldap as ldap_module
+
+    config = {
+        **ldap_module.LDAP_DEFAULTS,
+        'enabled': True,
+        'url': 'ldap://ldap.example.test:389',
+        'bind_dn': 'uid=admin,ou=people,dc=example,dc=com',
+        'bind_password': 'bind-secret',
+        'base_dn': 'ou=people,dc=example,dc=com',
+        'user_filter': '(&(objectClass=person)(uid={username}))',
+        'username_attribute': 'uid',
+        'email_attribute': 'mail',
+        'first_name_attribute': 'givenName',
+        'last_name_attribute': 'sn',
+    }
+
+    class Attribute:
+        def __init__(self, value):
+            self.value = value
+
+    class Entry:
+        entry_dn = 'uid=alice,ou=people,dc=example,dc=com'
+        entry_attributes = ['uid', 'mail']
+
+        def __getitem__(self, name):
+            values = {
+                'uid': Attribute('alice'),
+                'mail': Attribute('alice@example.com'),
+            }
+            return values[name]
+
+    class DirectoryConnection:
+        entries = [Entry()]
+
+        def search(self, base, ldap_filter, search_scope=None, attributes=None, size_limit=None):
+            assert base == config['base_dn']
+            assert ldap_filter == '(&(objectClass=person)(uid=alice))'
+            assert attributes == ldap_module.ALL_ATTRIBUTES
+            return True
+
+        def unbind(self):
+            return True
+
+    class UserConnection:
+        def unbind(self):
+            return True
+
+    connections = iter([DirectoryConnection(), UserConnection()])
+    monkeypatch.setattr(ldap_module, 'ldap_settings', lambda db, include_secret=False: dict(config))
+    monkeypatch.setattr(ldap_module, '_connection', lambda *args, **kwargs: next(connections))
+
+    profile = ldap_module.authenticate_ldap(object(), 'alice', 'directory-secret')
+
+    assert profile == {
+        'dn': 'uid=alice,ou=people,dc=example,dc=com',
+        'username': 'alice',
+        'email': 'alice@example.com',
+        'first_name': '',
+        'last_name': '',
+    }
+
+
 def test_ldap_diagnostics_explains_local_account_shadowing(system, monkeypatch):
     from app.auth import ldap as ldap_module
 
