@@ -131,6 +131,26 @@ def test_blueprint_creation_scopes_are_rbac_filtered_and_admin_sees_all(system):
 
 
 
+def test_project_scoped_blueprint_editor_can_read_tenant_apmids(system):
+    client, headers, _ = system
+    p = project(client, headers, 'bp-apmid-scope')
+    configured = client.put(
+        f"/api/v1/tenants/{p['tenant_id']}/vm-classification",
+        headers=headers,
+        json={'apmids': ['xd']},
+    )
+    assert configured.status_code == 200, configured.text
+
+    _user, user_headers = member(client, headers, p, username='bp-apmid-project-editor')
+    response = client.get(
+        '/api/v1/blueprints/vm-classification'
+        f"?tenant_id={p['tenant_id']}&project_id={p['id']}&permission=blueprints.create",
+        headers=user_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()['apmids'] == ['LEO', 'XD']
+
+
 def test_blueprint_acl_and_manager_roles_honor_project_role_assignments(system):
     client, headers, _ = system
     p = project(client, headers, 'bp-scoped-rbac')
