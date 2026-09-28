@@ -336,6 +336,238 @@ function heading(description, actions = []) {
   return node('div', { class: 'page-actions' }, node('p', { text: description }), node('div', { class: 'action-group' }, actions));
 }
 function loading() { dom.content.replaceChildren(node('div', { class: 'loading' }, node('div', { class: 'spinner', 'aria-label': 'Ładowanie' }))); }
+function searchable(value) {
+  return String(value ?? '')
+    .toLocaleLowerCase('pl-PL')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+function tablePreferenceKey(columns) {
+  const signature = [state.view, ...columns.map(column => column.label)].join('|');
+  let hash = 2166136261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `cloudportal.console.table.${(hash >>> 0).toString(16)}`;
+}
+function readTablePreferences(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
+function writeTablePreferences(key, preferences) {
+  try { localStorage.setItem(key, JSON.stringify(preferences)); } catch { /* Storage may be unavailable. */ }
+}
+function table(columns, rows, actions) {
+  if (!rows.length) return node('div', { class: 'table-wrap' }, node('div', { class: 'empty', text: 'Brak danych do wyświetlenia.' }));
+
+  const preferenceKey = tablePreferenceKey(columns);
+  const saved = readTablePreferences(preferenceKey);
+  const hiddenColumns = new Set(
+    Array.isArray(saved.hidden_columns)
+      ? saved.hidden_columns.filter(index => Number.isInteger(index) && index >= 0 && index < columns.length)
+      : []
+  );
+  let sortIndex = Number.isInteger(saved.sort_index) && saved.sort_index >= 0 && saved.sort_index < columns.length
+    ? saved.sort_index : null;
+  let sortDirection = saved.sort_direction === 'desc' ? 'desc' : 'asc';
+  let pageSize = [10, 25, 50, 100, 0].includes(Number(saved.page_size)) ? Number(saved.page_size) : 25;
+  let density = saved.density === 'compact' ? 'compact' : 'normal';
+  let currentPage = 1;
+
+  const head = node('tr');
+  const headerCells = [];
+  columns.forEach((column, columnIndex) => {
+    const sortButton = node('button', {
+      class: 'table-sort-button',
+      type: 'button',
+      disabled: column.sortable === false,
+      onClick: () => {
+        if (column.sortable === false) return;
+        if (sortIndex === columnIndex) sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+        else {
+          sortIndex = columnIndex;
+          sortDirection = 'asc';
+        }
+        currentPage = 1;
+        persist();
+        apply();
+      },
+    },
+    node('span', { text: column.label }),
+    node('span', { class: 'table-sort-indicator', 'aria-hidden': 'true', text: '↕' }));
+    const th = node('th', { 'data-column-index': columnIndex }, sortButton);
+    th.hidden = hiddenColumns.has(columnIndex);
+    headerCells.push(th);
+    head.append(th);
+  });
+  if (actions) head.append(node('th', { class: 'table-actions-column', text: 'Akcje' }));
+
+  const body = node('tbody');
+  const records = rows.map((row, rowIndex) => {
+    const tr = node('tr');
+    const sortValues = [];
+    const searchableValues = [];
+    columns.forEach((column, columnIndex) => {
+      const value = column.value(row);
+      const cell = node('td', { class: column.class || '', 'data-column-index': columnIndex }, value instanceof Node ? value : String(value ?? '—'));
+      cell.hidden = hiddenColumns.has(columnIndex);
+      const textValue = cell.textContent?.trim() || String(value ?? '');
+      sortValues.push(column.sortValue ? String(column.sortValue(row) ?? '') : textValue);
+      searchableValues.push(textValue);
+      tr.append(cell);
+    });
+    if (actions) tr.append(node('td', { class: 'table-actions-column' }, node('div', { class: 'row-actions' }, actions(row))));
+    const raw = (() => { try { return JSON.stringify(row); } catch { return ''; } })();
+    return {
+      originalIndex: rowIndex,
+      element: tr,
+      search: searchable([raw, ...searchableValues].join(' ')),
+      sortValues,
+    };
+  });
+  records.forEach(record => body.append(record.element));
+
+  const noResults = node('tr', { class: 'table-search-empty', hidden: true },
+    node('td', { colspan: columns.length + (actions ? 1 : 0), class: 'empty', text: 'Brak wyników.' }));
+  body.append(noResults);
+
+  const tableElement = node('table', {}, node('thead', {}, head), body);
+  const scroll = node('div', { class: 'table-scroll' }, tableElement);
+  const wrapper = node('div', { class: `table-wrap advanced-table ${density === 'compact' ? 'compact' : ''}` });
+
+  const search = node('input', {
+    class: 'table-search',
+    type: 'search',
+    placeholder: 'Szukaj w tabeli…',
+    'aria-label': 'Szukaj w tabeli',
+  });
+  const count = node('span', { class: 'table-count', 'aria-live': 'polite' });
+  const pageInfo = node('span', { class: 'table-page-info', 'aria-live': 'polite' });
+  const previousPage = button('←', () => { currentPage -= 1; apply(); }, 'ghost');
+  const nextPage = button('→', () => { currentPage += 1; apply(); }, 'ghost');
+  previousPage.setAttribute('aria-label', 'Poprzednia strona');
+  nextPage.setAttribute('aria-label', 'Następna strona');
+
+  const pageSizeSelect = node('select', { class: 'table-page-size', 'aria-label': 'Liczba wierszy na stronę' },
+    ...[
+      [10, '10 / strona'], [25, '25 / strona'], [50, '50 / strona'], [100, '100 / strona'], [0, 'Wszystkie'],
+    ].map(([value, label]) => node('option', { value, text: label, selected: Number(value) === pageSize })));
+  pageSizeSelect.addEventListener('change', () => {
+    pageSize = Number(pageSizeSelect.value);
+    currentPage = 1;
+    persist();
+    apply();
+  });
+
+  const densitySelect = node('select', { class: 'table-density', 'aria-label': 'Gęstość tabeli' },
+    node('option', { value: 'normal', text: 'Normalna', selected: density === 'normal' }),
+    node('option', { value: 'compact', text: 'Kompaktowa', selected: density === 'compact' }));
+  densitySelect.addEventListener('change', () => {
+    density = densitySelect.value === 'compact' ? 'compact' : 'normal';
+    wrapper.classList.toggle('compact', density === 'compact');
+    persist();
+  });
+
+  const columnPickerBody = node('div', { class: 'table-column-picker-body' });
+  columns.forEach((column, columnIndex) => {
+    const checkbox = node('input', { type: 'checkbox', checked: !hiddenColumns.has(columnIndex) });
+    checkbox.addEventListener('change', () => {
+      if (!checkbox.checked && columns.length - hiddenColumns.size <= 1) {
+        checkbox.checked = true;
+        toast('Co najmniej jedna kolumna musi pozostać widoczna.', 'error');
+        return;
+      }
+      if (checkbox.checked) hiddenColumns.delete(columnIndex);
+      else hiddenColumns.add(columnIndex);
+      headerCells[columnIndex].hidden = hiddenColumns.has(columnIndex);
+      records.forEach(record => {
+        const cell = record.element.querySelector(`[data-column-index="${columnIndex}"]`);
+        if (cell) cell.hidden = hiddenColumns.has(columnIndex);
+      });
+      persist();
+    });
+    columnPickerBody.append(node('label', { class: 'table-column-option' }, checkbox, node('span', { text: column.label })));
+  });
+  const columnPicker = node('details', { class: 'table-column-picker' },
+    node('summary', { text: 'Kolumny' }),
+    columnPickerBody);
+
+  const pagination = node('div', { class: 'table-pagination' }, previousPage, pageInfo, nextPage);
+  const toolbar = node('div', { class: 'table-toolbar' },
+    node('div', { class: 'table-toolbar-main' }, search, count),
+    node('div', { class: 'table-toolbar-controls' },
+      densitySelect, pageSizeSelect, columnPicker));
+  const footer = node('div', { class: 'table-footer' }, count.cloneNode(true), pagination);
+
+  function persist() {
+    writeTablePreferences(preferenceKey, {
+      hidden_columns: [...hiddenColumns],
+      sort_index: sortIndex,
+      sort_direction: sortDirection,
+      page_size: pageSize,
+      density,
+    });
+  }
+
+  function apply() {
+    const phrase = searchable(search.value.trim());
+    let filtered = records.filter(record => !phrase || record.search.includes(phrase));
+    if (sortIndex !== null) {
+      filtered = [...filtered].sort((left, right) => {
+        const result = left.sortValues[sortIndex].localeCompare(right.sortValues[sortIndex], 'pl', {
+          numeric: true, sensitivity: 'base',
+        });
+        return sortDirection === 'desc' ? -result : result;
+      });
+    } else {
+      filtered = [...filtered].sort((left, right) => left.originalIndex - right.originalIndex);
+    }
+
+    records.forEach(record => { record.element.hidden = true; });
+    filtered.forEach(record => body.append(record.element));
+    body.append(noResults);
+
+    const effectivePageSize = pageSize || Math.max(filtered.length, 1);
+    const totalPages = Math.max(1, Math.ceil(filtered.length / effectivePageSize));
+    currentPage = Math.max(1, Math.min(currentPage, totalPages));
+    const start = (currentPage - 1) * effectivePageSize;
+    const visible = filtered.slice(start, start + effectivePageSize);
+    visible.forEach(record => { record.element.hidden = false; });
+
+    noResults.hidden = filtered.length > 0;
+    const visibleStart = filtered.length ? start + 1 : 0;
+    const visibleEnd = filtered.length ? Math.min(start + effectivePageSize, filtered.length) : 0;
+    count.textContent = phrase ? `${filtered.length} z ${rows.length} pozycji` : `${rows.length} pozycji`;
+    footer.firstChild.textContent = filtered.length ? `${visibleStart}–${visibleEnd} z ${filtered.length}` : '0 pozycji';
+    pageInfo.textContent = `${currentPage} / ${totalPages}`;
+    previousPage.disabled = currentPage <= 1;
+    nextPage.disabled = currentPage >= totalPages;
+    pagination.hidden = totalPages <= 1;
+
+    headerCells.forEach((th, index) => {
+      const buttonElement = th.querySelector('.table-sort-button');
+      const indicator = th.querySelector('.table-sort-indicator');
+      const active = sortIndex === index;
+      th.setAttribute('aria-sort', active ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none');
+      if (indicator) indicator.textContent = active ? (sortDirection === 'asc' ? '↑' : '↓') : '↕';
+      buttonElement?.classList.toggle('active', active);
+    });
+  }
+
+  search.addEventListener('input', () => {
+    currentPage = 1;
+    apply();
+  });
+
+  wrapper.append(toolbar, scroll, footer);
+  apply();
+  return wrapper;
+}
 function formFieldLabel(labelText, required = false) {
   return node('span', { class: 'field-label' },
     labelText,
@@ -361,212 +593,6 @@ function selectField(labelText, name, choices, value, options = {}) {
   if (options.wide) label.classList.add('wide');
   return label;
 }
-let searchableSelectSequence = 0;
-
-function normalizeSearchText(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase('pl-PL')
-    .trim();
-}
-
-function searchableSelectField(labelText, name, choices, value, options = {}) {
-  const controlId = 'searchable-select-' + (++searchableSelectSequence);
-  const listboxId = controlId + '-listbox';
-  const valueInput = node('input', { type: 'hidden', name, value: '' });
-  const searchInput = node('input', {
-    id: controlId,
-    type: 'search',
-    class: 'searchable-select-input',
-    autocomplete: 'off',
-    spellcheck: 'false',
-    placeholder: options.placeholder || 'Wpisz, aby filtrować…',
-    role: 'combobox',
-    'aria-autocomplete': 'list',
-    'aria-expanded': 'false',
-    'aria-controls': listboxId,
-  });
-  const listbox = node('div', {
-    id: listboxId,
-    class: 'searchable-select-options',
-    role: 'listbox',
-    hidden: true,
-  });
-  const control = node('div', { class: 'searchable-select' },
-    searchInput,
-    node('span', { class: 'searchable-select-chevron', 'aria-hidden': 'true', text: '⌄' }),
-    valueInput,
-    listbox);
-  const wrapper = node('div', { class: 'searchable-select-field' + (options.wide ? ' wide' : '') },
-    node('label', { for: controlId }, formFieldLabel(labelText, Boolean(options.required))),
-    control);
-  if (options.help) wrapper.append(node('span', { class: 'field-help', text: options.help }));
-
-  let rows = [];
-  let selectedValue = '';
-  let activeIndex = -1;
-  let editing = false;
-  const listeners = new Set();
-
-  function selectedChoice() {
-    return rows.find(choice => String(choice.value) === String(selectedValue)) || null;
-  }
-
-  function closeList() {
-    listbox.hidden = true;
-    searchInput.setAttribute('aria-expanded', 'false');
-    searchInput.removeAttribute('aria-activedescendant');
-    activeIndex = -1;
-  }
-
-  function visibleChoices() {
-    const query = editing ? normalizeSearchText(searchInput.value) : '';
-    if (!query) return rows;
-    return rows.filter(choice => normalizeSearchText(choice.label).includes(query));
-  }
-
-  function optionButtons() {
-    return Array.from(listbox.querySelectorAll('.searchable-select-option'));
-  }
-
-  function activate(index) {
-    const buttons = optionButtons();
-    if (!buttons.length) {
-      activeIndex = -1;
-      searchInput.removeAttribute('aria-activedescendant');
-      return;
-    }
-    activeIndex = Math.max(0, Math.min(index, buttons.length - 1));
-    buttons.forEach((element, itemIndex) => element.classList.toggle('active', itemIndex === activeIndex));
-    const active = buttons[activeIndex];
-    searchInput.setAttribute('aria-activedescendant', active.id);
-    active.scrollIntoView({ block: 'nearest' });
-  }
-
-  function renderOptions() {
-    const matches = visibleChoices();
-    const selected = String(valueInput.value || '');
-    if (!matches.length) {
-      listbox.replaceChildren(node('div', {
-        class: 'searchable-select-empty',
-        role: 'presentation',
-        text: 'Brak pasujących wyników',
-      }));
-      activeIndex = -1;
-      return;
-    }
-    listbox.replaceChildren(...matches.map((choice, index) => {
-      const option = node('button', {
-        type: 'button',
-        id: listboxId + '-option-' + index,
-        class: 'searchable-select-option',
-        role: 'option',
-        'aria-selected': String(choice.value) === selected ? 'true' : 'false',
-        onMouseDown: event => event.preventDefault(),
-        onClick: () => commit(choice, true),
-      }, node('span', { text: choice.label }));
-      option._searchableChoice = choice;
-      return option;
-    }));
-    activeIndex = -1;
-  }
-
-  function openList() {
-    if (searchInput.disabled) return;
-    renderOptions();
-    listbox.hidden = false;
-    searchInput.setAttribute('aria-expanded', 'true');
-  }
-
-  function commit(choice, notify = false) {
-    if (!choice) return;
-    selectedValue = String(choice.value);
-    valueInput.value = selectedValue;
-    searchInput.value = String(choice.label || '');
-    editing = false;
-    closeList();
-    if (notify) listeners.forEach(listener => listener(selectedValue, choice));
-  }
-
-  function clearSelection() {
-    valueInput.value = '';
-    editing = true;
-  }
-
-  function setChoices(nextChoices, preferred = '') {
-    rows = (nextChoices || []).map(choice => ({
-      value: String(choice.value),
-      label: String(choice.label ?? choice.value),
-    }));
-    const preferredChoice = rows.find(choice => String(choice.value) === String(preferred));
-    const retainedChoice = rows.find(choice => String(choice.value) === String(selectedValue));
-    const next = preferredChoice || retainedChoice || rows[0] || null;
-    searchInput.disabled = rows.length === 0;
-    if (next) commit(next, false);
-    else {
-      selectedValue = '';
-      valueInput.value = '';
-      searchInput.value = '';
-      editing = false;
-      closeList();
-    }
-  }
-
-  searchInput.addEventListener('focus', () => {
-    searchInput.select();
-    editing = false;
-    openList();
-  });
-  searchInput.addEventListener('click', () => {
-    if (listbox.hidden) openList();
-  });
-  searchInput.addEventListener('input', () => {
-    clearSelection();
-    openList();
-  });
-  searchInput.addEventListener('keydown', event => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (listbox.hidden) openList();
-      const buttons = optionButtons();
-      if (!buttons.length) return;
-      const delta = event.key === 'ArrowDown' ? 1 : -1;
-      const start = activeIndex < 0 ? (delta > 0 ? 0 : buttons.length - 1) : activeIndex + delta;
-      activate(Math.max(0, Math.min(start, buttons.length - 1)));
-      return;
-    }
-    if (event.key === 'Enter' && !listbox.hidden) {
-      const buttons = optionButtons();
-      const target = activeIndex >= 0 ? buttons[activeIndex] : (buttons.length === 1 ? buttons[0] : null);
-      if (target) {
-        event.preventDefault();
-        commit(target._searchableChoice, true);
-      }
-      return;
-    }
-    if (event.key === 'Escape') {
-      const previous = selectedChoice();
-      if (previous) commit(previous, false);
-      else closeList();
-      event.stopPropagation();
-    }
-    if (event.key === 'Tab') closeList();
-  });
-  searchInput.addEventListener('blur', () => {
-    window.setTimeout(closeList, 0);
-  });
-
-  wrapper.searchableSelect = Object.freeze({
-    setChoices,
-    value: () => String(valueInput.value || ''),
-    onChange: listener => listeners.add(listener),
-    focus: () => searchInput.focus(),
-  });
-  setChoices(choices, value);
-  return wrapper;
-}
-
 function checkboxField(labelText, name, checked = false) {
   return node('label', { class: 'checkbox' }, node('input', { type: 'checkbox', name, checked }), labelText);
 }
