@@ -3,15 +3,140 @@ import hashlib
 import json
 import re
 import secrets
+from typing import Annotated, Literal
 from urllib.parse import urlencode, urlsplit
 
 import httpx
 import jwt
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import or_, select
 
 from app.models import Setting, User
 from app.security.core import decrypt_blob, encrypt_blob, password_hasher, redis_client
+
+
+class _SSOInput(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=False)
+
+
+class _SSOOutput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+
+class SSOExchangeInput(_SSOInput):
+    token: Annotated[str, Field(min_length=32, max_length=256)]
+
+
+class SSOSettingsInput(_SSOInput):
+    enabled: bool = False
+    provider_name: Annotated[str, Field(min_length=1, max_length=100)] = 'OpenSSO'
+    issuer: Annotated[str, Field(max_length=2048)] = ''
+    client_id: Annotated[str, Field(max_length=512)] = ''
+    client_secret: Annotated[str | None, Field(max_length=4096, json_schema_extra={'writeOnly': True})] = None
+    redirect_uri: Annotated[str, Field(max_length=2048)] = ''
+    scopes: Annotated[list[str], Field(min_length=1, max_length=16)] = Field(
+        default_factory=lambda: ['openid', 'profile', 'email', 'groups']
+    )
+    token_endpoint_auth_method: Literal['client_secret_post', 'client_secret_basic', 'none'] = 'client_secret_post'
+    verify_tls: bool = True
+    allow_insecure_http: bool = False
+    username_claim: Annotated[str, Field(min_length=1, max_length=128)] = 'preferred_username'
+    email_claim: Annotated[str, Field(min_length=1, max_length=128)] = 'email'
+    first_name_claim: Annotated[str, Field(min_length=1, max_length=128)] = 'given_name'
+    last_name_claim: Annotated[str, Field(min_length=1, max_length=128)] = 'family_name'
+
+    @field_validator('provider_name', 'client_id', 'username_claim', 'email_claim', 'first_name_claim', 'last_name_claim')
+    @classmethod
+    def sso_trimmed(cls, value):
+        return value.strip()
+
+    @field_validator('issuer')
+    @classmethod
+    def sso_issuer(cls, value):
+        value = value.strip()
+        if not value:
+            return ''
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {'https', 'http'} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+        ):
+            raise ValueError('SSO issuer must be an absolute HTTP(S) URL without credentials, query or fragment')
+        return value
+
+    @field_validator('redirect_uri')
+    @classmethod
+    def sso_redirect_uri(cls, value):
+        value = value.strip()
+        if not value:
+            return ''
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {'https', 'http'} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.fragment
+        ):
+            raise ValueError('SSO redirect URI must be an absolute HTTP(S) URL without credentials or fragment')
+        return value
+
+    @field_validator('scopes')
+    @classmethod
+    def sso_scopes(cls, values):
+        result = []
+        for value in values:
+            value = str(value).strip()
+            if not re.fullmatch(r'[A-Za-z0-9._:-]{1,64}', value):
+                raise ValueError('Invalid OIDC scope')
+            if value not in result:
+                result.append(value)
+        if 'openid' not in result:
+            raise ValueError('OIDC scopes must include openid')
+        return result
+
+    @field_validator('username_claim', 'email_claim', 'first_name_claim', 'last_name_claim')
+    @classmethod
+    def sso_claim_name(cls, value):
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.:-]{0,127}', value):
+            raise ValueError('Invalid OIDC claim name')
+        return value
+
+    @model_validator(mode='after')
+    def sso_configuration(self):
+        if self.enabled and (not self.provider_name or not self.issuer or not self.client_id or not self.redirect_uri):
+            raise ValueError('Provider name, issuer, client ID and redirect URI are required when SSO is enabled')
+        if not self.allow_insecure_http:
+            for label, value in (('issuer', self.issuer), ('redirect URI', self.redirect_uri)):
+                if value and not value.startswith('https://'):
+                    raise ValueError(f'SSO {label} must use HTTPS unless insecure HTTP is explicitly allowed')
+        return self
+
+
+class SSOSettingsOutput(_SSOOutput):
+    enabled: bool
+    provider_name: str
+    issuer: str
+    client_id: str
+    client_secret_configured: bool
+    redirect_uri: str
+    scopes: list[str]
+    token_endpoint_auth_method: Literal['client_secret_post', 'client_secret_basic', 'none']
+    verify_tls: bool
+    allow_insecure_http: bool
+    username_claim: str
+    email_claim: str
+    first_name_claim: str
+    last_name_claim: str
+
+
+class SSOTestOutput(_SSOOutput):
+    ok: bool
+    message: str
+    issuer: str
+    authorization_endpoint: str
+    token_endpoint: str
+    userinfo_endpoint: str
+    jwks_uri: str
+    signing_keys: int
 
 
 SSO_KEY = 'sso'
@@ -101,14 +226,14 @@ def _provider_client(config):
 
 
 def oidc_discovery(config):
-    issuer = str(config.get('issuer') or '').rstrip('/')
+    issuer = str(config.get('issuer') or '').strip()
     if not issuer:
         raise HTTPException(422, 'SSO issuer is not configured')
     allow_http = bool(config.get('allow_insecure_http'))
     _validate_runtime_url(issuer, allow_http=allow_http, label='SSO issuer')
     try:
         with _provider_client(config) as client:
-            response = client.get(issuer + '/.well-known/openid-configuration')
+            response = client.get(issuer.rstrip('/') + '/.well-known/openid-configuration')
             response.raise_for_status()
             metadata = response.json()
     except (httpx.HTTPError, ValueError):
