@@ -189,7 +189,7 @@ def _assignment_scope_matches(row: RoleAssignment, target: dict, context: Mappin
     inherited = kind != target_kind
 
     if kind == 'GLOBAL':
-        return True, target_kind != 'GLOBAL'
+        return (row.inherit or target_kind == 'GLOBAL'), target_kind != 'GLOBAL'
 
     if kind == 'ORGANIZATION':
         matched = bool(row.tenant_id and row.tenant_id == target['tenant_id'])
@@ -502,6 +502,14 @@ def authorize(
         if not scope_match:
             trace.append({'assignment_id': row.id, 'matched': False, 'reason': 'scope'})
             continue
+        profile = db.get(RoleProfile, row.role_id)
+        if is_inherited and profile is not None and not profile.inheritance_enabled:
+            trace.append({
+                'assignment_id': row.id,
+                'matched': False,
+                'reason': 'role_inheritance_disabled',
+            })
+            continue
         if row.conditions and not evaluate_condition(row.conditions, evaluation_context):
             trace.append({'assignment_id': row.id, 'matched': False, 'reason': 'condition'})
             continue
@@ -552,6 +560,22 @@ def authorize(
             'Explicit DENY matched before ALLOW',
             tuple(trace + [{'stage': 'explicit_deny', 'matched': True}]),
         )
+
+    # API_TOKEN is a restriction boundary, never an independent privilege
+    # source. Token scopes and token-scoped DENY/conditions may narrow access,
+    # but at least one USER/GROUP/SERVICE_ACCOUNT/legacy grant must exist.
+    if subject_user_id is None and getattr(actor, 'kind', None) == 'api':
+        base_allow = [
+            item for item in matched_allow
+            if item.get('subject_type') != 'API_TOKEN'
+        ]
+        if not base_allow:
+            return AuthorizationDecision(
+                'DENY', action, frozenset(), tuple(role_refs.values()),
+                tuple(matched_allow), tuple(inherited), (),
+                'API token cannot elevate beyond its owner permissions',
+                tuple(trace + [{'stage': 'token_owner_intersection', 'matched': False}]),
+            )
 
     if not matched_allow:
         return AuthorizationDecision(
