@@ -73,7 +73,11 @@ def tenant_vm_classification_settings(db, tenant_id):
     if row is None:
         apmids = list(global_settings['apmids'])
     else:
-        apmids = normalize_apmids(raw.get('apmids'))
+        requested = normalize_apmids(raw.get('apmids'))
+        apmids = [
+            *DEFAULT_APMIDS,
+            *(value for value in requested if value not in DEFAULT_APMIDS),
+        ]
 
     enabled_environments = [
         name for name in ENVIRONMENTS
@@ -108,7 +112,13 @@ def vm_classification_for_tenant(db, tenant_id):
 
 
 def save_tenant_apmids(db, tenant_id, apmids):
-    value = {'apmids': normalize_apmids(apmids)}
+    requested = normalize_apmids(apmids)
+    value = {
+        'apmids': [
+            *DEFAULT_APMIDS,
+            *(item for item in requested if item not in DEFAULT_APMIDS),
+        ],
+    }
     key = tenant_setting_key(tenant_id)
     row = db.get(Setting, key)
     if row is None:
