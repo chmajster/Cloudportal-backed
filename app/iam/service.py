@@ -507,6 +507,8 @@ def authorize(
             continue
         exact, patterns, role_name = _role_grants(db, row.role_id)
         permission_match = action in exact or PermissionMatcher.any_matches(patterns, action)
+        if permission_match and row.permission_ceiling is not None:
+            permission_match = PermissionMatcher.any_matches(row.permission_ceiling, action)
         if not permission_match:
             trace.append({'assignment_id': row.id, 'matched': False, 'reason': 'permission'})
             continue
