@@ -290,14 +290,22 @@ def test_policy_scope_picker_options_are_rbac_filtered(client, headers):
     response = client.get('/api/v1/policies/scopes', headers=headers)
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert set(payload) == {'global_allowed', 'tenants', 'projects'}
+    assert set(payload) == {'global_allowed', 'classifications', 'tenants', 'projects'}
     assert isinstance(payload['global_allowed'], bool)
+    assert isinstance(payload['classifications'], dict)
     assert isinstance(payload['tenants'], list)
     assert isinstance(payload['projects'], list)
     for tenant in payload['tenants']:
         assert {'id', 'name', 'slug'} <= set(tenant)
     for project in payload['projects']:
         assert {'id', 'tenant_id', 'name', 'slug', 'tenant_name', 'tenant_slug'} <= set(project)
+    visible_tenant_ids = {str(row['id']) for row in payload['tenants']} | {
+        str(row['tenant_id']) for row in payload['projects']
+    }
+    assert set(payload['classifications']) == visible_tenant_ids
+    for classification in payload['classifications'].values():
+        assert classification['apmids'][0] == 'LEO'
+        assert {'environments', 'apmids', 'hostname_defaults'} <= set(classification)
 
 
 def test_policy_api_versions_simulator_and_whitelist(client, headers):
