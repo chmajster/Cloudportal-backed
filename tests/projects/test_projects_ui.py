@@ -45,3 +45,17 @@ vm.createContext(context); vm.runInContext(fs.readFileSync('app/web/features/pro
 })().catch(error => {console.error(error);process.exitCode=1;});
 '''
     subprocess.run(['node', '-e', script], check=True, timeout=15)
+
+
+def test_project_member_picker_is_searchable_and_loads_all_tenant_members():
+    source = Path('app/web/features/projects.js').read_text()
+    core = Path('app/web/core.js').read_text()
+
+    assert "searchableSelectField('Członek tenanta'" in source
+    assert "placeholder: 'Wpisz login członka tenanta…'" in source
+    assert "eligible-members?limit=200&offset=" in source
+    assert "while (offset < total)" in source
+    assert "userPicker.setChoices(users.map(user => ({" in source
+    assert "Wybierz członka tenanta z listy." in source
+    assert "Kolejni członkowie tenanta" not in source
+    assert "function searchableSelectField" in core
