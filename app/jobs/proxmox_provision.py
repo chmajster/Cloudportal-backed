@@ -610,6 +610,12 @@ def destroy(context, timeout=1800):
                 f'{type(exc).__name__}: {str(exc)[:200]}'
             )
 
+    if force:
+        # Force bypasses provider prechecks, never CloudPortal control-plane guards.
+        # Re-read cancellation and runtime authorization without the normal 1s throttle
+        # immediately before submitting the destructive provider call.
+        context.check(force=True)
+
     context.stage('proxmox.destroy.delete')
     context.progress(None, 'Usuwanie VM przez Proxmox API', phase='destroy')
     try:
