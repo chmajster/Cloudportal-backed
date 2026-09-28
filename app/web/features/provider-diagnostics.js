@@ -86,7 +86,7 @@ function providerResultPanel(provider, result, running, runProvider) {
   const summary = result?.summary || {};
   const actions = [];
   if (running) {
-    actions.push(button('Diagnostyka trwa…', () => {}, 'primary', { disabled: true }));
+    actions.push(button('Diagnostyka trwa…', () => {}, 'primary', true));
   } else {
     actions.push(button('Szybki test', () => runProvider(provider.id, false), 'primary'));
     actions.push(button('Pełny test', () => runProvider(provider.id, true)));
@@ -153,7 +153,7 @@ async function providerDiagnosticsView() {
           render();
         },
         'primary',
-        { disabled: runningAll }
+        runningAll
       ));
     }
 
