@@ -76,8 +76,7 @@ loadTheme();
 loadSidebarState();
 
 (async function boot() {
-  if (await window.cloudportalSso?.handleCallback()) return;
-  await window.cloudportalSso?.configureLogin();
+  if (hasCommand('bootstrap.before-session') && await runCommand('bootstrap.before-session')) return;
   loadSession();
   if (!state.session?.access_token) return showLogin();
   try { state.identity = await api('/auth/me'); showApp(); }
