@@ -12,6 +12,7 @@
     ['Workflow', 'Workflow'],
     ['AWX', 'AWX / Automation Controller'],
     ['Dostęp', 'Dostęp i bezpieczeństwo'],
+    ['Placement', 'Placement'],
     ['Podsumowanie', 'Podsumowanie'],
   ];
 
@@ -59,6 +60,12 @@
         templates: [],
         schemes: [],
         pools: [],
+        resourcePools: [],
+        logicalNetworks: [],
+        storageClasses: [],
+        placementScopeKey: '',
+        placementLoading: false,
+        placementError: '',
         playbooks: playbooks.filter(value => value.enabled !== false),
         credentials: [], avatars,
         globalRoles: roles,
@@ -137,6 +144,45 @@
         } catch (error) {
           state.providerError = error.message;
           state.providerConnected = false;
+        }
+      }
+
+      async function loadPlacementResources(force = false) {
+        const key = String(state.tenantId || '') + ':' + String(state.projectId || '');
+        if (!state.tenantId || !state.projectId) {
+          data.resourcePools = [];
+          data.logicalNetworks = [];
+          data.storageClasses = [];
+          data.placementScopeKey = '';
+          return;
+        }
+        if (!force && data.placementScopeKey === key) return;
+        data.placementLoading = true;
+        data.placementError = '';
+        try {
+          const headers = parts.core.scopeHeaders(state);
+          const [poolResult, networkResult, storageResult] = await Promise.all([
+            api('/resource-pools?limit=200', { headers }).catch(error => ({ items: [], error })),
+            api('/logical-networks', { headers }).catch(error => ({ items: [], error })),
+            api('/storage-classes', { headers }).catch(error => ({ items: [], error })),
+          ]);
+          data.resourcePools = poolResult.items || [];
+          data.logicalNetworks = networkResult.items || [];
+          data.storageClasses = storageResult.items || [];
+          const failure = poolResult.error || networkResult.error || storageResult.error;
+          data.placementError = failure?.message || '';
+          data.placementScopeKey = key;
+          if (state.resourcePoolId && !data.resourcePools.some(row => String(row.id) === String(state.resourcePoolId))) {
+            state.resourcePoolId = '';
+          }
+          if (state.logicalNetwork && !data.logicalNetworks.some(row => String(row.id) === String(state.logicalNetwork) || String(row.name) === String(state.logicalNetwork))) {
+            state.logicalNetwork = '';
+          }
+          if (state.storageClass && !data.storageClasses.some(row => String(row.id) === String(state.storageClass) || String(row.name) === String(state.storageClass))) {
+            state.storageClass = '';
+          }
+        } finally {
+          data.placementLoading = false;
         }
       }
 
@@ -383,6 +429,14 @@
           state.requiresApproval = root.querySelector('[name="requires_approval"]')?.checked ?? state.requiresApproval;
           window.BlueprintApprovalPolicyUI.captureState(root, state);
           state.recoveryPolicy = root.querySelector('[name="recovery_policy"]')?.value || state.recoveryPolicy;
+        } else if (state.step === 9) {
+          state.placementMode = String(root.querySelector('[name="placement_mode"]')?.value || state.placementMode || 'FIXED').toUpperCase();
+          state.resourcePoolId = root.querySelector('[name="resource_pool_id"]')?.value || '';
+          state.logicalNetwork = root.querySelector('[name="logical_network"]')?.value || '';
+          state.storageClass = root.querySelector('[name="storage_class"]')?.value || '';
+          state.placementLocation = root.querySelector('[name="placement_location"]')?.value.trim() || '';
+          state.placementAffinityType = root.querySelector('[name="placement_affinity_type"]')?.value || '';
+          state.placementAffinityGroup = root.querySelector('[name="placement_affinity_group"]')?.value.trim() || '';
         }
       }
 
@@ -522,10 +576,20 @@
             render();
           });
 
-          const nodeField = selectField('Docelowy node', 'node', state.nodes.map(value => ({
+          const nodeField = selectField(
+            ['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase())
+              ? 'Node do discovery template'
+              : 'Docelowy node',
+            'node', state.nodes.map(value => ({
             value: value.node,
             label: value.node + (value.status ? ' · ' + statusLabel(value.status) : ''),
-          })), state.node, { required: true, placeholder: 'Wybierz node' });
+          })), state.node, {
+            required: true,
+            placeholder: 'Wybierz node',
+            help: ['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase())
+              ? 'Ten node służy tylko do odczytu template. Fizyczny target wybierze Placement Engine.'
+              : null,
+          });
           nodeField.querySelector('select').addEventListener('change', async event => {
             state.node = event.currentTarget.value;
             await loadNodeResources();
@@ -678,14 +742,24 @@
           label: value.iface + (value.type ? ' [' + value.type + ']' : ''),
         }));
 
-        const fields = node('div', { class: 'form-grid' },
+        const dynamicPlacement = ['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase());
+        const vmFieldRows = [
           field('CPU', 'cpu', { type: 'number', min: 1, max: 128, value: state.cpu, required: true }),
           field('RAM (MiB)', 'memory', { type: 'number', min: 512, max: 1048576, value: state.memory, required: true }),
           field('Dysk (GiB)', 'disk', { type: 'number', min: 1, max: 65536, value: state.disk, required: true }),
           field('VLAN ID (opcjonalnie)', 'vlan_id', { type: 'number', min: 1, max: 4094, value: state.vlanId }),
-          selectField('Storage', 'storage', storageChoices, state.storage, { required: true, placeholder: 'Wybierz storage' }),
-          selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' })
-        );
+        ];
+        if (dynamicPlacement) {
+          vmFieldRows.push(node('div', { class: 'blueprint-wizard-info wide' },
+            node('strong', { text: 'Storage i network są logiczne.' }),
+            node('span', { text: 'Fizyczny storage oraz bridge/network zostaną wybrane w kroku Placement na podstawie mapowań puli.' })));
+        } else {
+          vmFieldRows.push(
+            selectField('Storage', 'storage', storageChoices, state.storage, { required: true, placeholder: 'Wybierz storage' }),
+            selectField('Network / bridge', 'network', networkChoices, state.network, { required: true, placeholder: 'Wybierz sieć' })
+          );
+        }
+        const fields = node('div', { class: 'form-grid' }, ...vmFieldRows);
         fields.querySelectorAll('input,select').forEach(control => {
           control.addEventListener('input', () => {
             saveStateFromInput(control);
@@ -1122,6 +1196,153 @@
         return content;
       }
 
+      function renderPlacement() {
+        const dynamic = ['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase());
+        const currentScopeKey = String(state.tenantId || '') + ':' + String(state.projectId || '');
+        if (data.placementScopeKey !== currentScopeKey && !data.placementLoading) {
+          data.placementLoading = true;
+          loadPlacementResources(true)
+            .then(() => render())
+            .catch(error => {
+              data.placementLoading = false;
+              data.placementError = error.message;
+              render();
+            });
+        }
+
+        const modeField = selectField('Placement Mode', 'placement_mode', [
+          { value: 'FIXED', label: 'FIXED — stały provider/node/storage' },
+          { value: 'POOL', label: 'POOL — wskazana Resource Pool' },
+          { value: 'POLICY', label: 'POLICY — pula wybierana przez Placement Rules' },
+        ], state.placementMode || 'FIXED', {
+          required: true,
+          wide: true,
+          help: 'FIXED zachowuje dotychczasowe działanie. POOL/POLICY nie zapisują fizycznego targetu w Blueprint.',
+        });
+        modeField.querySelector('select').addEventListener('change', event => {
+          state.placementMode = event.currentTarget.value;
+          render();
+        });
+
+        const content = node('div', { class: 'blueprint-wizard-step-stack' },
+          node('div', { class: 'blueprint-wizard-info' },
+            node('strong', { text: 'Placement jest rozstrzygany wyłącznie przez backend.' }),
+            node('span', { text: 'Frontend nie decyduje o node/storage/network i nie może ominąć hard constraints, RBAC ani live capacity.' })),
+          modeField);
+
+        if (data.placementLoading) {
+          content.append(node('div', { class: 'loading' }, node('div', { class: 'spinner' }), node('span', { text: 'Ładowanie pul i mapowań…' })));
+          return content;
+        }
+        if (data.placementError) {
+          content.append(node('div', { class: 'blueprint-wizard-warning' },
+            node('strong', { text: 'Nie udało się odczytać części konfiguracji placement.' }),
+            node('span', { text: data.placementError })));
+        }
+
+        if (!dynamic) {
+          const provider = data.providers.find(value => String(value.id) === String(state.providerId));
+          content.append(node('section', { class: 'blueprint-wizard-inline-panel' },
+            node('div', { class: 'blueprint-wizard-section-heading' },
+              node('strong', { text: 'Stały target' }),
+              node('span', { class: 'muted', text: 'Backward compatible — istniejące Blueprinty po migracji pozostają FIXED.' })),
+            node('dl', { class: 'resource-pool-decision-grid' },
+              node('div', {}, node('dt', { text: 'Platform' }), node('dd', { text: provider?.name || '—' })),
+              node('div', {}, node('dt', { text: 'Node' }), node('dd', { text: state.node || '—' })),
+              node('div', {}, node('dt', { text: 'Storage' }), node('dd', { text: state.storage || '—' })),
+              node('div', {}, node('dt', { text: 'Network' }), node('dd', { text: state.network || '—' }))));
+          return content;
+        }
+
+        const poolField = searchableSelectField(
+          'Resource Pool', 'resource_pool_id',
+          data.resourcePools.map(pool => ({
+            value: pool.id,
+            label: pool.name + ' · ' + pool.strategy + ' · ' + String(pool.members ?? 0) + ' members',
+          })),
+          state.resourcePoolId || data.resourcePools[0]?.id || '',
+          {
+            required: state.placementMode === 'POOL',
+            wide: true,
+            placeholder: 'Wpisz nazwę puli…',
+            help: state.placementMode === 'POLICY'
+              ? 'W POLICY pula zostanie wybrana przez Placement Rules. Pole nie jest zapisywane.'
+              : 'Blueprint wskazuje logiczną pulę, a nie konkretny Proxmox/node.',
+          }
+        );
+        if (state.placementMode === 'POLICY') {
+          poolField.querySelector('input[name="resource_pool_id"]').value = '';
+          poolField.classList.add('muted-control');
+        } else {
+          poolField.searchableSelect.onChange(value => { state.resourcePoolId = value; });
+        }
+
+        const networkField = searchableSelectField(
+          'Logical Network', 'logical_network',
+          [{ value: '', label: 'Bez wymuszenia / reguła puli' }, ...data.logicalNetworks.map(row => ({ value: row.name, label: row.name }))],
+          state.logicalNetwork || '',
+          { wide: true, placeholder: 'Wpisz nazwę logicznej sieci…' }
+        );
+        const storageField = searchableSelectField(
+          'Storage Class', 'storage_class',
+          [{ value: '', label: 'Bez wymuszenia / reguła puli' }, ...data.storageClasses.map(row => ({ value: row.name, label: row.name }))],
+          state.storageClass || '',
+          { wide: true, placeholder: 'Wpisz klasę storage…' }
+        );
+        networkField.searchableSelect.onChange(value => { state.logicalNetwork = value; });
+        storageField.searchableSelect.onChange(value => { state.storageClass = value; });
+
+        const affinity = selectField('Affinity / Anti-Affinity', 'placement_affinity_type', [
+          { value: '', label: 'Brak' },
+          { value: 'prefer_same_node', label: 'Prefer same node' },
+          { value: 'require_same_node', label: 'Require same node' },
+          { value: 'prefer_different_node', label: 'Prefer different node' },
+          { value: 'require_different_node', label: 'Require different node' },
+          { value: 'prefer_same_location', label: 'Prefer same location' },
+          { value: 'require_same_location', label: 'Require same location' },
+          { value: 'prefer_different_location', label: 'Prefer different location' },
+          { value: 'require_different_location', label: 'Require different location' },
+        ], state.placementAffinityType || '');
+
+        const dynamicFields = node('div', { class: 'form-grid' },
+          poolField,
+          networkField,
+          storageField,
+          field('Preferred location', 'placement_location', {
+            value: state.placementLocation || '', placeholder: 'np. WRO-DC1', wide: true,
+            help: 'Soft preference. Hard ograniczenia konfiguruj w Placement Rules.',
+          }),
+          affinity,
+          field('Affinity group', 'placement_affinity_group', {
+            value: state.placementAffinityGroup || '', placeholder: 'np. app-cluster-01',
+            help: 'Wymagane, gdy wybrano affinity/anti-affinity.',
+          }));
+        dynamicFields.querySelectorAll('input,select').forEach(control => {
+          control.addEventListener('input', () => saveStateFromInput(control));
+          control.addEventListener('change', () => {
+            if (control.name === 'placement_location') state.placementLocation = control.value.trim();
+            if (control.name === 'placement_affinity_type') state.placementAffinityType = control.value;
+            if (control.name === 'placement_affinity_group') state.placementAffinityGroup = control.value.trim();
+          });
+        });
+
+        const representative = data.providers.find(value => String(value.id) === String(state.providerId));
+        content.append(
+          node('section', { class: 'blueprint-wizard-inline-panel' },
+            node('div', { class: 'blueprint-wizard-section-heading' },
+              node('strong', { text: state.placementMode === 'POOL' ? 'Resource Pool' : 'Policy based placement' }),
+              node('span', { class: 'muted', text: state.placementMode === 'POOL'
+                ? 'Live capacity, reservations i scoring wybiorą target we wskazanej puli.'
+                : 'Organization / Project / APMID / ENV oraz Placement Rules wybiorą pulę, a następnie target.' })),
+            dynamicFields),
+          node('div', { class: 'blueprint-wizard-info' },
+            node('strong', { text: 'Template discovery' }),
+            node('span', { text: (representative?.name || state.providerType || 'Platforma')
+              + ' została użyta wyłącznie do wyboru zgodnego template. provider_id, node, storage i network nie będą zapisane jako target Blueprintu.' }))
+        );
+        return content;
+      }
+
       function renderReview() {
         const provider = data.providers.find(value => String(value.id) === String(state.providerId));
         const scheme = data.schemes.find(value => String(value.id) === String(state.hostnameSchemeId));
@@ -1220,6 +1441,7 @@
           'Sprawdź automatycznie zbudowaną sekwencję operacji lub włącz tryb zaawansowany.',
           'Wybierz, czy Blueprint ma używać AWX. Możesz wskazać organizację, projekt, inventory i Job Template.',
           'Opcjonalnie ogranicz widoczność, uruchamianie i zarządzanie Blueprintem.',
+          'Wybierz FIXED, Resource Pool albo POLICY oraz logiczną sieć i klasę storage.',
           'Sprawdź całą konfigurację przed zapisaniem Blueprintu.',
         ];
         const content = [
@@ -1232,6 +1454,7 @@
           renderWorkflow,
           renderAwx,
           renderAccess,
+          renderPlacement,
           renderReview,
         ][state.step]();
 
@@ -1363,8 +1586,13 @@
       });
       try {
         await blueprintScope.loadResources(!editingItem);
+        await loadPlacementResources(true);
         if (editingItem) {
           parts.core.hydrateStateFromBlueprint(state, editingItem, data);
+          if (!state.providerId && state.providerType) {
+            const representative = data.providers.find(value => value.type === state.providerType);
+            if (representative) state.providerId = String(representative.id);
+          }
           await discoverProvider(state.providerId);
           state.maxStep = STEPS.length - 1;
         }
