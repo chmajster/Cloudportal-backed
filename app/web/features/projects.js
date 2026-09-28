@@ -262,9 +262,19 @@
         checkboxField(`Obecna rola #${roleId}`, 'role_' + roleId, true),
         node('div', { class: 'field-help', text: 'Rola przypisana wcześniej; backend ponownie sprawdzi jej bieżący zakres.' })));
     }
-    const userField = selectField('Członek tenanta', 'user_id', [], '');
-    const select = userField.querySelector('select'); select.required = true;
-    let roleOffset = 0, userOffset = 0, moreRoles, moreUsers;
+    const userField = searchableSelectField('Członek tenanta', 'user_id', [], '', {
+      required: true,
+      wide: true,
+      placeholder: 'Wpisz login członka tenanta…',
+      help: 'Wpisuj kolejne znaki, aby zawężać listę aktywnych członków tenanta.',
+    });
+    const userPicker = userField.searchableSelect;
+    const noUsers = node('p', {
+      class: 'form-error',
+      hidden: true,
+      text: 'Brak aktywnych członków tenanta dostępnych do dodania do projektu.',
+    });
+    let roleOffset = 0, moreRoles;
     async function loadRoles() {
       const page = await api(`/projects/${id}/assignable-roles?limit=${pageSize}&offset=${roleOffset}`);
       if (current !== generation || !viewIs('projects')) return;
@@ -281,16 +291,28 @@
       roleOffset += page.items.length; moreRoles.disabled = roleOffset >= page.total;
     }
     async function loadUsers() {
-      const page = await api(`/projects/${id}/eligible-members?limit=${pageSize}&offset=${userOffset}`);
-      if (current !== generation || !viewIs('projects')) return;
-      for (const user of page.items) select.append(node('option', { value: user.user_id, text: `${user.username} (#${user.user_id})` }));
-      userOffset += page.items.length; moreUsers.disabled = userOffset >= page.total;
+      const users = [];
+      let offset = 0;
+      let total = 0;
+      do {
+        const page = await api(`/projects/${id}/eligible-members?limit=200&offset=${offset}`);
+        if (current !== generation || !viewIs('projects')) return;
+        users.push(...page.items);
+        offset += page.items.length;
+        total = Number(page.total || users.length);
+        if (!page.items.length) break;
+      } while (offset < total);
+      userPicker.setChoices(users.map(user => ({
+        value: String(user.user_id),
+        label: `${user.username} (#${user.user_id})`,
+      })));
+      noUsers.hidden = users.length > 0;
     }
-    moreRoles = action('Kolejne role', loadRoles); moreUsers = action('Kolejni członkowie tenanta', loadUsers);
+    moreRoles = action('Kolejne role', loadRoles);
     if (assigner) await loadRoles(); if (!member) await loadUsers();
     if (current !== generation || !viewIs('projects')) return;
     openModal({ title: member ? 'Role członka projektu' : 'Dodaj członka projektu', body: node('div', { class: 'stack' },
-      member ? node('p', { text: member.username }) : userField, member ? null : moreUsers,
+      member ? node('p', { text: member.username }) : userField, member ? null : noUsers,
       node('p', { class: 'muted', text: 'Uprawnienia są nadawane przez role RBAC tylko w tym projekcie. Role projektowe nie rozszerzają uprawnień globalnych.' }),
       assigner ? roles : node('p', { text: 'Członkostwo bez roli — brak uprawnienia do przypisywania ról.' }), assigner ? moreRoles : null),
       onSubmit: async data => {
@@ -298,7 +320,11 @@
         roles.querySelectorAll('input[type="checkbox"]').forEach(input => {
           const roleId = Number(input.name.slice(5)); input.checked ? roleIds.add(roleId) : roleIds.delete(roleId);
         });
-        const values = member ? { role_ids: [...roleIds], expected_version: member.version } : { user_id: Number(data.get('user_id')), role_ids: [...roleIds] };
+        const selectedUserId = member ? member.user_id : Number(data.get('user_id'));
+        if (!member && (!Number.isInteger(selectedUserId) || selectedUserId <= 0)) {
+          throw new Error('Wybierz członka tenanta z listy.');
+        }
+        const values = member ? { role_ids: [...roleIds], expected_version: member.version } : { user_id: selectedUserId, role_ids: [...roleIds] };
         await api(member ? `/projects/${id}/members/${member.user_id}/roles` : `/projects/${id}/members`, { method: member ? 'PUT' : 'POST', idempotent: !member, body: values });
         await members(id); return false;
       },
