@@ -49,6 +49,7 @@ vm.createContext(context); vm.runInContext(fs.readFileSync('app/web/features/pro
 
 def test_project_member_picker_is_searchable_and_loads_all_tenant_members():
     source = Path('app/web/features/projects.js').read_text()
+    shared = Path('app/web/shared/searchable-select.js').read_text()
     core = Path('app/web/core.js').read_text()
 
     assert "searchableSelectField('Członek tenanta'" in source
@@ -58,4 +59,6 @@ def test_project_member_picker_is_searchable_and_loads_all_tenant_members():
     assert "userPicker.setChoices(users.map(user => ({" in source
     assert "Wybierz członka tenanta z listy." in source
     assert "Kolejni członkowie tenanta" not in source
-    assert "function searchableSelectField" in core
+    assert "function searchableSelectField" in shared
+    assert "window.searchableSelectField = searchableSelectField" in shared
+    assert "function searchableSelectField" not in core
