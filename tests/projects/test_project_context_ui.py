@@ -50,14 +50,17 @@ def test_global_context_switcher_drives_default_http_scope_and_blueprints():
 
 def test_global_context_picker_uses_filterable_combobox():
     context_source = Path('app/web/features/project-context.js').read_text()
+    shared_source = Path('app/web/shared/searchable-select.js').read_text()
     core_source = Path('app/web/core.js').read_text()
     styles = Path('app/web/styles/features/projects.css').read_text()
 
-    assert 'function searchableSelectField' in core_source
-    assert "type: 'search'" in core_source
-    assert "'aria-autocomplete': 'list'" in core_source
-    assert 'normalizeSearchText(choice.label).includes(query)' in core_source
+    assert 'function searchableSelectField' in shared_source
+    assert "type: 'search'" in shared_source
+    assert "'aria-autocomplete': 'list'" in shared_source
+    assert 'normalizeSearchText(choice.label).includes(query)' in shared_source
+    assert 'window.searchableSelectField = searchableSelectField' in shared_source
     assert 'function searchableSelectField' not in context_source
+    assert 'function searchableSelectField' not in core_source
     assert 'organization.searchableSelect' in context_source
     assert 'organizationSelect.onChange' in context_source
     assert '.searchable-select-options' in styles
