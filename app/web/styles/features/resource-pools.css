@@ -1,0 +1,149 @@
+.resource-pools-view { gap: 1rem; }
+.resource-pool-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.resource-pool-hero h2 { margin: .15rem 0 .55rem; }
+.resource-pool-hero-meta,
+.resource-pool-status-line {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.resource-pool-hero-capacity {
+  display: grid;
+  gap: .25rem;
+  text-align: right;
+}
+.resource-pool-tabs {
+  display: flex;
+  gap: .25rem;
+  overflow-x: auto;
+  padding: .2rem;
+  border-bottom: 1px solid var(--border);
+}
+.resource-pool-tab {
+  appearance: none;
+  border: 0;
+  border-radius: .5rem .5rem 0 0;
+  background: transparent;
+  color: var(--muted);
+  padding: .7rem .9rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.resource-pool-tab:hover,
+.resource-pool-tab.active {
+  color: var(--text);
+  background: var(--panel);
+}
+.resource-pool-tab.active { font-weight: 700; }
+.resource-pool-capacity {
+  display: grid;
+  gap: 1rem;
+}
+.resource-pool-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+.resource-pool-metric {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+.resource-pool-metric-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: .7rem;
+}
+.resource-pool-meter {
+  height: .5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(127,127,127,.18));
+  margin-bottom: .8rem;
+}
+.resource-pool-meter > span {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+.resource-pool-metric dl,
+.resource-pool-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .65rem 1rem;
+  margin: 0;
+}
+.resource-pool-metric dl > div,
+.resource-pool-decision-grid > div {
+  display: grid;
+  gap: .15rem;
+}
+.resource-pool-metric dt,
+.resource-pool-decision-grid dt {
+  color: var(--muted);
+  font-size: .78rem;
+}
+.resource-pool-metric dd,
+.resource-pool-decision-grid dd { margin: 0; font-weight: 650; }
+.resource-pool-health-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .75rem;
+}
+.resource-pool-health-grid > div {
+  display: grid;
+  gap: .25rem;
+  padding: .85rem;
+  border: 1px solid var(--border);
+  border-radius: .7rem;
+  background: var(--panel);
+}
+.resource-pool-health-grid span { color: var(--muted); font-size: .82rem; }
+.resource-pool-health-grid strong { font-size: 1.2rem; }
+.resource-pool-form textarea[name="conditions"],
+.resource-pool-form textarea[name="actions"] {
+  min-height: 12rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.resource-pool-discovery-status {
+  padding: .7rem .8rem;
+  border: 1px dashed var(--border);
+  border-radius: .6rem;
+}
+.resource-pool-mapping-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  background: var(--panel);
+}
+.resource-pool-simulator-result { display: grid; gap: 1rem; }
+.resource-pool-simulator-result > h3 { margin: 0; }
+.link-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.link-button:hover { text-decoration: underline; }
+@media (max-width: 900px) {
+  .resource-pool-hero { align-items: flex-start; flex-direction: column; }
+  .resource-pool-hero-capacity { text-align: left; }
+  .resource-pool-metrics-grid,
+  .resource-pool-health-grid { grid-template-columns: 1fr; }
+}
