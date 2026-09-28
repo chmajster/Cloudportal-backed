@@ -1,25 +1,5 @@
 'use strict';
 
-const ssoLoginButton = document.querySelector('#sso-login');
-const ssoSeparator = document.querySelector('#sso-separator');
-
-async function configureSsoLogin() {
-  try {
-    const config = await api('/auth/sso/config', { auth: false }, false);
-    const enabled = config?.enabled === true;
-    ssoLoginButton.hidden = !enabled;
-    ssoSeparator.hidden = !enabled;
-    if (enabled) ssoLoginButton.textContent = 'Zaloguj przez ' + (config.provider_name || 'SSO');
-  } catch {
-    ssoLoginButton.hidden = true;
-    ssoSeparator.hidden = true;
-  }
-}
-
-ssoLoginButton.addEventListener('click', () => {
-  window.location.assign('/api/v1/auth/sso/login');
-});
-
 const loginSubmit = dom.loginForm.querySelector('[data-boot-disabled]');
 if (loginSubmit) {
   loginSubmit.disabled = false;
@@ -96,43 +76,8 @@ loadTheme();
 loadSidebarState();
 
 (async function boot() {
-  const params = new URLSearchParams(window.location.search);
-  const handoff = params.get('sso_handoff');
-  const ssoError = params.get('sso_error');
-  if (handoff || ssoError) {
-    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
-  }
-
-  if (handoff) {
-    try {
-      const pair = await api('/auth/sso/exchange', {
-        method: 'POST',
-        auth: false,
-        body: { token: handoff },
-      }, false);
-      saveSession(pair);
-      state.identity = { user: pair.user, roles: pair.roles, permissions: pair.permissions, token_type: 'session' };
-      showApp();
-      return;
-    } catch (error) {
-      await configureSsoLogin();
-      showLogin('Logowanie SSO nie powiodło się: ' + error.message);
-      return;
-    }
-  }
-
-  await configureSsoLogin();
-  if (ssoError) {
-    const messages = {
-      provider_denied: 'Logowanie SSO zostało anulowane lub odrzucone przez dostawcę tożsamości.',
-      invalid_callback: 'Callback SSO jest nieprawidłowy lub niekompletny.',
-      identity_collision: 'Tożsamość SSO koliduje z istniejącym kontem Cloudportal. Administrator musi rozwiązać konflikt kont.',
-      authentication_failed: 'Nie udało się zweryfikować odpowiedzi dostawcy SSO.',
-    };
-    showLogin(messages[ssoError] || 'Logowanie SSO nie powiodło się.');
-    return;
-  }
-
+  if (await window.cloudportalSso?.handleCallback()) return;
+  await window.cloudportalSso?.configureLogin();
   loadSession();
   if (!state.session?.access_token) return showLogin();
   try { state.identity = await api('/auth/me'); showApp(); }
