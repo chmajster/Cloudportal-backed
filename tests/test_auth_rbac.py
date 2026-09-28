@@ -306,6 +306,88 @@ def test_ldap_settings_secret_and_jit_rbac(client, headers, monkeypatch):
     assert client.post('/api/v1/users/' + str(alice['id']) + '/reset-password', headers=headers).status_code == 409
 
 
+def test_ldap_diagnostics_explains_local_account_shadowing(system, monkeypatch):
+    from app.auth import ldap as ldap_module
+
+    _client, _headers, _admin = system
+    config = {
+        **ldap_module.LDAP_DEFAULTS,
+        'enabled': True,
+        'url': 'ldap://ldap.example.test:389',
+        'bind_dn': 'uid=admin,ou=people,dc=example,dc=com',
+        'bind_password': 'bind-secret',
+        'base_dn': 'ou=people,dc=example,dc=com',
+    }
+    profile = {
+        'dn': 'uid=admin,ou=people,dc=example,dc=com',
+        'username': 'admin',
+        'email': 'admin@example.com',
+        'first_name': 'LDAP',
+        'last_name': 'Admin',
+    }
+    monkeypatch.setattr(ldap_module, 'ldap_settings', lambda db, include_secret=False: dict(config))
+    monkeypatch.setattr(
+        ldap_module,
+        '_directory_diagnostics',
+        lambda config, identity='', password=None: ([
+            {
+                'key': 'user_bind',
+                'label': 'Bind użytkownika',
+                'status': 'ok',
+                'message': 'Hasło użytkownika zostało zaakceptowane przez LDAP.',
+                'detail': None,
+            }
+        ], profile, True),
+    )
+
+    with session() as db:
+        result = ldap_module.diagnose_ldap_login(db, 'admin', 'directory-secret')
+
+    assert result['ok'] is False
+    assert result['login_ready'] is False
+    routing = next(step for step in result['steps'] if step['key'] == 'login_routing')
+    assert routing['status'] == 'error'
+    assert 'lokalne konto "admin"' in routing['message']
+    assert any(step['key'] == 'jit' and step['status'] == 'error' for step in result['steps'])
+
+
+def test_ldap_diagnostics_endpoint_never_echoes_password(client, headers, monkeypatch):
+    def diagnostic(_db, identity, password):
+        assert identity == 'alice'
+        assert password == 'directory-secret'
+        return {
+            'ok': True,
+            'login_ready': True,
+            'password_tested': True,
+            'message': 'Pełna ścieżka logowania LDAP przeszła diagnostykę.',
+            'steps': [{
+                'key': 'user_bind',
+                'label': 'Bind użytkownika',
+                'status': 'ok',
+                'message': 'Hasło użytkownika zostało zaakceptowane przez LDAP.',
+                'detail': None,
+            }],
+            'profile': {
+                'dn': 'uid=alice,ou=people,dc=example,dc=com',
+                'username': 'alice',
+                'email': 'alice@example.com',
+                'first_name': 'Alice',
+                'last_name': 'Directory',
+            },
+        }
+
+    monkeypatch.setattr('app.api.administration.diagnose_ldap_login', diagnostic)
+    response = client.post(
+        '/api/v1/settings/ldap/diagnostics',
+        headers=headers,
+        json={'username': 'alice', 'password': 'directory-secret'},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()['login_ready'] is True
+    assert response.json()['steps'][0]['key'] == 'user_bind'
+    assert 'directory-secret' not in response.text
+
+
 def test_ldap_does_not_override_local_account(client, headers, monkeypatch):
     new_user(client, headers, username='localuser')
     called = {'value': False}

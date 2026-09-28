@@ -113,13 +113,130 @@ function ldapSettingsForm(config) {
   });
 }
 
-async function testLdap() {
-  try {
-    const result = await api('/settings/ldap/test', { method: 'POST' });
-    toast(result.message || 'Połączenie LDAP działa.');
-  } catch (error) {
-    toast(error.message, 'error');
-  }
+function ldapDiagnosticBadge(status) {
+  if (status === 'ok') return badge('OK', 'ok');
+  if (status === 'error') return badge('Błąd', 'danger');
+  if (status === 'warning') return badge('Uwaga', 'warning');
+  return badge('Pominięto', 'info');
+}
+
+function renderLdapDiagnostics(host, result) {
+  const steps = Array.isArray(result?.steps) ? result.steps : [];
+  const summaryKind = result?.login_ready ? 'ok' : (result?.ok ? 'warning' : 'danger');
+  const profile = result?.profile || null;
+  host.replaceChildren(
+    node('div', { class: 'settings-ldap-diagnostics-summary ' + summaryKind },
+      node('div', {},
+        node('strong', { text: result?.message || 'Diagnostyka zakończona.' }),
+        node('small', {
+          text: result?.password_tested
+            ? 'Sprawdzono również hasło i bind użytkownika.'
+            : 'Hasło użytkownika nie było testowane.',
+        })),
+      result?.login_ready ? badge('Logowanie gotowe', 'ok') : (result?.ok ? badge('Test częściowy', 'warning') : badge('Wykryto problem', 'danger'))),
+    node('div', { class: 'settings-ldap-diagnostic-steps' },
+      ...steps.map(step => node('article', { class: 'settings-ldap-diagnostic-step ' + String(step.status || '') },
+        node('div', { class: 'settings-ldap-diagnostic-step-head' },
+          node('strong', { text: step.label || step.key || 'Test' }),
+          ldapDiagnosticBadge(step.status)),
+        node('p', { text: step.message || '—' }),
+        step.detail ? node('code', { text: step.detail }) : null))),
+    profile
+      ? node('div', { class: 'settings-ldap-diagnostic-profile' },
+          node('strong', { text: 'Użytkownik znaleziony w LDAP' }),
+          node('div', { class: 'settings-ldap-detail-grid' },
+            ldapDetailRow('DN', profile.dn || '—', { mono: true, wide: true }),
+            ldapDetailRow('Login', profile.username || '—', { mono: true }),
+            ldapDetailRow('E-mail', profile.email || '—', { mono: true }),
+            ldapDetailRow('Imię', profile.first_name || '—'),
+            ldapDetailRow('Nazwisko', profile.last_name || '—')))
+      : null
+  );
+}
+
+function ldapDiagnosticsForm(config) {
+  const usernameField = field('Login użytkownika LDAP', 'username', {
+    value: '',
+    placeholder: 'np. chris',
+    wide: true,
+    help: 'Podaj dokładnie taki login, jaki wpisujesz na ekranie logowania CloudPortal.',
+  });
+  const passwordField = field('Hasło użytkownika LDAP', 'password', {
+    type: 'password',
+    value: '',
+    autocomplete: 'new-password',
+    wide: true,
+    help: 'Hasło jest używane wyłącznie do tego testu i nie jest zapisywane.',
+  });
+  const passwordInput = passwordField.querySelector('input');
+  const results = node('div', { class: 'settings-ldap-diagnostics-results wide' },
+    node('div', { class: 'settings-ldap-diagnostics-empty' },
+      node('strong', { text: 'Diagnostyka jeszcze nieuruchomiona' }),
+      node('p', { text: 'Najpierw sprawdź połączenie lub podaj login i hasło, aby przejść pełną ścieżkę logowania.' })));
+
+  const runBasic = async () => {
+    results.replaceChildren(node('p', { class: 'muted', text: 'Sprawdzanie połączenia, TLS, bind i Base DN…' }));
+    try {
+      const result = await api('/settings/ldap/diagnostics', {
+        method: 'POST',
+        body: { username: '' },
+      });
+      renderLdapDiagnostics(results, result);
+    } catch (error) {
+      results.replaceChildren(node('p', { class: 'form-error', text: error.message }));
+    }
+  };
+
+  const body = node('div', { class: 'stack' },
+    node('div', { class: 'settings-ldap-diagnostics-intro' },
+      node('strong', { text: 'Diagnostyka krok po kroku' }),
+      node('p', {
+        text: 'Test sprawdza: stan LDAP, połączenie TCP, TLS, bind serwisowy, Base DN, routing logowania CloudPortal, filtr użytkownika, mapowanie atrybutów, bind hasłem użytkownika oraz kolizje JIT z kontami lokalnymi.',
+      })),
+    node('div', { class: 'settings-ldap-diagnostics-config' },
+      ldapDetailRow('Serwer', config.url || '—', { mono: true }),
+      ldapDetailRow('Base DN', config.base_dn || '—', { mono: true }),
+      ldapDetailRow('Bind DN', config.bind_dn || 'Anonymous bind', { mono: true }),
+      ldapDetailRow('LDAP', config.enabled ? 'Włączony' : 'Wyłączony')),
+    node('div', { class: 'settings-ldap-diagnostics-actions' },
+      button('Sprawdź samo połączenie', () => runBasic())),
+    node('div', { class: 'form-grid' }, usernameField, passwordField),
+    node('div', { class: 'settings-ldap-diagnostics-note' },
+      node('strong', { text: 'Test nie wykonuje JIT provisioning' }),
+      node('p', { text: 'Diagnostyka tylko symuluje decyzje logowania i wykrywa blokady. Nie tworzy użytkownika, nie przypisuje ról i nie zapisuje hasła.' })),
+    results
+  );
+
+  openModal({
+    title: 'Diagnostyka LDAP',
+    eyebrow: 'Połączenie / wyszukiwanie / logowanie',
+    body,
+    submitLabel: 'Przetestuj pełne logowanie',
+    wide: true,
+    onSubmit: async data => {
+      const username = String(data.get('username') || '').trim();
+      const password = String(data.get('password') || '');
+      if (!username) throw new Error('Podaj login użytkownika LDAP.');
+      if (!password) throw new Error('Podaj hasło użytkownika LDAP do pełnego testu.');
+      results.replaceChildren(node('p', { class: 'muted', text: 'Sprawdzanie pełnej ścieżki logowania LDAP…' }));
+      try {
+        const result = await api('/settings/ldap/diagnostics', {
+          method: 'POST',
+          body: { username, password },
+        });
+        passwordInput.value = '';
+        renderLdapDiagnostics(results, result);
+      } catch (error) {
+        passwordInput.value = '';
+        throw error;
+      }
+      return false;
+    },
+  });
+}
+
+function testLdap() {
+  navigate('/admin/settings/ldap/diagnostics');
 }
 
 function executionParallelForm(parallelLimit) {
@@ -419,6 +536,13 @@ registerRoutedForm({
   permission: 'settings.update',
   label: 'Ustawienia',
 }, async () => ldapSettingsForm(await api('/settings/ldap')));
+registerRoutedForm({
+  id: 'settings-ldap-diagnostics',
+  pattern: /^\/admin\/settings\/ldap\/diagnostics$/,
+  parent: 'settings',
+  permission: 'settings.update',
+  label: 'Ustawienia',
+}, async () => ldapDiagnosticsForm(await api('/settings/ldap')));
 registerRoutedForm({
   id: 'settings-execution',
   pattern: /^\/admin\/settings\/execution$/,

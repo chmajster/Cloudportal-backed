@@ -428,9 +428,169 @@
   white-space: nowrap;
 }
 
+
+.settings-ldap-diagnostics-intro,
+.settings-ldap-diagnostics-note,
+.settings-ldap-diagnostics-empty {
+  display: grid;
+  gap: 5px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+
+.settings-ldap-diagnostics-intro strong,
+.settings-ldap-diagnostics-note strong,
+.settings-ldap-diagnostics-empty strong {
+  font-size: .82rem;
+}
+
+.settings-ldap-diagnostics-intro p,
+.settings-ldap-diagnostics-note p,
+.settings-ldap-diagnostics-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.55;
+}
+
+.settings-ldap-diagnostics-note {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+}
+
+.settings-ldap-diagnostics-config {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-ldap-diagnostics-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-ldap-diagnostics-results {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-ldap-diagnostics-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.settings-ldap-diagnostics-summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-ldap-diagnostics-summary strong {
+  font-size: .8rem;
+}
+
+.settings-ldap-diagnostics-summary small {
+  color: var(--muted);
+  font-size: .68rem;
+}
+
+.settings-ldap-diagnostics-summary.ok {
+  border-color: var(--success-border);
+  background: var(--accent-soft);
+}
+
+.settings-ldap-diagnostics-summary.danger {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.settings-ldap-diagnostic-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-ldap-diagnostic-step {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.settings-ldap-diagnostic-step.ok {
+  border-left-color: var(--success);
+}
+
+.settings-ldap-diagnostic-step.warning,
+.settings-ldap-diagnostic-step.skipped {
+  border-left-color: var(--warning);
+}
+
+.settings-ldap-diagnostic-step.error {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.settings-ldap-diagnostic-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-ldap-diagnostic-step-head strong {
+  font-size: .76rem;
+}
+
+.settings-ldap-diagnostic-step p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .71rem;
+  line-height: 1.5;
+}
+
+.settings-ldap-diagnostic-step code {
+  display: block;
+  overflow-x: auto;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: .68rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-ldap-diagnostic-profile {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.settings-ldap-diagnostic-profile > strong {
+  font-size: .78rem;
+}
+
 @media (max-width: 900px) {
   .settings-grid,
-  .settings-ldap-overview {
+  .settings-ldap-overview,
+  .settings-ldap-diagnostics-config {
     grid-template-columns: 1fr;
   }
 
