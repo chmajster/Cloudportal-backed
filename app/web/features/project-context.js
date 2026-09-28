@@ -202,15 +202,218 @@
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pl-PL'));
   }
 
-  function setProjectOptions(select, tenantId, preferred = '') {
+  let searchableSelectSequence = 0;
+
+  function normalizeSearchText(value) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLocaleLowerCase('pl-PL')
+      .trim();
+  }
+
+  function searchableSelectField(labelText, name, choices, value, options = {}) {
+    const controlId = 'project-context-search-' + (++searchableSelectSequence);
+    const listboxId = controlId + '-listbox';
+    const valueInput = node('input', { type: 'hidden', name, value: '' });
+    const searchInput = node('input', {
+      id: controlId,
+      type: 'search',
+      class: 'searchable-select-input',
+      autocomplete: 'off',
+      spellcheck: 'false',
+      placeholder: options.placeholder || 'Wpisz, aby filtrować…',
+      role: 'combobox',
+      'aria-autocomplete': 'list',
+      'aria-expanded': 'false',
+      'aria-controls': listboxId,
+    });
+    const listbox = node('div', {
+      id: listboxId,
+      class: 'searchable-select-options',
+      role: 'listbox',
+      hidden: true,
+    });
+    const control = node('div', { class: 'searchable-select' },
+      searchInput,
+      node('span', { class: 'searchable-select-chevron', 'aria-hidden': 'true', text: '⌄' }),
+      valueInput,
+      listbox);
+    const wrapper = node('div', { class: 'searchable-select-field' + (options.wide ? ' wide' : '') },
+      node('label', { for: controlId }, formFieldLabel(labelText, Boolean(options.required))),
+      control);
+    if (options.help) wrapper.append(node('span', { class: 'field-help', text: options.help }));
+
+    let rows = [];
+    let selectedValue = '';
+    let activeIndex = -1;
+    let editing = false;
+    const listeners = new Set();
+
+    function selectedChoice() {
+      return rows.find(choice => String(choice.value) === String(selectedValue)) || null;
+    }
+
+    function closeList() {
+      listbox.hidden = true;
+      searchInput.setAttribute('aria-expanded', 'false');
+      searchInput.removeAttribute('aria-activedescendant');
+      activeIndex = -1;
+    }
+
+    function visibleChoices() {
+      const query = editing ? normalizeSearchText(searchInput.value) : '';
+      if (!query) return rows;
+      return rows.filter(choice => normalizeSearchText(choice.label).includes(query));
+    }
+
+    function optionButtons() {
+      return Array.from(listbox.querySelectorAll('.searchable-select-option'));
+    }
+
+    function activate(index) {
+      const buttons = optionButtons();
+      if (!buttons.length) {
+        activeIndex = -1;
+        searchInput.removeAttribute('aria-activedescendant');
+        return;
+      }
+      activeIndex = Math.max(0, Math.min(index, buttons.length - 1));
+      buttons.forEach((element, itemIndex) => element.classList.toggle('active', itemIndex === activeIndex));
+      const active = buttons[activeIndex];
+      searchInput.setAttribute('aria-activedescendant', active.id);
+      active.scrollIntoView({ block: 'nearest' });
+    }
+
+    function renderOptions() {
+      const matches = visibleChoices();
+      const selected = String(valueInput.value || '');
+      if (!matches.length) {
+        listbox.replaceChildren(node('div', {
+          class: 'searchable-select-empty',
+          role: 'presentation',
+          text: 'Brak pasujących wyników',
+        }));
+        activeIndex = -1;
+        return;
+      }
+      listbox.replaceChildren(...matches.map((choice, index) => {
+        const option = node('button', {
+          type: 'button',
+          id: listboxId + '-option-' + index,
+          class: 'searchable-select-option',
+          role: 'option',
+          'aria-selected': String(choice.value) === selected ? 'true' : 'false',
+          onMouseDown: event => event.preventDefault(),
+          onClick: () => commit(choice, true),
+        }, node('span', { text: choice.label }));
+        option._searchableChoice = choice;
+        return option;
+      }));
+      activeIndex = -1;
+    }
+
+    function openList() {
+      if (searchInput.disabled) return;
+      renderOptions();
+      listbox.hidden = false;
+      searchInput.setAttribute('aria-expanded', 'true');
+    }
+
+    function commit(choice, notify = false) {
+      if (!choice) return;
+      selectedValue = String(choice.value);
+      valueInput.value = selectedValue;
+      searchInput.value = String(choice.label || '');
+      editing = false;
+      closeList();
+      if (notify) listeners.forEach(listener => listener(selectedValue, choice));
+    }
+
+    function clearSelection() {
+      valueInput.value = '';
+      editing = true;
+    }
+
+    function setChoices(nextChoices, preferred = '') {
+      rows = (nextChoices || []).map(choice => ({
+        value: String(choice.value),
+        label: String(choice.label ?? choice.value),
+      }));
+      const preferredChoice = rows.find(choice => String(choice.value) === String(preferred));
+      const retainedChoice = rows.find(choice => String(choice.value) === String(selectedValue));
+      const next = preferredChoice || retainedChoice || rows[0] || null;
+      searchInput.disabled = rows.length === 0;
+      if (next) commit(next, false);
+      else {
+        selectedValue = '';
+        valueInput.value = '';
+        searchInput.value = '';
+        editing = false;
+        closeList();
+      }
+    }
+
+    searchInput.addEventListener('focus', () => {
+      searchInput.select();
+      editing = false;
+      openList();
+    });
+    searchInput.addEventListener('click', () => {
+      if (listbox.hidden) openList();
+    });
+    searchInput.addEventListener('input', () => {
+      clearSelection();
+      openList();
+    });
+    searchInput.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (listbox.hidden) openList();
+        const buttons = optionButtons();
+        if (!buttons.length) return;
+        const delta = event.key === 'ArrowDown' ? 1 : -1;
+        const start = activeIndex < 0 ? (delta > 0 ? 0 : buttons.length - 1) : activeIndex + delta;
+        activate(Math.max(0, Math.min(start, buttons.length - 1)));
+        return;
+      }
+      if (event.key === 'Enter' && !listbox.hidden) {
+        const buttons = optionButtons();
+        const target = activeIndex >= 0 ? buttons[activeIndex] : (buttons.length === 1 ? buttons[0] : null);
+        if (target) {
+          event.preventDefault();
+          commit(target._searchableChoice, true);
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        const previous = selectedChoice();
+        if (previous) commit(previous, false);
+        else closeList();
+        event.stopPropagation();
+      }
+      if (event.key === 'Tab') closeList();
+    });
+    searchInput.addEventListener('blur', () => {
+      window.setTimeout(closeList, 0);
+    });
+
+    wrapper.searchableSelect = Object.freeze({
+      setChoices,
+      value: () => String(valueInput.value || ''),
+      onChange: listener => listeners.add(listener),
+      focus: () => searchInput.focus(),
+    });
+    setChoices(choices, value);
+    return wrapper;
+  }
+
+  function setProjectOptions(control, tenantId, preferred = '') {
     const projects = projectOptions(tenantId);
-    select.replaceChildren(...projects.map(item => node('option', {
+    control.setChoices(projects.map(item => ({
       value: String(item.id),
-      text: item.name + (item.slug ? ' / ' + item.slug : ''),
-      selected: String(item.id) === String(preferred),
-    })));
-    if (!select.value && projects.length) select.value = String(projects[0].id);
-    select.disabled = projects.length === 0;
+      label: item.name + (item.slug ? ' / ' + item.slug : ''),
+    })), preferred);
   }
 
   async function reloadActiveView() {
@@ -230,7 +433,7 @@
       }
 
       const selectedTenantId = String(currentScope?.tenant_id || tenants[0].id);
-      const organization = selectField(
+      const organization = searchableSelectField(
         'Organizacja / Tenant',
         'tenant_id',
         tenants.map(item => ({
@@ -238,19 +441,29 @@
           label: item.name + (item.slug ? ' / ' + item.slug : ''),
         })),
         selectedTenantId,
-        { required: true, wide: true, help: 'Najwyższy zakres organizacyjny CloudPortal.' }
+        {
+          required: true,
+          wide: true,
+          placeholder: 'Wpisz nazwę organizacji lub tenant…',
+          help: 'Wpisuj kolejne znaki, aby zawężać listę dostępnych organizacji.',
+        }
       );
-      const project = selectField(
+      const project = searchableSelectField(
         'Projekt',
         'project_id',
         [],
         '',
-        { required: true, wide: true, help: 'Wszystkie ekrany zasobowe będą domyślnie pracować w tym projekcie.' }
+        {
+          required: true,
+          wide: true,
+          placeholder: 'Wpisz nazwę projektu…',
+          help: 'Lista projektów jest ograniczona do wybranej organizacji i filtrowana podczas pisania.',
+        }
       );
-      const organizationSelect = organization.querySelector('select');
-      const projectSelect = project.querySelector('select');
-      setProjectOptions(projectSelect, organizationSelect.value, currentScope?.id || '');
-      organizationSelect.addEventListener('change', () => setProjectOptions(projectSelect, organizationSelect.value));
+      const organizationSelect = organization.searchableSelect;
+      const projectSelect = project.searchableSelect;
+      setProjectOptions(projectSelect, organizationSelect.value(), currentScope?.id || '');
+      organizationSelect.onChange(tenantId => setProjectOptions(projectSelect, tenantId));
 
       const summary = node('div', { class: 'global-context-summary' },
         node('strong', { text: 'Globalny zakres pracy' }),
