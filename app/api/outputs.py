@@ -225,6 +225,10 @@ class AuditOutput(Output):
     resource_id: str | None
     result: str
     request_id: str
+    old_value: dict[str, Any] | None = None
+    new_value: dict[str, Any] | None = None
+    scope: dict[str, Any] | None = None
+    details: dict[str, Any] | None = None
 
 
 class TemplateOutput(Output):

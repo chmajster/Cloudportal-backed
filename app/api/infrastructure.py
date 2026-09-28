@@ -8,7 +8,7 @@ from app.automation.workflow import WorkflowGraphError, ordered_workflow_steps
 from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
                              SSHHostKeyOutput)
-from app.credentials.outputs import CredentialOutput, SSHKeyBootstrapOutput
+from app.credentials.outputs import CredentialOutput, CredentialSecretOutput, SSHKeyBootstrapOutput
 from app.api.schemas import (AwxBootstrapInput, CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
                              ProxmoxTokenBootstrapInput, SSHHostKeyInput, SSHKeyBootstrapInput)
 from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, snapshot_ansible_payload,
@@ -148,8 +148,21 @@ def ensure_credential_usable(credential):
 
 
 
+def _require_effective(db, request, actor, permission, *, write=None):
+    """Authorize a secondary capability in the already selected resource scope."""
+    from app.iam.service import authorize_or_raise, request_context, scope_from_resource_scope
+    selected = getattr(request.state, 'resource_scope', None)
+    scope = scope_from_resource_scope(selected) if selected is not None else {'scope_type': 'GLOBAL'}
+    decision = authorize_or_raise(
+        db, actor, permission, scope=scope, context=request_context(request),
+        write=(request.method not in {'GET', 'HEAD', 'OPTIONS'}) if write is None else write,
+    )
+    request.state.permissions = set(getattr(request.state, 'permissions', set())) | {permission}
+    return decision
+
+
 @router.get('/credentials', response_model=Items[CredentialOutput])
-def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
+def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read_metadata')), db=Depends(get_db, scope='function')):
     return {'items': [credential_public(c) for c in paginate(db, Credential, offset, limit)]}
 
 
@@ -370,8 +383,16 @@ def sync_awx_scope(id: int, request: Request,
 
 
 @router.get('/credentials/{id}', response_model=CredentialOutput)
-def credential(id: int, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
+def credential(id: int, actor=Depends(require('credentials.read_metadata')), db=Depends(get_db, scope='function')):
     return credential_public(find(db, Credential, id))
+
+
+@router.get('/credentials/{id}/secret', response_model=CredentialSecretOutput)
+def credential_secret(id: int, request: Request, actor=Depends(require('credentials.read_secret')), db=Depends(get_db, scope='function')):
+    credential = find(db, Credential, id)
+    secret = decrypt_secret(credential)
+    audit(db, request, 'credential.secret_read', 'credentials', id)
+    return {'credential_id': credential.id, 'secret': secret}
 
 
 @router.post('/credentials', status_code=201, response_model=CredentialOutput)
@@ -435,6 +456,7 @@ def delete_credential(id: int, request: Request, actor=Depends(require('credenti
 
 @router.post('/credentials/{id}/test', response_model=CredentialTestOutput, response_model_exclude_unset=True)
 def test_credential(id: int, request: Request, actor=Depends(require('credentials.test')), db=Depends(get_db, scope='function')):
+    _require_effective(db, request, actor, 'credentials.use', write=False)
     c = find(db, Credential, id)
     try:
         result = test_connection(c)
@@ -464,6 +486,7 @@ def check_provider_credential(db, data):
 
 @router.post('/providers', status_code=201, response_model=ProviderOutput)
 def create_provider(data: ProviderInput, request: Request, actor=Depends(require('providers.create')), db=Depends(get_db, scope='function')):
+    _require_effective(db, request, actor, 'credentials.use', write=True)
     check_provider_credential(db, data)
     def create():
         p = Provider(**data.model_dump())
@@ -476,6 +499,7 @@ def create_provider(data: ProviderInput, request: Request, actor=Depends(require
 
 @router.put('/providers/{id}', response_model=ProviderOutput)
 def update_provider(id: int, data: ProviderInput, request: Request, actor=Depends(require('providers.update')), db=Depends(get_db, scope='function')):
+    _require_effective(db, request, actor, 'credentials.use', write=True)
     p = find(db, Provider, id)
     check_provider_credential(db, data)
     if p.credentials_id != data.credentials_id and db.scalar(select(Deployment.id).where(Deployment.provider_id == id, Deployment.status != 'destroyed')):
@@ -498,7 +522,8 @@ def delete_provider(id: int, request: Request, actor=Depends(require('providers.
 
 
 @router.get('/providers/{id}/qemu-agent-readiness')
-def qemu_agent_readiness(id: int, actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
+def qemu_agent_readiness(id: int, request: Request, actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
+    _require_effective(db, request, actor, 'credentials.use', write=False)
     provider = find(db, Provider, id)
     if provider.type != 'proxmox':
         raise HTTPException(422, 'QEMU Guest Agent readiness is available only for Proxmox providers')
@@ -508,9 +533,7 @@ def qemu_agent_readiness(id: int, actor=Depends(require('providers.read')), db=D
 
 @router.get('/providers/{id}/{resource}', response_model=Items[dict])
 def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templates', 'vms', 'pools'],
-             node: Annotated[str | None, Query(pattern=r'^[A-Za-z0-9_.-]{1,63}$')] = None,
-             actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
-    p = find(db, Provider, id)
+             node: Annotated[str | None, Query(pattern=r'^[A-Za-z0-9_.-]{1,63}
     rows = provider_for(find(db, Credential, p.credentials_id)).discover(resource, node)
     if resource == 'vms':
         from app.resource_scope.service import filter_provider_vms
@@ -573,29 +596,29 @@ def playbook_source(id: str, actor=Depends(require('ansible.read')), db=Depends(
     return playbook_source_preview(id, db=db)
 
 
-def check_job_permissions(request, operation):
+def check_job_permissions(db, request, actor, operation):
     if operation == 'proxmox.clone_template':
-        required = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+        required = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template', 'credentials.use'}
     elif operation == 'proxmox.provision':
         required = {
-            'jobs.execute', 'deployments.create',
+            'jobs.execute', 'deployments.create', 'credentials.use',
             'vms.read', 'vms.clone', 'vms.update', 'vms.power',
         }
     elif operation == 'proxmox.destroy':
         required = {
-            'jobs.execute', 'deployments.destroy',
+            'jobs.execute', 'deployments.destroy', 'credentials.use',
             'vms.read', 'vms.delete', 'vms.power',
         }
     else:
-        required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
+        required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute', 'credentials.use'}
         if operation == 'terraform.destroy':
             required.add('deployments.destroy')
         if operation == 'terraform.import':
             required.add('deployments.adopt')
         if operation == 'terraform.apply':
             required.add('deployments.create')
-    if not required <= request.state.permissions:
-        raise HTTPException(403, 'Missing execution or deployment permissions')
+    for permission in sorted(required):
+        _require_effective(db, request, actor, permission, write=True)
 
 
 def validate_ansible(db, data):
@@ -607,7 +630,7 @@ def validate_ansible(db, data):
 
 
 def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
-    check_job_permissions(request, operation)
+    check_job_permissions(db, request, actor, operation)
     provisioning_operation = operation in {'terraform.apply', 'proxmox.provision'}
     blueprint = ((payload or {}).get('blueprint') or {}) if isinstance(payload, dict) else {}
     if not blueprint and deployment and provisioning_operation:
@@ -664,7 +687,7 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
             422,
             'Direct Proxmox provisioning must be launched from a Blueprint so the provider workflow is immutable and auditable',
         )
-    check_job_permissions(request, 'terraform.apply')
+    check_job_permissions(db, request, actor, 'terraform.apply')
     p = find(db, Provider, data.provider_id)
     ensure_credential_usable(find(db, Credential, p.credentials_id))
     require_catalog_item_enabled(db, 'templates', data.template)
@@ -738,7 +761,7 @@ def destroy_deployment(id: str, request: Request, force: bool = False,
 
 @router.post('/jobs', status_code=202, response_model=JobOutput)
 def create_job(data: JobInput, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
-    check_job_permissions(request, data.operation)
+    check_job_permissions(db, request, actor, data.operation)
     if data.ansible:
         validate_ansible(db, data.ansible)
     def create():
@@ -884,7 +907,7 @@ def accept_awx_onboarding(
     if original.operation not in {'terraform.apply', 'proxmox.provision'} or not original.deployment_id:
         raise HTTPException(409, 'Manual AWX onboarding acceptance requires a Blueprint provisioning job')
 
-    check_job_permissions(request, original.operation)
+    check_job_permissions(db, request, actor, original.operation)
     deployment = db.scalar(
         select(Deployment).where(Deployment.id == original.deployment_id).with_for_update()
     )
@@ -1012,7 +1035,660 @@ def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')),
         raise HTTPException(404, 'Job not found')
     if original.status not in {'failed', 'cancelled'}:
         raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
-    check_job_permissions(request, original.operation)
+    check_job_permissions(db, request, actor, original.operation)
+    payload = dict(original.payload or {})
+    workflow_runtime = dict(payload.get('_workflow_runtime') or {})
+    proxmox_runtime = dict(payload.get('_proxmox_runtime') or {})
+    provider_checkpointed = (
+        workflow_runtime.get('provider_applied') is True
+        or (
+            original.operation == 'proxmox.provision'
+            and (
+                proxmox_runtime.get('clone_completed') is True
+                or bool(proxmox_runtime.get('clone_upid'))
+                or bool(proxmox_runtime.get('target_vm_id'))
+            )
+        )
+    )
+    safe_workflow_resume = (
+        original.operation in {'terraform.apply', 'proxmox.provision'}
+        and provider_checkpointed
+    )
+
+    payload.pop('_approval', None)
+    payload.pop('_workflow_approval', None)
+    payload.pop('_current_stage', None)
+    payload.pop('_provider_wait', None)
+    payload.pop('_quota_checked', None)
+    payload.pop('_quota_reservation_id', None)
+    payload.pop('_state_recovery', None)
+    payload.pop('_auto_resume', None)
+
+    if safe_workflow_resume:
+        # Provider-side mutation has already happened. Preserve durable workflow
+        # checkpoints so post-provisioning retry cannot recreate/replace the VM
+        # or repeat completed Ansible/AWX steps.
+        payload['_resume_after_provider_apply'] = True
+        payload.pop('_recreate', None)
+    else:
+        payload.pop('_resume_after_provider_apply', None)
+        payload.pop('_workflow_runtime', None)
+        if original.operation == 'proxmox.provision':
+            payload.pop('_proxmox_runtime', None)
+    if original.operation == 'ansible.execute' and payload.get('ansible'):
+        from app.api.schemas import AnsibleInput
+        validate_ansible(db, AnsibleInput.model_validate(payload['ansible']))
+
+    def create():
+        deployment = None
+        if original.deployment_id:
+            deployment = db.scalar(select(Deployment).where(Deployment.id == original.deployment_id).with_for_update())
+            if deployment is None:
+                raise HTTPException(404, 'Deployment not found')
+            if not safe_workflow_resume:
+                delete_plan(deployment.id)
+        new = new_job(
+            db,
+            request,
+            actor,
+            original.operation,
+            deployment,
+            payload,
+            retry_of=original.id,
+            attempt=original.attempt + 1,
+        )
+        db.add(JobLog(
+            job_id=new.id,
+            message=(
+                'job.resumed_from_checkpoint: provider mutation checkpoint preserved'
+                if safe_workflow_resume
+                else 'job.retry_from_start: no provider mutation checkpoint'
+            ),
+        ))
+        audit(db, request, 'job.resumed' if safe_workflow_resume else 'job.retried', 'jobs', new.id)
+        return job_public(new)
+
+    return idempotent(
+        db,
+        request,
+        actor,
+        {'retry_of': original.id, 'attempt': original.attempt + 1},
+        create,
+        required=True,
+    )
+
+
+@router.post('/jobs/{id}/force-dispatch', response_model=JobOutput)
+def force_dispatch(id: str, request: Request, actor=Depends(require('jobs.force')),
+                   db=Depends(get_db, scope='function')):
+    job = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    try:
+        force_dispatch_job(db, job)
+    except ForceDispatchConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ForceDispatchUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
+    audit(db, request, 'job.force_dispatch', 'jobs', job.id)
+    return job_public(job)
+
+
+@router.get('/jobs/{id}/logs', response_model=JobLogsOutput)
+def logs(id: str, after: Annotated[int, Query(ge=0)] = 0, limit: Limit = 100,
+         actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
+    j = find(db, Job, id)
+    rows = db.scalars(select(JobLog).where(JobLog.job_id == id, JobLog.id > after).order_by(JobLog.id).limit(limit)).all()
+    return {'request_id': j.request_id, 'status': j.status, 'items': [public(r, 'id timestamp message') for r in rows], 'next_after': rows[-1].id if rows else after}
+
+
+@router.post('/jobs/{id}/cancel', response_model=JobOutput)
+def cancel_job(id: str, request: Request, actor=Depends(require('jobs.cancel')), db=Depends(get_db, scope='function')):
+    j = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if j is None:
+        raise HTTPException(404, 'Job not found')
+    if j.status in {'successful', 'failed', 'cancelled'}:
+        raise HTTPException(409, 'Job already finished')
+    if j.cancel_requested and j.status == 'cancelling':
+        return job_public(j)
+
+    was_waiting_approval = j.status == 'waiting_approval'
+    j.cancel_requested = True
+    db.add(JobLog(job_id=j.id, message='job.cancel_requested: żądanie anulowania przyjęte'))
+
+    if j.status in {'queued', 'waiting_approval'}:
+        j.status = 'cancelled'
+        j.error = 'Cancellation requested before execution'
+        if j.deployment_id:
+            d = db.scalar(select(Deployment).where(Deployment.id == j.deployment_id).with_for_update())
+            if d is not None and d.active_job_id == j.id:
+                d.active_job_id = None
+                d.status = (
+                    (j.payload or {}).get('previous_status', d.status or 'failed')
+                    if j.operation == 'terraform.plan'
+                    else 'cancelled'
+                )
+                if was_waiting_approval:
+                    delete_plan(d.id)
+                if j.operation != 'terraform.plan':
+                    release_pre_execution_allocations(db, d.id)
+        release_job_reservation(db, j)
+    else:
+        j.status = 'cancelling'
+        if j.deployment_id:
+            d = find(db, Deployment, j.deployment_id)
+            if d.active_job_id == j.id:
+                d.status = 'cancelling'
+
+    audit(db, request, 'job.cancel', 'jobs', id)
+    return job_public(j)
+)] = None,
+             request: Request = None,
+             actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
+    _require_effective(db, request, actor, 'credentials.use', write=False)
+    p = find(db, Provider, id)
+    rows = provider_for(find(db, Credential, p.credentials_id)).discover(resource, node)
+    if resource == 'vms':
+        from app.resource_scope.service import filter_provider_vms
+        rows = filter_provider_vms(db, id, rows)
+    # Providers can expose storage passwords or plugin configuration; publish only discovery metadata.
+    safe_fields = {
+        'nodes': 'node status cpu maxcpu mem maxmem disk maxdisk uptime',
+        'storages': 'storage type content nodes shared disable enabled active total used avail',
+        'networks': 'node iface type bridge_ports vlan-id address cidr gateway active autostart comments',
+        'templates': 'vmid name node status template type tags mem maxmem cpu maxcpu disk maxdisk uptime id',
+        'vms': 'vmid name node status template type tags mem maxmem cpu maxcpu disk maxdisk uptime id',
+        'pools': 'poolid comment',
+    }[resource].split()
+    return {'items': [{k: v for k, v in row.items() if k in safe_fields} for row in rows]}
+
+
+@router.get('/templates', response_model=Items[TemplateOutput])
+@router.get('/terraform/templates', response_model=Items[TemplateOutput])
+def templates(actor=Depends(require('terraform.read')), db=Depends(get_db, scope='function')):
+    return {'items': [catalog_item_public(db, 'templates', item) for item in list_templates()]}
+
+
+@router.get('/templates/{id}', response_model=TemplateOutput)
+def template(id: str, actor=Depends(require('terraform.read')), db=Depends(get_db, scope='function')):
+    return catalog_item_public(db, 'templates', template_public(id))
+
+
+@router.put('/catalog/templates/{id}/enabled', response_model=TemplateOutput)
+def set_template_enabled(id: str, data: CatalogItemStateInput, request: Request,
+                         actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    item = template_public(id)
+    set_catalog_item_enabled(db, 'templates', id, data.enabled)
+    audit(db, request, 'catalog.template_enabled' if data.enabled else 'catalog.template_disabled', 'catalog', id)
+    return catalog_item_public(db, 'templates', item)
+
+
+@router.get('/templates/{id}/source')
+def template_source(id: str, actor=Depends(require('terraform.read'))):
+    return template_source_preview(id)
+
+
+@router.get('/ansible/playbooks', response_model=Items[PlaybookOutput])
+def playbooks(actor=Depends(require('ansible.read')), db=Depends(get_db, scope='function')):
+    return {'items': [catalog_item_public(db, 'playbooks', item) for item in list_playbooks(db)]}
+
+
+@router.put('/catalog/playbooks/{id}/enabled', response_model=PlaybookOutput)
+def set_playbook_enabled(id: str, data: CatalogItemStateInput, request: Request,
+                         actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    item = playbook_public(id, db=db)
+    if item.get('custom') and 'ansible.manage' not in request.state.permissions:
+        raise HTTPException(403, 'ansible.manage required for custom playbook state')
+    set_catalog_item_enabled(db, 'playbooks', id, data.enabled)
+    audit(db, request, 'catalog.playbook_enabled' if data.enabled else 'catalog.playbook_disabled', 'catalog', id)
+    return catalog_item_public(db, 'playbooks', item)
+
+
+@router.get('/ansible/playbooks/{id}/source')
+def playbook_source(id: str, actor=Depends(require('ansible.read')), db=Depends(get_db, scope='function')):
+    return playbook_source_preview(id, db=db)
+
+
+def check_job_permissions(db, request, actor, operation):
+    if operation == 'proxmox.clone_template':
+        required = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
+    elif operation == 'proxmox.provision':
+        required = {
+            'jobs.execute', 'deployments.create',
+            'vms.read', 'vms.clone', 'vms.update', 'vms.power',
+        }
+    elif operation == 'proxmox.destroy':
+        required = {
+            'jobs.execute', 'deployments.destroy',
+            'vms.read', 'vms.delete', 'vms.power',
+        }
+    else:
+        required = {'jobs.execute', 'ansible.execute' if operation == 'ansible.execute' else 'terraform.execute'}
+        if operation == 'terraform.destroy':
+            required.add('deployments.destroy')
+        if operation == 'terraform.import':
+            required.add('deployments.adopt')
+        if operation == 'terraform.apply':
+            required.add('deployments.create')
+    if not required <= request.state.permissions:
+        raise HTTPException(403, 'Missing execution or deployment permissions')
+
+
+def validate_ansible(db, data):
+    c = ensure_credential_usable(locked_credential(db, data.credentials_id))
+    require_catalog_item_enabled(db, 'playbooks', data.playbook)
+    expected = playbook_definition(data.playbook, db=db)['transport']
+    if c.type != expected:
+        raise HTTPException(422, f'Playbook requires {expected} credential')
+
+
+def new_job(db, request, actor, operation, deployment=None, payload=None, *, retry_of=None, attempt=1):
+    check_job_permissions(db, request, actor, operation)
+    provisioning_operation = operation in {'terraform.apply', 'proxmox.provision'}
+    blueprint = ((payload or {}).get('blueprint') or {}) if isinstance(payload, dict) else {}
+    if not blueprint and deployment and provisioning_operation:
+        blueprint = ((deployment.workflow or {}).get('blueprint') or {})
+    if blueprint and provisioning_operation and 'blueprints.execute' not in request.state.permissions:
+        raise HTTPException(403, 'blueprints.execute required by Blueprint deployment')
+    if (
+        deployment
+        and (
+            (deployment.workflow or {}).get('ansible')
+            or (deployment.workflow or {}).get('ansible_runs')
+        )
+        and provisioning_operation
+        and 'ansible.execute' not in request.state.permissions
+    ):
+        raise HTTPException(403, 'ansible.execute required by the deployment workflow')
+    if deployment and deployment.status == 'reconciliation_required' and operation != 'terraform.plan':
+        raise HTTPException(
+            409,
+            'Deployment requires Terraform reconciliation; run terraform.plan successfully before mutating it',
+        )
+    if deployment and (deployment.active_job_id or deployment.status == 'destroyed'):
+        raise HTTPException(409, 'Deployment is busy or destroyed')
+    if deployment and provisioning_operation and has_released_allocations(db, deployment.id):
+        raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
+    if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
+        raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
+    job_payload = snapshot_ansible_payload(
+        db,
+        payload or (deployment.workflow if deployment and provisioning_operation else {}),
+    )
+    if deployment:
+        job_payload['previous_status'] = deployment.status
+    job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
+              payload=job_payload, created_by=actor.user_id, token_id=actor.id,
+              request_id=request.state.request_id, ip=request.client.host if request.client else '',
+              source=getattr(request.state, 'source', 'API'), retry_of=retry_of, attempt=attempt)
+    db.add(job)
+    db.flush()
+    if deployment:
+        deployment.active_job_id = job.id
+        deployment.status = 'queued'
+    gate_job_for_approval(db, job, deployment)
+    if job.status == 'queued':
+        prepare_job_reservation(db, job, deployment)
+    audit(db, request, 'job.created', 'jobs', job.id)
+    return job
+
+
+@router.post('/deployments', status_code=202, response_model=CreatedDeploymentOutput)
+def create_deployment(data: DeploymentInput, request: Request, actor=Depends(require('deployments.create')), db=Depends(get_db, scope='function')):
+    if data.executor == 'proxmox':
+        raise HTTPException(
+            422,
+            'Direct Proxmox provisioning must be launched from a Blueprint so the provider workflow is immutable and auditable',
+        )
+    check_job_permissions(db, request, actor, 'terraform.apply')
+    p = find(db, Provider, data.provider_id)
+    ensure_credential_usable(find(db, Credential, p.credentials_id))
+    require_catalog_item_enabled(db, 'templates', data.template)
+    template_meta, _ = template_definition(data.template)
+    if p.type != template_meta['provider']:
+        raise HTTPException(422, 'Selected infrastructure provider does not match the Terraform template')
+    variables = validate_template_variables(data.template, data.variables)
+    if p.credentials_id != data.credentials_id:
+        raise HTTPException(422, 'Credential does not belong to the selected provider')
+    # Share the same row locks with credential mutation/deletion to preserve references.
+    for credential_id in sorted({data.credentials_id} | ({data.ansible.credentials_id} if data.ansible else set())):
+        locked_credential(db, credential_id)
+    if data.ansible:
+        if p.type != 'proxmox':
+            raise HTTPException(422, 'Ansible post-provisioning currently requires the Proxmox guest-agent workflow')
+        if 'ansible.execute' not in request.state.permissions:
+            raise HTTPException(403, 'ansible.execute required')
+        validate_ansible(db, data.ansible)
+    def create():
+        d = Deployment(name=data.name, provider_id=p.id, provider=p.type, template=data.template, credentials_id=data.credentials_id,
+                       variables=variables.model_dump(mode='json'), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
+        db.add(d)
+        db.flush()
+        d.state_location = f'database://terraform-states/{d.id}'
+        job = new_job(db, request, actor, 'terraform.apply', d, {'ansible': data.ansible.model_dump() if data.ansible else None})
+        audit(db, request, 'deployment.created', 'deployments', d.id)
+        return {**deployment_public(d), 'job': job_public(job)}
+    return idempotent(db, request, actor, data.model_dump(), create, required=True)
+
+
+@router.get('/deployments', response_model=Items[DeploymentOutput])
+def deployments(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
+    return {'items': [deployment_public(d) for d in paginate(db, Deployment, offset, limit)]}
+
+
+@router.get('/deployments/{id}', response_model=DeploymentOutput)
+def deployment(id: str, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
+    return deployment_public(find(db, Deployment, id))
+
+
+@router.post('/deployments/{id}/recreate', status_code=202, response_model=JobOutput)
+def recreate_deployment(id: str, request: Request, actor=Depends(require('deployments.destroy')),
+                        db=Depends(get_db, scope='function')):
+    def create():
+        deployment = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
+        if deployment is None:
+            raise HTTPException(404, 'Deployment not found')
+        if deployment.executor == 'proxmox':
+            raise HTTPException(409, 'Direct Proxmox deployments do not use Terraform recreate; delete and execute the Blueprint again')
+        payload = recreate_job_payload(deployment)
+        job = new_job(db, request, actor, 'terraform.apply', deployment, payload)
+        audit(db, request, 'deployment.recreate_requested', 'deployments', deployment.id)
+        return job_public(job)
+
+    return idempotent(db, request, actor, {'id': id, 'action': 'recreate'}, create, required=True)
+
+
+@router.post('/deployments/{id}/destroy', status_code=202, response_model=JobOutput)
+@router.delete('/deployments/{id}', status_code=202, response_model=JobOutput)
+def destroy_deployment(id: str, request: Request, force: bool = False,
+                       actor=Depends(require('deployments.destroy')), db=Depends(get_db, scope='function')):
+    def create():
+        d = db.scalar(select(Deployment).where(Deployment.id == id).with_for_update())
+        if not d:
+            raise HTTPException(404, 'Deployment not found')
+        operation = 'proxmox.destroy' if d.executor == 'proxmox' else 'terraform.destroy'
+        payload = {'force': True} if force and operation == 'proxmox.destroy' else None
+        return job_public(new_job(db, request, actor, operation, d, payload))
+    return idempotent(db, request, actor, {'id': id, 'force': force}, create, required=True)
+
+
+@router.post('/jobs', status_code=202, response_model=JobOutput)
+def create_job(data: JobInput, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
+    check_job_permissions(db, request, actor, data.operation)
+    if data.ansible:
+        validate_ansible(db, data.ansible)
+    def create():
+        d = None
+        if data.deployment_id:
+            d = db.scalar(select(Deployment).where(Deployment.id == data.deployment_id).with_for_update())
+            if not d:
+                raise HTTPException(404, 'Deployment not found')
+        return job_public(new_job(db, request, actor, data.operation, d, {'ansible': data.ansible.model_dump()} if data.ansible else None))
+    return idempotent(db, request, actor, data.model_dump(), create, required=True)
+
+
+@router.get('/jobs', response_model=Items[JobOutput])
+def jobs(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
+    return {'items': [job_public(j) for j in paginate(db, Job, offset, limit)]}
+
+
+@router.get('/jobs/{id}', response_model=JobOutput)
+def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='function')):
+    return job_public(find(db, Job, id))
+
+
+@router.post('/jobs/{id}/approve', response_model=JobOutput)
+def approve_job(id: str, request: Request, actor=Depends(require('blueprints.approve')),
+                db=Depends(get_db, scope='function')):
+    job = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if job is None:
+        raise HTTPException(404, 'Job not found')
+    if job.status != 'waiting_approval':
+        raise HTTPException(409, 'Job is not waiting for approval')
+    blueprint = (job.payload or {}).get('blueprint') or {}
+    if not blueprint.get('requires_approval'):
+        raise HTTPException(409, 'Job does not require Blueprint approval')
+
+    payload = dict(job.payload or {})
+    workflow_approval = dict(payload.get('_workflow_approval') or {})
+    if workflow_approval.get('status') == 'pending':
+        expires_at = workflow_approval.get('expires_at')
+        if expires_at:
+            try:
+                if datetime.fromisoformat(expires_at) <= now():
+                    raise HTTPException(409, 'Workflow approval request has expired')
+            except ValueError:
+                raise HTTPException(409, 'Workflow approval request expiry is invalid') from None
+        step_id = str(workflow_approval.get('step_id') or '').strip()
+        runtime = dict(payload.get('_workflow_runtime') or {})
+        plan_sha256 = str(runtime.get('plan_sha256') or '')
+        expected_plan_sha256 = str(workflow_approval.get('plan_sha256') or '')
+        if not step_id:
+            raise HTTPException(409, 'Workflow approval step is missing')
+        if expected_plan_sha256 and expected_plan_sha256 != plan_sha256:
+            raise HTTPException(409, 'Terraform plan changed after the approval request was created')
+        workflow_approval.update({
+            'status': 'approved',
+            'approved_by': actor.user_id,
+            'approved_at': now().isoformat(),
+            'approved_plan_sha256': plan_sha256 or None,
+        })
+        payload['_workflow_approval'] = workflow_approval
+        job.payload = payload
+        deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
+        prepare_job_reservation(db, job, deployment)
+        job.status = 'queued'
+        if deployment is not None and deployment.active_job_id == job.id:
+            deployment.status = 'queued'
+        db.add(JobLog(
+            job_id=job.id,
+            message=f'workflow.approval.step_approved: step={step_id}; user={actor.user_id}',
+        ))
+        audit(db, request, 'blueprint.workflow_step.approved', 'jobs', job.id)
+        db.flush()
+        return job_public(job)
+
+    approval = dict(payload.get('_approval') or {})
+    expires_at = approval.get('expires_at')
+    if expires_at:
+        try:
+            if datetime.fromisoformat(expires_at) <= now():
+                raise HTTPException(409, 'Approval request has expired')
+        except ValueError:
+            raise HTTPException(409, 'Approval request expiry is invalid') from None
+    policy_stage = approve_policy_stage(job, actor, request.state.permissions, db=db)
+    if policy_stage is not None and not policy_stage['complete']:
+        payload = dict(job.payload or {})
+        next_stage = dict(policy_stage.get('next_stage') or {})
+        policy_config = dict(payload.get('_approval_policy') or {})
+        try:
+            timeout_hours = int(next_stage.get('timeout_hours') or policy_config.get('approval_timeout_hours') or 48)
+        except (TypeError, ValueError):
+            timeout_hours = 48
+        timeout_hours = max(1, min(720, timeout_hours))
+        requested_at = now()
+        expires_at = requested_at + timedelta(hours=timeout_hours)
+        payload['_approval'] = {
+            'status': 'pending',
+            'requested_at': requested_at.isoformat(),
+            'expires_at': expires_at.isoformat(),
+            'stage': int((payload.get('_policy_approval') or {}).get('current_stage') or 0),
+            'stage_name': next_stage.get('name'),
+        }
+        job.payload = payload
+        db.add(JobLog(job_id=job.id, message=(
+            'workflow.approval.policy.stage_approved: '
+            f"user={actor.user_id}; next_stage={next_stage.get('name')}; "
+            f'expires_at={expires_at.isoformat()}'
+        )))
+        audit(db, request, 'blueprint.execution.policy_stage_approved', 'jobs', job.id)
+        db.flush()
+        return job_public(job)
+
+    payload = dict(job.payload or {})
+    approval = dict(payload.get('_approval') or {})
+    approval.update({
+        'status': 'approved',
+        'approved_by': actor.user_id,
+        'approved_at': now().isoformat(),
+    })
+    payload['_approval'] = approval
+    job.payload = payload
+    deployment = db.get(Deployment, job.deployment_id) if job.deployment_id else None
+    prepare_job_reservation(db, job, deployment)
+    job.status = 'queued'
+    if deployment is not None and deployment.active_job_id == job.id:
+        deployment.status = 'queued'
+    db.add(JobLog(job_id=job.id, message=f'workflow.approval.approved: user={actor.user_id}'))
+    audit(db, request, 'blueprint.execution.approved', 'jobs', job.id)
+    db.flush()
+    return job_public(job)
+
+
+@router.post('/jobs/{id}/accept-awx-onboarding', status_code=202, response_model=JobOutput)
+def accept_awx_onboarding(
+    id: str,
+    request: Request,
+    actor=Depends(require('jobs.execute')),
+    db=Depends(get_db, scope='function'),
+):
+    original = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if original is None:
+        raise HTTPException(404, 'Job not found')
+    if original.status != 'failed':
+        raise HTTPException(409, 'Only a failed AWX onboarding job can be accepted manually')
+    if original.operation not in {'terraform.apply', 'proxmox.provision'} or not original.deployment_id:
+        raise HTTPException(409, 'Manual AWX onboarding acceptance requires a Blueprint provisioning job')
+
+    check_job_permissions(db, request, actor, original.operation)
+    deployment = db.scalar(
+        select(Deployment).where(Deployment.id == original.deployment_id).with_for_update()
+    )
+    if deployment is None:
+        raise HTTPException(404, 'Deployment not found')
+    if deployment.active_job_id:
+        raise HTTPException(409, 'Deployment is busy')
+    if deployment.status in {'destroyed', 'reconciliation_required'}:
+        raise HTTPException(409, 'Deployment cannot resume AWX onboarding in its current state')
+
+    payload = dict(original.payload or {})
+    stage = str(payload.get('_current_stage') or '').strip()
+    prefix = 'workflow.step.start:'
+    if not stage.startswith(prefix):
+        raise HTTPException(409, 'Failed job is not stopped on a Blueprint workflow step')
+    step_id, separator, step_type = stage[len(prefix):].partition(':')
+    if not separator or not step_id or step_type != 'register_awx':
+        raise HTTPException(409, 'Failed job is not stopped on AWX onboarding')
+
+    blueprint = payload.get('blueprint') or ((deployment.workflow or {}).get('blueprint') or {})
+    steps = list(blueprint.get('steps') or []) if isinstance(blueprint, dict) else []
+    matching_step = next(
+        (
+            step for step in steps
+            if str((step or {}).get('id') or '') == step_id
+            and str((step or {}).get('type') or '') == 'register_awx'
+        ),
+        None,
+    )
+    if matching_step is None:
+        raise HTTPException(409, 'AWX onboarding step no longer exists in the Blueprint snapshot')
+
+    runtime = dict(payload.get('_workflow_runtime') or {})
+    if runtime.get('provider_applied') is not True or runtime.get('inventory_synced') is not True:
+        raise HTTPException(
+            409,
+            'AWX onboarding can be accepted manually only after Terraform apply and inventory synchronization',
+        )
+    managed_vm = db.scalar(select(ManagedVM).where(
+        ManagedVM.deployment_id == deployment.id,
+        ManagedVM.lifecycle_status == 'active',
+    ).limit(1))
+    if managed_vm is None:
+        raise HTTPException(409, 'Managed VM is not active; manual AWX onboarding acceptance is unsafe')
+
+    accepted_at = now().isoformat()
+    completed_steps = {
+        str(value) for value in (runtime.get('completed_steps') or [])
+    }
+    completed_steps.add(step_id)
+    runtime['completed_steps'] = sorted(completed_steps)
+    overrides = list(runtime.get('manual_overrides') or [])
+    overrides.append({
+        'step_id': step_id,
+        'step_type': 'register_awx',
+        'accepted_by': actor.user_id,
+        'accepted_at': accepted_at,
+        'source_job_id': original.id,
+    })
+    runtime['manual_overrides'] = overrides[-50:]
+    payload['_workflow_runtime'] = runtime
+
+    for key in (
+        '_approval',
+        '_workflow_approval',
+        '_current_stage',
+        '_provider_wait',
+        '_quota_checked',
+        '_quota_reservation_id',
+        '_state_recovery',
+        '_auto_resume',
+        '_recreate',
+    ):
+        payload.pop(key, None)
+
+    def create():
+        resumed = new_job(
+            db,
+            request,
+            actor,
+            original.operation,
+            deployment,
+            payload,
+            retry_of=original.id,
+            attempt=original.attempt + 1,
+        )
+        db.add(JobLog(
+            job_id=original.id,
+            message=(
+                f'workflow.awx.manual_accept: step={step_id}; user={actor.user_id}; '
+                f'resume_job={resumed.id}'
+            ),
+        ))
+        db.add(JobLog(
+            job_id=resumed.id,
+            message=(
+                f'workflow.awx.manual_accept.resumed: step={step_id}; '
+                f'source_job={original.id}; terraform_apply=checkpoint_reused'
+            ),
+        ))
+        audit(
+            db,
+            request,
+            'workflow.awx.manual_accept',
+            'jobs',
+            original.id,
+            'success',
+        )
+        return job_public(resumed)
+
+    return idempotent(
+        db,
+        request,
+        actor,
+        {'job_id': original.id, 'action': 'accept_awx_onboarding', 'step_id': step_id},
+        create,
+        required=True,
+    )
+
+
+@router.post('/jobs/{id}/retry', status_code=202, response_model=JobOutput)
+def retry_job(id: str, request: Request, actor=Depends(require('jobs.execute')), db=Depends(get_db, scope='function')):
+    original = db.scalar(select(Job).where(Job.id == id).with_for_update())
+    if original is None:
+        raise HTTPException(404, 'Job not found')
+    if original.status not in {'failed', 'cancelled'}:
+        raise HTTPException(409, 'Only failed or cancelled jobs can be retried')
+    check_job_permissions(db, request, actor, original.operation)
     payload = dict(original.payload or {})
     workflow_runtime = dict(payload.get('_workflow_runtime') or {})
     proxmox_runtime = dict(payload.get('_proxmox_runtime') or {})

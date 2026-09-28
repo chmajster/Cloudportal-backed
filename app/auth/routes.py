@@ -117,9 +117,26 @@ def login(data: Login, request: Request, db=Depends(get_db, scope='function')):
 
 
 @router.get('/me', response_model=IdentityOutput)
-def me(request: Request, actor=Depends(authenticate)):
-    return {'user': user_public(actor.user), 'roles': [{'id': r.id, 'name': r.name} for r in actor.user.roles],
-            'permissions': sorted(request.state.permissions), 'token_type': actor.kind}
+def me(request: Request, actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    from app.iam.service import effective_permissions as iam_effective_permissions
+    permissions = iam_effective_permissions(
+        db,
+        actor,
+        scope={'scope_type': 'GLOBAL'},
+        context={
+            'request_id': request.state.request_id,
+            'source': getattr(request.state, 'source', 'API'),
+            'method': request.method,
+            'path': request.url.path,
+        },
+    )
+    request.state.permissions = permissions
+    return {
+        'user': user_public(actor.user),
+        'roles': [{'id': r.id, 'name': r.name} for r in actor.user.roles],
+        'permissions': sorted(permissions),
+        'token_type': actor.kind,
+    }
 
 
 @router.post('/logout', response_model=LogoutOutput)

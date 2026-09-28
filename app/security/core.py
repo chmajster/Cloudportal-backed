@@ -266,29 +266,100 @@ def authenticate(request: Request, auth: HTTPAuthorizationCredentials | None = D
 
 def require(permission):
     def dependency(request: Request, actor=Depends(authenticate), db=Depends(get_db, scope='function')):
-        if permission not in request.state.permissions:
-            audit(db, request, 'authorization.denied', permission, result='denied')
+        from app.iam.service import authorize, request_context
+        decision = authorize(
+            db,
+            actor,
+            permission,
+            scope={'scope_type': 'GLOBAL'},
+            context=request_context(request),
+            write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
+        )
+        if decision.decision != 'ALLOW':
+            audit(
+                db,
+                request,
+                'authorization.denied',
+                permission,
+                result='denied',
+                details={
+                    'required_permission': permission,
+                    'decision': decision.decision,
+                    'reason': decision.reason,
+                },
+            )
             db.commit()
-            raise HTTPException(403, f"Permission required: {permission}")
+            status = 409 if decision.decision == 'REQUIRES_APPROVAL' else 403
+            error = 'approval_required' if status == 409 else 'permission_denied'
+            raise HTTPException(status, {
+                'error': error,
+                'required_permission': permission,
+                'reason': decision.reason,
+                'request_id': request.state.request_id,
+            })
+        request.state.permissions = set(request.state.permissions) | {permission}
+        if decision.break_glass:
+            request.state.break_glass_id = next(
+                (item.get('id') for item in decision.assignments
+                 if item.get('source') == 'break_glass'),
+                None,
+            )
         return actor
     return dependency
 
 
-def audit(db, request, action, resource='', resource_id=None, result='success', user_id=None):
+def _audit_safe(value):
+    sensitive = {
+        'password', 'secret', 'token', 'access_token', 'refresh_token',
+        'token_secret', 'client_secret', 'private_key', 'authorization',
+        'encrypted_secret',
+    }
+    if isinstance(value, dict):
+        return {
+            str(key): ('[REDACTED]' if str(key).lower() in sensitive else _audit_safe(item))
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_audit_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def audit(
+    db,
+    request,
+    action,
+    resource='',
+    resource_id=None,
+    result='success',
+    user_id=None,
+    *,
+    old_value=None,
+    new_value=None,
+    scope=None,
+    details=None,
+):
     actor = getattr(request.state, 'actor', None)
     effective_user_id = user_id if user_id is not None else actor.user_id if actor else None
     effective_token_id = actor.id if actor else None
     resource_id_text = str(resource_id) if resource_id is not None else None
+    break_glass_id = getattr(request.state, 'break_glass_id', None)
+    audit_source = 'BreakGlass' if break_glass_id else getattr(request.state, 'source', 'API')
     db.add(Audit(
         user_id=effective_user_id,
         token_id=effective_token_id,
         ip=request.client.host if request.client else '',
-        source=getattr(request.state, 'source', 'API'),
+        source=audit_source,
         action=action,
         resource=resource,
         resource_id=resource_id_text,
         result=result,
         request_id=request.state.request_id,
+        old_value=_audit_safe(old_value) if old_value is not None else None,
+        new_value=_audit_safe(new_value) if new_value is not None else None,
+        scope=_audit_safe(scope) if scope is not None else None,
+        details=_audit_safe(details) if details is not None else None,
     ))
 
     # Audit is already the common transaction boundary for state-changing API
@@ -305,6 +376,7 @@ def audit(db, request, action, resource='', resource_id=None, result='success', 
                     'resource': resource,
                     'resource_id': resource_id_text,
                     'result': result,
+                    'break_glass_id': break_glass_id,
                 }
             },
             subject_type=resource or 'system',

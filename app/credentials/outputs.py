@@ -1,6 +1,6 @@
 """Credential-domain public response models."""
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -31,3 +31,10 @@ class SSHKeyBootstrapOutput(BaseModel):
     credential: CredentialOutput
     public_key: str
     fingerprint: str
+
+
+class CredentialSecretOutput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    credential_id: int
+    secret: dict[str, Any]

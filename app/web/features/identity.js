@@ -55,7 +55,7 @@ function roleCard(role) {
       'Usuń rolę',
       `Rola ${role.name} zostanie trwale usunięta. Najpierw usuń wszystkie jej przypisania.`,
       async () => {
-        await api(`/roles/${role.id}`, { method: 'DELETE' });
+        await api(`/rbac/roles/${role.id}`, { method: 'DELETE' });
         toast('Rola usunięta.');
         await rolesView();
       }
@@ -338,11 +338,15 @@ async function usersView() {
 
 function userActions(user) {
   const actions = [];
-  if (allowed('roles.read')) actions.push(button('Dostęp', () => {
-    rbacSelectedUserId = Number(user.id);
-    rbacTab = 'assignments';
-    navigate('roles');
-  }));
+  if (allowed('rbac.assignments.read')) {
+    actions.push(button('Dostępy', () => navigate('/access/users/' + encodeURIComponent(user.id) + '/iam')));
+  } else if (allowed('roles.read')) {
+    actions.push(button('Role globalne', () => {
+      rbacSelectedUserId = Number(user.id);
+      rbacTab = 'assignments';
+      navigate('roles');
+    }));
+  }
   if (allowed('users.update')) {
     actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
@@ -420,17 +424,19 @@ function resetUserPassword(user) {
 
 async function rolesView() {
   const [roleResult, permissionResult, userResult] = await Promise.all([
-    api('/roles?limit=200'),
-    api('/permissions'),
+    api('/rbac/roles?limit=200'),
+    api('/rbac/permissions'),
     allowed('users.read') ? api('/users?limit=200') : Promise.resolve({ items: [] }),
   ]);
   const roles = roleResult.items || [];
-  const permissions = permissionResult.items || [];
+  const permissions = (permissionResult.items || []).map(item => typeof item === 'string' ? item : item.name);
   const users = userResult.items || [];
 
   const actions = [];
   if (allowed('roles.create')) actions.push(button('Nowa rola', () => navigate('/access/roles/new'), 'primary'));
-  if (allowed('roles.assign') && allowed('users.read')) actions.push(button('Nadaj dostęp', () => setRbacTab('assignments').catch(error => toast(error.message, 'error'))));
+  if (allowed('rbac.assignments.manage') || allowed('roles.assign')) {
+    actions.push(button('Nadaj dostęp', () => navigate('iam-access')));
+  }
   const stats = node('div', { class: 'rbac-stats' },
     rbacStat('Role', roles.length, 'definicje globalne'),
     rbacStat('Użytkownicy', allowed('users.read') ? users.length : '—', allowed('users.read') ? 'konta dostępne do przypisań' : 'brak users.read'),
@@ -453,7 +459,8 @@ async function rolesView() {
 
 async function roleForm(role = null) {
   try {
-    const permissions = (await api('/permissions')).items;
+    const permissionResult = await api('/rbac/permissions');
+    const permissions = (permissionResult.items || []).map(item => typeof item === 'string' ? item : item.name);
     const picker = permissionPicker(permissions, role?.permissions || [], 'permission');
     picker.classList.add('rbac-permission-picker');
 
@@ -504,10 +511,28 @@ async function roleForm(role = null) {
     picker.querySelectorAll('[name="permission"]').forEach(input => input.addEventListener('change', updateEditor));
     updateEditor();
 
+    const scopeChoices = [
+      'GLOBAL', 'ORGANIZATION', 'PROJECT', 'APMID', 'ENVIRONMENT',
+      'RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE',
+    ].map(value => ({ value, label: value }));
     const fields = node('div', { class: 'form-grid rbac-role-form' },
-      formSection('Rola', 'Nazwa powinna opisywać odpowiedzialność, nie konkretną osobę lub środowisko.',
-        field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true, placeholder: 'np. VM Operator' })),
-      formSection('Uprawnienia', 'Wybierz co ta rola może robić. Zakres Organization/Project/APMID/ENV jest nakładany osobno.',
+      formSection('Rola', 'Nazwa opisuje odpowiedzialność. Role systemowe są chronione przed usunięciem.',
+        field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true, placeholder: 'np. VM Operator' }),
+        field('Opis', 'description', { tag: 'textarea', value: role?.description || '', maxlength: 4000, wide: true })),
+      formSection('Dozwolone scope', 'Ogranicza typy scope, na których tę rolę można delegować.',
+        multiCheckboxField('Scope types', 'scope_type', scopeChoices, role?.scope_types || ['GLOBAL'])),
+      formSection('Dziedziczenie', 'Kontroluje propagację assignmentu do scope potomnych.',
+        checkboxField('Rola może być dziedziczona do scope potomnych', 'inheritance_enabled', role?.inheritance_enabled ?? true),
+        checkboxField('Rola aktywna', 'enabled', role?.enabled ?? true)),
+      formSection('Permission patterns', 'Opcjonalne kontrolowane wildcardy. Dozwolony jest wyłącznie końcowy namespace wildcard, np. machines.*.',
+        field('Wildcard permissions', 'permission_patterns', {
+          value: (role?.permission_patterns || []).join('\n'),
+          tag: 'textarea',
+          wide: true,
+          placeholder: 'machines.*',
+          help: 'Jeden pattern w linii.',
+        })),
+      formSection('Uprawnienia', 'Wybierz konkretne permissions. Scope i ABAC są nakładane przez RoleAssignment/Policy Engine.',
         searchField,
         toolbar,
         picker));
@@ -519,11 +544,21 @@ async function roleForm(role = null) {
       submitLabel: role ? 'Zapisz rolę' : 'Utwórz rolę',
       wide: true,
       onSubmit: async (_data, form) => {
+        const scope_types = [...form.querySelectorAll('[name="scope_type"]:checked')].map(input => input.value);
+        if (!scope_types.length) throw new Error('Wybierz co najmniej jeden typ scope.');
         const payload = {
           name: form.elements.name.value,
+          description: form.elements.description.value,
           permissions: [...form.querySelectorAll('[name="permission"]:checked')].map(input => input.value),
+          permission_patterns: String(form.elements.permission_patterns.value || '')
+            .split(/\r?\n|,/)
+            .map(value => value.trim())
+            .filter(Boolean),
+          scope_types,
+          inheritance_enabled: Boolean(form.elements.inheritance_enabled?.checked),
+          enabled: Boolean(form.elements.enabled?.checked),
         };
-        await api(role ? `/roles/${role.id}` : '/roles', { method: role ? 'PUT' : 'POST', body: payload });
+        await api(role ? `/rbac/roles/${role.id}` : '/rbac/roles', { method: role ? 'PATCH' : 'POST', body: payload });
         toast('Rola zapisana.');
         rbacTab = 'roles';
         navigate('roles');
@@ -769,7 +804,7 @@ registerRoutedForm({
   permission: 'roles.update',
   label: 'Role i RBAC',
 }, async match => {
-  const roles = (await api('/roles?limit=200')).items;
+  const roles = (await api('/rbac/roles?limit=200')).items;
   const role = roles.find(item => Number(item.id) === Number(match.params.id));
   if (!role) throw new Error('Nie znaleziono roli.');
   await roleForm(role);

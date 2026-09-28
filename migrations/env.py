@@ -8,6 +8,7 @@ from app.resource_scope import models as resource_scope_models
 from app.quotas import models as quota_models
 from app.availability import models as availability_models  # noqa: F401
 from app.instance_backup import models as instance_backup_models  # noqa: F401
+from app.iam import models as iam_models  # noqa: F401
 
 
 def run():

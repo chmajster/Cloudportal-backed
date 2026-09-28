@@ -51,22 +51,22 @@ POSITIVE_INT = {'type': 'integer', 'minimum': 1}
 
 
 ACTIONS = (
-    ActionDefinition('power_on', 'Uruchom', 'power', 'Uruchamia zatrzymaną maszynę.', 'day2.power', EMPTY_SCHEMA,
+    ActionDefinition('power_on', 'Uruchom', 'power', 'Uruchamia zatrzymaną maszynę.', 'machines.power.on', EMPTY_SCHEMA,
                      supported_states=frozenset({'stopped'})),
-    ActionDefinition('power_off', 'Wymuś wyłączenie', 'power', 'Wykonuje wymuszone zatrzymanie VM.', 'day2.power', EMPTY_SCHEMA,
+    ActionDefinition('power_off', 'Wymuś wyłączenie', 'power', 'Wykonuje wymuszone zatrzymanie VM.', 'machines.power.hard_stop', EMPTY_SCHEMA,
                      destructive=True, supported_states=frozenset({'running', 'paused'})),
-    ActionDefinition('shutdown', 'Wyłącz system', 'power', 'Wysyła kontrolowane wyłączenie systemu.', 'day2.power', EMPTY_SCHEMA,
+    ActionDefinition('shutdown', 'Wyłącz system', 'power', 'Wysyła kontrolowane wyłączenie systemu.', 'machines.power.off', EMPTY_SCHEMA,
                      supported_states=frozenset({'running'})),
-    ActionDefinition('reboot', 'Restart', 'power', 'Wykonuje kontrolowany restart VM.', 'day2.power', EMPTY_SCHEMA,
+    ActionDefinition('reboot', 'Restart', 'power', 'Wykonuje kontrolowany restart VM.', 'machines.power.reset', EMPTY_SCHEMA,
                      supported_states=frozenset({'running'})),
-    ActionDefinition('reset', 'Twardy reset', 'power', 'Odpowiednik sprzętowego resetu VM.', 'day2.power', EMPTY_SCHEMA,
+    ActionDefinition('reset', 'Twardy reset', 'power', 'Odpowiednik sprzętowego resetu VM.', 'machines.power.reset', EMPTY_SCHEMA,
                      destructive=True, supported_states=frozenset({'running'})),
-    ActionDefinition('suspend', 'Wstrzymaj', 'power', 'Wstrzymuje działanie VM.', 'day2.power', EMPTY_SCHEMA,
+    ActionDefinition('suspend', 'Wstrzymaj', 'power', 'Wstrzymuje działanie VM.', 'machines.power.suspend', EMPTY_SCHEMA,
                      supported_states=frozenset({'running'})),
-    ActionDefinition('resume', 'Wznów', 'power', 'Wznawia wstrzymaną VM.', 'day2.power', EMPTY_SCHEMA,
+    ActionDefinition('resume', 'Wznów', 'power', 'Wznawia wstrzymaną VM.', 'machines.power.resume', EMPTY_SCHEMA,
                      supported_states=frozenset({'paused', 'suspended'})),
     ActionDefinition(
-        'create_snapshot', 'Utwórz snapshot', 'snapshots', 'Tworzy snapshot VM.', 'day2.snapshot.create',
+        'create_snapshot', 'Utwórz snapshot', 'snapshots', 'Tworzy snapshot VM.', 'machines.snapshot.create',
         object_schema({
             'name': SLUG,
             'description': {'type': 'string', 'maxLength': 1000},
@@ -75,17 +75,17 @@ ACTIONS = (
         }, ('name',)), supports_cancel=True,
     ),
     ActionDefinition(
-        'delete_snapshot', 'Usuń snapshot', 'snapshots', 'Usuwa wskazany snapshot.', 'day2.snapshot.delete',
+        'delete_snapshot', 'Usuń snapshot', 'snapshots', 'Usuwa wskazany snapshot.', 'machines.snapshot.delete',
         object_schema({'name': SLUG, 'confirmation': TEXT}, ('name', 'confirmation')),
         destructive=True, requires_confirmation=True, approval_default=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'restore_snapshot', 'Przywróć snapshot', 'snapshots', 'Przywraca VM do wskazanego snapshotu.', 'day2.snapshot.restore',
+        'restore_snapshot', 'Przywróć snapshot', 'snapshots', 'Przywraca VM do wskazanego snapshotu.', 'machines.snapshot.restore',
         object_schema({'name': SLUG, 'confirmation': TEXT}, ('name', 'confirmation')),
         destructive=True, requires_confirmation=True, approval_default=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'resize_compute', 'Zmień CPU / RAM', 'compute', 'Zmienia zasoby obliczeniowe VM.', 'day2.compute.resize',
+        'resize_compute', 'Zmień CPU / RAM', 'compute', 'Zmienia zasoby obliczeniowe VM.', 'machines.compute.resize',
         object_schema({
             'cpu_cores': {'type': 'integer', 'minimum': 1, 'maximum': 128},
             'cpu_sockets': {'type': 'integer', 'minimum': 1, 'maximum': 8},
@@ -93,7 +93,7 @@ ACTIONS = (
         }), mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'add_disk', 'Dodaj dysk', 'storage', 'Dodaje dysk do VM.', 'day2.disk.add',
+        'add_disk', 'Dodaj dysk', 'storage', 'Dodaje dysk do VM.', 'machines.disk.add',
         object_schema({
             'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'},
             'size_gib': {'type': 'integer', 'minimum': 1, 'maximum': 65536},
@@ -105,14 +105,14 @@ ACTIONS = (
         }, ('device', 'size_gib', 'storage')), mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'resize_disk', 'Powiększ dysk', 'storage', 'Powiększa istniejący dysk; zmniejszanie jest zabronione.', 'day2.disk.resize',
+        'resize_disk', 'Powiększ dysk', 'storage', 'Powiększa istniejący dysk; zmniejszanie jest zabronione.', 'machines.disk.resize',
         object_schema({
             'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'},
             'new_size_gib': {'type': 'integer', 'minimum': 1, 'maximum': 65536},
         }, ('device', 'new_size_gib')), mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'detach_disk', 'Odłącz dysk', 'storage', 'Odłącza dysk bez deklarowania jego usunięcia.', 'day2.disk.delete',
+        'detach_disk', 'Odłącz dysk', 'storage', 'Odłącza dysk bez deklarowania jego usunięcia.', 'machines.disk.delete',
         object_schema({'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'}}, ('device',)),
         destructive=True, mutates_configuration=True,
     ),
@@ -122,7 +122,7 @@ ACTIONS = (
         destructive=True, requires_confirmation=True, approval_default=True, mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'add_nic', 'Dodaj interfejs', 'network', 'Dodaje interfejs sieciowy.', 'day2.network.manage',
+        'add_nic', 'Dodaj interfejs', 'network', 'Dodaje interfejs sieciowy.', 'machines.network.add',
         object_schema({
             'device': {'type': 'string', 'pattern': r'^net\d{1,2}$'},
             'bridge': SLUG,
@@ -134,7 +134,7 @@ ACTIONS = (
         }, ('device', 'bridge')), mutates_configuration=True,
     ),
     ActionDefinition(
-        'edit_nic', 'Edytuj interfejs', 'network', 'Aktualizuje konfigurację interfejsu.', 'day2.network.manage',
+        'edit_nic', 'Edytuj interfejs', 'network', 'Aktualizuje konfigurację interfejsu.', 'machines.network.update',
         object_schema({
             'device': {'type': 'string', 'pattern': r'^net\d{1,2}$'},
             'bridge': SLUG,
@@ -146,12 +146,12 @@ ACTIONS = (
         }, ('device', 'bridge')), mutates_configuration=True,
     ),
     ActionDefinition(
-        'detach_nic', 'Odłącz interfejs', 'network', 'Usuwa konfigurację wskazanego NIC z VM.', 'day2.network.manage',
+        'detach_nic', 'Odłącz interfejs', 'network', 'Usuwa konfigurację wskazanego NIC z VM.', 'machines.network.delete',
         object_schema({'device': {'type': 'string', 'pattern': r'^net\d{1,2}$'}}, ('device',)),
         destructive=True, mutates_configuration=True,
     ),
     ActionDefinition(
-        'update_cloud_init', 'Aktualizuj cloud-init', 'automation', 'Aktualizuje wybrane pola cloud-init.', 'day2.cloudinit.update',
+        'update_cloud_init', 'Aktualizuj cloud-init', 'automation', 'Aktualizuje wybrane pola cloud-init.', 'machines.cloud_init.update',
         object_schema({
             'hostname': TEXT,
             'domain': TEXT,
@@ -165,7 +165,7 @@ ACTIONS = (
         }), mutates_configuration=True,
     ),
     ActionDefinition(
-        'update_credentials', 'Aktualizuj credentials', 'automation', 'Wykonuje kontrolowaną operację na koncie gościa przez zapisany credential.', 'day2.credentials.manage',
+        'update_credentials', 'Aktualizuj credentials', 'automation', 'Wykonuje kontrolowaną operację na koncie gościa przez zapisany credential.', 'machines.credentials.inject',
         object_schema({
             'credential_id': POSITIVE_INT,
             'operation': {'type': 'string', 'enum': ['create_user', 'update_ssh_key', 'rotate_password', 'disable_user', 'remove_user']},
@@ -173,7 +173,7 @@ ACTIONS = (
         }, ('credential_id', 'operation', 'username')), supports_cancel=True,
     ),
     ActionDefinition(
-        'run_ansible', 'Uruchom Ansible', 'automation', 'Uruchamia zatwierdzony playbook na bieżącej VM.', 'day2.ansible.run',
+        'run_ansible', 'Uruchom Ansible', 'automation', 'Uruchamia zatwierdzony playbook na bieżącej VM.', 'ansible.execute',
         object_schema({
             'playbook': SLUG,
             'credential_id': POSITIVE_INT,
@@ -197,7 +197,7 @@ ACTIONS = (
                      object_schema({'tag': SLUG}, ('tag',)), mutates_configuration=True),
     ActionDefinition('remove_tag', 'Usuń tag', 'metadata', 'Usuwa tag.', 'day2.tags.manage',
                      object_schema({'tag': SLUG}, ('tag',)), mutates_configuration=True),
-    ActionDefinition('update_metadata', 'Zmień metadata', 'metadata', 'Aktualizuje metadata utrzymywane przez Cloudportal.', 'day2.metadata.manage',
+    ActionDefinition('update_metadata', 'Zmień metadata', 'metadata', 'Aktualizuje metadata utrzymywane przez Cloudportal.', 'machines.metadata.update',
                      object_schema({'metadata': {'type': 'object'}}, ('metadata',))),
     ActionDefinition(
         'apply_availability', 'Zastosuj Availability Plan', 'availability',
@@ -212,17 +212,17 @@ ACTIONS = (
         }, ('plan_id', 'state', 'max_restart', 'max_relocate')),
     ),
     ActionDefinition(
-        'migrate_vm', 'Migruj VM', 'lifecycle', 'Migruje VM do wybranego węzła.', 'day2.migrate',
+        'migrate_vm', 'Migruj VM', 'lifecycle', 'Migruje VM do wybranego węzła.', 'machines.migrate',
         object_schema({'target_node': SLUG, 'online': {'type': 'boolean'}, 'with_local_disks': {'type': 'boolean'}}, ('target_node',)),
         destructive=True, mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'move_storage', 'Przenieś dysk', 'storage', 'Przenosi wolumen do innego storage.', 'day2.migrate',
+        'move_storage', 'Przenieś dysk', 'storage', 'Przenosi wolumen do innego storage.', 'machines.disk.migrate',
         object_schema({'device': {'type': 'string', 'pattern': r'^(?:scsi|virtio|sata|ide)\d{1,2}$'}, 'target_storage': SLUG, 'delete_source': {'type': 'boolean'}}, ('device', 'target_storage')),
         mutates_configuration=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'clone_vm', 'Klonuj VM', 'lifecycle', 'Tworzy klon istniejącej VM.', 'day2.clone',
+        'clone_vm', 'Klonuj VM', 'lifecycle', 'Tworzy klon istniejącej VM.', 'machines.clone',
         object_schema({
             'new_vm_id': {'type': 'integer', 'minimum': 100, 'maximum': 999999999},
             'name': TEXT,
@@ -232,7 +232,7 @@ ACTIONS = (
         }, ('new_vm_id', 'name')), supports_cancel=True,
     ),
     ActionDefinition(
-        'rebuild_vm', 'Przebuduj VM', 'lifecycle', 'Odtwarza VM z zachowanego deploymentu/blueprintu.', 'day2.rebuild',
+        'rebuild_vm', 'Przebuduj VM', 'lifecycle', 'Odtwarza VM z zachowanego deploymentu/blueprintu.', 'machines.rebuild',
         object_schema({
             'preserve_disks': {'type': 'boolean'},
             'preserve_metadata': {'type': 'boolean'},
@@ -241,11 +241,11 @@ ACTIONS = (
         }, ('confirmation',)), destructive=True, requires_confirmation=True, approval_default=True, supports_cancel=True,
     ),
     ActionDefinition(
-        'delete_vm', 'Usuń VM', 'lifecycle', 'Usuwa zasób u providera i synchronizuje inventory.', 'day2.delete',
+        'delete_vm', 'Usuń VM', 'lifecycle', 'Usuwa zasób u providera i synchronizuje inventory.', 'machines.delete',
         object_schema({'purge': {'type': 'boolean'}, 'destroy_unreferenced_disks': {'type': 'boolean'}, 'confirmation': TEXT}, ('confirmation',)),
         destructive=True, requires_confirmation=True, approval_default=True, supports_cancel=True,
     ),
-    ActionDefinition('refresh_state', 'Odśwież stan', 'lifecycle', 'Pobiera stan rzeczywisty z providera i wykrywa drift.', 'day2.view', EMPTY_SCHEMA),
+    ActionDefinition('refresh_state', 'Odśwież stan', 'lifecycle', 'Pobiera stan rzeczywisty z providera i wykrywa drift.', 'machines.read', EMPTY_SCHEMA),
 )
 
 REGISTRY = {action.id: action for action in ACTIONS}
