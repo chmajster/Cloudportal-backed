@@ -142,7 +142,7 @@
 
     async function loadResources(resetManagerSelection = false) {
       const requestOptions = { headers: parts.core.scopeHeaders(state) };
-      const [providers, templates, schemes, pools, credentials, playbooks, roleOptions, userOptions] = await Promise.all([
+      const [providers, templates, schemes, pools, credentials, playbooks, roleOptions, userOptions, vmClassification] = await Promise.all([
         safeApi('/providers?limit=200', [], requestOptions),
         safeApi('/templates', [], requestOptions),
         scopeAllows('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
@@ -183,6 +183,14 @@
               return [...merged.values()].sort((left, right) =>
                 String(left.username || '').localeCompare(String(right.username || ''), 'pl'));
             }),
+        safeApi(
+          '/blueprints/vm-classification'
+          + '?tenant_id=' + encodeURIComponent(state.tenantId)
+          + '&project_id=' + encodeURIComponent(state.projectId)
+          + '&permission=' + encodeURIComponent(options.item ? 'blueprints.update' : 'blueprints.create'),
+          data.vmClassification,
+          requestOptions
+        ),
       ]);
 
       data.providers = providers;
@@ -194,6 +202,7 @@
       data.roles = roleOptions;
       data.users = userOptions;
       data.playbooks = playbooks.filter(value => value.enabled !== false);
+      data.vmClassification = vmClassification || data.vmClassification;
       if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
       if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 

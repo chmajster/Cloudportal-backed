@@ -116,3 +116,143 @@ def test_proxmox_vm_tags_accept_apmid_environment_code():
         'tags': ['IAASTEAM.DEV', 'env-dev', 'apmid-iaasteam'],
     })
     assert values.tags == ['apmid-iaasteam', 'env-dev', 'iaasteam.dev']
+
+def test_apmids_are_scoped_per_organization_and_expand_enabled_environments(client, headers):
+    first = client.post('/api/v1/tenants', headers=headers, json={
+        'name': 'Organization Alpha',
+        'slug': 'organization-alpha',
+    })
+    second = client.post('/api/v1/tenants', headers=headers, json={
+        'name': 'Organization Beta',
+        'slug': 'organization-beta',
+    })
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    alpha, beta = first.json(), second.json()
+
+    environments = {
+        'test': False,
+        'dev': True,
+        'nonprod': True,
+        'prod': True,
+    }
+    saved_global = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': environments,
+        'apmids': ['LEO'],
+    })
+    assert saved_global.status_code == 200, saved_global.text
+
+    alpha_saved = client.put(
+        f"/api/v1/tenants/{alpha['id']}/vm-classification",
+        headers=headers,
+        json={'apmids': ['xd']},
+    )
+    assert alpha_saved.status_code == 200, alpha_saved.text
+    assert alpha_saved.json()['apmids'] == ['LEO', 'XD']
+    assert alpha_saved.json()['apmid_environments'] == {
+        'LEO': ['dev', 'nonprod', 'prod'],
+        'XD': ['dev', 'nonprod', 'prod'],
+    }
+    assert alpha_saved.json()['classifications'] == [
+        'LEO.DEV',
+        'LEO.NONPROD',
+        'LEO.PROD',
+        'XD.DEV',
+        'XD.NONPROD',
+        'XD.PROD',
+    ]
+
+    beta_before = client.get(
+        f"/api/v1/tenants/{beta['id']}/vm-classification",
+        headers=headers,
+    )
+    assert beta_before.status_code == 200, beta_before.text
+    assert beta_before.json()['apmids'] == ['LEO']
+    assert beta_before.json()['classifications'] == [
+        'LEO.DEV',
+        'LEO.NONPROD',
+        'LEO.PROD',
+    ]
+
+    beta_saved = client.put(
+        f"/api/v1/tenants/{beta['id']}/vm-classification",
+        headers=headers,
+        json={'apmids': ['crm', 'billing']},
+    )
+    assert beta_saved.status_code == 200, beta_saved.text
+    assert beta_saved.json()['apmids'] == ['LEO', 'CRM', 'BILLING']
+    assert beta_saved.json()['classifications'] == [
+        'LEO.DEV',
+        'LEO.NONPROD',
+        'LEO.PROD',
+        'CRM.DEV',
+        'CRM.NONPROD',
+        'CRM.PROD',
+        'BILLING.DEV',
+        'BILLING.NONPROD',
+        'BILLING.PROD',
+    ]
+
+    alpha_again = client.get(
+        f"/api/v1/tenants/{alpha['id']}/vm-classification",
+        headers=headers,
+    )
+    assert alpha_again.status_code == 200, alpha_again.text
+    assert alpha_again.json()['apmids'] == ['LEO', 'XD']
+
+
+def test_runtime_classification_uses_selected_organization_scope(client, headers):
+    tenant = client.post('/api/v1/tenants', headers=headers, json={
+        'name': 'Scoped APMID Org',
+        'slug': 'scoped-apmid-org',
+    })
+    assert tenant.status_code == 201, tenant.text
+    tenant = tenant.json()
+
+    project = client.post('/api/v1/projects', headers=headers, json={
+        'tenant_id': tenant['id'],
+        'name': 'Scoped APMID Project',
+        'slug': 'scoped-apmid-project',
+    })
+    assert project.status_code == 201, project.text
+    project = project.json()
+
+    configured = client.put(
+        f"/api/v1/tenants/{tenant['id']}/vm-classification",
+        headers=headers,
+        json={'apmids': ['xd']},
+    )
+    assert configured.status_code == 200, configured.text
+
+    scoped_headers = headers | {
+        'X-Tenant-ID': tenant['id'],
+        'X-Project-ID': project['id'],
+    }
+    options = client.get('/api/v1/vm-classification/options', headers=scoped_headers)
+    assert options.status_code == 200, options.text
+    assert options.json()['apmids'] == ['LEO', 'XD']
+
+def test_tenant_apmid_save_keeps_leo_first_and_non_removable(client, headers):
+    tenant = client.post('/api/v1/tenants', headers=headers, json={
+        'name': 'LEO Protected Org',
+        'slug': 'leo-protected-org',
+    })
+    assert tenant.status_code == 201, tenant.text
+    tenant_id = tenant.json()['id']
+
+    empty = client.put(
+        f'/api/v1/tenants/{tenant_id}/vm-classification',
+        headers=headers,
+        json={'apmids': []},
+    )
+    assert empty.status_code == 200, empty.text
+    assert empty.json()['apmids'] == ['LEO']
+
+    custom = client.put(
+        f'/api/v1/tenants/{tenant_id}/vm-classification',
+        headers=headers,
+        json={'apmids': ['xd', 'LEO', 'crm']},
+    )
+    assert custom.status_code == 200, custom.text
+    assert custom.json()['apmids'] == ['LEO', 'XD', 'CRM']
+

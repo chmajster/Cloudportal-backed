@@ -14,6 +14,7 @@ from app.tenancy.authorization import (assert_version, authorize, fail, identity
                                        lock_authorization, require_global, visible_tenants)
 from app.tenancy.models import Tenant, TenantMembership, TenantRoleAssignment, TenantRoleGrant
 from app.tenancy.permissions import DELEGABLE_PERMISSIONS
+from app.vm_classification import save_tenant_apmids, tenant_vm_classification_settings
 
 
 def tenant_output(tenant):
@@ -48,6 +49,16 @@ def tenant_permissions(db, principal, tenant_id):
             'permissions': sorted(access.permissions & (DELEGABLE_PERMISSIONS | {
                 'tenants.create', 'tenants.delete', 'tenants.admin'})),
             'global_administration': access.identity.platform_admin}
+
+
+def tenant_vm_classification(db, principal, tenant_id):
+    access = authorize(db, principal, tenant_id, 'tenants.read')
+    return tenant_vm_classification_settings(db, access.tenant.id)
+
+
+def tenant_vm_classification_update(db, principal, tenant_id, data):
+    access = authorize(db, principal, tenant_id, 'tenants.update', write=True, lock=True)
+    return save_tenant_apmids(db, access.tenant.id, data.apmids)
 
 
 def tenant_create(db, principal, data):
