@@ -33,6 +33,11 @@ SCOPE_TYPES = [
 
 
 def upgrade():
+    op.add_column('audit', sa.Column('old_value', sa.JSON(), nullable=True))
+    op.add_column('audit', sa.Column('new_value', sa.JSON(), nullable=True))
+    op.add_column('audit', sa.Column('scope', sa.JSON(), nullable=True))
+    op.add_column('audit', sa.Column('details', sa.JSON(), nullable=True))
+
     op.create_table(
         'role_profiles',
         sa.Column('role_id', sa.Integer(), nullable=False),
@@ -401,3 +406,7 @@ def downgrade():
     op.drop_table('iam_group_members')
     op.drop_table('iam_groups')
     op.drop_table('role_profiles')
+    op.drop_column('audit', 'details')
+    op.drop_column('audit', 'scope')
+    op.drop_column('audit', 'new_value')
+    op.drop_column('audit', 'old_value')
