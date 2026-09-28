@@ -9,6 +9,7 @@
     ]) },
     { id: 'automation', label: 'AUTOMATYZACJA', rank: 1, routes: Object.freeze([
       'providers',
+      'resource-pools',
       'blueprints',
       'catalog',
       'schedules',
@@ -51,6 +52,7 @@
     'my-resources': '/resources',
     inventory: '/inventory',
     providers: '/providers',
+    'resource-pools': '/resource-pools',
     ipam: '/ipam',
     deployments: '/products',
     blueprints: '/blueprints',
