@@ -277,7 +277,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Utwórz VM'" in script
     assert "button('Zarządzaj VM'" in script
     assert "['terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'].includes(item.operation)" in script
-    assert "const destroyJob = provisioningJob?.operation === 'terraform.destroy';" in script
+    assert "const destroyJob = ['terraform.destroy', 'proxmox.destroy'].includes(provisioningJob?.operation);" in script
     assert "const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';" in script
     assert "destroyFailed ? 'Wymuś usunięcie' : 'Usuń'" in script
     assert "const destroyPath = `/deployments/${deployment.id}/destroy`" in script
