@@ -241,7 +241,7 @@ def ensure_admin_remains(db):
             RoleAssignment.scope_type == 'GLOBAL',
             RoleAssignment.enabled.is_(True),
             or_(RoleAssignment.valid_from.is_(None), RoleAssignment.valid_from <= instant),
-            or_(RoleAssignment.valid_until.is_(None), RoleAssignment.valid_until > instant),
+            RoleAssignment.valid_until.is_(None),
             RoleAssignment.subject_type.in_(('USER', 'GROUP')),
         )
     ).all()
