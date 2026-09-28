@@ -29,9 +29,8 @@ EXECUTION_PERMISSIONS = frozenset({
     'deployments.create', 'deployments.destroy', 'deployments.adopt', 'jobs.execute',
     'terraform.execute', 'ansible.execute', 'blueprints.execute',
     'inventory.import', 'inventory.update', 'inventory.delete',
-    'vm.onboarding.create', 'vm.onboarding.bulk', 'vm.onboarding.manage',
-    'vm.onboarding.full_adoption', 'vm.onboarding.conflicts.resolve',
-    'vm.onboarding.credentials.assign', 'vm.onboarding.awx.configure', 'vm.onboarding.remove',
+    # Onboarding is intentionally not gated by ensure_execution_ready(): its
+    # API and worker validate project provider/credential assignments directly.
     'availability.assign',
     'vms.power', 'vms.update', 'vms.delete', 'vms.clone', 'vms.migrate', 'vms.template',
     'snapshots.create', 'snapshots.delete', 'snapshots.rollback', 'backups.create', 'backups.restore',
