@@ -338,28 +338,28 @@
   document.addEventListener('cloudportal:app-hidden', () => { generation++; listOffset = 0; listStatus = ''; });
   registerRoutedForm({
     id: 'tenants-details',
-    pattern: /^\/tenants\/(?<id>[^/]+)$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
   }, match => tenantDetails(match.params.id));
   registerRoutedForm({
     id: 'tenants-members',
-    pattern: /^\/tenants\/(?<id>[^/]+)\/members$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
   }, match => membersView(match.params.id));
   registerRoutedForm({
     id: 'tenants-audit',
-    pattern: /^\/tenants\/(?<id>[^/]+)\/audit$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/audit$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
   }, match => auditView(match.params.id));
   registerRoutedForm({
     id: 'tenants-member-create',
-    pattern: /^\/tenants\/(?<id>[^/]+)\/members\/new$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/new$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
@@ -371,7 +371,7 @@
   });
   registerRoutedForm({
     id: 'tenants-member-roles',
-    pattern: /^\/tenants\/(?<id>[^/]+)\/members\/(?<userId>\d+)\/roles$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/(?<userId>\d+)\/roles$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
@@ -399,7 +399,7 @@
   });
   registerRoutedForm({
     id: 'tenants-edit',
-    pattern: /^\/tenants\/edit\/(?<id>[^/]+)(?:\/[^/]+)?$/,
+    pattern: /^\/tenants\/edit\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})(?:\/[^/]+)?$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
