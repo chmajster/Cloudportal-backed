@@ -578,6 +578,13 @@ def create_schedule(
     provider = db.get(Provider, data.provider_id)
     if provider is None:
         raise HTTPException(404, 'Provider is not assigned to this project')
+    if data.automatic_inventory_import and not {
+        'vm.onboarding.create', 'vm.onboarding.bulk'
+    } <= set(getattr(request.state, 'permissions', set())):
+        raise HTTPException(
+            403,
+            'Automatic inventory import requires vm.onboarding.create and vm.onboarding.bulk',
+        )
     scope = request.state.resource_scope
     row = OnboardingSchedule(
         tenant_id=scope.tenant_id,
@@ -611,6 +618,13 @@ def update_schedule(
     if row is None:
         raise HTTPException(404, 'Onboarding schedule not found')
     values = data.model_dump(exclude_unset=True)
+    if values.get('automatic_inventory_import') is True and not {
+        'vm.onboarding.create', 'vm.onboarding.bulk'
+    } <= set(getattr(request.state, 'permissions', set())):
+        raise HTTPException(
+            403,
+            'Automatic inventory import requires vm.onboarding.create and vm.onboarding.bulk',
+        )
     for key in ('name', 'interval_seconds', 'next_run_at', 'auto_classification', 'automatic_inventory_import', 'is_active'):
         if key in values:
             setattr(row, key, values[key])
