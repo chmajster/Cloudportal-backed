@@ -1155,3 +1155,113 @@ def placement_for_deployment(db, scope, deployment_id: str):
     if row is None:
         raise HTTPException(404, 'Placement decision not found for deployment')
     return decision_public(db, row)
+
+
+def pool_capacity(db, scope, pool_id: str) -> dict:
+    pool = scoped_pool(db, scope, pool_id)
+    members = list(db.scalars(select(ResourcePoolMember).where(
+        ResourcePoolMember.pool_id == pool.id
+    ).order_by(ResourcePoolMember.priority.desc(), ResourcePoolMember.id.asc())))
+    totals = {
+        'cpu_total': 0.0, 'cpu_used': 0.0, 'cpu_reserved': 0.0,
+        'memory_mb_total': 0.0, 'memory_mb_used': 0.0, 'memory_mb_reserved': 0.0,
+        'storage_gb_total': 0.0, 'storage_gb_used': 0.0, 'storage_gb_reserved': 0.0,
+    }
+    nodes_online = nodes_offline = nodes_maintenance = 0
+    unavailable = []
+    seen = set()
+    expire_reservations(db, pool.id)
+
+    for member in members:
+        if member.maintenance_mode:
+            nodes_maintenance += 1
+            continue
+        if not member.enabled:
+            unavailable.append({'member_id': member.id, 'reason': 'disabled'})
+            continue
+        provider = db.get(Provider, member.provider_id)
+        credential = db.get(Credential, provider.credentials_id) if provider else None
+        if not provider or not credential:
+            unavailable.append({'member_id': member.id, 'reason': 'provider unavailable'})
+            continue
+        try:
+            adapter = provider_for(credential)
+            targets = list(adapter.get_placement_targets() or [])
+        except Exception as exc:
+            unavailable.append({'member_id': member.id, 'reason': f'provider discovery failed: {exc.__class__.__name__}'})
+            continue
+        if member.node:
+            targets = [row for row in targets if str(row.get('node') or row.get('id') or '') == member.node]
+        for target in targets:
+            node = str(target.get('node') or target.get('id') or '')
+            key = (provider.id, node, member.storage or '')
+            if key in seen:
+                continue
+            seen.add(key)
+            if not target.get('online', str(target.get('status') or '').lower() in {'online', 'available', 'connected'}):
+                nodes_offline += 1
+                unavailable.append({'member_id': member.id, 'provider_id': provider.id, 'node': node, 'reason': 'offline'})
+                continue
+            nodes_online += 1
+            storage = member.storage
+            try:
+                storages = list(adapter.get_storages({'node': node}) or [])
+                if not storage:
+                    eligible = [row for row in storages if row.get('active', True) and 'images' in str(row.get('content') or 'images')]
+                    chosen = max(eligible, key=lambda row: _safe_float(row.get('avail') or row.get('free')), default=None)
+                    storage = str((chosen or {}).get('storage') or (chosen or {}).get('id') or '') or None
+                capacity = adapter.get_capacity({'node': node, 'storage': storage})
+            except Exception as exc:
+                nodes_online -= 1
+                nodes_offline += 1
+                unavailable.append({'member_id': member.id, 'provider_id': provider.id, 'node': node, 'reason': f'capacity failed: {exc.__class__.__name__}'})
+                continue
+            synthetic = {'provider_id': provider.id, 'node': node, 'storage': storage}
+            reserved = _reservation_usage(db, synthetic)
+            totals['cpu_total'] += _safe_float(capacity.get('cpu_total'))
+            totals['cpu_used'] += _safe_float(capacity.get('cpu_used'))
+            totals['cpu_reserved'] += reserved['cpu']
+            totals['memory_mb_total'] += _safe_float(capacity.get('memory_mb_total'))
+            totals['memory_mb_used'] += _safe_float(capacity.get('memory_mb_used'))
+            totals['memory_mb_reserved'] += reserved['memory_mb']
+            totals['storage_gb_total'] += _safe_float(capacity.get('storage_gb_total'))
+            totals['storage_gb_used'] += _safe_float(capacity.get('storage_gb_used'))
+            totals['storage_gb_reserved'] += reserved['storage_gb']
+
+    totals['cpu_available'] = max(0.0, totals['cpu_total'] - totals['cpu_used'] - totals['cpu_reserved'])
+    totals['memory_mb_available'] = max(0.0, totals['memory_mb_total'] - totals['memory_mb_used'] - totals['memory_mb_reserved'])
+    totals['storage_gb_available'] = max(0.0, totals['storage_gb_total'] - totals['storage_gb_used'] - totals['storage_gb_reserved'])
+    totals['cpu_usage_pct'] = _pct(totals['cpu_used'] + totals['cpu_reserved'], totals['cpu_total'])
+    totals['ram_usage_pct'] = _pct(totals['memory_mb_used'] + totals['memory_mb_reserved'], totals['memory_mb_total'])
+    totals['storage_usage_pct'] = _pct(totals['storage_gb_used'] + totals['storage_gb_reserved'], totals['storage_gb_total'])
+
+    thresholds = dict(pool.thresholds or {})
+    warning = (
+        totals['cpu_usage_pct'] >= _safe_float(thresholds.get('cpu_warning'), 80)
+        or totals['ram_usage_pct'] >= _safe_float(thresholds.get('ram_warning'), 80)
+        or totals['storage_usage_pct'] >= _safe_float(thresholds.get('storage_warning'), 80)
+    )
+    if nodes_online == 0 and nodes_maintenance and not unavailable:
+        health = 'MAINTENANCE'
+        reason = 'All placement targets are in maintenance mode.'
+    elif nodes_online == 0:
+        health = 'UNAVAILABLE'
+        reason = 'No placement target is currently available.'
+    elif unavailable or nodes_offline:
+        health = 'DEGRADED'
+        reason = f'{len(unavailable)} placement target(s) unavailable.'
+    elif warning:
+        health = 'CAPACITY_WARNING'
+        reason = 'Pool capacity crossed a configured warning threshold.'
+    else:
+        health = 'HEALTHY'
+        reason = 'All placement targets are available and below warning thresholds.'
+
+    return {
+        'pool_id': pool.id, 'pool': pool.name, 'strategy': pool.strategy,
+        **{key: round(value, 2) if isinstance(value, float) else value for key, value in totals.items()},
+        'nodes_online': nodes_online, 'nodes_offline': nodes_offline,
+        'nodes_maintenance': nodes_maintenance,
+        'members_total': len(members),
+        'health': health, 'reason': reason, 'unavailable': unavailable,
+    }
