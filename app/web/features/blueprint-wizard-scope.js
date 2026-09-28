@@ -183,8 +183,11 @@
               return [...merged.values()].sort((left, right) =>
                 String(left.username || '').localeCompare(String(right.username || ''), 'pl'));
             }),
-        optionalApi(
-          '/tenants/' + encodeURIComponent(state.tenantId) + '/vm-classification',
+        safeApi(
+          '/blueprints/vm-classification'
+          + '?tenant_id=' + encodeURIComponent(state.tenantId)
+          + '&project_id=' + encodeURIComponent(state.projectId)
+          + '&permission=' + encodeURIComponent(options.item ? 'blueprints.update' : 'blueprints.create'),
           data.vmClassification,
           requestOptions
         ),
