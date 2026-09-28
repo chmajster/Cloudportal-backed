@@ -3892,7 +3892,7 @@ case "$os_family" in
   debian)
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y ca-certificates curl unzip python3 python3-venv python3-dev build-essential libpq-dev postgresql redis-server nginx openssl sshpass openssh-client qemu-utils
+    apt-get install -y ca-certificates curl unzip python3 python3-venv python3-dev build-essential libpq-dev postgresql redis-server nginx openssl sshpass openssh-client qemu-utils iputils-ping
     ;;
   rhel)
     if ((rhel_major == 9)); then
@@ -3900,7 +3900,7 @@ case "$os_family" in
     else
       python_packages=(python3 python3-pip python3-devel)
     fi
-    dnf install -y ca-certificates curl unzip "${python_packages[@]}" gcc gcc-c++ make redhat-rpm-config libpq-devel postgresql-server "$key_value_package" nginx openssl sshpass openssh-clients qemu-img policycoreutils-python-utils
+    dnf install -y ca-certificates curl unzip "${python_packages[@]}" gcc gcc-c++ make redhat-rpm-config libpq-devel postgresql-server "$key_value_package" nginx openssl sshpass openssh-clients qemu-img iputils policycoreutils-python-utils
     [[ -s /var/lib/pgsql/data/PG_VERSION ]] || postgresql-setup --initdb
     ;;
 esac

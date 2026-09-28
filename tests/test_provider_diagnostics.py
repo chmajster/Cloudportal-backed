@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi import HTTPException
 
 from app.api import provider_diagnostics as diagnostics
@@ -27,6 +29,52 @@ def _pass(check_id, label, layer, *, critical=False):
         latency_ms=1,
         critical=critical,
     )
+
+
+def test_ping_check_executes_real_ping_command_without_shell(monkeypatch):
+    target = {
+        'label': 'Proxmox VE',
+        'host': 'pve.example.test',
+        'port': 8006,
+    }
+    observed = {}
+
+    monkeypatch.setattr(diagnostics.shutil, 'which', lambda command: '/usr/bin/ping' if command == 'ping' else None)
+
+    def fake_run(args, **kwargs):
+        observed['args'] = args
+        observed['kwargs'] = kwargs
+        return SimpleNamespace(returncode=0, stdout='64 bytes from pve.example.test: time=1.23 ms')
+
+    monkeypatch.setattr(diagnostics.subprocess, 'run', fake_run)
+
+    result = diagnostics._ping_check(target)
+
+    assert result['status'] == 'pass'
+    assert result['latency_ms'] == 1.23
+    assert observed['args'] == ['/usr/bin/ping', '-c', '1', '-W', '2', 'pve.example.test']
+    assert 'shell' not in observed['kwargs']
+
+
+def test_tcp_timeout_is_reported_as_possible_firewall_or_routing_block(monkeypatch):
+    target = {
+        'label': 'Proxmox VE',
+        'host': 'pve.example.test',
+        'port': 8006,
+    }
+
+    def timeout(*args, **kwargs):
+        raise diagnostics.socket.timeout()
+
+    monkeypatch.setattr(diagnostics.socket, 'create_connection', timeout)
+
+    result = diagnostics._tcp_check(target)
+
+    assert result['status'] == 'fail'
+    assert result['critical'] is True
+    assert result['details']['reason'] == 'timeout'
+    assert 'firewall' in result['message'].lower()
+    assert 'routing' in result['message'].lower()
 
 
 def test_diagnose_provider_quick_checks_nodes(monkeypatch):
