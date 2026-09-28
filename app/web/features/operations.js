@@ -380,40 +380,59 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
           text: 'Podczas edycji projekt istniejącej polityki pozostaje bez zmian.' }));
       }
 
-      const configuredApmids = Array.isArray(classification?.apmids) ? classification.apmids : [];
       const scopeApmids = (Array.isArray(defaultScope.apmids) ? defaultScope.apmids : [])
         .map(value => String(value).toUpperCase());
-      const apmids = [...new Set([...configuredApmids, ...scopeApmids].map(value => String(value).toUpperCase()).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, 'pl'));
+      const scopeEnvironments = (Array.isArray(defaultScope.environments) ? defaultScope.environments : [])
+        .map(value => String(value).toLowerCase());
       const environmentOrder = ['dev', 'test', 'nonprod', 'prod'];
-      const scopeEnvironments = Array.isArray(defaultScope.environments) ? defaultScope.environments : [];
-      const environments = [...new Set([
-        ...environmentOrder.filter(name => classification?.environments?.[name] !== false),
-        ...scopeEnvironments.map(value => String(value).toLowerCase()),
-      ])];
+      const apmidFieldHost = node('div', { class: 'wide' });
+      const environmentFieldHost = node('div', { class: 'wide' });
 
-      const apmidField = multiCheckboxField(
-        'APMID',
-        'scope_apmids',
-        apmids.map(value => ({ value, label: value })),
-        scopeApmids,
-        {
-          wide: true,
-          empty: 'Brak skonfigurowanych APMID. Dodaj APMID w Narzędziach albo użyj trybu zaawansowanego.',
-          help: 'Brak zaznaczenia = polityka dotyczy każdego APMID w wybranym zakresie.',
-        }
-      );
-      const environmentField = multiCheckboxField(
-        'Środowiska / ENV',
-        'scope_environments',
-        environments.map(value => ({ value, label: value.toUpperCase() })),
-        scopeEnvironments,
-        {
-          wide: true,
-          empty: 'Brak dostępnych środowisk.',
-          help: 'Możesz zaznaczyć DEV, TEST, NONPROD, PROD lub dowolną ich kombinację.',
-        }
-      );
+      function renderClassificationFields(config, selectedApmids = scopeApmids, selectedEnvironments = scopeEnvironments) {
+        const configuredApmids = Array.isArray(config?.apmids) ? config.apmids : [];
+        const apmids = [...new Set([
+          ...configuredApmids,
+          ...selectedApmids,
+        ].map(value => String(value).toUpperCase()).filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b, 'pl'));
+        const environments = [...new Set([
+          ...environmentOrder.filter(name => config?.environments?.[name] !== false),
+          ...selectedEnvironments.map(value => String(value).toLowerCase()),
+        ])];
+
+        const apmidField = multiCheckboxField(
+          'APMID',
+          'scope_apmids',
+          apmids.map(value => ({ value, label: value })),
+          selectedApmids,
+          {
+            wide: true,
+            empty: 'Brak skonfigurowanych APMID w wybranej organizacji. Dodaj APMID w Narzędziach.',
+            help: selectedLevel === 'global'
+              ? 'Zakres globalny używa globalnego fallbacku APMID.'
+              : 'Lista pochodzi z wybranej organizacji. Brak zaznaczenia = każdy APMID w tym zakresie.',
+          }
+        );
+        const environmentField = multiCheckboxField(
+          'Środowiska / ENV',
+          'scope_environments',
+          environments.map(value => ({ value, label: value.toUpperCase() })),
+          selectedEnvironments,
+          {
+            wide: true,
+            empty: 'Brak dostępnych środowisk.',
+            help: 'Każdy APMID w organizacji automatycznie dziedziczy wszystkie aktywne Environment.',
+          }
+        );
+        apmidField.querySelectorAll('input[type="checkbox"]').forEach(input =>
+          input.addEventListener('change', refreshPreview));
+        environmentField.querySelectorAll('input[type="checkbox"]').forEach(input =>
+          input.addEventListener('change', refreshPreview));
+        apmidFieldHost.replaceChildren(apmidField);
+        environmentFieldHost.replaceChildren(environmentField);
+      }
+
+      renderClassificationFields(classification);
 
       const actionsField = field('Akcje', 'scope_actions', {
         value: (Array.isArray(defaultScope.actions) ? defaultScope.actions : []).join(', '),
@@ -536,8 +555,8 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
           levelField,
           tenantField,
           projectField,
-          apmidField,
-          environmentField,
+          apmidFieldHost,
+          environmentFieldHost,
           actionsField,
           resourceTypesField,
           scopeKeysField,
@@ -556,23 +575,34 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
         )
       );
 
+      async function reloadClassification(preserveSelection = true) {
+        const selectedApmids = preserveSelection ? selectedValues('scope_apmids') : [];
+        const selectedEnvironments = preserveSelection ? selectedValues('scope_environments') : [];
+        classification = globalClassification;
+        if (selectedLevel !== 'global' && selectedTenantId) {
+          classification = await api(
+            '/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'
+          ).catch(() => globalClassification);
+        }
+        renderClassificationFields(classification, selectedApmids, selectedEnvironments);
+        refreshPreview();
+      }
+
       levelField.querySelector('select').addEventListener('change', event => {
         selectedLevel = String(event.currentTarget.value);
         refreshTargetFields();
+        reloadClassification(false).catch(error => toast(error.message, 'error'));
       });
       tenantSelect.addEventListener('change', event => {
         selectedTenantId = String(event.currentTarget.value);
         selectedProjectId = String(projectsForTenant(selectedTenantId)[0]?.id || '');
         refreshTargetFields();
+        reloadClassification(false).catch(error => toast(error.message, 'error'));
       });
       projectSelect.addEventListener('change', event => {
         selectedProjectId = String(event.currentTarget.value);
         refreshPreview();
       });
-      apmidField.querySelectorAll('input[type="checkbox"]').forEach(input =>
-        input.addEventListener('change', refreshPreview));
-      environmentField.querySelectorAll('input[type="checkbox"]').forEach(input =>
-        input.addEventListener('change', refreshPreview));
 
       refreshTargetFields();
 
