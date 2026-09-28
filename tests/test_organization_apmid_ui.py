@@ -11,13 +11,15 @@ def test_apmid_tool_is_scoped_to_organization_and_shows_generated_variants():
     assert "value + '.' + String(environment).toUpperCase()" in source
     assert "XD.DEV, XD.PROD i XD.NONPROD" in source
     assert "permission: null" in source
-    assert "IMMUTABLE_APMIDS" not in source
+    assert "const IMMUTABLE_APMIDS = new Set(['LEO']);" in source
+    assert "editable && !locked" in source
 
 
 def test_blueprint_wizard_loads_classification_from_selected_tenant():
     source = Path('app/web/features/blueprint-wizard-scope.js').read_text()
 
-    assert "'/tenants/' + encodeURIComponent(state.tenantId) + '/vm-classification'" in source
+    assert "'/blueprints/vm-classification'" in source
+    assert "'&permission=' + encodeURIComponent(options.item ? 'blueprints.update' : 'blueprints.create')" in source
     assert "data.vmClassification = vmClassification || data.vmClassification;" in source
 
 
