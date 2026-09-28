@@ -517,6 +517,8 @@ Legenda:
 - **#264 [OPEN] Allow Blueprint manager roles to be reused** — Creating another Blueprint could show „Brak dostępnych pozycji” under Role zarządzające Blueprintem . The cause was a one-to-one restriction between an RBAC role and a Blueprint: UI removed roles already used by another Blueprint, API returned 409 when the same role was reused, the database had a unique constraint on b
 - **#265 [OPEN] Show real Proxmox clone status during Terraform provisioning** — W widoku Moje zasoby provisioning Terraform pokazywał tylko Terraform apply, mimo że provider wykonywał w tym czasie pełne klonowanie VM w Proxmox. Dodatkowo brak wartości progress percent był konwertowany przez JS z null na 0, więc UI pokazywał fałszywe 0%.
 
+- **#284 [OPEN] Fix scoped Proxmox template discovery in Blueprint wizard** — Współdzielony provider Proxmox mógł pokazywać działające połączenie i node, ale pustą sekcję „Template / VM bazowa” w kreatorze Blueprintu. Przyczyną było przepuszczanie `/providers/{id}/templates` przez filtr ownership przeznaczony dla runtime VM. Template są bazowymi obrazami dostępnymi w zakresie przypisanego providera, a nie workloadami należącymi do projektu. Discovery template pozostaje teraz widoczne dla projektu mającego dostęp do providera, natomiast `/vms` nadal zachowuje tenant/project ownership filtering. Dodano test regresyjny dla współdzielonego providera z workloadem innego projektu.
+
 ---
 
 # 4. Procedura przy nowej regresji
