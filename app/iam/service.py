@@ -239,23 +239,24 @@ def _role_grants(db, role_id: int) -> tuple[set[str], set[str], str]:
 
 
 def _legacy_global(db, actor_identity, action: str):
-    if action in actor_identity.global_permissions:
-        roles = db.execute(
-            select(Role.id, Role.name)
-            .join(UserRole, UserRole.role_id == Role.id)
-            .join(RolePermission, RolePermission.role_id == Role.id)
-            .join(Permission, Permission.id == RolePermission.permission_id)
-            .where(UserRole.user_id == actor_identity.user_id, Permission.name == action)
-        ).all()
-        return [{
-            'source': 'legacy_global',
-            'role_id': role_id,
-            'role': name,
-            'effect': 'ALLOW',
-            'scope_type': 'GLOBAL',
-            'scope_id': None,
-        } for role_id, name in roles]
-    return []
+    # Query live role membership directly. API-token restriction is evaluated
+    # independently before this point so terminal wildcards such as machines.*
+    # remain useful without weakening the user-permission ceiling.
+    roles = db.execute(
+        select(Role.id, Role.name)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .join(RolePermission, RolePermission.role_id == Role.id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .where(UserRole.user_id == actor_identity.user_id, Permission.name == action)
+    ).all()
+    return [{
+        'source': 'legacy_global',
+        'role_id': role_id,
+        'role': name,
+        'effect': 'ALLOW',
+        'scope_type': 'GLOBAL',
+        'scope_id': None,
+    } for role_id, name in roles]
 
 
 def _legacy_scoped(db, actor_identity, action: str, scope: dict):
