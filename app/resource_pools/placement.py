@@ -1083,9 +1083,11 @@ def prepare_job_placement(context, *, invalidate_current: bool = False, reason: 
         pool = db.scalar(select(ResourcePool).where(ResourcePool.id == decision.pool_id).with_for_update())
         if pool is None or not pool.enabled:
             raise ExecutionFailed('NO_VALID_PLACEMENT_TARGET: Resource Pool is unavailable')
+        expire_reservations(db, pool.id)
         existing = db.scalar(select(ResourceReservation).where(
             ResourceReservation.deployment_id == context.deployment.id,
             ResourceReservation.status == 'RESERVED',
+            ResourceReservation.expires_at > now(),
         ).order_by(ResourceReservation.created_at.desc()).limit(1))
         request = _request_from_decision(decision)
         exclude: set[tuple[int, str | None]] = set()
@@ -1127,8 +1129,13 @@ def prepare_job_placement(context, *, invalidate_current: bool = False, reason: 
                         None,
                     )
                     if live and live.get('online', str(live.get('status') or '').lower() in {'online', 'available', 'connected'}):
-                        db.commit()
-                        return False
+                        if existing is not None:
+                            db.commit()
+                            return False
+                        # TTL expired while the job was queued. Re-run placement
+                        # against current capacity so the job never consumes
+                        # resources that are no longer reserved.
+                        placement_runtime['reservation_expired'] = True
                 except Exception:
                     pass
             exclude.add((decision.selected_provider_id, decision.selected_node))
@@ -1143,10 +1150,15 @@ def prepare_job_placement(context, *, invalidate_current: bool = False, reason: 
 
         scope = Scope(context.deployment.tenant_id, context.deployment.project_id)
         blueprint = db.get(Blueprint, decision.blueprint_id) if decision.blueprint_id else None
-        resolution = resolve_placement(
-            db, scope, request, context.job.created_by,
-            blueprint=blueprint, reserve=True, exclude=exclude,
-        )
+        try:
+            resolution = resolve_placement(
+                db, scope, request, context.job.created_by,
+                blueprint=blueprint, reserve=True, exclude=exclude,
+            )
+        except NoValidPlacementTarget as exc:
+            detail = exc.detail
+            message = detail.get('message') if isinstance(detail, dict) else str(detail)
+            raise ExecutionFailed('NO_VALID_PLACEMENT_TARGET: ' + str(message)) from None
         deployment = db.get(Deployment, context.deployment.id)
         provider = resolution.selected['_provider']
         deployment.provider_id = provider.id
