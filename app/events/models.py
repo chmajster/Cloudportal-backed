@@ -54,8 +54,7 @@ class EventContext(Base):
     workflow_id: Mapped[str | None] = mapped_column(String(64), index=True)
     parent_event_id: Mapped[str | None] = mapped_column(String(36), index=True)
     root_event_id: Mapped[str | None] = mapped_column(String(36), index=True)
-    depth: Mapped[int] = mapped_column(Integer, default=0)
-
+    depth: Mapped[int] = mapped_column(Integer, default=0)\n    context_json: Mapped[dict] = mapped_column(JSON, default=dict)\n
 
 class EventSubscription(Timestamp, Base):
     __tablename__ = "event_subscriptions"
@@ -96,8 +95,7 @@ class EventSubscription(Timestamp, Base):
     project_id: Mapped[str | None] = mapped_column(String(36), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
-    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))\n    run_as_token_id: Mapped[int | None] = mapped_column(ForeignKey("tokens.id", ondelete="SET NULL"), index=True)\n
 
 class EventReplay(Base):
     __tablename__ = "event_replays"
@@ -141,8 +139,7 @@ class EventDelivery(Timestamp, Base):
     )
     original_delivery_id: Mapped[str | None] = mapped_column(String(36), index=True)
     subscription_version: Mapped[int] = mapped_column(Integer)
-    subscription_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
-    action_type: Mapped[str] = mapped_column(String(48), index=True)
+    subscription_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)\n    encrypted_secret_snapshot: Mapped[bytes | None] = mapped_column(LargeBinary)\n    action_type: Mapped[str] = mapped_column(String(48), index=True)
     status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
     blocking: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)

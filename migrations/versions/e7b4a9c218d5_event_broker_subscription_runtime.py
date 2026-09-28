@@ -35,8 +35,7 @@ def upgrade():
         sa.Column("workflow_id", sa.String(64)),
         sa.Column("parent_event_id", sa.String(36)),
         sa.Column("root_event_id", sa.String(36)),
-        sa.Column("depth", sa.Integer(), nullable=False, server_default="0"),
-    )
+        sa.Column("depth", sa.Integer(), nullable=False, server_default="0"),\n        sa.Column("context_json", sa.JSON(), nullable=False),\n    )
     for column in (
         "event_id", "tenant_id", "project_id", "apmid", "environment", "resource_id",
         "resource_type", "deployment_id", "provider_id", "provider_type", "resource_pool_id",
@@ -83,12 +82,10 @@ def upgrade():
         sa.Column("project_id", sa.String(36)),
         sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("created_by", sa.Integer(), sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False),
-        sa.Column("updated_by", sa.Integer(), sa.ForeignKey("users.id", ondelete="SET NULL")),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_by", sa.Integer(), sa.ForeignKey("users.id", ondelete="SET NULL")),\n        sa.Column("run_as_token_id", sa.Integer(), sa.ForeignKey("tokens.id", ondelete="SET NULL")),\n        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
     )
-    for column in ("event_pattern", "phase", "priority", "is_enabled", "is_blocking", "action_type", "credential_id", "tenant_id", "project_id", "created_by"):
-        op.create_index(f"ix_event_subscriptions_{column}", "event_subscriptions", [column])
+    for column in ("event_pattern", "phase", "priority", "is_enabled", "is_blocking", "action_type", "credential_id", "tenant_id", "project_id", "created_by", "run_as_token_id"):\n        op.create_index(f"ix_event_subscriptions_{column}", "event_subscriptions", [column])
     op.create_index("ix_event_subscription_match", "event_subscriptions", ["event_pattern", "phase", "is_enabled", "priority"])
     op.create_index("ix_event_subscription_scope", "event_subscriptions", ["tenant_id", "project_id", "is_enabled"])
 
@@ -114,8 +111,7 @@ def upgrade():
         sa.Column("replay_id", sa.String(36), sa.ForeignKey("event_replays.id", ondelete="SET NULL")),
         sa.Column("original_delivery_id", sa.String(36)),
         sa.Column("subscription_version", sa.Integer(), nullable=False),
-        sa.Column("subscription_snapshot", sa.JSON(), nullable=False),
-        sa.Column("action_type", sa.String(48), nullable=False),
+        sa.Column("subscription_snapshot", sa.JSON(), nullable=False),\n        sa.Column("encrypted_secret_snapshot", sa.LargeBinary()),\n        sa.Column("action_type", sa.String(48), nullable=False),
         sa.Column("status", sa.String(24), nullable=False, server_default="PENDING"),
         sa.Column("blocking", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
