@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import (Boolean, DateTime, ForeignKey, Index, Integer, JSON, String,
-                        Text, UniqueConstraint)
+from sqlalchemy import (Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint,
+                        Index, Integer, JSON, String, Text, UniqueConstraint)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -83,6 +83,23 @@ class ResourceExternalIdentity(ResourceScope, Timestamp, Base):
             'provider_id', 'cluster_id', 'resource_type', 'external_id',
             name='uq_resource_external_identity',
         ),
+        CheckConstraint(
+            '(managed_vm_id IS NOT NULL AND managed_resource_id IS NULL) OR '
+            '(managed_vm_id IS NULL AND managed_resource_id IS NOT NULL)',
+            name='ck_resource_external_identity_one_target',
+        ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'project_id', 'managed_vm_id'],
+            ['managed_vms.tenant_id', 'managed_vms.project_id', 'managed_vms.id'],
+            name='fk_resource_external_identity_vm_scope',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'project_id', 'managed_resource_id'],
+            ['managed_resources.tenant_id', 'managed_resources.project_id', 'managed_resources.id'],
+            name='fk_resource_external_identity_resource_scope',
+            ondelete='RESTRICT',
+        ),
         Index('ix_resource_external_identity_vm', 'managed_vm_id'),
         Index('ix_resource_external_identity_resource', 'managed_resource_id'),
         *scope_constraints(__tablename__),
@@ -90,8 +107,8 @@ class ResourceExternalIdentity(ResourceScope, Timestamp, Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     provider_id: Mapped[int] = mapped_column(ForeignKey('providers.id', ondelete='RESTRICT'), index=True)
-    managed_vm_id: Mapped[str | None] = mapped_column(ForeignKey('managed_vms.id', ondelete='SET NULL'))
-    managed_resource_id: Mapped[str | None] = mapped_column(ForeignKey('managed_resources.id', ondelete='SET NULL'))
+    managed_vm_id: Mapped[str | None] = mapped_column(String(36))
+    managed_resource_id: Mapped[str | None] = mapped_column(String(36))
     resource_type: Mapped[str] = mapped_column(String(32))
     external_id: Mapped[str] = mapped_column(String(255))
     cluster_id: Mapped[str] = mapped_column(String(255), default='')
