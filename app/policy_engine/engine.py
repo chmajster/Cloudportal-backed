@@ -15,8 +15,10 @@ OPERATOR_ALIASES = {
     "not_equals": "neq",
     "less_than": "lt",
     "less_than_or_equal": "lte",
+    "less_or_equal": "lte",
     "greater_than": "gt",
     "greater_than_or_equal": "gte",
+    "greater_or_equal": "gte",
     "matches_regex": "regex",
 }
 
