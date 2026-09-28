@@ -6,33 +6,74 @@ from app.rbac.locking import governance_lock
 from app.projects.permissions import PROJECT_DEFAULT_ROLES
 from app.tenancy.permissions import TENANCY_PERMISSION_ACTIONS, TENANCY_DEFAULT_ROLES
 
+
+# Central permission catalog. Permission identifiers are stable API contracts:
+# endpoint code, role definitions, API tokens, IAM assignments and UI capability
+# checks all consume this catalog rather than inventing strings locally.
 PERMISSIONS = {
     **{area: actions.split() for area, actions in {
-        'users': 'read create update delete', 'roles': 'read create update delete assign',
-        'credentials': 'read create update delete test', 'providers': 'read create update delete',
-        'deployments': 'read read_all create destroy adopt', 'jobs': 'read read_all execute cancel force',
-        'terraform': 'read execute', 'ansible': 'read execute manage', 'audit': 'read',
-        'blueprints': 'read create update delete execute approve',
+        'users': 'read create update delete assign_roles impersonate',
+        'roles': 'read create update delete assign delegate',
+        'groups': 'read create update delete manage_members map_identity',
+        'service_accounts': 'read create update delete tokens.manage',
+        'rbac': 'assignments.read assignments.manage access_review.read impact.read',
+        'authorization': 'check explain simulate',
+        'jit': 'request read approve reject manage',
+        'break_glass': 'use read manage',
+        'credentials': 'read read_metadata read_secret use create update delete test',
+        'providers': 'read create update delete test',
+        'deployments': 'read read_all create delete destroy retry adopt approval.bypass',
+        'jobs': 'read read_all execute cancel retry force',
+        'terraform': 'read execute manage',
+        'ansible': 'read execute manage',
+        'awx': 'read execute manage',
+        'audit': 'read',
+        'blueprints': 'read create update delete execute publish clone manage_access approve',
         'hostnames': 'read create update delete reserve release',
+        # vms.* is the legacy compatibility surface. New code should prefer
+        # machines.* for Day-2 authorization granularity.
         'vms': 'read read_all manage_all power update delete clone migrate template console',
+        'machines': (
+            'read create update delete delete.force '
+            'power.on power.off power.reset power.hard_stop '
+            'snapshot.create snapshot.delete snapshot.restore '
+            'disk.add disk.resize disk.delete '
+            'network.add network.update network.delete '
+            'console.open rebuild rebuild.force clone migrate '
+            'credentials.inject tags.update metadata.update'
+        ),
         'snapshots': 'read create delete rollback',
         'backups': 'read create restore',
         'instance_backups': 'read create download upload verify delete restore',
         'ipam': 'read create update delete allocate release',
         'inventory': 'read read_all import update delete',
         'availability': 'read create update delete assign',
-        'day2': ('view power snapshot.create snapshot.restore snapshot.delete compute.resize disk.add disk.resize '
-                 'disk.delete network.manage cloudinit.update credentials.manage ansible.run package.manage '
-                 'tags.manage metadata.manage migrate clone rebuild delete cancel retry approve admin override_protection'),
-        'schedules': 'read create update delete',
-        'webhooks': 'read create update delete',
-        'events': 'read publish replay consume manage', 'extensions': 'read manage',
-        'metrics': 'read', 'quotas': 'read manage tenant.manage',
+        'day2': (
+            'view power snapshot.create snapshot.restore snapshot.delete compute.resize '
+            'disk.add disk.resize disk.delete network.manage cloudinit.update credentials.manage '
+            'ansible.run package.manage tags.manage metadata.manage migrate clone rebuild delete '
+            'cancel retry approve admin override_protection'
+        ),
+        'resource_pools': 'read use manage placement.override',
+        'approvals': 'read request approve reject manage',
+        'schedules': 'read create update delete manage',
+        'webhooks': 'read create update delete manage',
+        'events': 'read publish replay consume manage',
+        'event_broker': 'read manage',
+        'extensions': 'read manage',
+        'metrics': 'read',
+        'quotas': 'read manage tenant.manage override',
         'policies': 'read manage simulate audit exception.manage',
-        'tokens': 'read create revoke', 'settings': 'read update', 'updates': 'read execute update', 'portal': 'connect',
+        'tokens': 'read create revoke manage_scopes',
+        'settings': 'read update',
+        'updates': 'read execute update',
+        'portal': 'connect',
     }.items()}
 }
 PERMISSIONS.update(TENANCY_PERMISSION_ACTIONS)
+# Organization is the UI/IAM term; tenants.* remains the compatibility contract
+# used by existing tenancy routes.
+PERMISSIONS['organizations'] = 'read create update delete manage_members assign_roles audit.read'.split()
 ALL_PERMISSIONS = {f'{area}.{action}' for area, actions in PERMISSIONS.items() for action in actions}
 
 
@@ -44,18 +85,102 @@ def seed(db):
         db.add(p)
         existing[name] = p
     db.flush()
+
     day2_operator = {
         'day2.view', 'day2.power', 'day2.snapshot.create', 'day2.snapshot.restore', 'day2.snapshot.delete',
         'day2.compute.resize', 'day2.disk.add', 'day2.disk.resize', 'day2.disk.delete', 'day2.network.manage',
         'day2.cloudinit.update', 'day2.credentials.manage', 'day2.ansible.run', 'day2.package.manage',
         'day2.tags.manage', 'day2.metadata.manage', 'day2.migrate', 'day2.clone', 'day2.cancel', 'day2.retry',
     }
+    machine_operator = {
+        p for p in ALL_PERMISSIONS
+        if p.startswith(('machines.read', 'machines.power.', 'machines.snapshot.', 'machines.console.',
+                         'machines.tags.', 'machines.metadata.'))
+    }
+    viewer = {
+        p for p in ALL_PERMISSIONS
+        if p.endswith('.read') or '.read.' in p or p in {
+            'projects.select', 'projects.use', 'credentials.read_metadata',
+        }
+    }
+    developer = {
+        'projects.read', 'projects.use', 'projects.select',
+        'blueprints.read', 'blueprints.execute', 'deployments.read', 'deployments.create',
+        'jobs.read', 'jobs.execute', 'jobs.cancel',
+        'machines.read', 'machines.power.on', 'machines.power.off', 'machines.power.reset',
+        'machines.snapshot.create', 'machines.snapshot.restore', 'machines.snapshot.delete',
+        'machines.console.open', 'machines.tags.update', 'machines.metadata.update',
+        'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'awx.read', 'awx.execute',
+        'credentials.read_metadata', 'credentials.use', 'resource_pools.read', 'resource_pools.use',
+    }
     defaults = {
         'Administrator': ALL_PERMISSIONS,
-        'Infrastructure Administrator': ({p for p in ALL_PERMISSIONS if p.split('.')[0] not in {'users', 'roles', 'tokens', 'settings', 'updates', 'tenants', 'projects', 'governance', 'instance_backups'} and p != 'quotas.tenant.manage'} | {'updates.read'}),
-        'Operator': {'providers.read', 'credentials.read', 'deployments.read', 'deployments.read_all', 'deployments.create', 'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute', 'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release', 'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone', 'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback', 'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate', 'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update', 'availability.read', 'availability.assign', 'schedules.read', 'schedules.create', 'schedules.update', 'events.read', 'extensions.read', 'quotas.read', 'policies.read'} | day2_operator,
-        'Viewer': {'providers.read', 'deployments.read', 'deployments.read_all', 'jobs.read', 'jobs.read_all', 'terraform.read', 'ansible.read', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'availability.read', 'schedules.read', 'day2.view', 'quotas.read', 'policies.read'},
-        'Auditor': {'audit.read', 'users.read', 'roles.read', 'jobs.read', 'jobs.read_all', 'deployments.read', 'deployments.read_all', 'blueprints.read', 'hostnames.read', 'vms.read', 'vms.read_all', 'snapshots.read', 'backups.read', 'ipam.read', 'inventory.read', 'inventory.read_all', 'availability.read', 'schedules.read', 'events.read', 'extensions.read', 'metrics.read', 'updates.read', 'day2.view', 'quotas.read', 'policies.read', 'policies.audit'},
+        'Global Administrator': ALL_PERMISSIONS,
+        'Infrastructure Administrator': ({
+            p for p in ALL_PERMISSIONS
+            if p.split('.')[0] not in {
+                'users', 'roles', 'groups', 'service_accounts', 'tokens', 'settings',
+                'updates', 'tenants', 'organizations', 'projects', 'governance',
+                'rbac', 'authorization', 'break_glass', 'instance_backups',
+            } and p != 'quotas.tenant.manage'
+        } | {'updates.read'}),
+        'Operator': {
+            'providers.read', 'credentials.read_metadata', 'credentials.use',
+            'deployments.read', 'deployments.read_all', 'deployments.create',
+            'jobs.read', 'jobs.read_all', 'jobs.execute', 'jobs.cancel', 'jobs.retry',
+            'terraform.read', 'terraform.execute', 'ansible.read', 'ansible.execute',
+            'blueprints.read', 'blueprints.execute', 'hostnames.read', 'hostnames.reserve', 'hostnames.release',
+            'vms.read', 'vms.read_all', 'vms.manage_all', 'vms.power', 'vms.update', 'vms.clone',
+            'vms.migrate', 'vms.console', 'snapshots.read', 'snapshots.create', 'snapshots.rollback',
+            'backups.read', 'backups.create', 'backups.restore', 'ipam.read', 'ipam.allocate',
+            'ipam.release', 'inventory.read', 'inventory.read_all', 'inventory.import', 'inventory.update',
+            'availability.read', 'availability.assign', 'schedules.read', 'schedules.create',
+            'schedules.update', 'events.read', 'extensions.read', 'quotas.read', 'policies.read',
+            'resource_pools.read', 'resource_pools.use',
+        } | day2_operator | machine_operator,
+        'Viewer': viewer,
+        'Read Only': viewer,
+        'Auditor': viewer | {
+            'audit.read', 'users.read', 'roles.read', 'groups.read', 'rbac.access_review.read',
+            'authorization.explain', 'policies.audit', 'events.read', 'metrics.read', 'updates.read',
+        },
+        'Organization Administrator': set(TENANCY_DEFAULT_ROLES['Tenant Administrator']),
+        'Organization Auditor': {
+            'tenants.read', 'tenants.members.read', 'tenants.audit.read',
+            'organizations.read', 'organizations.audit.read',
+            'projects.read', 'projects.members.read', 'projects.audit.read',
+        },
+        'Project Operator': set(PROJECT_DEFAULT_ROLES['Project Operator']) | machine_operator,
+        'Developer': developer,
+        'Infrastructure Operator': machine_operator | {
+            'providers.read', 'credentials.read_metadata', 'credentials.use',
+            'deployments.read', 'jobs.read', 'ansible.read', 'ansible.execute', 'awx.read', 'awx.execute',
+        },
+        'Security Administrator': {
+            'users.read', 'roles.read', 'groups.read', 'groups.map_identity',
+            'rbac.assignments.read', 'rbac.assignments.manage', 'rbac.access_review.read',
+            'authorization.check', 'authorization.explain', 'authorization.simulate',
+            'audit.read', 'policies.read', 'policies.manage', 'policies.simulate', 'policies.audit',
+            'tokens.read', 'tokens.revoke', 'break_glass.read', 'break_glass.manage',
+        },
+        'Approval Manager': {
+            'approvals.read', 'approvals.approve', 'approvals.reject', 'approvals.manage',
+            'jit.read', 'jit.approve', 'jit.reject', 'jobs.read',
+        },
+        'Blueprint Administrator': {
+            'blueprints.read', 'blueprints.create', 'blueprints.update', 'blueprints.delete',
+            'blueprints.execute', 'blueprints.publish', 'blueprints.clone', 'blueprints.manage_access',
+        },
+        'Credential Administrator': {
+            'credentials.read', 'credentials.read_metadata', 'credentials.create',
+            'credentials.update', 'credentials.delete', 'credentials.test', 'credentials.use',
+        },
+        'Self Service User': {
+            'projects.read', 'projects.use', 'projects.select', 'blueprints.read', 'blueprints.execute',
+            'deployments.read', 'jobs.read', 'machines.read', 'credentials.use',
+            'credentials.read_metadata', 'resource_pools.read', 'resource_pools.use',
+            'jit.request',
+        },
         'Portal Service': {'portal.connect'},
         **TENANCY_DEFAULT_ROLES,
         **PROJECT_DEFAULT_ROLES,
@@ -65,16 +190,13 @@ def seed(db):
         if not role:
             db.add(Role(name=name, permissions=[existing[p] for p in sorted(permissions)]))
         else:
-            current = {p.name for p in role.permissions}
-            if name == 'Administrator':
-                # The built-in Administrator role is authoritative and must always
-                # receive every permission, including permissions that already exist
-                # in the database but were missing from the role assignment.
-                additions = permissions - current
+            current_permissions = {p.name for p in role.permissions}
+            if name in {'Administrator', 'Global Administrator'}:
+                additions = permissions - current_permissions
             else:
-                # Other built-in roles receive only newly introduced defaults so
-                # administrators can intentionally customize them.
-                additions = permissions & new_permission_names - current
+                # Existing customized built-ins are not reset. Only newly introduced
+                # catalog entries are added when they belong to the default template.
+                additions = permissions & new_permission_names - current_permissions
             role.permissions.extend(existing[p] for p in sorted(additions))
     if not db.get(Setting, 'governance'):
         db.add(Setting(key='governance', value={}))
@@ -89,6 +211,10 @@ def permissions_from_names(db, names):
 
 def ensure_admin_remains(db):
     db.flush()
-    users = db.scalars(select(User).where(User.is_active.is_(True), User.is_locked.is_(False), User.is_service_account.is_(False))).all()
+    users = db.scalars(select(User).where(
+        User.is_active.is_(True),
+        User.is_locked.is_(False),
+        User.is_service_account.is_(False),
+    )).all()
     if not any(ALL_PERMISSIONS <= effective_permissions(u) for u in users):
         raise HTTPException(409, 'At least one active human administrator with all permissions must remain')
