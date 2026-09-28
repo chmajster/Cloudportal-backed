@@ -751,6 +751,48 @@ def delete_blueprint(
     }
 
 
+def _execution_workflow_steps(row, awx):
+    steps = [
+        {**step, 'depends_on': list(step.get('depends_on') or [])}
+        for step in (row.workflow or [])
+    ]
+    if not bool((row.deployment or {}).get('prompt_awx_on_execute')) or awx is not None:
+        return steps
+
+    removed = {
+        str(step.get('id')): list(step.get('depends_on') or [])
+        for step in steps
+        if step.get('type') == 'register_awx'
+    }
+    if not removed:
+        return steps
+
+    def expand(dependency, seen=None):
+        dependency = str(dependency)
+        if dependency not in removed:
+            return [dependency]
+        seen = set(seen or ())
+        if dependency in seen:
+            return []
+        seen.add(dependency)
+        result = []
+        for parent in removed[dependency]:
+            result.extend(expand(parent, seen))
+        return result
+
+    result = []
+    for step in steps:
+        if step.get('type') == 'register_awx':
+            continue
+        dependencies = []
+        for dependency in step.get('depends_on') or []:
+            for expanded in expand(dependency):
+                if expanded not in dependencies:
+                    dependencies.append(expanded)
+        result.append({**step, 'depends_on': dependencies})
+    return result
+
+
 @router.post('/blueprints/{id}/execute', status_code=202, response_model=CreatedDeploymentOutput)
 def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                       source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
@@ -787,7 +829,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         raise HTTPException(403, 'availability.assign required to select an Availability Plan')
     def create():
         rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs, awx = compile_blueprint(
-            db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
+            db, row, data.variables, data.hostname_values, actor.user_id,
+            data.apmid, data.environment, data.awx_onboarding
         )
         from app.policy_engine.integration import enforce_blueprint_execution
         rendered, policy_result = enforce_blueprint_execution(
@@ -842,6 +885,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             if awx_credential.type != 'awx':
                 raise HTTPException(422, 'AWX onboarding requires an AWX credential')
         configured_ansible = list(ansible_runs)
+        execution_steps = _execution_workflow_steps(row, awx)
         if configured_ansible:
             if provider.type != 'proxmox':
                 raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
@@ -854,11 +898,13 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                                 workflow={'ansible_runs': [run.model_dump() for run in configured_ansible],
                                           'awx': awx.model_dump() if awx else None,
                                           'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
-                                                        'variables': blueprint_variables, 'steps': row.workflow,
+                                                        'variables': blueprint_variables, 'steps': execution_steps,
                                                         'guest_credential_id': guest_credential_id,
                                                         'template_guest_credential_id': template_guest_credential_id,
                                                         'guest_account_mode': (row.deployment or {}).get('guest_account_mode', 'cloud_init_managed'),
                                                         'awx': awx.model_dump() if awx else None,
+                                                        'prompt_awx_on_execute': bool((row.deployment or {}).get('prompt_awx_on_execute')),
+                                                        'awx_onboarding': bool(awx) if (row.deployment or {}).get('prompt_awx_on_execute') else None,
                                                         'requires_approval': (
                                                             row.requires_approval
                                                             or policy_result.get('decision') == 'approval_required'
