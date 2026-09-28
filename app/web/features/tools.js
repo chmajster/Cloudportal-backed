@@ -1100,7 +1100,7 @@ async function toolsView() {
 
   if (allowed('hostnames.read')) {
     try {
-      const schemes = await api('/hostname-schemes?limit=200');
+      const schemes = await api('/hostname-schemes?limit=200', { headers: globalThis.CPProjectContext?.headers?.() || {} });
       cards.push(hostnameGeneratorTool(schemes.items || []));
     } catch (error) {
       cards.push(node('article', { class: 'panel tool-card' },
