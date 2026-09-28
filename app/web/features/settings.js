@@ -124,7 +124,7 @@ function renderLdapDiagnostics(host, result) {
   const steps = Array.isArray(result?.steps) ? result.steps : [];
   const summaryKind = result?.login_ready ? 'ok' : (result?.ok ? 'warning' : 'danger');
   const profile = result?.profile || null;
-  host.replaceChildren(
+  const content = [
     node('div', { class: 'settings-ldap-diagnostics-summary ' + summaryKind },
       node('div', {},
         node('strong', { text: result?.message || 'Diagnostyka zakończona.' }),
@@ -141,17 +141,18 @@ function renderLdapDiagnostics(host, result) {
           ldapDiagnosticBadge(step.status)),
         node('p', { text: step.message || '—' }),
         step.detail ? node('code', { text: step.detail }) : null))),
-    profile
-      ? node('div', { class: 'settings-ldap-diagnostic-profile' },
-          node('strong', { text: 'Użytkownik znaleziony w LDAP' }),
-          node('div', { class: 'settings-ldap-detail-grid' },
-            ldapDetailRow('DN', profile.dn || '—', { mono: true, wide: true }),
-            ldapDetailRow('Login', profile.username || '—', { mono: true }),
-            ldapDetailRow('E-mail', profile.email || '—', { mono: true }),
-            ldapDetailRow('Imię', profile.first_name || '—'),
-            ldapDetailRow('Nazwisko', profile.last_name || '—')))
-      : null
-  );
+  ];
+  if (profile) {
+    content.push(node('div', { class: 'settings-ldap-diagnostic-profile' },
+      node('strong', { text: 'Użytkownik znaleziony w LDAP' }),
+      node('div', { class: 'settings-ldap-detail-grid' },
+        ldapDetailRow('DN', profile.dn || '—', { mono: true, wide: true }),
+        ldapDetailRow('Login', profile.username || '—', { mono: true }),
+        ldapDetailRow('E-mail', profile.email || '—', { mono: true }),
+        ldapDetailRow('Imię', profile.first_name || '—'),
+        ldapDetailRow('Nazwisko', profile.last_name || '—'))));
+  }
+  host.replaceChildren(...content);
 }
 
 function ldapDiagnosticsForm(config) {
