@@ -280,6 +280,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "const destroyJob = provisioningJob?.operation === 'terraform.destroy';" in script
     assert "const activityTitle = destroyJob ? 'Usuwanie' : 'Provisioning';" in script
     assert "destroyFailed ? 'Wymuś usunięcie' : 'Usuń'" in script
+    assert "const destroyPath = `/deployments/${deployment.id}/destroy`" in script
+    assert "(destroyFailed && directProxmox ? '?force=true' : '')" in script
+    assert "CloudPortal pominie nieudany precheck stanu VM" in script
     assert "'Usuwanie zasobów trwa.'" in script
     assert "registerExtension('deployments-bulk-vm-actions'" in script
     assert "api('/day2-actions/bulk'" in script
