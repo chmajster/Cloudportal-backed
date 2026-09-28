@@ -241,7 +241,7 @@ Dodatkowo:
 | Terraform destroy | QGA/shutdown blokował usunięcie | provider hard-stop przed destroy | #218, #224 |
 | Direct Proxmox force destroy | niedostępny precheck/status blokował nawet „Wymuś usunięcie” | force omija blokujący precheck, hard-stop jest best-effort, potem bezpośredni delete API; cancel i cofnięcie autoryzacji nadal są twardymi guardami | #282 |
 | Tenant/Project routing | UI zakładało numeryczne ID mimo UUID w modelu, więc szczegóły/edycja/usuwanie nie były routowalne | route UUID + bezpośrednie akcje rename/delete z backendowym RBAC i version guard | #283 |
-| Module boundary | feature rozrastał wspólny/duży plik | wydzielanie domenowych modułów | #20, #26, #167, #183, #241 |
+| Module boundary | feature rozrastał wspólny/duży plik | wydzielanie domenowych modułów | #20, #26, #167, #183, #241, #295 |
 | Credential lifecycle | sekret trafiał do niewłaściwej warstwy | referencja ID + runtime resolution | #91, #125, #128, #149, #151, #168 |
 | Async UI race | zakończony job nadal „W toku” | korelacja timestamp/state + final refresh | #83, #85, #192, #210, #222 |
 
@@ -525,6 +525,7 @@ Legenda:
 
 - **#284 [OPEN] Fix scoped Proxmox template discovery in Blueprint wizard** — Współdzielony provider Proxmox mógł pokazywać działające połączenie i node, ale pustą sekcję „Template / VM bazowa” w kreatorze Blueprintu. Przyczyną było przepuszczanie `/providers/{id}/templates` przez filtr ownership przeznaczony dla runtime VM. Template są bazowymi obrazami dostępnymi w zakresie przypisanego providera, a nie workloadami należącymi do projektu. Discovery template pozostaje teraz widoczne dla projektu mającego dostęp do providera, natomiast `/vms` nadal zachowuje tenant/project ownership filtering. Dodano test regresyjny dla współdzielonego providera z workloadem innego projektu.
 - **#290 [OPEN] Scope APMIDs per organization and generate ENV variants** — APMID przestaje być jedną globalną listą i jest przechowywany per organizacja/tenant, przy zachowaniu obowiązkowego, pierwszego i nieusuwalnego `LEO` z PR #71. Każdy APMID automatycznie otrzymuje wszystkie aktywne Environment jako wyliczane warianty, np. `XD.DEV`, `XD.NONPROD`, `XD.PROD`. Kreator Blueprintu i runtime `/vm-classification/options` korzystają z tenant/project scope; globalna lista APMID pozostaje wyłącznie fallbackiem dla organizacji bez własnej konfiguracji.
+- **#295 [OPEN] Restore frontend module boundary after searchable select merge** — #291 przeniósł współdzielony helper `searchableSelectField` do `app/web/core.js`, zwiększając plik do 1380 linii i łamiąc twardy limit 1200. Helper został przeniesiony do automatycznie ładowanego `app/web/shared/searchable-select.js`; feature Projects i globalny Project Context zachowują wspólny kontrakt bez rozbudowy hot-spotu `core.js`.
 
 ---
 
