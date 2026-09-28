@@ -76,6 +76,16 @@ PERMISSIONS.update(TENANCY_PERMISSION_ACTIONS)
 PERMISSIONS['organizations'] = 'read create update delete manage_members assign_roles audit.read'.split()
 ALL_PERMISSIONS = {f'{area}.{action}' for area, actions in PERMISSIONS.items() for action in actions}
 
+SYSTEM_ROLE_NAMES = frozenset({
+    'Administrator', 'Global Administrator', 'Infrastructure Administrator',
+    'Operator', 'Viewer', 'Read Only', 'Auditor', 'Organization Administrator',
+    'Organization Auditor', 'Tenant Administrator', 'Tenant Viewer',
+    'Project Administrator', 'Project Viewer', 'Project Operator', 'Developer',
+    'Infrastructure Operator', 'Security Administrator', 'Approval Manager',
+    'Blueprint Administrator', 'Credential Administrator', 'Self Service User',
+    'Portal Service',
+})
+
 
 def seed(db):
     existing = {p.name: p for p in db.scalars(select(Permission))}
