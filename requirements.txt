@@ -24,3 +24,5 @@ ldap3>=2.9,<3
 jsonschema>=4.23,<5
 pycdlib>=1.14,<2
 python-multipart>=0.0.20,<1
+
+PyJWT>=2.10,<3
