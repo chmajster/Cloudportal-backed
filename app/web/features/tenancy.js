@@ -70,7 +70,7 @@
           body: tenantUpdateValues(current, name),
         });
         toast('Nazwa organizacji została zmieniona.');
-        await tenantsView();
+        await navigate('tenants');
         return false;
       },
     });
@@ -102,7 +102,7 @@
         });
         toast('Organizacja została usunięta.');
         listOffset = 0;
-        await tenantsView();
+        await navigate('tenants');
         return false;
       },
     });
