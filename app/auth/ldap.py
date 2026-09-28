@@ -4,7 +4,7 @@ import ssl
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from ldap3 import BASE, SUBTREE, Connection, Server, Tls
+from ldap3 import ALL_ATTRIBUTES, BASE, SUBTREE, Connection, Server, Tls
 from ldap3.core.exceptions import LDAPException
 from ldap3.utils.conv import escape_filter_chars
 from sqlalchemy import or_, select
@@ -155,10 +155,20 @@ def _safe_unbind(connection):
 def _entry_value(entry, name):
     if not name:
         return ''
-    attribute = getattr(entry, name, None)
-    if attribute is None:
+    requested = str(name).strip()
+    if not requested:
         return ''
-    raw = attribute.value
+    available = {
+        str(attribute).lower(): str(attribute)
+        for attribute in (getattr(entry, 'entry_attributes', None) or [])
+    }
+    actual = available.get(requested.lower())
+    if not actual:
+        return ''
+    try:
+        raw = entry[actual].value
+    except (LDAPException, KeyError, TypeError, AttributeError):
+        return ''
     if isinstance(raw, list):
         raw = raw[0] if raw else ''
     return str(raw or '').strip()
@@ -278,19 +288,17 @@ def _directory_diagnostics(config, identity='', password=None):
 
     escaped = escape_filter_chars(identity)
     ldap_filter = config['user_filter'].replace('{username}', escaped)
-    attributes = list(dict.fromkeys([
-        config['username_attribute'],
-        config['email_attribute'],
-        config['first_name_attribute'],
-        config['last_name_attribute'],
-    ]))
-
     try:
         directory.search(
             config['base_dn'],
             ldap_filter,
             search_scope=SUBTREE,
-            attributes=attributes,
+            # Do not request configured attributes explicitly here. Some LDAP
+            # servers expose a valid user entry but reject unknown/unsupported
+            # requested attribute names with LDAPAttributeError. Fetching all
+            # readable attributes lets mapping validation report missing fields
+            # as warnings instead of making user lookup fail completely.
+            attributes=ALL_ATTRIBUTES,
             size_limit=3,
         )
         entries = list(directory.entries)
@@ -562,19 +570,13 @@ def authenticate_ldap(db, identity, password):
         return None
     escaped = escape_filter_chars(identity)
     ldap_filter = config['user_filter'].replace('{username}', escaped)
-    attributes = list(dict.fromkeys([
-        config['username_attribute'],
-        config['email_attribute'],
-        config['first_name_attribute'],
-        config['last_name_attribute'],
-    ]))
     try:
         directory = _connection(config, config['bind_dn'], config.get('bind_password'))
         found = directory.search(
             config['base_dn'],
             ldap_filter,
             search_scope=SUBTREE,
-            attributes=attributes,
+            attributes=ALL_ATTRIBUTES,
             size_limit=2,
         )
         entries = list(directory.entries)
@@ -587,25 +589,14 @@ def authenticate_ldap(db, identity, password):
         user_connection = _connection(config, user_dn, password)
         user_connection.unbind()
 
-        def value(name):
-            if not name:
-                return ''
-            attribute = getattr(entry, name, None)
-            if attribute is None:
-                return ''
-            raw = attribute.value
-            if isinstance(raw, list):
-                raw = raw[0] if raw else ''
-            return str(raw or '').strip()
-
-        username = value(config['username_attribute']) or identity
-        email = value(config['email_attribute'])
+        username = _entry_value(entry, config['username_attribute']) or identity
+        email = _entry_value(entry, config['email_attribute'])
         return {
             'dn': user_dn,
             'username': username.lower(),
             'email': email.lower(),
-            'first_name': value(config['first_name_attribute']),
-            'last_name': value(config['last_name_attribute']),
+            'first_name': _entry_value(entry, config['first_name_attribute']),
+            'last_name': _entry_value(entry, config['last_name_attribute']),
         }
     except LDAPException:
         return None
