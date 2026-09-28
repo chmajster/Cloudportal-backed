@@ -1040,6 +1040,10 @@ async function toolsView() {
     }
   }
 
+  if (allowed('providers.update') && window.ProviderDiagnostics?.card) {
+    cards.push(window.ProviderDiagnostics.card());
+  }
+
   if (
     allowed('providers.read')
     && allowed('vms.read')
