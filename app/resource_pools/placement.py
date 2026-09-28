@@ -910,6 +910,22 @@ def resolve_placement(
     pool, rules = _pool_and_rules(db, scope, request, context)
     actions = _rule_actions(rules)
     candidates = _collect_pool_candidates(db, scope, pool, request, actions)
+    if request.override:
+        override = request.override
+        for candidate in candidates:
+            if candidate.get('status') == 'REJECTED':
+                continue
+            mismatch = (
+                int(candidate.get('provider_id') or 0) != int(override.provider_id)
+                or (override.node and str(candidate.get('node') or '') != str(override.node))
+                or (override.storage and str(candidate.get('storage') or '') != str(override.storage))
+                or (override.network and str(candidate.get('network') or '') != str(override.network))
+            )
+            if mismatch:
+                candidate['status'] = 'REJECTED'
+                candidate.setdefault('reasons', []).append('candidate does not match authorized placement override')
+            else:
+                candidate.setdefault('reasons', []).append('authorized placement override matched candidate')
     exclude = exclude or set()
     for candidate in candidates:
         if (int(candidate.get('provider_id') or 0), candidate.get('node')) in exclude:
@@ -1015,6 +1031,7 @@ def release_job_placement(db, job_id: str, *, status='RELEASED'):
 
 def _request_from_decision(decision: PlacementDecision) -> PlacementRequest:
     payload = dict(decision.request_snapshot or {})
+    payload.pop('selected_location', None)
     payload['placement_mode'] = decision.placement_mode
     payload['pool_id'] = decision.pool_id
     payload['reserve'] = True
@@ -1144,6 +1161,47 @@ def prepare_job_placement(context, *, invalidate_current: bool = False, reason: 
             f'{resolution.selected.get("storage")} score={resolution.selected.get("score")}'
         )
         return True
+
+
+def record_fixed_blueprint_decision(db, scope, rendered: dict, actor_id: int, *, blueprint_id: int, override=None):
+    provider_id = int((override or {}).get('provider_id') or rendered.get('provider_id') or 0)
+    provider = db.get(Provider, provider_id)
+    if provider is None or not reference_visible(db, 'provider', provider_id, scope):
+        raise HTTPException(404, 'Fixed placement provider is not assigned to the selected project')
+    variables = dict(rendered.get('variables') or {})
+    selected = {
+        'provider_id': provider.id,
+        'provider_type': provider.type,
+        'platform': provider.name,
+        'member_id': None,
+        'node': (override or {}).get('node') or variables.get('node'),
+        'storage': (override or {}).get('storage') or variables.get('storage'),
+        'network': (override or {}).get('network') or variables.get('network'),
+        'location': provider.name,
+        'status': 'SELECTED',
+        'score': 100.0,
+        'reasons': ['fixed target preserved for backward-compatible Blueprint execution'],
+    }
+    request = PlacementRequest.model_validate({
+        'placement_mode': 'FIXED',
+        'blueprint_id': blueprint_id,
+        'cpu': variables.get('cpu') or 1,
+        'ram_mb': variables.get('memory') or 512,
+        'disk_gb': variables.get('disk') or 1,
+        'tags': variables.get('tags') or [],
+        'template_id': variables.get('template_id'),
+        'override': {
+            'provider_id': provider.id,
+            'node': selected['node'],
+            'storage': selected['storage'],
+            'network': selected['network'],
+        },
+    })
+    decision = _create_decision(
+        db, scope, request, None, [], selected, [selected], actor_id,
+        blueprint_id=blueprint_id, is_override=bool(override),
+    )
+    return Resolution(None, selected, [selected], [], decision, None)
 
 
 def placement_for_deployment(db, scope, deployment_id: str):
