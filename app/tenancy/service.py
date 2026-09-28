@@ -154,6 +154,51 @@ def member_list(db, principal, tenant_id, *, limit=100, offset=0, status=None):
             'total': total, 'limit': limit, 'offset': offset}
 
 
+def user_memberships(db, principal, user_id, *, limit=100, offset=0):
+    actor = require_global(db, principal, 'tenants.members.read')
+    if 'users.read' not in actor.global_permissions:
+        fail(403, 'DIRECTORY_PERMISSION_REQUIRED', 'Global user-directory read permission is required')
+    username = db.scalar(select(User.username).where(User.id == user_id))
+    if username is None:
+        fail(404, 'USER_NOT_FOUND', 'User not found')
+
+    predicate = and_(
+        TenantMembership.user_id == user_id,
+        Tenant.deleted_at.is_(None),
+    )
+    query = (select(TenantMembership, Tenant.name, Tenant.slug)
+             .join(Tenant, Tenant.id == TenantMembership.tenant_id)
+             .where(predicate))
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = db.execute(query.order_by(Tenant.slug, Tenant.id).offset(offset).limit(limit)).all()
+
+    roles = defaultdict(list)
+    if rows:
+        tenant_ids = [member.tenant_id for member, _name, _slug in rows]
+        for tenant_id, role_id in db.execute(
+            select(TenantRoleAssignment.tenant_id, TenantRoleAssignment.role_id)
+            .where(
+                TenantRoleAssignment.user_id == user_id,
+                TenantRoleAssignment.tenant_id.in_(tenant_ids),
+            )
+            .order_by(TenantRoleAssignment.tenant_id, TenantRoleAssignment.role_id)
+        ):
+            roles[tenant_id].append(role_id)
+
+    return {
+        'items': [
+            _member_values(member, username, roles[member.tenant_id]) | {
+                'tenant_name': tenant_name,
+                'tenant_slug': tenant_slug,
+            }
+            for member, tenant_name, tenant_slug in rows
+        ],
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+    }
+
+
 def _role_permissions(db, role_ids, permissions):
     allowed = DELEGABLE_PERMISSIONS & permissions
     roles = db.scalars(select(Role.id).where(Role.id.in_(role_ids))).all()

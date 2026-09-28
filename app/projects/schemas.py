@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.tenancy.schemas import TenantFields, TenantOutput, TenantAuditOutput
 
 
@@ -60,6 +60,32 @@ class ProjectMemberPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class UserProjectMembershipOutput(ProjectMemberOutput):
+    project_name: str
+    project_slug: str
+    tenant_name: str
+    tenant_slug: str
+
+
+class UserProjectMembershipPage(BaseModel):
+    items: list[UserProjectMembershipOutput]
+    total: int
+    limit: int
+    offset: int
+
+
+class ProjectMembershipSelection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    project_ids: list[UUID] = Field(default_factory=list, max_length=1000)
+
+    @field_validator('project_ids')
+    @classmethod
+    def unique_project_ids(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError('Project IDs must be distinct')
+        return value
 
 
 class EligibleMember(BaseModel):

@@ -8,7 +8,7 @@ from app.projects.authorization import (authorize, authorize_creation, effective
 from app.projects.models import Project, ProjectMembership, ProjectRoleAssignment, ProjectRoleGrant
 from app.projects.permissions import PROJECT_DELEGABLE_PERMISSIONS
 from app.tenancy.authorization import assert_version, fail
-from app.tenancy.models import TenantMembership, TenantRoleAssignment, TenantRoleGrant
+from app.tenancy.models import Tenant, TenantMembership, TenantRoleAssignment, TenantRoleGrant
 from app.tenancy.service import tenant_output
 
 
@@ -137,6 +137,58 @@ def eligible_members(db, principal, project_id, *, limit=100, offset=0):
     total = db.scalar(select(func.count()).select_from(query.subquery()))
     rows = db.execute(query.order_by(User.username, User.id).limit(limit).offset(offset))
     return page([{'user_id': u, 'username': n} for u, n in rows], total, limit, offset)
+
+
+def require_global_membership_access(db, principal, permission):
+    actor = identity(db, principal)
+    required = {'projects.admin', permission, 'users.read'}
+    if not required <= actor.global_permissions:
+        fail(403, 'GLOBAL_PERMISSION_REQUIRED', 'Global project and user-directory permissions are required')
+    return actor
+
+
+def user_memberships(db, principal, user_id, *, limit=100, offset=0):
+    require_global_membership_access(db, principal, 'projects.members.read')
+    username = db.scalar(select(User.username).where(User.id == user_id))
+    if username is None:
+        fail(404, 'USER_NOT_FOUND', 'User not found')
+
+    predicate = and_(
+        ProjectMembership.user_id == user_id,
+        Project.deleted_at.is_(None),
+        Tenant.deleted_at.is_(None),
+    )
+    query = (select(ProjectMembership, Project.name, Project.slug, Tenant.name, Tenant.slug)
+             .join(Project, Project.id == ProjectMembership.project_id)
+             .join(Tenant, Tenant.id == Project.tenant_id)
+             .where(predicate))
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = db.execute(
+        query.order_by(Tenant.slug, Project.slug, Project.id).offset(offset).limit(limit)
+    ).all()
+
+    roles = defaultdict(list)
+    if rows:
+        project_ids = [member.project_id for member, *_rest in rows]
+        for project_id, role_id in db.execute(
+            select(ProjectRoleAssignment.project_id, ProjectRoleAssignment.role_id)
+            .where(
+                ProjectRoleAssignment.user_id == user_id,
+                ProjectRoleAssignment.project_id.in_(project_ids),
+            )
+            .order_by(ProjectRoleAssignment.project_id, ProjectRoleAssignment.role_id)
+        ):
+            roles[project_id].append(role_id)
+
+    return page([
+        _member_values(member, username, roles[member.project_id]) | {
+            'project_name': project_name,
+            'project_slug': project_slug,
+            'tenant_name': tenant_name,
+            'tenant_slug': tenant_slug,
+        }
+        for member, project_name, project_slug, tenant_name, tenant_slug in rows
+    ], total, limit, offset)
 
 
 def _role_permissions(db, role_ids, permissions):

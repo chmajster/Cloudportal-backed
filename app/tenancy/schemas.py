@@ -172,6 +172,30 @@ class MemberPage(BaseModel):
     offset: int
 
 
+class UserTenantMembershipOutput(MemberOutput):
+    tenant_name: str
+    tenant_slug: str
+
+
+class UserTenantMembershipPage(BaseModel):
+    items: list[UserTenantMembershipOutput]
+    total: int
+    limit: int
+    offset: int
+
+
+class TenantMembershipSelection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    tenant_ids: list[UUID] = Field(default_factory=list, max_length=500)
+
+    @field_validator('tenant_ids')
+    @classmethod
+    def unique_tenant_ids(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError('Tenant IDs must be distinct')
+        return value
+
+
 class TenantPermissions(BaseModel):
     tenant_id: UUID
     scope: Literal['TENANT'] = 'TENANT'

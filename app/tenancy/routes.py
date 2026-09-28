@@ -12,7 +12,8 @@ from app.tenancy.authorization import Principal, lock_authorization, require_glo
 from app.tenancy.schemas import (MemberCreate, MemberOutput, MemberPage, MemberRoles, MemberStatus,
                                 MemberUpdate, RolePage, TenantAuditPage, TenantCreate, TenantOutput,
                                 TenantPage, TenantPermissions, TenantStatus, TenantUpdate,
-                                TenantVMClassificationInput, TenantVMClassificationOutput)
+                                TenantVMClassificationInput, TenantVMClassificationOutput,
+                                TenantMembershipSelection, UserTenantMembershipPage)
 
 router = APIRouter(tags=['tenancy'])
 
@@ -73,6 +74,51 @@ def delete_tenant(tenant_id: UUID, request: Request, expected_version: int = Que
                   actor=Depends(authenticate), db=Depends(get_db, scope='function')):
     result = service.tenant_delete(db, Principal.from_token(actor), tenant_id, expected_version)
     audit(db, request, 'tenant.deleted', 'tenants', tenant_id)
+    return result
+
+
+@router.get('/users/{user_id}/tenant-memberships', response_model=UserTenantMembershipPage)
+def user_tenant_memberships(user_id: int, limit: Limit = 100, offset: Offset = 0,
+                            actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    return service.user_memberships(
+        db, Principal.from_token(actor), user_id, limit=limit, offset=offset
+    )
+
+
+@router.put('/users/{user_id}/tenant-memberships', response_model=UserTenantMembershipPage)
+def set_user_tenant_memberships(user_id: int, data: TenantMembershipSelection, request: Request,
+                                actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    principal = Principal.from_token(actor)
+    require_global(db, principal, 'tenants.members.manage')
+    current = []
+    offset = 0
+    while True:
+        page = service.user_memberships(db, principal, user_id, limit=500, offset=offset)
+        current.extend(page['items'])
+        offset += len(page['items'])
+        if offset >= page['total'] or not page['items']:
+            break
+    current_by_id = {str(item['tenant_id']): item for item in current}
+    desired = {str(tenant_id) for tenant_id in data.tenant_ids}
+
+    for tenant_id, item in current_by_id.items():
+        if tenant_id not in desired:
+            service.member_delete(db, principal, tenant_id, user_id, item['version'])
+            audit(db, request, 'tenant.member.removed', 'tenant_memberships', f'{tenant_id}:{user_id}')
+
+    for tenant_id in sorted(desired):
+        item = current_by_id.get(tenant_id)
+        if item is None:
+            service.member_create(db, principal, tenant_id, MemberCreate(user_id=user_id))
+            audit(db, request, 'tenant.member.added', 'tenant_memberships', f'{tenant_id}:{user_id}')
+        elif item['status'] != 'active':
+            service.member_update(
+                db, principal, tenant_id, user_id,
+                MemberUpdate(status='active', expected_version=item['version']),
+            )
+            audit(db, request, 'tenant.member.updated', 'tenant_memberships', f'{tenant_id}:{user_id}')
+
+    result = service.user_memberships(db, principal, user_id, limit=500, offset=0)
     return result
 
 
