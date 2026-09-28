@@ -8,7 +8,7 @@ from app.automation.workflow import WorkflowGraphError, ordered_workflow_steps
 from app.api.outputs import (Items, ProviderOutput, DeploymentOutput, CreatedDeploymentOutput,
                              JobOutput, JobLogsOutput, TemplateOutput, PlaybookOutput, DeletedOutput, CredentialTestOutput,
                              SSHHostKeyOutput)
-from app.credentials.outputs import CredentialOutput, SSHKeyBootstrapOutput
+from app.credentials.outputs import CredentialOutput, CredentialSecretOutput, SSHKeyBootstrapOutput
 from app.api.schemas import (AwxBootstrapInput, CatalogItemStateInput, CredentialInput, DeploymentInput, JobInput, ProviderInput,
                              ProxmoxTokenBootstrapInput, SSHHostKeyInput, SSHKeyBootstrapInput)
 from app.catalog import (list_playbooks, list_templates, playbook_definition, playbook_public, snapshot_ansible_payload,
@@ -149,7 +149,7 @@ def ensure_credential_usable(credential):
 
 
 @router.get('/credentials', response_model=Items[CredentialOutput])
-def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
+def credentials(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('credentials.read_metadata')), db=Depends(get_db, scope='function')):
     return {'items': [credential_public(c) for c in paginate(db, Credential, offset, limit)]}
 
 
@@ -370,8 +370,21 @@ def sync_awx_scope(id: int, request: Request,
 
 
 @router.get('/credentials/{id}', response_model=CredentialOutput)
-def credential(id: int, actor=Depends(require('credentials.read')), db=Depends(get_db, scope='function')):
+def credential(id: int, actor=Depends(require('credentials.read_metadata')), db=Depends(get_db, scope='function')):
     return credential_public(find(db, Credential, id))
+
+
+@router.get('/credentials/{id}/secret', response_model=CredentialSecretOutput)
+def credential_secret(
+    id: int,
+    request: Request,
+    actor=Depends(require('credentials.read_secret')),
+    db=Depends(get_db, scope='function'),
+):
+    credential = find(db, Credential, id)
+    secret = decrypt_secret(credential)
+    audit(db, request, 'credential.secret_read', 'credentials', id)
+    return {'credential_id': credential.id, 'secret': secret}
 
 
 @router.post('/credentials', status_code=201, response_model=CredentialOutput)
