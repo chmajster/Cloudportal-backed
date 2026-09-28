@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.executors.base import ExecutionFailed
+from app.executors.base import Cancelled, ExecutionFailed
 from app.jobs import proxmox_provision
 from app.jobs.proxmox_provision import parse_task_progress
 
@@ -118,3 +118,24 @@ def test_forced_proxmox_destroy_bypasses_precheck_and_stop_failures(monkeypatch)
     ]
     assert any('proxmox.destroy.force_precheck_failed' in message for message in context.logs)
     assert any('proxmox.destroy.force_stop_failed' in message for message in context.logs)
+
+
+def test_forced_proxmox_destroy_does_not_swallow_cancellation(monkeypatch):
+    adapter = DestroyAdapter()
+    context = DestroyContext(force=True)
+
+    def cancelled_power(node, vm_id, action):
+        adapter.calls.append(('power', node, vm_id, action))
+        raise Cancelled('cancelled')
+
+    adapter.vm_power = cancelled_power
+    monkeypatch.setattr(
+        proxmox_provision,
+        'identity',
+        lambda _context: ('pve', 124, adapter),
+    )
+
+    with pytest.raises(Cancelled):
+        proxmox_provision.destroy(context)
+
+    assert ('delete', 'pve', 124, True, False) not in adapter.calls
