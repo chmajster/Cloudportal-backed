@@ -148,11 +148,15 @@ def test_apmids_are_scoped_per_organization_and_expand_enabled_environments(clie
         json={'apmids': ['xd']},
     )
     assert alpha_saved.status_code == 200, alpha_saved.text
-    assert alpha_saved.json()['apmids'] == ['XD']
+    assert alpha_saved.json()['apmids'] == ['LEO', 'XD']
     assert alpha_saved.json()['apmid_environments'] == {
+        'LEO': ['dev', 'nonprod', 'prod'],
         'XD': ['dev', 'nonprod', 'prod'],
     }
     assert alpha_saved.json()['classifications'] == [
+        'LEO.DEV',
+        'LEO.NONPROD',
+        'LEO.PROD',
         'XD.DEV',
         'XD.NONPROD',
         'XD.PROD',
@@ -176,8 +180,11 @@ def test_apmids_are_scoped_per_organization_and_expand_enabled_environments(clie
         json={'apmids': ['crm', 'billing']},
     )
     assert beta_saved.status_code == 200, beta_saved.text
-    assert beta_saved.json()['apmids'] == ['CRM', 'BILLING']
+    assert beta_saved.json()['apmids'] == ['LEO', 'CRM', 'BILLING']
     assert beta_saved.json()['classifications'] == [
+        'LEO.DEV',
+        'LEO.NONPROD',
+        'LEO.PROD',
         'CRM.DEV',
         'CRM.NONPROD',
         'CRM.PROD',
@@ -191,7 +198,7 @@ def test_apmids_are_scoped_per_organization_and_expand_enabled_environments(clie
         headers=headers,
     )
     assert alpha_again.status_code == 200, alpha_again.text
-    assert alpha_again.json()['apmids'] == ['XD']
+    assert alpha_again.json()['apmids'] == ['LEO', 'XD']
 
 
 def test_runtime_classification_uses_selected_organization_scope(client, headers):
@@ -223,5 +230,29 @@ def test_runtime_classification_uses_selected_organization_scope(client, headers
     }
     options = client.get('/api/v1/vm-classification/options', headers=scoped_headers)
     assert options.status_code == 200, options.text
-    assert options.json()['apmids'] == ['XD']
+    assert options.json()['apmids'] == ['LEO', 'XD']
+
+def test_tenant_apmid_save_keeps_leo_first_and_non_removable(client, headers):
+    tenant = client.post('/api/v1/tenants', headers=headers, json={
+        'name': 'LEO Protected Org',
+        'slug': 'leo-protected-org',
+    })
+    assert tenant.status_code == 201, tenant.text
+    tenant_id = tenant.json()['id']
+
+    empty = client.put(
+        f'/api/v1/tenants/{tenant_id}/vm-classification',
+        headers=headers,
+        json={'apmids': []},
+    )
+    assert empty.status_code == 200, empty.text
+    assert empty.json()['apmids'] == ['LEO']
+
+    custom = client.put(
+        f'/api/v1/tenants/{tenant_id}/vm-classification',
+        headers=headers,
+        json={'apmids': ['xd', 'LEO', 'crm']},
+    )
+    assert custom.status_code == 200, custom.text
+    assert custom.json()['apmids'] == ['LEO', 'XD', 'CRM']
 
