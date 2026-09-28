@@ -187,7 +187,7 @@ def _directory_diagnostics(config, identity='', password=None):
             'ok',
             f"Połączenie TCP z {parsed.hostname}:{parsed.port or (636 if parsed.scheme == 'ldaps' else 389)} działa.",
         ))
-    except LDAPException as error:
+    except (LDAPException, OSError) as error:
         steps.append(_diagnostic_step(
             'socket',
             'Połączenie z serwerem',
@@ -213,7 +213,7 @@ def _directory_diagnostics(config, identity='', password=None):
                 'tls', 'TLS', 'warning',
                 'Połączenie LDAP działa bez TLS. Hasła mogą być przesyłane bez szyfrowania.'
             ))
-    except LDAPException as error:
+    except (LDAPException, OSError) as error:
         steps.append(_diagnostic_step(
             'tls', 'TLS', 'error', 'Nie udało się zestawić TLS.',
             _ldap_result_detail(directory, error),
@@ -249,7 +249,7 @@ def _directory_diagnostics(config, identity='', password=None):
             attributes=[],
             size_limit=1,
         )
-        if found_base and directory.entries:
+        if found_base:
             steps.append(_diagnostic_step(
                 'base_dn', 'Base DN', 'ok', 'Base DN istnieje i jest dostępny.', config['base_dn']
             ))
@@ -389,7 +389,7 @@ def _directory_diagnostics(config, identity='', password=None):
         steps.append(_diagnostic_step(
             'user_bind', 'Bind użytkownika', 'ok', 'Hasło użytkownika zostało zaakceptowane przez LDAP.'
         ))
-    except LDAPException as error:
+    except (LDAPException, OSError) as error:
         steps.append(_diagnostic_step(
             'user_bind',
             'Bind użytkownika',
