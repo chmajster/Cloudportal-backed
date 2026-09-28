@@ -23,6 +23,7 @@ from app.database import get_db
 from app.models import (Blueprint, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
+from app.providers.settings import require_platform_enabled
 from app.projects.authorization import effective_permissions as project_effective_permissions, visible_projects
 from app.projects.models import Project
 from app.security.core import audit, authenticate
@@ -332,6 +333,9 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         blueprint_avatar(db, data.avatar_id)
     provider = find(db, Provider, data.deployment.provider_id)
     existing = db.get(Blueprint, blueprint_id) if blueprint_id is not None else None
+    existing_provider_id = (existing.deployment or {}).get('provider_id') if existing else None
+    if existing is None or str(existing_provider_id or '') != str(provider.id):
+        require_platform_enabled(db, provider.type)
     existing_template = existing.deployment.get('template') if existing else None
     existing_playbooks = set()
     if existing:
@@ -812,6 +816,7 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         if scope_key not in (None, ''):
             blueprint_variables['scope_key'] = scope_key
         provider = find(db, Provider, parsed.provider_id)
+        require_platform_enabled(db, provider.type)
         if data.availability_plan_id and provider.type != 'proxmox':
             raise HTTPException(422, 'Availability Plan currently supports Proxmox VM deployments only')
         template_meta, _ = template_definition(parsed.template)

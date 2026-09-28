@@ -13,6 +13,7 @@ from app.api.common import find
 from app.database import get_db
 from app.models import Credential, Provider
 from app.providers.registry import provider_for
+from app.providers.settings import require_platform_enabled
 from app.resource_scope.http import require
 from app.security.core import audit
 
@@ -567,6 +568,7 @@ def run_provider_diagnostics(
     db=Depends(get_db, scope='function'),
 ):
     provider = find(db, Provider, provider_id)
+    require_platform_enabled(db, provider.type)
     credential = find(db, Credential, provider.credentials_id)
     if provider.type != credential.type:
         raise HTTPException(409, 'Provider i przypisane dane dostępowe mają różne typy.')

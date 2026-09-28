@@ -334,7 +334,7 @@ def _execute_unfenced(job_id):
                         status_code=409,
                     )
 
-            adapter = day2_provider(credential)
+            adapter = day2_provider(db, credential)
             validation = validate_action(db, target, credential, request.action, request.parameters or {}, request.reason, permissions, quota_check=False)
             if validation['approval_required'] and request.approval_state != 'approved':
                 raise failure('APPROVAL_REQUIRED', message='Approval policy changed before Day-2 execution')

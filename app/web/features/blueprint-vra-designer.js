@@ -404,6 +404,7 @@
     }
 
     const data = await loadData();
+    data.providers = data.providers.filter(value => value.enabled !== false || String(value.id) === String(item?.deployment?.provider_id || ''));
     const state = {
       id: item?.id || null,
       version: item?.version || null,

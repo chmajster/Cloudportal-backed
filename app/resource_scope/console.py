@@ -2,6 +2,7 @@
 from app.database import session
 from app.models import Credential, Provider
 from app.providers.registry import provider_for
+from app.providers.settings import platform_enabled
 from app.resource_scope.authorization import Scope, authorize
 from app.resource_scope.database import bind_scope
 from app.resource_scope.service import guard_raw_provider, guard_vm_identity
@@ -24,4 +25,6 @@ def console_access(record, *, adapter=False):
         credential = db.get(Credential, provider.credentials_id) if provider else None
         if provider is None or credential is None or provider.type != 'proxmox' or credential.type != 'proxmox':
             fail(404, 'RESOURCE_NOT_FOUND', 'Console infrastructure is no longer accessible')
+        if not platform_enabled(db, provider.type):
+            fail(409, 'PROVIDER_DISABLED', 'Provider Proxmox is disabled')
         return provider_for(credential) if adapter else None

@@ -19,6 +19,7 @@ from app.config import settings
 from app.database import get_db, session as db_session
 from app.models import Credential, ManagedResource, ManagedVM, Provider
 from app.providers.registry import provider_for
+from app.providers.settings import require_platform_enabled
 from app.providers.task_reconcile import track_proxmox_task
 from app.security.core import audit, redis_client
 from app.resource_scope.http import require
@@ -155,6 +156,7 @@ class MigrateVMInput(Input):
 
 def adapter(db, provider_id):
     provider = find(db, Provider, provider_id)
+    require_platform_enabled(db, provider.type)
     if provider.type != 'proxmox':
         raise HTTPException(422, 'VM management is currently implemented only for Proxmox providers')
     credential = find(db, Credential, provider.credentials_id)

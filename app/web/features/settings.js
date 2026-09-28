@@ -395,8 +395,36 @@ function blueprintApprovalTimeoutForm(blueprintSettings) {
   });
 }
 
+async function platformSettingsView() {
+  const result = await api('/settings/platforms');
+  const platforms = result.items || [];
+  const actions = allowed('providers.read') ? [button('Połączenia z platformami', () => navigate('providers'))] : [];
+  dom.content.replaceChildren(
+    heading('Ustawienia → Platformy', actions),
+    node('section', { class: 'panel' },
+      node('p', { class: 'muted', text: 'Wyłączenie platformy blokuje nowe provisioning, Blueprinty, discovery i Day-2 Actions. Istniejąca konfiguracja oraz dane dostępowe pozostają zapisane.' }),
+      table([
+        { label: 'Platforma', value: item => node('strong', { text: item.label || item.name }) },
+        { label: 'Status', value: item => badge(item.enabled ? 'Włączona' : 'Wyłączona', item.enabled ? 'ok' : 'warning') },
+        { label: 'Konfiguracja', value: item => badge(item.configured ? 'Skonfigurowana' : 'Brak konfiguracji', item.configured ? 'info' : 'warning') },
+        { label: 'Stan połączenia', value: item => item.connection_status === 'not_configured' ? 'Brak konfiguracji' : 'Nie sprawdzono' },
+        { label: 'Połączenia', value: item => String(item.connection_count || 0) },
+      ], platforms, item => {
+        const rowActions = [];
+        if (item.enabled && allowed('providers.read')) rowActions.push(button('Konfiguruj', () => navigate('providers')));
+        if (item.enabled && item.configured && allowed('providers.update')) rowActions.push(button('Diagnostyka', () => navigate('/admin/tools/provider-diagnostics')));
+        if (allowed('settings.update')) rowActions.push(button(item.enabled ? 'Wyłącz' : 'Włącz', async () => {
+          await api('/settings/platforms/' + encodeURIComponent(item.name), { method: 'PUT', body: { enabled: !item.enabled } });
+          toast((item.label || item.name) + (item.enabled ? ' wyłączona.' : ' włączona.'));
+          await platformSettingsView();
+        }, item.enabled ? 'danger' : 'primary'));
+        return rowActions;
+      }))
+  );
+}
+
 async function settingsView() {
-  const [config, ssoConfig, health, updateSettings, blueprintSettings, executionSettings, executionCapabilities] = await Promise.all([
+  const [config, ssoConfig, health, updateSettings, blueprintSettings, executionSettings, executionCapabilities, platformSettings] = await Promise.all([
     api('/settings/ldap'),
     api('/settings/sso'),
     api('/health', { auth: false, allow: [503] }),
@@ -404,6 +432,7 @@ async function settingsView() {
     api('/settings/blueprints'),
     api('/settings/execution'),
     api('/settings/execution/capabilities'),
+    api('/settings/platforms'),
   ]);
 
   const user = state.identity?.user || {};
@@ -418,6 +447,8 @@ async function settingsView() {
   const workerCapacityShortfall = onlineWorkers < parallelLimit;
   const workerReconciliationSupported = executionCapabilities?.worker_reconciliation_supported === true;
   const installMode = executionCapabilities?.install_mode || 'unknown';
+  const platformItems = platformSettings?.items || [];
+  const enabledPlatforms = platformItems.filter(item => item.enabled);
 
   const reconcileWorkerCapacity = async () => {
     const result = await api('/settings/execution/reconcile', {
@@ -553,6 +584,18 @@ async function settingsView() {
       : null
   );
 
+  const platforms = settingsCard(
+    'server',
+    'Platformy',
+    'Globalnie włączaj i wyłączaj providery infrastruktury.',
+    node('div', { class: 'settings-values' },
+      settingsValue('Włączone', enabledPlatforms.map(item => item.label || item.name).join(', ') || 'Brak'),
+      settingsValue('Aktywne typy', String(enabledPlatforms.length)),
+      settingsValue('Dostępne typy', String(platformItems.length))),
+    node('div', { class: 'settings-card-actions' },
+      button('Zarządzaj platformami', () => navigate('/admin/settings/platforms'), 'primary'))
+  );
+
   const security = settingsCard(
     'shield',
     'Bezpieczeństwo',
@@ -642,11 +685,18 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.'),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, blueprints, security, sso),
+    node('div', { class: 'settings-grid' }, appearance, account, system, updates, platforms, blueprints, security, sso),
     ldap
   );
 }
 
+registerRoutedForm({
+  id: 'settings-platforms',
+  pattern: /^\/admin\/settings\/platforms$/,
+  parent: 'settings',
+  permission: 'settings.read',
+  label: 'Platformy',
+}, platformSettingsView);
 registerRoutedForm({
   id: 'settings-sso',
   pattern: /^\/admin\/settings\/sso$/,

@@ -1237,6 +1237,8 @@ def test_blueprint_requires_exactly_one_apply_and_vm_steps_depend_on_it(client, 
 
 
 def test_blueprint_rejects_proxmox_only_steps_for_aws(client, headers):
+    enabled = client.put('/api/v1/settings/platforms/aws', headers=headers, json={'enabled': True})
+    assert enabled.status_code == 200, enabled.text
     credential = client.post('/api/v1/credentials', headers=headers, json={
         'name': 'AWS Blueprint',
         'type': 'aws',

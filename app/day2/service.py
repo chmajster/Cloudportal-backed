@@ -306,7 +306,7 @@ def _availability_reason(db, target, action, adapter, permissions, config, state
 
 def action_catalog(db, target, credential, permissions):
     config = day2_settings(db)
-    adapter = day2_provider(credential)
+    adapter = day2_provider(db, credential)
     state = get_resource_state(db, target.resource_id)
     try:
         live = adapter.snapshot_state(target)
@@ -423,7 +423,7 @@ def validate_action(db, target, credential, action_id, params, reason, permissio
     if action.permission not in permissions:
         raise failure('PERMISSION_DENIED', status_code=403, details={'permission': action.permission})
     _validate_schema(action.schema, params)
-    adapter = day2_provider(credential)
+    adapter = day2_provider(db, credential)
     state = get_resource_state(db, target.resource_id)
     try:
         live = adapter.snapshot_state(target)
@@ -652,7 +652,7 @@ def create_action(db, request, actor, target, credential, action_id, params, rea
     if not validation['approval_required']:
         acquire_resource_lock(db, target.resource_id, row.id, day2_settings(db)['resource_lock_timeout'])
         quota_current = _current_for_diff(
-            action.id, target, day2_provider(credential), get_resource_state(db, target.resource_id), params
+            action.id, target, day2_provider(db, credential), get_resource_state(db, target.resource_id), params
         )
         prepare_day2_reservation(db, job, target, action.id, params, current=quota_current)
     db.add(JobLog(job_id=job.id, message='day2.requested: ' + action.id))
@@ -731,7 +731,7 @@ def approve_action(db, request, actor, row, permissions):
     validate_action(db, target, credential, row.action, row.parameters or {}, row.reason, permissions | {get_action(row.action).permission})
     acquire_resource_lock(db, row.resource_id, row.id, day2_settings(db)['resource_lock_timeout'])
     quota_current = _current_for_diff(
-        row.action, target, day2_provider(credential), get_resource_state(db, target.resource_id),
+        row.action, target, day2_provider(db, credential), get_resource_state(db, target.resource_id),
         row.parameters or {},
     )
     prepare_day2_reservation(db, job, target, row.action, row.parameters or {}, current=quota_current)

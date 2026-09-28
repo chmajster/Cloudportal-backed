@@ -143,6 +143,9 @@ class ProviderOutput(Output):
     name: str
     type: Literal['proxmox', 'vmware', 'aws', 'azure', 'openstack']
     credentials_id: int
+    enabled: bool
+    configured: bool
+    connection_status: str
     created_at: datetime
     updated_at: datetime
 

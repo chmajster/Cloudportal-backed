@@ -18,6 +18,7 @@ from app.inventory_sync import repair_inventory_from_states
 from app.jobs.lifecycle import release_pre_execution_allocations
 from app.models import Audit, Credential, Deployment, Job, JobLog, ManagedResource, ManagedVM, Provider, User, now
 from app.providers.registry import provider_for
+from app.providers.settings import platform_enabled_map, require_platform_enabled
 from app.security.core import audit
 from app.resource_scope.http import require
 from app.resource_scope.authorization import Scope
@@ -73,6 +74,7 @@ def history_log_message(message):
 
 def provider_adapter(db, provider_id):
     provider = find(db, Provider, provider_id)
+    require_platform_enabled(db, provider.type)
     credential = find(db, Credential, provider.credentials_id)
     return provider, provider_for(credential)
 
@@ -304,7 +306,11 @@ def managed_vms(
         by_provider = {}
         for row in rows:
             by_provider.setdefault(row.provider_id, []).append(row)
+        enabled_map = platform_enabled_map(db)
         for pid, managed in by_provider.items():
+            provider = find(db, Provider, pid)
+            if not enabled_map.get(str(provider.type).lower(), False):
+                continue
             _, adapter = provider_adapter(db, pid)
             discovered = {
                 int(vm['vmid']): vm

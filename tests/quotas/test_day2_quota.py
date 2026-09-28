@@ -23,8 +23,8 @@ from test_day2 import FakeAdapter, key, submit
 def resource(system, monkeypatch):
     client, headers, _ = system
     fake = FakeAdapter()
-    monkeypatch.setattr(service, 'day2_provider', lambda credential: fake)
-    monkeypatch.setattr(worker, 'day2_provider', lambda credential: fake)
+    monkeypatch.setattr(service, 'day2_provider', lambda db, credential: fake)
+    monkeypatch.setattr(worker, 'day2_provider', lambda db, credential: fake)
     with session() as db:
         owner = db.scalar(select(User).where(User.username == 'admin'))
         cred = Credential(name='day2-quota-test', type='proxmox', encrypted_secret=b'not-used')

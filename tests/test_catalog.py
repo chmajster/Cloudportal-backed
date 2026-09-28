@@ -1,3 +1,8 @@
+def _enable_platform(client, headers, name):
+    response = client.put('/api/v1/settings/platforms/' + name, headers=headers, json={'enabled': True})
+    assert response.status_code == 200, response.text
+
+
 def test_manifest_catalog_exposes_all_approved_templates(client, headers):
     response = client.get('/api/v1/templates', headers=headers)
     assert response.status_code == 200, response.text
@@ -66,6 +71,7 @@ def test_manifest_catalog_exposes_all_approved_templates(client, headers):
 
 def test_catalog_items_can_be_disabled_and_block_new_use(client, headers):
     import uuid
+    _enable_platform(client, headers, 'aws')
 
     templates = client.get('/api/v1/templates', headers=headers)
     assert templates.status_code == 200
@@ -160,6 +166,7 @@ def test_catalog_items_can_be_disabled_and_block_new_use(client, headers):
 
 
 def test_aws_provider_and_template_are_validated_before_job_creation(client, headers):
+    _enable_platform(client, headers, 'aws')
     credential = client.post('/api/v1/credentials', headers=headers, json={
         'name': 'AWS Terraform',
         'type': 'aws',
@@ -215,6 +222,7 @@ def test_aws_provider_and_template_are_validated_before_job_creation(client, hea
 
 
 def test_template_provider_mismatch_is_rejected(client, headers):
+    _enable_platform(client, headers, 'aws')
     credential = client.post('/api/v1/credentials', headers=headers, json={
         'name': 'AWS mismatch',
         'type': 'aws',

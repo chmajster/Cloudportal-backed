@@ -17,6 +17,8 @@ def test_registry_contains_native_multicloud_adapters():
 
 def test_multicloud_discovery_is_routed_and_sanitized(client, headers, monkeypatch):
     for kind in ['aws', 'azure', 'vmware', 'openstack']:
+        enabled = client.put('/api/v1/settings/platforms/' + kind, headers=headers, json={'enabled': True})
+        assert enabled.status_code == 200, enabled.text
         credential = client.post('/api/v1/credentials', headers=headers, json=_credential_payload(kind))
         assert credential.status_code == 201, credential.text
         provider = client.post('/api/v1/providers', headers=headers, json={
