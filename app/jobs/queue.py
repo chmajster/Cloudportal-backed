@@ -352,6 +352,8 @@ def queued_dispatch_candidates(db, batch_size=100):
 
 def _dispatch_once_unfenced():
     materialize_scheduled_jobs()
+    from app.onboarding.scheduler import materialize_onboarding_jobs
+    materialize_onboarding_jobs()
     q = queue()
     with session() as db:
         acquire_dispatch_capacity_lock(db)
