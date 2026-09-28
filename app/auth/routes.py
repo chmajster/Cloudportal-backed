@@ -1,7 +1,9 @@
 import re
 import secrets
 from datetime import timedelta
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy import or_, select, update
 from app.api.schemas import Login, Refresh, ResetPassword, ChangePassword
 from app.api.outputs import IdentityOutput, SessionOutput, LogoutOutput, ResetOutput, PasswordChangedOutput
@@ -9,6 +11,8 @@ from app.database import get_db
 from app.models import PasswordReset, Token, User, now
 from app.config import settings
 from app.auth.ldap import authenticate_ldap
+from app.auth.oidc import (SSOExchangeInput, authenticate_sso_callback, begin_sso, consume_sso_handoff,
+                           discard_sso_state, issue_sso_handoff, sso_settings)
 from app.security.core import (authenticate, audit, digest, dummy_hash, effective_permissions, issue_token,
                                password_hasher, revoke_user, throttle, verify_password)
 
@@ -27,6 +31,61 @@ def session_pair(db, user, family=None):
     return {'access_token': access, 'refresh_token': refresh, 'token_type': 'bearer', 'expires_in': settings().access_seconds,
             'user': user_public(user), 'roles': [{'id': r.id, 'name': r.name} for r in user.roles],
             'permissions': sorted(effective_permissions(user))}
+
+
+@router.get('/sso/config')
+def sso_config(db=Depends(get_db, scope='function')):
+    config = sso_settings(db)
+    return {
+        'enabled': bool(config.get('enabled')),
+        'provider_name': config.get('provider_name') or 'SSO',
+    }
+
+
+@router.get('/sso/login', include_in_schema=False)
+def sso_login(request: Request, db=Depends(get_db, scope='function')):
+    throttle('sso:ip:' + (request.client.host if request.client else ''), 60, 60)
+    return RedirectResponse(begin_sso(db), status_code=302)
+
+
+@router.get('/sso/callback', include_in_schema=False)
+def sso_callback(request: Request, state: str | None = None, code: str | None = None,
+                 error: str | None = None, db=Depends(get_db, scope='function')):
+    if error:
+        discard_sso_state(state)
+        audit(db, request, 'auth.sso', 'users', None, 'failure')
+        return RedirectResponse('/ui/?sso_error=' + quote('provider_denied', safe=''), status_code=303)
+    if not state or not code:
+        discard_sso_state(state)
+        audit(db, request, 'auth.sso', 'users', None, 'failure')
+        return RedirectResponse('/ui/?sso_error=' + quote('invalid_callback', safe=''), status_code=303)
+    try:
+        user, created = authenticate_sso_callback(db, state=state, code=code)
+        if created:
+            audit(db, request, 'user.oidc_provisioned', 'users', user.id, user_id=user.id)
+        audit(db, request, 'auth.sso', 'users', user.id, user_id=user.id)
+        db.commit()
+        handoff = issue_sso_handoff(user.id)
+        return RedirectResponse('/ui/?sso_handoff=' + quote(handoff, safe=''), status_code=303)
+    except HTTPException as exc:
+        db.rollback()
+        audit(db, request, 'auth.sso', 'users', None, 'failure')
+        db.commit()
+        reason = 'identity_collision' if exc.status_code == 409 else 'authentication_failed'
+        return RedirectResponse('/ui/?sso_error=' + quote(reason, safe=''), status_code=303)
+
+
+@router.post('/sso/exchange', response_model=SessionOutput)
+def sso_exchange(data: SSOExchangeInput, request: Request, db=Depends(get_db, scope='function')):
+    user_id = consume_sso_handoff(data.token)
+    user = db.get(User, user_id)
+    if not user or user.auth_source != 'oidc' or not user.is_active or user.is_locked or user.is_service_account:
+        raise HTTPException(401, 'SSO account is unavailable')
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.last_login_at = now()
+    audit(db, request, 'auth.sso_session', 'users', user.id, user_id=user.id)
+    return session_pair(db, user)
 
 
 @router.post('/login', response_model=SessionOutput)
@@ -98,7 +157,7 @@ def login(data: Login, request: Request, db=Depends(get_db, scope='function')):
                     user.last_name = ldap_profile['last_name']
 
     if not user or not valid or locked or not user.is_active or user.is_service_account:
-        if user and not locked and user.is_active:
+        if user and user.auth_source in {'local', 'ldap'} and not locked and user.is_active:
             user.failed_login_attempts += 1
             if user.failed_login_attempts >= settings().login_attempts:
                 user.locked_until = now() + timedelta(seconds=settings().lockout_seconds)
@@ -176,7 +235,7 @@ def reset_password(data: ResetPassword, request: Request, db=Depends(get_db, sco
     if not user.is_active or user.is_service_account:
         raise HTTPException(400, 'Account unavailable')
     if user.auth_source != 'local':
-        raise HTTPException(409, 'Password is managed by LDAP')
+        raise HTTPException(409, 'Password is managed by an external identity provider')
     user.password_hash = password_hasher.hash(data.password)
     user.must_change_password = False
     reset.consumed_at = now()

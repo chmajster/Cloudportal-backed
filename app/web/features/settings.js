@@ -38,6 +38,103 @@ function ldapFilterCard(title, filter) {
     node('code', { text: filter }));
 }
 
+function ssoSettingsForm(config) {
+  const defaultRedirect = location.origin + '/api/v1/auth/sso/callback';
+  const fields = node('div', { class: 'form-grid' },
+    checkboxField('Włącz logowanie SSO', 'enabled', Boolean(config.enabled)),
+    field('Nazwa dostawcy', 'provider_name', {
+      required: true,
+      value: config.provider_name || 'OpenSSO',
+      placeholder: 'OpenSSO',
+    }),
+    field('Issuer OIDC', 'issuer', {
+      required: true,
+      value: config.issuer || '',
+      placeholder: 'https://sso.example.com',
+      wide: true,
+      help: 'Cloudportal pobierze automatycznie /.well-known/openid-configuration.',
+    }),
+    field('Client ID', 'client_id', {
+      required: true,
+      value: config.client_id || '',
+      placeholder: 'cloudportal',
+      wide: true,
+    }),
+    field('Client secret', 'client_secret', {
+      type: 'password',
+      value: '',
+      autocomplete: 'new-password',
+      wide: true,
+      placeholder: config.client_secret_configured ? '•••••••• (zapisany)' : 'Sekret klienta OIDC',
+      help: config.client_secret_configured
+        ? 'Sekret jest zapisany zaszyfrowany. Pozostaw puste, aby go nie zmieniać.'
+        : 'Dla publicznego klienta PKCE wybierz metodę none. Dla OpenSSO zalecany jest klient confidential.',
+    }),
+    field('Redirect URI', 'redirect_uri', {
+      required: true,
+      value: config.redirect_uri || defaultRedirect,
+      wide: true,
+      help: 'Ten adres musi być zarejestrowany dokładnie po stronie dostawcy SSO.',
+    }),
+    field('Scopes', 'scopes', {
+      required: true,
+      value: (config.scopes || ['openid', 'profile', 'email', 'groups']).join(' '),
+      wide: true,
+      help: 'Lista rozdzielona spacją lub przecinkiem. Scope openid jest wymagany.',
+    }),
+    selectField('Uwierzytelnienie token endpoint', 'token_endpoint_auth_method', [
+      { value: 'client_secret_post', label: 'client_secret_post' },
+      { value: 'client_secret_basic', label: 'client_secret_basic' },
+      { value: 'none', label: 'none (public client + PKCE)' },
+    ], config.token_endpoint_auth_method || 'client_secret_post', { required: true, wide: true }),
+    checkboxField('Weryfikuj TLS dostawcy SSO', 'verify_tls', config.verify_tls !== false),
+    checkboxField('Zezwól na HTTP (tylko laboratorium)', 'allow_insecure_http', Boolean(config.allow_insecure_http)),
+    field('Claim loginu', 'username_claim', { required: true, value: config.username_claim || 'preferred_username' }),
+    field('Claim e-mail', 'email_claim', { required: true, value: config.email_claim || 'email' }),
+    field('Claim imienia', 'first_name_claim', { required: true, value: config.first_name_claim || 'given_name' }),
+    field('Claim nazwiska', 'last_name_claim', { required: true, value: config.last_name_claim || 'family_name' })
+  );
+
+  openModal({
+    title: 'Konfiguracja SSO / OIDC',
+    eyebrow: 'Ustawienia uwierzytelniania',
+    body: fields,
+    submitLabel: 'Zapisz konfigurację',
+    wide: true,
+    onSubmit: async data => {
+      const scopes = String(data.get('scopes') || '')
+        .split(/[\s,]+/)
+        .map(value => value.trim())
+        .filter(Boolean);
+      const payload = {
+        enabled: data.has('enabled'),
+        provider_name: data.get('provider_name'),
+        issuer: data.get('issuer'),
+        client_id: data.get('client_id'),
+        redirect_uri: data.get('redirect_uri'),
+        scopes,
+        token_endpoint_auth_method: data.get('token_endpoint_auth_method'),
+        verify_tls: data.has('verify_tls'),
+        allow_insecure_http: data.has('allow_insecure_http'),
+        username_claim: data.get('username_claim'),
+        email_claim: data.get('email_claim'),
+        first_name_claim: data.get('first_name_claim'),
+        last_name_claim: data.get('last_name_claim'),
+      };
+      if (data.get('client_secret')) payload.client_secret = data.get('client_secret');
+      await api('/settings/sso', { method: 'PUT', body: payload });
+      toast('Konfiguracja SSO zapisana.');
+      navigate('settings');
+    },
+  });
+}
+
+async function testSsoConnection() {
+  const result = await api('/settings/sso/test', { method: 'POST' });
+  toast('OIDC działa. Zweryfikowano discovery i ' + result.signing_keys + ' kluczy JWKS.');
+}
+
+
 function ldapSettingsForm(config) {
   const fields = node('div', { class: 'form-grid' },
     checkboxField('Włącz logowanie LDAP', 'enabled', Boolean(config.enabled)),
@@ -299,8 +396,9 @@ function blueprintApprovalTimeoutForm(blueprintSettings) {
 }
 
 async function settingsView() {
-  const [config, health, updateSettings, blueprintSettings, executionSettings, executionCapabilities] = await Promise.all([
+  const [config, ssoConfig, health, updateSettings, blueprintSettings, executionSettings, executionCapabilities] = await Promise.all([
     api('/settings/ldap'),
+    api('/settings/sso'),
     api('/health', { auth: false, allow: [503] }),
     allowed('updates.read') ? api('/updates/settings').catch(() => null) : Promise.resolve(null),
     api('/settings/blueprints'),
@@ -468,6 +566,25 @@ async function settingsView() {
       allowed('tokens.read') ? button('Tokeny API', () => navigate('tokens')) : null)
   );
 
+  const ssoActions = [];
+  if (allowed('settings.update')) {
+    ssoActions.push(button('Testuj OIDC', () => testSsoConnection().catch(error => toast(error.message, 'error'))));
+    ssoActions.push(button('Konfiguruj SSO', () => navigate('/admin/settings/sso'), 'primary'));
+  }
+  const sso = settingsCard(
+    'shield',
+    'SSO / OIDC',
+    'Logowanie przez zewnętrzny Identity Provider z Authorization Code + PKCE. OpenSSO jest obsługiwany bezpośrednio.',
+    node('div', { class: 'settings-values' },
+      settingsValue('Status', ssoConfig.enabled ? 'Włączone' : 'Wyłączone'),
+      settingsValue('Dostawca', ssoConfig.provider_name || 'OpenSSO'),
+      settingsValue('Issuer', ssoConfig.issuer || 'Nie skonfigurowano', 'mono'),
+      settingsValue('Client ID', ssoConfig.client_id || 'Nie skonfigurowano', 'mono'),
+      settingsValue('Client secret', ssoConfig.client_secret_configured ? 'Skonfigurowany' : 'Brak'),
+      settingsValue('Token auth', ssoConfig.token_endpoint_auth_method || 'client_secret_post')),
+    ssoActions.length ? node('div', { class: 'settings-card-actions' }, ssoActions) : null
+  );
+
   const ldapActions = [];
   if (allowed('settings.update')) {
     ldapActions.push(button('Testuj połączenie', testLdap));
@@ -525,11 +642,18 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.'),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, blueprints, security),
+    node('div', { class: 'settings-grid' }, appearance, account, system, updates, blueprints, security, sso),
     ldap
   );
 }
 
+registerRoutedForm({
+  id: 'settings-sso',
+  pattern: /^\/admin\/settings\/sso$/,
+  parent: 'settings',
+  permission: 'settings.update',
+  label: 'Ustawienia',
+}, async () => ssoSettingsForm(await api('/settings/sso')));
 registerRoutedForm({
   id: 'settings-ldap',
   pattern: /^\/admin\/settings\/ldap$/,

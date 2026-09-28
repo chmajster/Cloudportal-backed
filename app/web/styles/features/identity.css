@@ -680,3 +680,26 @@
     flex-direction: column;
   }
 }
+
+
+/* SSO selector on the login surface belongs to the identity domain. */
+.login-separator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0;
+  color: var(--muted);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.login-separator::before,
+.login-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.login-separator span {
+  flex: 0 0 auto;
+}

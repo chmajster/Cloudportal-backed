@@ -12,6 +12,12 @@ const RBAC_TABS = [
   { id: 'governance', label: 'Zakresy i polityki' },
 ];
 
+function authSourceBadge(user) {
+  if (user.auth_source === 'ldap') return badge('LDAP', 'info');
+  if (user.auth_source === 'oidc') return badge('SSO / OIDC', 'ok');
+  return badge('Lokalne', '');
+}
+
 function setRbacTab(tab) {
   rbacTab = RBAC_TABS.some(item => item.id === tab) ? tab : 'overview';
   return rolesView();
@@ -190,7 +196,7 @@ async function rbacAssignmentsPanel(roles, users) {
   const rows = users || [];
   const userTable = table([
     { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
-    { label: 'Źródło', value: user => badge(user.auth_source === 'ldap' ? 'LDAP' : 'Lokalne', user.auth_source === 'ldap' ? 'info' : '') },
+    { label: 'Źródło', value: user => authSourceBadge(user) },
     { label: 'Typ', value: user => user.is_service_account ? 'Konto serwisowe' : 'Użytkownik' },
     { label: 'Status', value: user => badge(user.is_locked ? 'Zablokowany' : user.is_active ? 'Aktywny' : 'Wyłączony', user.is_locked || !user.is_active ? 'danger' : 'ok') },
   ], rows, user => [button(rbacSelectedUserId === Number(user.id) ? 'Wybrany' : 'Zarządzaj dostępem', () => renderUser(user).catch(error => toast(error.message, 'error')), rbacSelectedUserId === Number(user.id) ? 'primary' : 'ghost')]);
@@ -330,7 +336,7 @@ async function usersView() {
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
       { label: 'Typ', value: user => badge(user.is_service_account ? 'serwisowe' : 'osobowe', user.is_service_account ? 'info' : '') },
-      { label: 'Logowanie', value: user => badge(user.auth_source === 'ldap' ? 'LDAP' : 'Lokalne', user.auth_source === 'ldap' ? 'info' : '') },
+      { label: 'Logowanie', value: user => authSourceBadge(user) },
       { label: 'Status', value: user => { const status = user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive'; return badge(statusLabel(status), statusKind(status)); } },
       { label: 'Ostatnie logowanie', value: user => formatDate(user.last_login_at) },
     ], users, user => userActions(user)));
@@ -351,7 +357,7 @@ function userActions(user) {
     actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
     actions.push(button(user.is_active ? 'Wyłącz' : 'Włącz', () => userCommand(user, user.is_active ? 'disable' : 'enable')));
-    if (!user.is_service_account && user.is_active && user.auth_source !== 'ldap') actions.push(button('Reset hasła', () => resetUserPassword(user)));
+    if (!user.is_service_account && user.is_active && user.auth_source === 'local') actions.push(button('Reset hasła', () => resetUserPassword(user)));
   }
   if (allowed('users.delete')) actions.push(button('Usuń', () => confirmAction('Usuń użytkownika', `Konto ${user.username} zostanie zanonimizowane i utraci dostęp.`, async () => { await api(`/users/${user.id}`, { method: 'DELETE' }); toast('Użytkownik usunięty.'); navigate('users'); }), 'danger'));
   return actions;
@@ -659,9 +665,14 @@ async function accountView() {
       accountValue('Role', roles),
       accountValue('Ostatnie logowanie', formatDate(user.last_login_at))));
 
-  const passwordMessage = user.must_change_password
-    ? 'Konto używa początkowego hasła administratora. Ustaw własne hasło, aby odblokować pełny dostęp.'
-    : 'Zmiana hasła unieważni aktywne sesje i tokeny resetu. Po zapisaniu zalogujesz się ponownie.';
+  const externalAuth = user.auth_source !== 'local';
+  const passwordMessage = externalAuth
+    ? (user.auth_source === 'oidc'
+      ? 'Uwierzytelnianie i hasło są zarządzane przez dostawcę SSO / OIDC.'
+      : 'Uwierzytelnianie i hasło są zarządzane przez katalog LDAP.')
+    : user.must_change_password
+      ? 'Konto używa początkowego hasła administratora. Ustaw własne hasło, aby odblokować pełny dostęp.'
+      : 'Zmiana hasła unieważni aktywne sesje i tokeny resetu. Po zapisaniu zalogujesz się ponownie.';
 
   const security = node('section', { class: 'panel account-card account-security-card' },
     node('div', { class: 'account-card-heading' },
@@ -669,9 +680,10 @@ async function accountView() {
       node('div', {},
         node('span', { class: 'account-kicker', text: 'Ochrona dostępu' }),
         node('h2', { text: 'Bezpieczeństwo konta' })),
-      user.must_change_password ? badge('Wymagana zmiana', 'warning') : badge('Hasło ustawione', 'ok')),
-    node('p', { class: user.must_change_password ? 'form-error account-security-copy' : 'muted account-security-copy', text: passwordMessage }),
-    node('div', { class: 'account-security-actions' },
+      externalAuth ? authSourceBadge(user)
+        : user.must_change_password ? badge('Wymagana zmiana', 'warning') : badge('Hasło ustawione', 'ok')),
+    node('p', { class: !externalAuth && user.must_change_password ? 'form-error account-security-copy' : 'muted account-security-copy', text: passwordMessage }),
+    externalAuth ? null : node('div', { class: 'account-security-actions' },
       button(user.must_change_password ? 'Ustaw nowe hasło' : 'Zmień hasło', () => navigate('/account/password' + (user.must_change_password ? '?required=1' : '')), 'primary')));
 
   const permissionPanel = node('section', { class: 'panel account-permissions-panel' },
@@ -692,6 +704,11 @@ async function accountView() {
 }
 
 function changePassword(required = false) {
+  if (state.identity?.user?.auth_source !== 'local') {
+    toast('Hasło tego konta jest zarządzane przez zewnętrznego dostawcę tożsamości.', 'error');
+    navigate('account');
+    return;
+  }
   const currentPassword = field('Obecne hasło', 'current_password', {
     type: 'password',
     autocomplete: 'current-password',

@@ -24,7 +24,7 @@ class UserOutput(Output):
     is_active: bool
     is_locked: bool
     is_service_account: bool
-    auth_source: Literal['local', 'ldap']
+    auth_source: Literal['local', 'ldap', 'oidc']
     must_change_password: bool
     created_at: datetime
     updated_at: datetime
@@ -48,6 +48,7 @@ class BlueprintAvatarOutput(Output):
     id: str
     name: str
     data_uri: str
+
 
 
 class LDAPSettingsOutput(Output):

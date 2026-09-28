@@ -96,6 +96,7 @@ class BlueprintExecutionSettingsInput(Input):
     approval_timeout_hours: int = Field(default=48, ge=1, le=720)
 
 
+
 class LDAPSettingsInput(Input):
     enabled: bool = False
     url: Annotated[str, Field(min_length=8, max_length=2048)] = 'ldap://localhost:389'
