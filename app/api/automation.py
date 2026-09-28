@@ -454,6 +454,26 @@ def blueprint_yaml_render(data: BlueprintInput, actor=Depends(require('blueprint
     }
 
 
+@router.get('/blueprints/vm-classification', response_model=VMClassificationSettingsOutput)
+def blueprint_vm_classification(
+    tenant_id: Annotated[str, Query(min_length=36, max_length=36)],
+    project_id: Annotated[str, Query(min_length=36, max_length=36)],
+    permission: BlueprintScopePermission = 'blueprints.create',
+    actor=Depends(authenticate),
+    db=Depends(get_db, scope='function'),
+):
+    from app.projects.authorization import authorize as authorize_project
+
+    access = authorize_project(
+        db,
+        Principal.from_token(actor),
+        project_id,
+        permission,
+        tenant_id=tenant_id,
+    )
+    return vm_classification_for_tenant(db, access.tenant.id)
+
+
 @router.get('/blueprints/creation-scopes', response_model=Items[BlueprintCreationScopeOutput])
 def blueprint_creation_scopes(limit: Limit = 200, offset: Offset = 0,
                               permission: BlueprintScopePermission = 'blueprints.create',
