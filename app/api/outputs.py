@@ -70,6 +70,23 @@ class LDAPTestOutput(Output):
     message: str
 
 
+class LDAPDiagnosticStepOutput(Output):
+    key: str
+    label: str
+    status: Literal['ok', 'warning', 'error', 'skipped']
+    message: str
+    detail: str | None = None
+
+
+class LDAPDiagnosticsOutput(Output):
+    ok: bool
+    login_ready: bool
+    password_tested: bool
+    message: str
+    steps: list[LDAPDiagnosticStepOutput]
+    profile: dict[str, str] | None = None
+
+
 class RoleReference(Output):
     id: int
     name: str
