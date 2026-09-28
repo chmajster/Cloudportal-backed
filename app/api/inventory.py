@@ -26,12 +26,12 @@ from app.quotas.service import account_confirmed_absent, reconcile_terraform_pre
 
 router = APIRouter(prefix='/inventory', tags=['inventory'])
 FIELDS = (
-    'tenant_id project_id id provider_id deployment_id node vm_id name management_mode lifecycle_status '
-    'created_by created_at updated_at destroyed_at'
+    'tenant_id project_id id provider_id deployment_id node vm_id name management_mode management_source '
+    'provisioning_source metadata_json lifecycle_status created_by created_at updated_at destroyed_at'
 )
 RESOURCE_FIELDS = (
     'tenant_id project_id id deployment_id provider_id provider resource_type external_id name primary_ip '
-    'lifecycle_status metadata_json created_by created_at updated_at destroyed_at'
+    'lifecycle_status metadata_json management_source provisioning_source created_by created_at updated_at destroyed_at'
 )
 
 
@@ -57,7 +57,7 @@ def resource_public(row):
 HISTORY_LOG_PREFIXES = (
     'job.', 'workflow.', 'terraform.', 'inventory.', 'cloud_init', 'cloud-init',
     'wait_for_', 'ansible.', 'awx.', 'provider.', 'proxmox.', 'hostname.',
-    'ipam.', 'guest_', 'snapshot.', 'backup.',
+    'ipam.', 'guest_', 'snapshot.', 'backup.', 'vm.discovery.', 'vm.onboarding.', 'vm.sync.', 'vm.drift.', 'vm.missing.',
 )
 
 
