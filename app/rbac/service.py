@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy import select
-from app.models import Permission, Role, Setting, User
+from app.models import Permission, Role, Setting, User, now
 from app.security.core import effective_permissions
 from app.rbac.locking import governance_lock
 from app.projects.permissions import PROJECT_DEFAULT_ROLES
@@ -226,5 +226,54 @@ def ensure_admin_remains(db):
         User.is_locked.is_(False),
         User.is_service_account.is_(False),
     )).all()
-    if not any(ALL_PERMISSIONS <= effective_permissions(u) for u in users):
-        raise HTTPException(409, 'At least one active human administrator with all permissions must remain')
+    if any(ALL_PERMISSIONS <= effective_permissions(u) for u in users):
+        return
+
+    # Generic enterprise assignments may be the authoritative global-admin
+    # grant after migration away from legacy UserRole. Import lazily to avoid a
+    # module cycle during bootstrap.
+    from sqlalchemy import and_, or_
+    from app.iam.models import Group, GroupMember, RoleAssignment, RoleProfile
+    instant = now()
+    candidates = db.scalars(
+        select(RoleAssignment).where(
+            RoleAssignment.effect == 'ALLOW',
+            RoleAssignment.scope_type == 'GLOBAL',
+            RoleAssignment.enabled.is_(True),
+            or_(RoleAssignment.valid_from.is_(None), RoleAssignment.valid_from <= instant),
+            or_(RoleAssignment.valid_until.is_(None), RoleAssignment.valid_until > instant),
+            RoleAssignment.subject_type.in_(('USER', 'GROUP')),
+        )
+    ).all()
+    for assignment in candidates:
+        profile = db.get(RoleProfile, assignment.role_id)
+        if profile is not None and not profile.enabled:
+            continue
+        role = db.get(Role, assignment.role_id)
+        if role is None or not ALL_PERMISSIONS <= {p.name for p in role.permissions}:
+            continue
+        if assignment.permission_ceiling is not None and not ALL_PERMISSIONS <= set(assignment.permission_ceiling):
+            continue
+        if assignment.subject_type == 'USER' and assignment.subject_id.isdigit():
+            user = db.get(User, int(assignment.subject_id))
+            if (user is not None and user.is_active and not user.is_locked
+                    and not user.is_service_account):
+                return
+        if assignment.subject_type == 'GROUP':
+            group = db.get(Group, assignment.subject_id)
+            if group is None or not group.enabled:
+                continue
+            member = db.scalar(
+                select(User.id)
+                .join(GroupMember, GroupMember.user_id == User.id)
+                .where(
+                    GroupMember.group_id == assignment.subject_id,
+                    User.is_active.is_(True),
+                    User.is_locked.is_(False),
+                    User.is_service_account.is_(False),
+                )
+                .limit(1)
+            )
+            if member is not None:
+                return
+    raise HTTPException(409, 'At least one active human administrator with all permissions must remain')
