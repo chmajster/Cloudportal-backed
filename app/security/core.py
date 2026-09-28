@@ -276,7 +276,18 @@ def require(permission):
             write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
         )
         if decision.decision != 'ALLOW':
-            audit(db, request, 'authorization.denied', permission, result='denied')
+            audit(
+                db,
+                request,
+                'authorization.denied',
+                permission,
+                result='denied',
+                details={
+                    'required_permission': permission,
+                    'decision': decision.decision,
+                    'reason': decision.reason,
+                },
+            )
             db.commit()
             status = 409 if decision.decision == 'REQUIRES_APPROVAL' else 403
             error = 'approval_required' if status == 409 else 'permission_denied'
@@ -297,7 +308,38 @@ def require(permission):
     return dependency
 
 
-def audit(db, request, action, resource='', resource_id=None, result='success', user_id=None):
+def _audit_safe(value):
+    sensitive = {
+        'password', 'secret', 'token', 'access_token', 'refresh_token',
+        'token_secret', 'client_secret', 'private_key', 'authorization',
+        'encrypted_secret',
+    }
+    if isinstance(value, dict):
+        return {
+            str(key): ('[REDACTED]' if str(key).lower() in sensitive else _audit_safe(item))
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_audit_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def audit(
+    db,
+    request,
+    action,
+    resource='',
+    resource_id=None,
+    result='success',
+    user_id=None,
+    *,
+    old_value=None,
+    new_value=None,
+    scope=None,
+    details=None,
+):
     actor = getattr(request.state, 'actor', None)
     effective_user_id = user_id if user_id is not None else actor.user_id if actor else None
     effective_token_id = actor.id if actor else None
@@ -314,6 +356,10 @@ def audit(db, request, action, resource='', resource_id=None, result='success', 
         resource_id=resource_id_text,
         result=result,
         request_id=request.state.request_id,
+        old_value=_audit_safe(old_value) if old_value is not None else None,
+        new_value=_audit_safe(new_value) if new_value is not None else None,
+        scope=_audit_safe(scope) if scope is not None else None,
+        details=_audit_safe(details) if details is not None else None,
     ))
 
     # Audit is already the common transaction boundary for state-changing API
