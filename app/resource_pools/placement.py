@@ -1054,7 +1054,7 @@ def release_job_placement(db, job_id: str, *, status='RELEASED'):
     ).with_for_update()))
     for row in rows:
         release_reservation(db, row, status=status)
-    return len(rows)
+    return [row.id for row in rows]
 
 
 def _request_from_decision(decision: PlacementDecision) -> PlacementRequest:
