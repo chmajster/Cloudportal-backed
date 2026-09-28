@@ -1633,3 +1633,79 @@ def test_dispatch_candidates_do_not_starve_regular_jobs_behind_deferred_blueprin
         candidates = queued_dispatch_candidates(db, batch_size=100)
         assert any(job.id == runnable_id for job in candidates)
 
+
+
+def test_blueprint_runtime_awx_prompt_requires_choice_and_can_skip_onboarding(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    awx_credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'AWX runtime prompt',
+        'type': 'awx',
+        'endpoint': 'https://awx.example.test',
+        'username': 'cloudportal',
+        'secrets': {'token': 'awx-runtime-token'},
+    })
+    assert awx_credential.status_code == 201, awx_credential.text
+
+    payload = {
+        'slug': 'runtime-awx-choice',
+        'name': 'Runtime AWX choice',
+        'deployment': {
+            'name': 'runtime-awx-choice',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'runtime-awx-choice',
+            },
+            'awx': {
+                'credential_id': awx_credential.json()['id'],
+                'inventory_name': '<Projekt>-<APMID>-<ENV>',
+                'group_by_environment': True,
+                'group_by_apmid': True,
+                'remove_on_destroy': True,
+            },
+            'prompt_awx_on_execute': True,
+        },
+        'workflow': [
+            {'id': 'cloud_init', 'type': 'cloud_init'},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud_init']},
+            {'id': 'guest_ip', 'type': 'wait_for_ip', 'depends_on': ['apply'], 'timeout': 180},
+            {'id': 'awx', 'type': 'register_awx', 'depends_on': ['guest_ip']},
+        ],
+    }
+    created = client.post('/api/v1/blueprints', headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+    blueprint = created.json()
+    assert blueprint['deployment']['prompt_awx_on_execute'] is True
+
+    missing = client.post(
+        f"/api/v1/blueprints/{blueprint['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert missing.status_code == 422, missing.text
+    assert 'Choose whether' in missing.text
+
+    skipped = client.post(
+        f"/api/v1/blueprints/{blueprint['id']}/execute",
+        headers=key(headers),
+        json={'awx_onboarding': False},
+    )
+    assert skipped.status_code == 202, skipped.text
+    skipped_body = skipped.json()
+    assert skipped_body['workflow']['awx'] is None
+    assert skipped_body['workflow']['blueprint']['awx_onboarding'] is False
+    skipped_steps = skipped_body['workflow']['blueprint']['steps']
+    assert all(step['type'] != 'register_awx' for step in skipped_steps)
+
+    enabled = client.post(
+        f"/api/v1/blueprints/{blueprint['id']}/execute",
+        headers=key(headers),
+        json={'awx_onboarding': True},
+    )
+    assert enabled.status_code == 202, enabled.text
+    enabled_body = enabled.json()
+    assert enabled_body['workflow']['awx']['credential_id'] == awx_credential.json()['id']
+    assert enabled_body['workflow']['blueprint']['awx_onboarding'] is True
+    assert any(step['type'] == 'register_awx' for step in enabled_body['workflow']['blueprint']['steps'])
