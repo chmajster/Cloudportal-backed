@@ -10,7 +10,7 @@ from sqlalchemy import and_, or_, select
 from app.models import Permission, Role, RolePermission, Token, User, UserRole, now
 from app.projects.models import Project, ProjectMembership, ProjectRoleAssignment, ProjectRoleGrant
 from app.tenancy.models import Tenant, TenantMembership, TenantRoleAssignment, TenantRoleGrant
-from app.tenancy.authorization import Principal, identity
+from app.tenancy.authorization import Identity, Principal, identity
 from app.policy_engine.engine import evaluate, evaluate_condition, validate_condition_tree
 from app.policy_engine.models import PolicyDefinition, PolicyException
 from app.rbac.service import ALL_PERMISSIONS
@@ -156,7 +156,9 @@ def _context(scope: dict, actor, resource: Mapping[str, Any] | None, extra: Mapp
 
 
 def _subjects(db, actor) -> list[tuple[str, str]]:
-    result = [('USER', str(actor.user_id)), ('API_TOKEN', str(actor.id))]
+    result = [('USER', str(actor.user_id))]
+    if getattr(actor, 'id', None) is not None and getattr(actor, 'kind', None) != 'simulation':
+        result.append(('API_TOKEN', str(actor.id)))
     if getattr(actor.user, 'is_service_account', False):
         result.append(('SERVICE_ACCOUNT', str(actor.user_id)))
     groups = db.scalars(
@@ -363,7 +365,8 @@ def _validate_scope_resource(db, scope: dict, *, write: bool):
 
 
 def _active_break_glass(db, actor):
-    if getattr(actor, 'kind', None) != 'session' or getattr(actor.user, 'is_service_account', False):
+    if (getattr(actor, 'kind', None) not in {'session', 'simulation'}
+            or getattr(actor.user, 'is_service_account', False)):
         return None
     instant = _instant()
     return db.scalar(
@@ -409,6 +412,33 @@ def _policy_decision(db, context: dict, scope: dict):
     return evaluate(policies, context, exceptions)
 
 
+@dataclass(frozen=True, slots=True)
+class SimulatedActor:
+    user_id: int
+    user: User
+    id: int | None = None
+    kind: str = 'simulation'
+    scopes: tuple[str, ...] = ()
+
+
+def _simulation_identity(db, user_id: int) -> tuple[SimulatedActor, Identity]:
+    user = db.get(User, user_id)
+    if user is None or not user.is_active or user.is_locked:
+        raise HTTPException(404, {'error': 'user_not_found'})
+    permissions = frozenset(db.scalars(
+        select(Permission.name)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(UserRole, UserRole.role_id == RolePermission.role_id)
+        .where(UserRole.user_id == user_id)
+    ))
+    return SimulatedActor(user_id=user_id, user=user), Identity(
+        user_id=user_id,
+        token_id=-1,
+        global_permissions=permissions,
+        token_ceiling=None,
+    )
+
+
 def authorize(
     db,
     actor,
@@ -418,16 +448,21 @@ def authorize(
     resource: Mapping[str, Any] | None = None,
     context: Mapping[str, Any] | None = None,
     write: bool = False,
+    subject_user_id: int | None = None,
 ) -> AuthorizationDecision:
     if action not in ALL_PERMISSIONS:
         raise HTTPException(500, {'error': 'unknown_permission', 'permission': action})
 
     target = normalize_scope(scope)
     _validate_scope_resource(db, target, write=write)
-    actor_identity = identity(db, Principal.from_token(actor))
+    if subject_user_id is None:
+        actor_identity = identity(db, Principal.from_token(actor))
+        evaluated_actor = actor
+    else:
+        evaluated_actor, actor_identity = _simulation_identity(db, subject_user_id)
 
     token_ceiling = None
-    if actor.kind == 'api':
+    if subject_user_id is None and actor.kind == 'api':
         token_ceiling = tuple(actor.scopes or ())
         if not PermissionMatcher.any_matches(token_ceiling, action):
             return AuthorizationDecision(
@@ -436,10 +471,10 @@ def authorize(
                 ({'stage': 'token_ceiling', 'matched': False},),
             )
 
-    evaluation_context = _context(target, actor, resource, context)
+    evaluation_context = _context(target, evaluated_actor, resource, context)
     evaluation_context['action'] = action
 
-    break_glass = _active_break_glass(db, actor)
+    break_glass = _active_break_glass(db, evaluated_actor)
     if break_glass is not None:
         return AuthorizationDecision(
             'ALLOW', action, frozenset({action}), (), ({
@@ -454,7 +489,7 @@ def authorize(
     legacy = _legacy_global(db, actor_identity, action)
     legacy += _legacy_scoped(db, actor_identity, action, target)
 
-    subjects = _subjects(db, actor)
+    subjects = _subjects(db, evaluated_actor)
     assignments = db.scalars(_active_assignment_query(subjects, _instant())).all()
     matched_allow = []
     matched_deny = []
@@ -553,6 +588,8 @@ def authorize(
 
 def authorize_or_raise(db, actor, action: str, **kwargs) -> AuthorizationDecision:
     decision = authorize(db, actor, action, **kwargs)
+    context = kwargs.get('context') or {}
+    request_id = context.get('request_id')
     if decision.decision == 'ALLOW':
         return decision
     if decision.decision == 'REQUIRES_APPROVAL':
@@ -560,11 +597,13 @@ def authorize_or_raise(db, actor, action: str, **kwargs) -> AuthorizationDecisio
             'error': 'approval_required',
             'required_permission': action,
             'reason': decision.reason,
+            'request_id': request_id,
         })
     raise HTTPException(403, {
         'error': 'permission_denied',
         'required_permission': action,
         'reason': decision.reason,
+        'request_id': request_id,
     })
 
 
@@ -577,11 +616,12 @@ def scope_from_resource_scope(scope) -> dict:
     }
 
 
-def effective_permissions(db, actor, *, scope=None, resource=None, context=None) -> set[str]:
+def effective_permissions(db, actor, *, scope=None, resource=None, context=None, subject_user_id=None) -> set[str]:
     result = set()
     for action in sorted(ALL_PERMISSIONS):
         decision = authorize(
             db, actor, action, scope=scope, resource=resource, context=context, write=False,
+            subject_user_id=subject_user_id,
         )
         if decision.decision in {'ALLOW', 'REQUIRES_APPROVAL'}:
             result.add(action)
