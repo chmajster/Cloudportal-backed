@@ -63,6 +63,11 @@ registerExtension('auth-sso', () => {
     window.location.assign('/api/v1/auth/sso/login');
   });
 
+  registerCommand('bootstrap.before-session', async () => {
+    const handled = await handleCallback();
+    if (!handled) await configureLogin();
+    return handled;
+  });
   window.cloudportalSso = Object.freeze({ configureLogin, handleCallback });
 });
 })();
