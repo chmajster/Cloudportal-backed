@@ -68,12 +68,12 @@ class Context:
         self.deployment = self.credential = self.ansible = self.ansible_credential = None
         self.ansible_runs = []
 
-    def check(self):
+    def check(self, *, force=False):
         if time.monotonic() - self.started > settings().execution_timeout:
             raise ExecutionFailed('Execution timeout')
         if self.step_deadline is not None and time.monotonic() > self.step_deadline:
             raise ExecutionFailed('Workflow step timeout')
-        if time.monotonic() - self.last_check < 1:
+        if not force and time.monotonic() - self.last_check < 1:
             return
         self.last_check = time.monotonic()
         with session() as db:
