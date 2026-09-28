@@ -64,6 +64,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'shared/polling.js',
         'shared/routed-forms.js',
         'shared/status.js',
+        'shared/tables.js',
     ]
     assert {
         'features/dashboard.js',
