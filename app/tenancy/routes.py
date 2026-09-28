@@ -11,7 +11,8 @@ from app.tenancy import service
 from app.tenancy.authorization import Principal, lock_authorization, require_global
 from app.tenancy.schemas import (MemberCreate, MemberOutput, MemberPage, MemberRoles, MemberStatus,
                                 MemberUpdate, RolePage, TenantAuditPage, TenantCreate, TenantOutput,
-                                TenantPage, TenantPermissions, TenantStatus, TenantUpdate)
+                                TenantPage, TenantPermissions, TenantStatus, TenantUpdate,
+                                TenantVMClassificationInput, TenantVMClassificationOutput)
 
 router = APIRouter(tags=['tenancy'])
 
@@ -44,6 +45,19 @@ def tenant(tenant_id: UUID, actor=Depends(authenticate), db=Depends(get_db, scop
 @router.get('/tenants/{tenant_id}/permissions', response_model=TenantPermissions)
 def permissions(tenant_id: UUID, actor=Depends(authenticate), db=Depends(get_db, scope='function')):
     return service.tenant_permissions(db, Principal.from_token(actor), tenant_id)
+
+
+@router.get('/tenants/{tenant_id}/vm-classification', response_model=TenantVMClassificationOutput)
+def tenant_vm_classification(tenant_id: UUID, actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    return service.tenant_vm_classification(db, Principal.from_token(actor), tenant_id)
+
+
+@router.put('/tenants/{tenant_id}/vm-classification', response_model=TenantVMClassificationOutput)
+def update_tenant_vm_classification(tenant_id: UUID, data: TenantVMClassificationInput, request: Request,
+                                    actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    result = service.tenant_vm_classification_update(db, Principal.from_token(actor), tenant_id, data)
+    audit(db, request, 'tenant.vm_classification_updated', 'tenants', tenant_id)
+    return result
 
 
 @router.put('/tenants/{tenant_id}', response_model=TenantOutput)
