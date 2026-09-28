@@ -299,6 +299,107 @@ async function executeBlueprint(item, scope = null) {
       }
     }
 
+    const placementMode = String(item.deployment?.placement_mode || 'FIXED').toUpperCase();
+    if (['POOL', 'POLICY'].includes(placementMode)) {
+      const poolLabel = placementMode === 'POOL'
+        ? 'Pula: ' + (item.deployment?.resource_pool_id || '—')
+        : 'Pula: wybierana przez Placement Rules';
+      fields.append(formSection(
+        'Placement',
+        'Backend pobierze live capacity, zastosuje hard constraints, scoring i rezerwację zasobów.',
+        node('div', { class: 'blueprint-execution-placement-summary wide' },
+          badge(placementMode, 'info'),
+          node('span', { text: poolLabel }),
+          item.deployment?.logical_network
+            ? node('span', { text: 'Network: ' + item.deployment.logical_network }) : null,
+          item.deployment?.storage_class
+            ? node('span', { text: 'Storage: ' + item.deployment.storage_class }) : null)
+      ));
+
+      if (scopeAllows('placement.override')) {
+        const overrideToggle = checkboxField('Override placement', 'placement_override_enabled', false);
+        const overridePanel = node('div', { class: 'form-grid wide', hidden: true });
+        const providers = (await api('/providers?limit=200', { headers: scopeHeaders })).items || [];
+        const providerField = searchableSelectField(
+          'Platforma', 'placement_override_provider_id',
+          providers.map(row => ({ value: row.id, label: row.name + ' · ' + row.type })),
+          providers[0]?.id || '', { required: false, wide: true, placeholder: 'Wpisz nazwę platformy…' }
+        );
+        const nodeField = searchableSelectField(
+          'Node', 'placement_override_node', [], '',
+          { wide: true, placeholder: 'Wpisz nazwę node…' }
+        );
+        const storageField = searchableSelectField(
+          'Storage', 'placement_override_storage', [], '',
+          { wide: true, placeholder: 'Wpisz nazwę storage…' }
+        );
+        const networkField = searchableSelectField(
+          'Network', 'placement_override_network', [], '',
+          { wide: true, placeholder: 'Wpisz nazwę network…' }
+        );
+        const discovery = node('p', { class: 'field-help wide', text: 'Target będzie ponownie zweryfikowany przez backend i nadal musi spełniać hard constraints puli.' });
+        overridePanel.append(providerField, nodeField, storageField, networkField, discovery);
+
+        let generation = 0;
+        const loadNodeResources = async (providerId, selectedNode = '') => {
+          const current = ++generation;
+          if (!providerId) return;
+          try {
+            const nodes = (await api('/providers/' + encodeURIComponent(providerId) + '/nodes', { headers: scopeHeaders })).items || [];
+            if (current !== generation) return;
+            nodeField.searchableSelect.setChoices(
+              nodes.map(row => ({ value: row.node || row.id, label: row.node || row.id })),
+              selectedNode || nodes[0]?.node || nodes[0]?.id || ''
+            );
+            const loadTargetResources = async nodeValue => {
+              const token = ++generation;
+              if (!nodeValue) {
+                storageField.searchableSelect.setChoices([], '');
+                networkField.searchableSelect.setChoices([], '');
+                return;
+              }
+              const [storages, networks] = await Promise.all([
+                api('/providers/' + encodeURIComponent(providerId) + '/storages?node=' + encodeURIComponent(nodeValue), { headers: scopeHeaders }),
+                api('/providers/' + encodeURIComponent(providerId) + '/networks?node=' + encodeURIComponent(nodeValue), { headers: scopeHeaders }),
+              ]);
+              if (token !== generation) return;
+              storageField.searchableSelect.setChoices(
+                (storages.items || []).map(row => ({
+                  value: row.storage || row.id,
+                  label: (row.storage || row.id) + (row.content ? ' · ' + row.content : ''),
+                })),
+                ''
+              );
+              networkField.searchableSelect.setChoices(
+                (networks.items || []).filter(row => row.iface || row.network || row.id).map(row => ({
+                  value: row.iface || row.network || row.id,
+                  label: (row.iface || row.network || row.id) + (row.type ? ' · ' + row.type : ''),
+                })),
+                ''
+              );
+            };
+            nodeField.searchableSelect.onChange(value => loadTargetResources(value));
+            await loadTargetResources(nodeField.searchableSelect.value());
+          } catch (error) {
+            discovery.textContent = 'Discovery override: ' + error.message;
+          }
+        };
+        providerField.searchableSelect.onChange(value => loadNodeResources(value));
+        overrideToggle.querySelector('input').addEventListener('change', async event => {
+          overridePanel.hidden = !event.currentTarget.checked;
+          if (event.currentTarget.checked) {
+            await loadNodeResources(providerField.searchableSelect.value());
+          }
+        });
+        fields.append(formSection(
+          'Override placement',
+          'Dostępny wyłącznie z permission placement.override. Nie omija hard constraints ani RBAC.',
+          overrideToggle,
+          overridePanel
+        ));
+      }
+    }
+
     let scheme = null;
     if (item.deployment?.hostname_scheme_id && scopeAllows('hostnames.read')) {
       const result = await api('/hostname-schemes?limit=200', { headers: scopeHeaders });
@@ -351,6 +452,16 @@ async function executeBlueprint(item, scope = null) {
         if (runtimeClassification.environment) payload.environment = runtimeClassification.environment;
         const availabilityPlanId = String(form.elements.availability_plan_id?.value || '').trim();
         if (availabilityPlanId) payload.availability_plan_id = availabilityPlanId;
+        if (form.elements.placement_override_enabled?.checked) {
+          const providerId = Number(form.elements.placement_override_provider_id?.value || 0);
+          if (!providerId) throw new Error('Wybierz platformę dla override placement.');
+          payload.placement_override = {
+            provider_id: providerId,
+            node: String(form.elements.placement_override_node?.value || '').trim() || null,
+            storage: String(form.elements.placement_override_storage?.value || '').trim() || null,
+            network: String(form.elements.placement_override_network?.value || '').trim() || null,
+          };
+        }
 
         const result = await api(`/blueprints/${item.id}/execute`, {
           method: 'POST',
