@@ -237,6 +237,7 @@ Dodatkowo:
 | noVNC proxy | MIME, dynamic import, WebSocket 404 | lokalne assets + poprawny WS proxy | #110, #129, #158, #161 |
 | Bulk partial failure | jedna VM wywracała batch / błędny retry UI | per-resource result + stable idempotency | #133–#138, #217, #238, #244 |
 | Terraform destroy | QGA/shutdown blokował usunięcie | provider hard-stop przed destroy | #218, #224 |
+| Direct Proxmox force destroy | niedostępny precheck/status blokował nawet „Wymuś usunięcie” | force omija blokujący precheck, hard-stop jest best-effort, potem bezpośredni delete API | #282 |
 | Module boundary | feature rozrastał wspólny/duży plik | wydzielanie domenowych modułów | #20, #26, #167, #183, #241 |
 | Credential lifecycle | sekret trafiał do niewłaściwej warstwy | referencja ID + runtime resolution | #91, #125, #128, #149, #151, #168 |
 | Async UI race | zakończony job nadal „W toku” | korelacja timestamp/state + final refresh | #83, #85, #192, #210, #222 |
@@ -516,6 +517,7 @@ Legenda:
 - **#263 [OPEN] fix(workflow): repair direct Proxmox clone step** — Direct Proxmox provisioning failed immediately on clone vm with: job.failed: Workflow step clone (clone vm) failed. Root cause: PR 255 removed BLUEPRINT PRECOMPILED STEPS, but run proxmox blueprint workflow() still referenced that deleted symbol before executing clone vm. Runtime raised NameError, which was then wrappe
 - **#264 [OPEN] Allow Blueprint manager roles to be reused** — Creating another Blueprint could show „Brak dostępnych pozycji” under Role zarządzające Blueprintem . The cause was a one-to-one restriction between an RBAC role and a Blueprint: UI removed roles already used by another Blueprint, API returned 409 when the same role was reused, the database had a unique constraint on b
 - **#265 [OPEN] Show real Proxmox clone status during Terraform provisioning** — W widoku Moje zasoby provisioning Terraform pokazywał tylko Terraform apply, mimo że provider wykonywał w tym czasie pełne klonowanie VM w Proxmox. Dodatkowo brak wartości progress percent był konwertowany przez JS z null na 0, więc UI pokazywał fałszywe 0%.
+- **#282 [OPEN] Fix forced Proxmox destroy after failed VM precheck** — Naprawia przypadek, w którym przycisk „Wymuś usunięcie” tworzył zwykły job `proxmox.destroy`, więc ponownie kończył się na etapie „Sprawdzanie VM przed usunięciem”. UI przekazuje teraz `force=true`; backend zapisuje flagę w payloadzie joba. W trybie force błąd odczytu statusu VM nie blokuje usunięcia, twardy stop jest best-effort, a następnie wykonywany jest bezpośredni `delete_vm` przez Proxmox API. Zwykłe usuwanie nadal zachowuje bezpieczny precheck i kończy się błędem, jeśli stanu VM nie można zweryfikować.
 
 ---
 
