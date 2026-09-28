@@ -190,7 +190,11 @@ async function rbacAssignmentsPanel(roles, users) {
   const rows = users || [];
   const userTable = table([
     { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
-    { label: 'Źródło', value: user => badge(user.auth_source === 'ldap' ? 'LDAP' : 'Lokalne', user.auth_source === 'ldap' ? 'info' : '') },
+    { label: 'Źródło', value: user => {
+      if (user.auth_source === 'ldap') return badge('LDAP', 'info');
+      if (user.auth_source === 'oidc') return badge('SSO / OIDC', 'ok');
+      return badge('Lokalne', '');
+    } },
     { label: 'Typ', value: user => user.is_service_account ? 'Konto serwisowe' : 'Użytkownik' },
     { label: 'Status', value: user => badge(user.is_locked ? 'Zablokowany' : user.is_active ? 'Aktywny' : 'Wyłączony', user.is_locked || !user.is_active ? 'danger' : 'ok') },
   ], rows, user => [button(rbacSelectedUserId === Number(user.id) ? 'Wybrany' : 'Zarządzaj dostępem', () => renderUser(user).catch(error => toast(error.message, 'error')), rbacSelectedUserId === Number(user.id) ? 'primary' : 'ghost')]);
