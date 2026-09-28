@@ -678,6 +678,141 @@ class ProxmoxProvider(InfrastructureProvider):
             return None
         return self._delete('/cluster/ha/resources/' + quote(sid, safe=':'))
 
+    def get_placement_targets(self):
+        nodes = list(self._get('/nodes') or [])
+        return [
+            {
+                'node': str(row.get('node') or ''),
+                'status': row.get('status'),
+                'online': str(row.get('status') or '').lower() == 'online',
+                'cpu': row.get('cpu'),
+                'maxcpu': row.get('maxcpu'),
+                'mem': row.get('mem'),
+                'maxmem': row.get('maxmem'),
+                'disk': row.get('disk'),
+                'maxdisk': row.get('maxdisk'),
+                'uptime': row.get('uptime'),
+            }
+            for row in nodes
+            if row.get('node')
+        ]
+
+    def get_storages(self, target=None):
+        node = str((target or {}).get('node') or '').strip() or None
+        rows = list(self.discover('storages', node) or [])
+        result = []
+        for row in rows:
+            value = dict(row)
+            value['active'] = (
+                value.get('active', value.get('enabled', True)) not in {False, 0, '0'}
+                and value.get('disable') not in {True, 1, '1'}
+            )
+            result.append(value)
+        return result
+
+    def get_networks(self, target=None):
+        node = str((target or {}).get('node') or '').strip() or None
+        rows = list(self.discover('networks', node) or [])
+        result = []
+        for row in rows:
+            value = dict(row)
+            value['active'] = value.get('active', value.get('autostart', True)) not in {False, 0, '0'}
+            result.append(value)
+        return result
+
+    def get_capacity(self, target):
+        node = str((target or {}).get('node') or '').strip()
+        storage = str((target or {}).get('storage') or '').strip() or None
+        if not node:
+            raise HTTPException(422, 'Placement capacity requires a Proxmox node')
+        nodes = list(self._get('/nodes') or [])
+        node_row = next((row for row in nodes if str(row.get('node') or '') == node), None)
+        if node_row is None:
+            raise HTTPException(404, 'Proxmox placement node not found')
+        if str(node_row.get('status') or '').lower() != 'online':
+            raise HTTPException(409, 'Proxmox placement node is offline')
+
+        storages = self.get_storages({'node': node})
+        if storage:
+            storage_row = next((row for row in storages if str(row.get('storage') or '') == storage), None)
+        else:
+            eligible = [
+                row for row in storages
+                if row.get('active') and 'images' in str(row.get('content') or '')
+            ]
+            storage_row = max(eligible, key=lambda row: float(row.get('avail') or 0), default=None)
+        if storage_row is None or not storage_row.get('active'):
+            raise HTTPException(409, 'Proxmox placement storage is unavailable')
+
+        cpu_total = float(node_row.get('maxcpu') or 0)
+        cpu_ratio = float(node_row.get('cpu') or 0)
+        cpu_used = max(0.0, cpu_total * cpu_ratio)
+        memory_total = float(node_row.get('maxmem') or 0) / (1024 * 1024)
+        memory_used = float(node_row.get('mem') or 0) / (1024 * 1024)
+        storage_total = float(storage_row.get('total') or 0) / (1024 ** 3)
+        storage_used = float(storage_row.get('used') or 0) / (1024 ** 3)
+        resources = list(self._get('/cluster/resources?type=vm') or [])
+        vm_count = sum(
+            1 for row in resources
+            if row.get('type') == 'qemu' and not row.get('template') and str(row.get('node') or '') == node
+        )
+        return {
+            'cpu_total': cpu_total,
+            'cpu_used': cpu_used,
+            'cpu_usage_pct': cpu_ratio * 100,
+            'memory_mb_total': memory_total,
+            'memory_mb_used': memory_used,
+            'memory_mb_free': max(0.0, memory_total - memory_used),
+            'memory_usage_pct': (memory_used * 100 / memory_total) if memory_total else 0,
+            'storage_gb_total': storage_total,
+            'storage_gb_used': storage_used,
+            'storage_gb_free': max(0.0, storage_total - storage_used),
+            'storage_usage_pct': (storage_used * 100 / storage_total) if storage_total else 0,
+            'storage': storage_row.get('storage'),
+            'storage_active': bool(storage_row.get('active')),
+            'vm_count': vm_count,
+            'node_online': True,
+        }
+
+    def validate_placement(self, target, requirements):
+        try:
+            capacity = self.get_capacity(target)
+            networks = self.get_networks(target)
+            requested_network = (target or {}).get('network') or (requirements or {}).get('network')
+            if requested_network and not any(
+                str(row.get('iface') or '') == str(requested_network)
+                for row in networks
+            ):
+                return {'valid': False, 'reason': 'network unavailable'}
+            return {'valid': True, 'reason': None, 'capacity': capacity}
+        except HTTPException as exc:
+            return {'valid': False, 'reason': str(exc.detail)}
+
+    def reserve_resources(self, target, requirements):
+        raise NotImplementedError(
+            'Proxmox VE has no atomic capacity reservation primitive; CloudPortal DB reservations are authoritative'
+        )
+
+    def release_reservation(self, reservation):
+        raise NotImplementedError(
+            'Proxmox VE has no atomic capacity reservation primitive; CloudPortal DB reservations are authoritative'
+        )
+
+    def create_vm(self, target, spec):
+        required = {'source_node', 'source_vm_id', 'new_vm_id', 'name'}
+        if not required <= set(spec or {}):
+            raise HTTPException(422, 'Direct Proxmox create_vm requires source_node, source_vm_id, new_vm_id and name')
+        return self.clone_vm(
+            spec['source_node'],
+            int(spec['source_vm_id']),
+            new_vm_id=int(spec['new_vm_id']),
+            name=str(spec['name']),
+            target=(target or {}).get('node'),
+            full=bool(spec.get('full', True)),
+            storage=(target or {}).get('storage') or spec.get('storage'),
+            pool=spec.get('pool'),
+        )
+
     def discover(self, resource, node=None):
         if resource == 'nodes':
             return self._get('/nodes')
