@@ -47,6 +47,7 @@ from app.models import (Audit, Blueprint, Credential, Deployment, HostnameReserv
                         ManagedResource, ManagedVM, Provider, Token, User, now)
 from app.operations.service import queue_job_webhooks, queue_webhook_event, scheduler_user_permissions
 from app.providers.registry import provider_for
+from app.providers.settings import require_platform_enabled
 from app.credentials.ssh import public_key_from_private_key
 from app.security.core import decrypt_secret, effective_permissions
 from app.terraform.state import delete_plan, persist_plan, restore_plan, restore_state
@@ -206,6 +207,10 @@ def validate_authorization(db, job):
             target = db.get(Deployment, job.deployment_id)
             if target is None or (target.tenant_id, target.project_id) != (scope.tenant_id, scope.project_id):
                 raise ExecutionFailed('Job and deployment scope do not match')
+            try:
+                require_platform_enabled(db, target.provider)
+            except HTTPException as exc:
+                raise ExecutionFailed(str(exc.detail)) from None
             if not reference_visible(db, 'provider', target.provider_id, scope):
                 raise ExecutionFailed('Provider access has been revoked')
             if not reference_visible(db, 'credential', target.credentials_id, scope):
@@ -233,6 +238,10 @@ def validate_authorization(db, job):
             provider = db.get(Provider, provider_id)
             if provider is None or provider.type != 'proxmox':
                 raise ExecutionFailed('Clone-to-template provider no longer exists')
+            try:
+                require_platform_enabled(db, provider.type)
+            except HTTPException as exc:
+                raise ExecutionFailed(str(exc.detail)) from None
             if not reference_visible(db, 'provider', provider.id, scope):
                 raise ExecutionFailed('Provider access has been revoked')
             if not reference_visible(db, 'credential', provider.credentials_id, scope):

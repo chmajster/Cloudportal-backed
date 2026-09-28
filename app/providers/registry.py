@@ -11,6 +11,16 @@ PROVIDERS = {
     'vmware': VMwareProvider,
 }
 
+PROVIDER_TYPES = tuple(PROVIDERS)
+PROVIDER_LABELS = {
+    'proxmox': 'Proxmox',
+    'vmware': 'VMware',
+    'aws': 'AWS',
+    'azure': 'Azure',
+    'openstack': 'OpenStack',
+}
+DEFAULT_PROVIDER_ENABLED = {name: name == 'proxmox' for name in PROVIDER_TYPES}
+
 
 def provider_for(credential):
     if credential.expires_at is not None and credential.expires_at <= now():

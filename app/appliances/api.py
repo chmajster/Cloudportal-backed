@@ -20,6 +20,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Blueprint, Credential, Provider
 from app.providers.proxmox import ProxmoxProvider
+from app.providers.settings import require_platform_enabled
 from app.resource_scope.http import require
 from app.security.core import audit
 
@@ -190,6 +191,7 @@ async def create_ova_blueprint(
         raise HTTPException(409, 'Blueprint o takim slug już istnieje')
 
     provider_row = find(db, Provider, provider_id)
+    require_platform_enabled(db, provider_row.type)
     if provider_row.type != 'proxmox':
         raise HTTPException(422, 'Appliance OVA jest obecnie obsługiwany tylko dla Proxmox')
     credential = find(db, Credential, provider_row.credentials_id)

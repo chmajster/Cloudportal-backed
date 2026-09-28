@@ -22,6 +22,7 @@ from app.auth.ldap import diagnose_ldap_login, ldap_settings, save_ldap_settings
 from app.auth.oidc import (SSOSettingsInput, SSOSettingsOutput, SSOTestOutput,
                            save_sso_settings, sso_settings, test_sso_connection)
 from app.vm_classification import save_vm_classification_settings, vm_classification_settings
+from app.providers.settings import platform_states, save_platform_enabled
 from app.database import get_db
 from app.models import Audit, PasswordReset, Role, Token, User, UserRole, now
 from app.rbac.service import ALL_PERMISSIONS, SYSTEM_ROLE_NAMES, ensure_admin_remains, governance_lock, permissions_from_names
@@ -39,6 +40,21 @@ class JobExecutionSettingsInput(BaseModel):
 class JobExecutionSettingsOutput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     max_parallel_jobs: int
+
+
+class PlatformStateInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    enabled: bool
+
+
+class PlatformStateOutput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str
+    label: str
+    enabled: bool
+    configured: bool
+    connection_count: int
+    connection_status: str
 
 
 def role_public(role):
@@ -175,6 +191,20 @@ def reset_user(id: int, request: Request, actor=Depends(require('users.update'))
         audit(db, request, 'user.password_reset_requested', 'users', id)
         return {'reset_token': plain, 'expires_in': 900, 'user_id': id}
     return idempotent(db, request, actor, {'id': id}, create)
+
+
+@router.get('/settings/platforms', response_model=Items[PlatformStateOutput])
+def get_platform_settings(actor=Depends(require('settings.read')), db=Depends(get_db, scope='function')):
+    return {'items': platform_states(db)}
+
+
+@router.put('/settings/platforms/{provider_type}', response_model=PlatformStateOutput)
+def update_platform_settings(provider_type: str, data: PlatformStateInput, request: Request,
+                             actor=Depends(require('settings.update')), db=Depends(get_db, scope='function')):
+    result = save_platform_enabled(db, provider_type, data.enabled)
+    action = 'settings.platform_enabled' if data.enabled else 'settings.platform_disabled'
+    audit(db, request, action, 'settings', 'provider_platforms:' + result['name'])
+    return result
 
 
 @router.get('/settings/vm-classification', response_model=VMClassificationSettingsOutput)

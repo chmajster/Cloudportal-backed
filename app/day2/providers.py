@@ -9,6 +9,7 @@ from app.day2.errors import failure
 from app.models import Credential
 from app.providers.proxmox import ProxmoxProvider
 from app.providers.registry import provider_for
+from app.providers.settings import require_platform_enabled
 
 
 _DISK_KEY = re.compile(r'^(?:scsi|virtio|sata|ide)\d{1,2}$')
@@ -419,7 +420,8 @@ class UnsupportedDay2Adapter:
         return [target.primary_ip] if target.primary_ip else []
 
 
-def day2_provider(credential: Credential):
+def day2_provider(db, credential: Credential):
+    require_platform_enabled(db, credential.type)
     if credential.type == 'proxmox':
         return ProxmoxDay2Adapter(credential)
     return UnsupportedDay2Adapter(credential.type)

@@ -76,7 +76,7 @@ function inventoryVmActions(item) {
 }
 
 async function importInventoryVm() {
-  const providers = (await api('/providers?limit=200')).items.filter(item => item.type === 'proxmox');
+  const providers = (await api('/providers?limit=200')).items.filter(item => item.enabled !== false && item.type === 'proxmox');
   const fields = node('div', { class: 'form-grid' },
     selectField('Platforma Proxmox', 'provider_id', providers.map(item => ({ value: item.id, label: `${item.name} (#${item.id})` })), '', { required: true, placeholder: 'Wybierz platformę' }),
     field('VMID', 'vm_id', { type: 'number', min: 100, required: true }));

@@ -193,7 +193,7 @@
         ),
       ]);
 
-      data.providers = providers;
+      data.providers = providers.filter(value => value.enabled !== false || String(value.id) === String(options.item?.deployment?.provider_id || ''));
       data.templates = templates.filter(value =>
         value.enabled !== false || value.id === options.item?.deployment?.template);
       data.schemes = schemes.filter(value => value.is_active);

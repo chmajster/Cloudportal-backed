@@ -13,13 +13,15 @@ async function providersView() {
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
       { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type, 'info') },
+      { label: 'Status', value: item => badge(item.enabled ? 'Włączona' : 'Wyłączona', item.enabled ? 'ok' : 'warning') },
       { label: 'Dane dostępowe', value: item => credentialNames.get(Number(item.credentials_id)) || `#${item.credentials_id}` },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
       const actions = [];
-      actions.push(button('Przeglądaj zasoby', () => navigate('/providers/' + encodeURIComponent(item.id) + '/resources')));
-      if (allowed('providers.update')) actions.push(button('Diagnostyka', () => navigate('/admin/tools/provider-diagnostics?provider=' + encodeURIComponent(item.id))));
-      if (allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => navigate('/providers/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'provider'))));
+      if (item.enabled) actions.push(button('Przeglądaj zasoby', () => navigate('/providers/' + encodeURIComponent(item.id) + '/resources')));
+      if (item.enabled && allowed('providers.update')) actions.push(button('Diagnostyka', () => navigate('/admin/tools/provider-diagnostics?provider=' + encodeURIComponent(item.id))));
+      if (item.enabled && allowed('providers.update') && allowed('credentials.read')) actions.push(button('Edytuj', () => navigate('/providers/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.name || 'provider'))));
+      if (!item.enabled && allowed('settings.update')) actions.push(button('Włącz platformę', () => navigate('/admin/settings/platforms'), 'primary'));
       if (allowed('providers.delete')) actions.push(button('Usuń', () => confirmAction('Usuń platformę', `Platforma „${item.name}” zostanie usunięta. Zasoby po stronie platformy nie zostaną skasowane.`, async () => {
         await api('/providers/' + item.id, { method: 'DELETE' });
         toast('Platforma usunięta.');
@@ -31,8 +33,14 @@ async function providersView() {
 
 async function providerForm(item = null) {
   try {
-    const credentials = (await api('/credentials?limit=200')).items;
-    const providerTypes = ['proxmox', 'vmware', 'aws', 'azure', 'openstack'];
+    const [credentialResult, platformResult] = await Promise.all([
+      api('/credentials?limit=200'),
+      api('/providers/platforms'),
+    ]);
+    const credentials = credentialResult.items;
+    const providerTypes = (platformResult.items || [])
+      .filter(value => value.enabled || value.name === item?.type)
+      .map(value => value.name);
     const typeField = selectField('Typ platformy', 'type', providerTypes.map(value => ({
       value, label: CREDENTIAL_TYPE_CONFIG[value]?.label || value,
     })), item?.type || 'proxmox', { required: true });

@@ -89,7 +89,7 @@ async function openOvaImport() {
   }
 
   const providerResult = await api('/providers?limit=200');
-  const providers = (providerResult.items || []).filter(item => item.type === 'proxmox');
+  const providers = (providerResult.items || []).filter(item => item.enabled !== false && item.type === 'proxmox');
   if (!providers.length) throw new Error('Najpierw skonfiguruj provider Proxmox.');
 
   const providerField = selectField(

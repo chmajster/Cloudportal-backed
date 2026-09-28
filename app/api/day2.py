@@ -176,7 +176,7 @@ def resource_capabilities(resource_id: str, request: Request, actor=Depends(requ
                           db=Depends(get_db, scope='function')):
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
-        adapter = day2_provider(credential)
+        adapter = day2_provider(db, credential)
         catalog = action_catalog(db, target, credential, _permissions(request))
         return {
             'resource_id': resource_id,
@@ -195,7 +195,7 @@ def resource_day2_state(resource_id: str, request: Request, actor=Depends(requir
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
         state = get_resource_state(db, resource_id)
-        adapter = day2_provider(credential)
+        adapter = day2_provider(db, credential)
         live = adapter.snapshot_state(target)
         return {**resource_state_public(state), 'live': live, 'management_mode': target.management_mode}
     except Day2Failure as error:
@@ -237,7 +237,7 @@ def resource_snapshots(resource_id: str, request: Request, actor=Depends(require
                        db=Depends(get_db, scope='function')):
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
-        adapter = day2_provider(credential)
+        adapter = day2_provider(db, credential)
         if not hasattr(adapter, 'snapshots'):
             raise failure('ACTION_NOT_SUPPORTED')
         return {'items': adapter.snapshots(target)}
@@ -250,7 +250,7 @@ def resource_disks(resource_id: str, request: Request, actor=Depends(require('da
                    db=Depends(get_db, scope='function')):
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
-        adapter = day2_provider(credential)
+        adapter = day2_provider(db, credential)
         if not hasattr(adapter, 'disks'):
             raise failure('ACTION_NOT_SUPPORTED')
         return {'items': adapter.disks(target)}
@@ -263,7 +263,7 @@ def resource_nics(resource_id: str, request: Request, actor=Depends(require('day
                   db=Depends(get_db, scope='function')):
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
-        adapter = day2_provider(credential)
+        adapter = day2_provider(db, credential)
         if not hasattr(adapter, 'nics'):
             raise failure('ACTION_NOT_SUPPORTED')
         return {'items': adapter.nics(target)}

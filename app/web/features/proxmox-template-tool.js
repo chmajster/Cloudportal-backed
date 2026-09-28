@@ -94,7 +94,7 @@ async function proxmoxTemplateCloneView() {
   }
 
   const providers = (await api('/providers?limit=200')).items
-    .filter(item => item.type === 'proxmox');
+    .filter(item => item.enabled !== false && item.type === 'proxmox');
   if (!providers.length) {
     dom.content.replaceChildren(
       heading('VM → Template', [button('← Narzędzia', () => navigate('tools'))]),

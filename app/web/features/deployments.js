@@ -590,7 +590,7 @@ async function createDeployment() {
       api('/templates'),
       allowed('ansible.execute') && allowed('ansible.read') ? api('/ansible/playbooks') : Promise.resolve({ items: [] }),
     ]);
-    const providers = providerResult.items;
+    const providers = (providerResult.items || []).filter(item => item.enabled !== false);
     const credentials = credentialResult.items;
     const templates = templateResult.items.filter(item => item.enabled !== false);
     const playbooks = playbookResult.items.filter(item => item.enabled !== false);
