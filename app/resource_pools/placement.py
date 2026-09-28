@@ -345,6 +345,10 @@ def _collect_pool_candidates(db, scope, pool: ResourcePool, request: PlacementRe
         if request.provider_type and member.provider_type != request.provider_type:
             candidates.append({**base, 'status': 'REJECTED', 'reasons': ['provider type does not match request']})
             continue
+        policy_provider_id = (request.metadata or {}).get('policy_required_provider_id')
+        if policy_provider_id not in {None, ''} and int(member.provider_id) != int(policy_provider_id):
+            candidates.append({**base, 'status': 'REJECTED', 'reasons': ['provider rejected by existing Policy Engine placement effect']})
+            continue
         required_tags = set(actions['required_tags'])
         if required_tags and not required_tags <= set(member.tags or []):
             candidates.append({**base, 'status': 'REJECTED', 'reasons': ['member is missing required tag(s)']})
@@ -400,6 +404,18 @@ def _collect_pool_candidates(db, scope, pool: ResourcePool, request: PlacementRe
                 target.get('datacenter') or target.get('location')
                 or member.datacenter or target.get('cluster') or member.cluster or provider.name
             )
+            policy_node = str((request.metadata or {}).get('policy_required_node') or '')
+            policy_cluster = str((request.metadata or {}).get('policy_required_cluster') or '')
+            if policy_node and node != policy_node:
+                candidate['status'] = 'REJECTED'
+                candidate['reasons'] = ['node rejected by existing Policy Engine placement effect']
+                candidates.append(candidate)
+                continue
+            if policy_cluster and str(candidate.get('cluster') or '') != policy_cluster:
+                candidate['status'] = 'REJECTED'
+                candidate['reasons'] = ['cluster rejected by existing Policy Engine placement effect']
+                candidates.append(candidate)
+                continue
             if actions['allowed_nodes'] is not None and node not in {str(x) for x in actions['allowed_nodes']}:
                 candidate['status'] = 'REJECTED'
                 candidate['reasons'] = ['node blocked by hard constraint']
@@ -427,6 +443,18 @@ def _collect_pool_candidates(db, scope, pool: ResourcePool, request: PlacementRe
             if storage is None or network is None:
                 candidate['status'] = 'REJECTED'
                 candidate['reasons'] = mapping_notes
+                candidates.append(candidate)
+                continue
+            policy_storage = str((request.metadata or {}).get('policy_required_storage') or '')
+            policy_network = str((request.metadata or {}).get('policy_required_network') or '')
+            if policy_storage and str(storage) != policy_storage:
+                candidate['status'] = 'REJECTED'
+                candidate['reasons'] = mapping_notes + ['storage rejected by existing Policy Engine placement effect']
+                candidates.append(candidate)
+                continue
+            if policy_network and str(network) != policy_network:
+                candidate['status'] = 'REJECTED'
+                candidate['reasons'] = mapping_notes + ['network rejected by existing Policy Engine placement effect']
                 candidates.append(candidate)
                 continue
             candidate['storage'] = storage
