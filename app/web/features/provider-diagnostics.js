@@ -8,6 +8,12 @@ const STATUS = {
   skipped: ['Pominięto', 'info'],
 };
 
+function diagnosticMeta(label, value) {
+  return node('div', { class: 'tool-meta-item' },
+    node('span', { text: label }),
+    node('strong', { text: value || '—' }));
+}
+
 function providerDiagnosticsCard() {
   return node('article', { class: 'panel tool-card tool-card-featured' },
     node('div', { class: 'tool-card-head' },
@@ -18,10 +24,10 @@ function providerDiagnosticsCard() {
         node('p', { class: 'muted', text: 'Sprawdź DNS, ping, port TCP, TLS, HTTP, autoryzację API oraz pobieranie zasobów z platform infrastruktury.' })),
       badge('Warstwowa', 'ok')),
     node('div', { class: 'tool-meta-grid' },
-      toolMeta('Sieć', 'DNS / ICMP / TCP'),
-      toolMeta('Transport', 'TLS / HTTP'),
-      toolMeta('API', 'logowanie / token'),
-      toolMeta('Zasoby', 'hosty / VM / storage / sieci')),
+      diagnosticMeta('Sieć', 'DNS / ICMP / TCP'),
+      diagnosticMeta('Transport', 'TLS / HTTP'),
+      diagnosticMeta('API', 'logowanie / token'),
+      diagnosticMeta('Zasoby', 'hosty / VM / storage / sieci')),
     node('div', { class: 'tool-card-footer' },
       node('span', { class: 'tool-health' },
         node('span', { class: 'status-dot ok' }),
