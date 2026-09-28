@@ -71,7 +71,7 @@
           body: projectUpdateValues(current, name),
         });
         toast('Nazwa projektu została zmieniona.');
-        await projectsView();
+        await navigate('projects');
         return false;
       },
     });
@@ -101,7 +101,7 @@
         });
         toast('Projekt został usunięty.');
         listOffset = 0;
-        await projectsView();
+        await navigate('projects');
         return false;
       },
     });
