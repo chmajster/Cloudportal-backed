@@ -8,9 +8,9 @@ from sqlalchemy import select, update
 from app.api.common import Limit, Offset, find, idempotent, paginate, public
 from app.api.outputs import (Items, UserOutput, RoleOutput, TokenOutput, IssuedTokenOutput,
                              IssuedResetOutput, DeletedOutput, AuditOutput, LDAPSettingsOutput, LDAPTestOutput,
-                             LDAPDiagnosticsOutput, SSOSettingsOutput, SSOTestOutput, VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput,
+                             LDAPDiagnosticsOutput, VMClassificationSettingsOutput, BlueprintExecutionSettingsOutput,
                              BlueprintAvatarOutput)
-from app.api.schemas import (AssignRoles, LDAPSettingsInput, LDAPDiagnosticsInput, SSOSettingsInput, RoleInput, TokenInput,
+from app.api.schemas import (AssignRoles, LDAPSettingsInput, LDAPDiagnosticsInput, RoleInput, TokenInput,
                              UserCreate, UserUpdate, VMClassificationSettingsInput,
                              BlueprintExecutionSettingsInput, BlueprintAvatarInput)
 from app.auth.routes import user_public
@@ -19,7 +19,8 @@ from app.blueprint_avatars import (delete_blueprint_avatar, list_blueprint_avata
                                    save_blueprint_avatar)
 from app.jobs.settings import job_execution_settings, save_job_execution_settings
 from app.auth.ldap import diagnose_ldap_login, ldap_settings, save_ldap_settings, test_ldap_connection
-from app.auth.oidc import save_sso_settings, sso_settings, test_sso_connection
+from app.auth.oidc import (SSOSettingsInput, SSOSettingsOutput, SSOTestOutput,
+                           save_sso_settings, sso_settings, test_sso_connection)
 from app.vm_classification import save_vm_classification_settings, vm_classification_settings
 from app.database import get_db
 from app.models import Audit, PasswordReset, Role, Token, User, UserRole, now
