@@ -4,6 +4,9 @@ RESOURCE_ACTIONS = {
     'jobs': 'read read_all execute cancel',
     'terraform': 'read execute', 'ansible': 'read execute',
     'inventory': 'read read_all import update delete',
+    'vm': ('discovery.read onboarding.create onboarding.bulk onboarding.manage onboarding.full_adoption '
+           'onboarding.rules.read onboarding.rules.manage onboarding.conflicts.resolve '
+           'onboarding.credentials.assign onboarding.awx.configure onboarding.remove'),
     'availability': 'read create update delete assign',
     'blueprints': 'read create update delete execute approve',
     'hostnames': 'read create update delete reserve release',
@@ -25,7 +28,11 @@ SCOPE_PERMISSION_ACTIONS = {'governance': ['admin', 'access.read', 'access.manag
 EXECUTION_PERMISSIONS = frozenset({
     'deployments.create', 'deployments.destroy', 'deployments.adopt', 'jobs.execute',
     'terraform.execute', 'ansible.execute', 'blueprints.execute',
-    'inventory.import', 'inventory.update', 'inventory.delete', 'availability.assign',
+    'inventory.import', 'inventory.update', 'inventory.delete',
+    'vm.onboarding.create', 'vm.onboarding.bulk', 'vm.onboarding.manage',
+    'vm.onboarding.full_adoption', 'vm.onboarding.conflicts.resolve',
+    'vm.onboarding.credentials.assign', 'vm.onboarding.awx.configure', 'vm.onboarding.remove',
+    'availability.assign',
     'vms.power', 'vms.update', 'vms.delete', 'vms.clone', 'vms.migrate', 'vms.template',
     'snapshots.create', 'snapshots.delete', 'snapshots.rollback', 'backups.create', 'backups.restore',
 })
