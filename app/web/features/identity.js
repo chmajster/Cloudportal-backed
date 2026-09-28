@@ -12,6 +12,12 @@ const RBAC_TABS = [
   { id: 'governance', label: 'Zakresy i polityki' },
 ];
 
+function authSourceBadge(user) {
+  if (user.auth_source === 'ldap') return badge('LDAP', 'info');
+  if (user.auth_source === 'oidc') return badge('SSO / OIDC', 'ok');
+  return badge('Lokalne', '');
+}
+
 function setRbacTab(tab) {
   rbacTab = RBAC_TABS.some(item => item.id === tab) ? tab : 'overview';
   return rolesView();
@@ -190,11 +196,7 @@ async function rbacAssignmentsPanel(roles, users) {
   const rows = users || [];
   const userTable = table([
     { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
-    { label: 'Źródło', value: user => {
-      if (user.auth_source === 'ldap') return badge('LDAP', 'info');
-      if (user.auth_source === 'oidc') return badge('SSO / OIDC', 'ok');
-      return badge('Lokalne', '');
-    } },
+    { label: 'Źródło', value: user => authSourceBadge(user) },
     { label: 'Typ', value: user => user.is_service_account ? 'Konto serwisowe' : 'Użytkownik' },
     { label: 'Status', value: user => badge(user.is_locked ? 'Zablokowany' : user.is_active ? 'Aktywny' : 'Wyłączony', user.is_locked || !user.is_active ? 'danger' : 'ok') },
   ], rows, user => [button(rbacSelectedUserId === Number(user.id) ? 'Wybrany' : 'Zarządzaj dostępem', () => renderUser(user).catch(error => toast(error.message, 'error')), rbacSelectedUserId === Number(user.id) ? 'primary' : 'ghost')]);
@@ -334,7 +336,7 @@ async function usersView() {
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
       { label: 'Typ', value: user => badge(user.is_service_account ? 'serwisowe' : 'osobowe', user.is_service_account ? 'info' : '') },
-      { label: 'Logowanie', value: user => badge(user.auth_source === 'ldap' ? 'LDAP' : 'Lokalne', user.auth_source === 'ldap' ? 'info' : '') },
+      { label: 'Logowanie', value: user => authSourceBadge(user) },
       { label: 'Status', value: user => { const status = user.is_locked ? 'locked' : user.is_active ? 'active' : 'inactive'; return badge(statusLabel(status), statusKind(status)); } },
       { label: 'Ostatnie logowanie', value: user => formatDate(user.last_login_at) },
     ], users, user => userActions(user)));
@@ -351,7 +353,7 @@ function userActions(user) {
     actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
     actions.push(button(user.is_active ? 'Wyłącz' : 'Włącz', () => userCommand(user, user.is_active ? 'disable' : 'enable')));
-    if (!user.is_service_account && user.is_active && user.auth_source !== 'ldap') actions.push(button('Reset hasła', () => resetUserPassword(user)));
+    if (!user.is_service_account && user.is_active && user.auth_source === 'local') actions.push(button('Reset hasła', () => resetUserPassword(user)));
   }
   if (allowed('users.delete')) actions.push(button('Usuń', () => confirmAction('Usuń użytkownika', `Konto ${user.username} zostanie zanonimizowane i utraci dostęp.`, async () => { await api(`/users/${user.id}`, { method: 'DELETE' }); toast('Użytkownik usunięty.'); navigate('users'); }), 'danger'));
   return actions;
