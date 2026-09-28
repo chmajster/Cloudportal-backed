@@ -42,11 +42,11 @@
   }
   function validAlways() { return true; }
 
-  function safeAction(label, operation, valid) {
+  function safeAction(label, operation, valid, kind = 'ghost') {
     return button(label, async () => {
       if (!valid()) return;
       try { await operation(); } catch (error) { if (valid()) toast(error.message, 'error'); }
-    });
+    }, kind);
   }
 
   function scopeHeaders() {
@@ -169,9 +169,19 @@
       current = { selected: null, version: 0 };
     }
     if (!valid()) return null;
-    const text = revoked ? 'Zapisany projekt nie jest już dostępny. Wyczyść wybór.' : current.selected
-      ? `Zapisany kontekst: ${current.selected.name} / ${current.selected.tenant_id}`
-      : 'Brak zapisanego kontekstu projektu.';
+    const selected = current.selected || null;
+    const state = revoked ? 'warning' : selected ? 'active' : 'empty';
+    const title = revoked
+      ? 'Zapisany projekt nie jest już dostępny'
+      : selected
+        ? selected.name
+        : 'Nie wybrano kontekstu projektu';
+    const description = revoked
+      ? 'Wyczyść zapisany wybór i ustaw ponownie organizację oraz projekt.'
+      : selected
+        ? `Tenant: ${selected.tenant_id}${selected.default_environment ? ' · środowisko: ' + String(selected.default_environment).toUpperCase() : ''}`
+        : 'Wybierz organizację i projekt, aby ustawić domyślny zakres pracy w panelu.';
+
     const clearPanel = async () => {
       const query = revoked ? '' : `?expected_version=${current.version}`;
       const cleared = await api('/project-context' + query, {method: 'DELETE'});
@@ -185,8 +195,19 @@
         await reload();
       }
     };
-    return node('div', {class: 'projects-notice'}, node('p', {text}),
-      revoked || current.selected ? safeAction('Wyczyść kontekst', clearPanel, valid) : null);
+
+    const panelAction = revoked || selected
+      ? safeAction('Wyczyść kontekst', clearPanel, valid)
+      : safeAction('Wybierz kontekst', openPicker, valid, 'primary');
+
+    return node('section', { class: 'projects-context-card ' + state },
+      node('div', { class: 'projects-context-main' },
+        node('span', { class: 'projects-context-marker', 'aria-hidden': 'true', text: selected ? 'P' : '○' }),
+        node('div', { class: 'projects-context-copy' },
+          node('span', { class: 'projects-context-eyebrow', text: 'Kontekst pracy' }),
+          node('strong', { text: title }),
+          node('p', { text: description }))),
+      panelAction);
   }
 
   function projectOptions(tenantId) {

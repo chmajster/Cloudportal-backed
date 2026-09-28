@@ -30,8 +30,30 @@
     return result;
   }
   function notice() {
-    return node('p', { class: 'projects-notice', role: 'note', text:
-      'Uprawnienia projektowe są sprawdzane przez backend. Ta warstwa administracji projektami nie włącza jeszcze izolacji istniejącej infrastruktury ani egzekwowania quota i policy.' });
+    return node('div', { class: 'projects-notice', role: 'note' },
+      node('span', { class: 'projects-notice-icon', 'aria-hidden': 'true', text: 'i' }),
+      node('div', { class: 'projects-notice-copy' },
+        node('strong', { text: 'Zakres działania' }),
+        node('p', { text:
+          'Backend weryfikuje uprawnienia projektowe przy każdej operacji. Izolacja istniejącej infrastruktury oraz egzekwowanie quota i policy nie są jeszcze włączone w tej warstwie.' })));
+  }
+  function projectStatusBadge(status) {
+    const kind = status === 'active' ? 'ok' : status === 'suspended' ? 'warning' : 'danger';
+    return node('span', { class: 'badge ' + kind, text: labels[status] || status });
+  }
+  function projectSystemBadge(item) {
+    return node('span', {
+      class: 'badge ' + (item.is_system ? 'info' : ''),
+      text: item.is_system ? 'Systemowy' : 'Standardowy',
+    });
+  }
+  function emptyProjects(message, actions = []) {
+    return node('section', { class: 'projects-empty-state' },
+      node('span', { class: 'projects-empty-icon', 'aria-hidden': 'true', text: 'P' }),
+      node('div', { class: 'projects-empty-copy' },
+        node('strong', { text: 'Brak projektów do wyświetlenia' }),
+        node('p', { text: message })),
+      actions.length ? node('div', { class: 'action-group projects-empty-actions' }, actions) : null);
   }
 
   function projectUpdateValues(item, name = item.name) {
@@ -116,20 +138,38 @@
     const valid = () => current === generation && viewIs('projects');
     const selection = globalThis.CPProjectContext ? await globalThis.CPProjectContext.panel(projectsView, valid) : null;
     if (!valid()) return;
-    const filter = selectField('Status', 'project_status', [{ value: '', label: 'Wszystkie dostępne' }, ...statuses], listStatus);
+    const filter = selectField('Status projektu', 'project_status', [{ value: '', label: 'Wszystkie statusy' }, ...statuses], listStatus);
+    filter.className = ((filter.className || '') + ' projects-filter').trim();
     filter.querySelector('select').addEventListener('change', event => {
       listStatus = event.target.value; listOffset = 0; projectsView().catch(error => toast(error.message, 'error'));
     });
+
     const actions = scopes.total ? [action('Nowy projekt', () => navigate('/projects/new'), 'primary')] : [];
     if (tenantFilter) actions.push(action('Wszystkie dostępne tenanty', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
-    dom.content.replaceChildren(heading('Projekty, członkostwa i uprawnienia w kontekście Tenant / Project.', actions), notice(), selection, filter,
-      table([
-        { label: 'Projekt', value: row => node('strong', { text: row.name }) },
-        { label: 'Tenant ID', value: row => row.tenant_id },
-        { label: 'Slug', value: row => row.slug },
-        { label: 'Środowisko domyślne', value: row => row.default_environment },
-        { label: 'Status', value: row => labels[row.status] },
-        { label: 'Systemowy', value: row => row.is_system ? 'Tak — chroniony' : 'Nie' },
+
+    const rangeStart = page.total ? page.offset + 1 : 0;
+    const rangeEnd = Math.min(page.offset + page.items.length, page.total);
+    const toolbar = node('section', { class: 'panel projects-toolbar' },
+      node('div', { class: 'projects-toolbar-copy' },
+        node('strong', { text: 'Dostępne projekty' }),
+        node('span', { class: 'muted', text: `Pobrano z API: ${rangeStart}–${rangeEnd} z ${page.total}` }),
+        tenantFilter ? node('span', { class: 'projects-scope-chip', text: 'Tenant: ' + tenantFilter }) : null),
+      filter);
+
+    const emptyActions = [];
+    if (listStatus) emptyActions.push(action('Wyczyść filtr statusu', () => { listStatus = ''; listOffset = 0; return projectsView(); }));
+    if (tenantFilter) emptyActions.push(action('Pokaż wszystkie tenanty', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
+    if (!listStatus && !tenantFilter && scopes.total) emptyActions.push(action('Utwórz projekt', () => navigate('/projects/new'), 'primary'));
+
+    const projectList = page.items.length
+      ? table([
+        { label: 'Projekt', value: row => node('div', { class: 'projects-project-name' },
+          node('strong', { text: row.name }),
+          node('span', { class: 'mono muted', text: row.slug })) },
+        { label: 'Tenant', class: 'mono', value: row => row.tenant_id },
+        { label: 'Środowisko', value: row => node('span', { class: 'badge info', text: row.default_environment }) },
+        { label: 'Status', value: row => projectStatusBadge(row.status) },
+        { label: 'Typ', value: row => projectSystemBadge(row) },
       ], page.items, row => {
         const rowActions = [action('Szczegóły', () => navigate('/projects/' + encodeURIComponent(row.id)))];
         if (!row.is_system) {
@@ -137,8 +177,21 @@
           rowActions.push(action('Usuń', () => deleteProject(row), 'danger'));
         }
         return rowActions;
-      }),
-      controls(page, offset => { listOffset = offset; return projectsView(); }));
+      })
+      : emptyProjects(
+        listStatus || tenantFilter
+          ? 'Żaden projekt nie spełnia obecnie wybranych filtrów.'
+          : 'Nie masz jeszcze dostępnych projektów w tym zakresie.',
+        emptyActions);
+
+    dom.content.replaceChildren(
+      heading('Zarządzaj projektami, członkostwami i dostępem w obrębie tenantów.', actions),
+      node('div', { class: 'projects-page-stack' },
+        notice(),
+        selection,
+        toolbar,
+        projectList,
+        page.total > page.limit ? controls(page, offset => { listOffset = offset; return projectsView(); }) : null));
   }
 
   async function details(id) {
