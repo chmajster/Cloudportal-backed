@@ -82,6 +82,7 @@ class AssignmentOutput(IAMModel):
     apmid: str | None
     environment: str | None
     conditions: dict[str, Any]
+    permission_ceiling: list[str] | None
     inherit: bool
     approval_required: bool
     valid_from: datetime | None
