@@ -326,7 +326,7 @@ async function usersView() {
   const users = (await api('/users?limit=200')).items;
   const actions = [];
   if (allowed('users.create')) actions.push(button('Dodaj użytkownika', () => navigate('/access/users/new'), 'primary'));
-  dom.content.replaceChildren(heading('Konta ludzi i konta serwisowe. Uprawnienia wynikają wyłącznie z przypisanych ról.', actions),
+  dom.content.replaceChildren(heading('Konta ludzi i konta serwisowe. Uprawnienia mogą wynikać z ról globalnych oraz ról w organizacjach/projektach.', actions),
     table([
       { label: 'Użytkownik', value: user => node('div', {}, node('strong', { text: user.username }), node('div', { class: 'muted', text: user.email })) },
       { label: 'Typ', value: user => badge(user.is_service_account ? 'serwisowe' : 'osobowe', user.is_service_account ? 'info' : '') },
@@ -338,11 +338,13 @@ async function usersView() {
 
 function userActions(user) {
   const actions = [];
-  if (allowed('roles.read')) actions.push(button('Dostęp', () => {
+  if (allowed('roles.read')) actions.push(button('Role globalne', () => {
     rbacSelectedUserId = Number(user.id);
     rbacTab = 'assignments';
     navigate('roles');
   }));
+  actions.push(button('Organizacje', () =>
+    navigate('/access/users/' + encodeURIComponent(user.id) + '/organizations')));
   if (allowed('users.update')) {
     actions.push(button('Edytuj', () => navigate('/access/users/edit/' + encodeURIComponent(user.id) + '/' + encodeURIComponent(user.username || 'user'))));
     if (user.is_locked) actions.push(button('Odblokuj', () => userCommand(user, 'unlock')));
