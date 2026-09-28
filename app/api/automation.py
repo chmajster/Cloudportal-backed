@@ -29,7 +29,7 @@ from app.security.core import audit, authenticate
 from app.tenancy.authorization import Principal, identity as scoped_identity
 from app.tenancy.models import Tenant
 from app.resource_scope.http import require
-from app.vm_classification import vm_classification_settings
+from app.vm_classification import vm_classification_for_tenant
 
 
 router = APIRouter(tags=['automation'])
@@ -104,8 +104,9 @@ def blueprint_avatars(actor=Depends(authenticate), db=Depends(get_db, scope='fun
 
 
 @router.get('/vm-classification/options', response_model=VMClassificationSettingsOutput)
-def vm_classification_options(actor=Depends(require('blueprints.execute')), db=Depends(get_db, scope='function')):
-    return vm_classification_settings(db)
+def vm_classification_options(request: Request, actor=Depends(require('blueprints.execute')),
+                              db=Depends(get_db, scope='function')):
+    return vm_classification_for_tenant(db, request.state.resource_scope.tenant_id)
 
 
 @router.get('/hostname-schemes', response_model=Items[HostnameSchemeOutput])
