@@ -146,6 +146,11 @@ class LDAPSettingsInput(Input):
         return self
 
 
+class LDAPDiagnosticsInput(Input):
+    username: Annotated[str, Field(max_length=254)] = ''
+    password: Annotated[str | None, Field(max_length=256, json_schema_extra={'writeOnly': True})] = None
+
+
 class UserCreate(Input):
     username: Slug
     email: EmailStr
