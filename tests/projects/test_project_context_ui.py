@@ -48,3 +48,16 @@ def test_global_context_switcher_drives_default_http_scope_and_blueprints():
     assert "globalThis.CPProjectContext.choose({" in blueprint_source
     assert "Zmiana tego pola aktualizuje również globalny kontekst pracy" in blueprint_source
 
+def test_global_context_picker_uses_filterable_combobox():
+    context_source = Path('app/web/features/project-context.js').read_text()
+    styles = Path('app/web/styles/features/projects.css').read_text()
+
+    assert 'function searchableSelectField' in context_source
+    assert "type: 'search'" in context_source
+    assert "'aria-autocomplete': 'list'" in context_source
+    assert 'normalizeSearchText(choice.label).includes(query)' in context_source
+    assert 'organization.searchableSelect' in context_source
+    assert 'organizationSelect.onChange' in context_source
+    assert '.searchable-select-options' in styles
+    assert '.searchable-select-option.active' in styles
+

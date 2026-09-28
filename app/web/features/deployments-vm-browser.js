@@ -484,12 +484,16 @@ function managedVmCard(item, providerNames, deploymentById, metadata = {}, onSel
       actions.push(button(destroyFailed ? 'Wymuś usunięcie' : 'Usuń', () => confirmAction(
         destroyFailed ? 'Wymuś usunięcie zasobów' : 'Usuń nieudany provisioning',
         destroyFailed
-          ? 'Cloudportal wykona twarde zatrzymanie VM w Proxmox i ponowi usunięcie bez oczekiwania na QEMU Guest Agent.'
+          ? (directProxmox
+              ? 'CloudPortal pominie nieudany precheck stanu VM, spróbuje twardego stopu i wyśle bezpośrednie usunięcie do Proxmox API.'
+              : 'CloudPortal ponowi usuwanie zasobów Terraform po wcześniejszym błędzie.')
           : (directProxmox
               ? 'Proxmox API usunie VM utworzoną przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.'
               : 'Terraform usunie zasoby utworzone przed błędem. Po zakończeniu wpis zniknie z aktywnych VM.'),
         async () => {
-          await api(`/deployments/${deployment.id}/destroy`, { method: 'POST', body: {}, idempotent: true });
+          const destroyPath = `/deployments/${deployment.id}/destroy`
+            + (destroyFailed && directProxmox ? '?force=true' : '');
+          await api(destroyPath, { method: 'POST', body: {}, idempotent: true });
           toast(destroyFailed
             ? 'Utworzono wymuszone zadanie usuwania zasobów.'
             : 'Utworzono zadanie usuwania nieudanego provisioningu.');
