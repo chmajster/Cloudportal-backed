@@ -284,7 +284,7 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
         environments: { test: true, dev: true, nonprod: true, prod: true },
         apmids: [],
       })),
-    ]).then(([caps, scopeOptions, projectContext, classification]) => {
+    ]).then(async ([caps, scopeOptions, projectContext, globalClassification]) => {
       const defaultScope = item?.scope || {
         actions: ['vm.create'],
         resource_types: ['vm'],
@@ -331,6 +331,12 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
         || projects[0]?.id
         || ''
       );
+      let classification = globalClassification;
+      if (selectedTenantId && selectedLevel !== 'global') {
+        classification = await api(
+          '/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'
+        ).catch(() => globalClassification);
+      }
 
       const levelChoices = [];
       if (scopeOptions?.global_allowed || selectedLevel === 'global') {
