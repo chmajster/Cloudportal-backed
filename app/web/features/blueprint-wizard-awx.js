@@ -9,6 +9,7 @@
 
   function toggleStep(state, checked) {
     state.awxEnabled = checked;
+    if (!checked) state.promptAwxOnExecute = false;
     if (checked && state.providerType === 'proxmox' && parts.cloudInit && !parts.cloudInit.enabled(state)) {
       parts.cloudInit.toggleStep(state, true);
     }
@@ -173,6 +174,20 @@
       toggle
     );
     if (!supported || !active) return panel;
+
+    const runtimePrompt = checkboxField(
+      'Przy uruchomieniu Blueprintu pytaj, czy dodać serwer do AWX',
+      'awx_prompt_on_execute',
+      Boolean(state.promptAwxOnExecute)
+    );
+    runtimePrompt.querySelector('input').addEventListener('change', event => {
+      state.promptAwxOnExecute = event.currentTarget.checked;
+    });
+    runtimePrompt.append(node('span', {
+      class: 'field-help',
+      text: 'Jeśli włączone, podczas „Utwórz VM” użytkownik wybierze Tak/Nie. Decyzja dotyczy tylko tego jednego wdrożenia.',
+    }));
+    panel.append(runtimePrompt);
 
     const credential = selectField('Połączenie AWX', 'awx_credential_id', [
       { value: '', label: awxCredentials.length ? 'Wybierz AWX' : 'Brak zapisanych połączeń AWX' },
@@ -364,6 +379,7 @@
       ['Inventory AWX', state.awxInventoryId
         ? nameFor(discovery.inventories, state.awxInventoryId)
         : 'Pattern: ' + (state.awxInventoryName || '<Projekt>-<APMID>-<ENV>')],
+      ['Pytaj przy uruchomieniu', state.promptAwxOnExecute ? 'Tak' : 'Nie'],
       ['Job Template', state.awxJobTemplateId
         ? nameFor(discovery.job_templates, state.awxJobTemplateId)
         : 'Nie uruchamiaj'],
