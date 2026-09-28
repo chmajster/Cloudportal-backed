@@ -827,8 +827,14 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         )
     if data.availability_plan_id and 'availability.assign' not in request.state.permissions:
         raise HTTPException(403, 'availability.assign required to select an Availability Plan')
+    configured_placement_mode = str((row.deployment or {}).get('placement_mode') or 'FIXED').upper()
+    if configured_placement_mode in {'POOL', 'POLICY'} and 'resource_pool.assign' not in request.state.permissions:
+        raise HTTPException(403, 'resource_pool.assign required by Blueprint placement mode')
+    if data.placement_override and 'placement.override' not in request.state.permissions:
+        raise HTTPException(403, 'placement.override required for manual placement override')
+
     def create():
-        rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs, awx = compile_blueprint(
+        rendered, hostname_reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs, awx = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id, data.apmid, data.environment
         )
         from app.policy_engine.integration import enforce_blueprint_execution
@@ -837,12 +843,11 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             apmid=data.apmid or (row.deployment or {}).get('apmid'),
             environment=data.environment or (row.deployment or {}).get('environment'),
         )
+
         blueprint_variables = rendered.pop('blueprint_variables')
-        parsed = DeploymentInput.model_validate(rendered)
-        require_catalog_item_enabled(db, 'templates', parsed.template)
-        parsed.variables = validate_template_variables(
-            parsed.template, parsed.variables
-        ).model_dump(mode='json')
+        placement_config = dict(rendered.pop('_placement', {}) or {})
+        placement_mode = str(placement_config.get('placement_mode') or configured_placement_mode or 'FIXED').upper()
+
         # Classification/governance metadata is persisted in the immutable
         # Blueprint snapshot, never mixed into Terraform/provider variables.
         effective_context = policy_result.get('effective_context') or {}
@@ -857,14 +862,111 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
         scope_key = effective_resource.get('scope_key') or effective_scope.get('key')
         if scope_key not in (None, ''):
             blueprint_variables['scope_key'] = scope_key
+
+        template_id = rendered.get('template', 'proxmox-vm')
+        require_catalog_item_enabled(db, 'templates', template_id)
+        template_meta, _ = template_definition(template_id)
+
+        # Existing Policy Engine placement effects stay authoritative. Resource
+        # Pool scoring may choose only candidates compatible with those effects.
+        placement_metadata = dict(placement_config.get('metadata') or {})
+        if placement_mode in {'POOL', 'POLICY'}:
+            policy_provider_id = rendered.get('provider_id')
+            if policy_provider_id not in (None, ''):
+                placement_metadata['policy_required_provider_id'] = int(policy_provider_id)
+            policy_variables = dict(rendered.get('variables') or {})
+            for source_key, metadata_key in (
+                ('node', 'policy_required_node'),
+                ('cluster', 'policy_required_cluster'),
+                ('storage', 'policy_required_storage'),
+                ('network', 'policy_required_network'),
+            ):
+                value = policy_variables.get(source_key)
+                if value not in (None, '', 'placement-auto'):
+                    placement_metadata[metadata_key] = value
+        placement_config['metadata'] = placement_metadata
+        placement_config['provider_type'] = template_meta['provider']
+
+        from app.resource_pools.placement import (
+            NoValidPlacementTarget, apply_resolution_to_rendered, bind_resolution,
+            record_fixed_blueprint_decision, request_from_blueprint, resolve_placement,
+        )
+        placement_resolution = None
+        placement_override = (
+            data.placement_override.model_dump(mode='json', exclude_none=True)
+            if data.placement_override else None
+        )
+        scope_context = {
+            'organization': blueprint_variables.get('organization'),
+            'project': blueprint_variables.get('project'),
+            'apmid': blueprint_variables.get('apmid'),
+            'environment': blueprint_variables.get('environment'),
+        }
+        try:
+            if placement_mode in {'POOL', 'POLICY'}:
+                placement_request = request_from_blueprint(
+                    rendered,
+                    placement_config,
+                    scope_context=scope_context,
+                    blueprint_id=row.id,
+                    override=placement_override,
+                )
+                placement_resolution = resolve_placement(
+                    db,
+                    request.state.resource_scope,
+                    placement_request,
+                    actor.user_id,
+                    blueprint=row,
+                    reserve=True,
+                    is_override=bool(placement_override),
+                )
+                rendered = apply_resolution_to_rendered(rendered, placement_resolution)
+            elif placement_override:
+                placement_config['placement_mode'] = 'FIXED'
+                placement_request = request_from_blueprint(
+                    rendered,
+                    placement_config,
+                    scope_context=scope_context,
+                    blueprint_id=row.id,
+                    override=placement_override,
+                )
+                placement_resolution = resolve_placement(
+                    db,
+                    request.state.resource_scope,
+                    placement_request,
+                    actor.user_id,
+                    blueprint=row,
+                    reserve=False,
+                    is_override=True,
+                )
+                rendered = apply_resolution_to_rendered(rendered, placement_resolution)
+            else:
+                # Preserve legacy semantics: FIXED Blueprints are queued even if
+                # the provider is temporarily offline; the worker already owns
+                # offline-provider queuing/retry.
+                placement_resolution = record_fixed_blueprint_decision(
+                    db,
+                    request.state.resource_scope,
+                    rendered,
+                    actor.user_id,
+                    blueprint_id=row.id,
+                )
+        except NoValidPlacementTarget:
+            audit(db, request, 'PLACEMENT_FAILED', 'blueprints', row.id, 'failure')
+            raise
+
+        parsed = DeploymentInput.model_validate(rendered)
+        parsed.variables = validate_template_variables(
+            parsed.template, parsed.variables
+        ).model_dump(mode='json')
         provider = find(db, Provider, parsed.provider_id)
         if data.availability_plan_id and provider.type != 'proxmox':
             raise HTTPException(422, 'Availability Plan currently supports Proxmox VM deployments only')
-        template_meta, _ = template_definition(parsed.template)
         if provider.type != template_meta['provider']:
-            raise HTTPException(422, 'Policy-selected provider does not match the Terraform template')
+            raise HTTPException(422, 'Selected placement provider does not match the Terraform template')
         if provider.credentials_id != parsed.credentials_id:
-            raise HTTPException(422, 'Credential does not belong to the selected provider')
+            raise HTTPException(422, 'Credential does not belong to the selected placement provider')
+
         primary_ansible = ansible_runs[0] if ansible_runs else None
         credential_ids = {parsed.credentials_id}
         if primary_ansible:
@@ -890,41 +992,76 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
                 raise HTTPException(403, 'ansible.execute required by blueprint')
             for ansible_run in configured_ansible:
                 validate_ansible(db, ansible_run)
-        deployment = Deployment(name=parsed.name, provider_id=provider.id, provider=provider.type, template=parsed.template,
-                                credentials_id=parsed.credentials_id, variables=parsed.variables,
-                                workflow={'ansible_runs': [run.model_dump() for run in configured_ansible],
-                                          'awx': awx.model_dump() if awx else None,
-                                          'blueprint': {'id': row.id, 'slug': row.slug, 'version': row.version,
-                                                        'variables': blueprint_variables, 'steps': row.workflow,
-                                                        'guest_credential_id': guest_credential_id,
-                                                        'template_guest_credential_id': template_guest_credential_id,
-                                                        'guest_account_mode': (row.deployment or {}).get('guest_account_mode', 'cloud_init_managed'),
-                                                        'awx': awx.model_dump() if awx else None,
-                                                        'requires_approval': (
-                                                            row.requires_approval
-                                                            or policy_result.get('decision') == 'approval_required'
-                                                        ),
-                                                        'policy_decision_id': policy_result.get('decision_id'),
-                                                        'policy_matched_ids': policy_result.get('matched_policy_ids') or [],
-                                                        'policy_approvals': policy_result.get('approvals') or [],
-                                                        'policy_obligations': policy_result.get('obligations') or [],
-                                                        'policy_warnings': policy_result.get('warnings') or [],
-                                                        'auto_approve_for_executors': (
-                                                            False
-                                                            if policy_result.get('decision') == 'approval_required'
-                                                            else row.auto_approve_for_executors
-                                                        ),
-                                                        'approval_timeout_hours': row.approval_timeout_hours,
-                                                        'recovery_policy': row.recovery_policy}},
-                                created_by=actor.user_id, executor=parsed.executor)
+
+        placement_snapshot = {
+            'mode': placement_mode,
+            'pool_id': placement_resolution.pool.id if placement_resolution.pool else None,
+            'pool': placement_resolution.pool.name if placement_resolution.pool else None,
+            'decision_id': placement_resolution.decision.id,
+            'rule_ids': [rule.id for rule in placement_resolution.matched_rules],
+            'provider_id': provider.id,
+            'platform': provider.name,
+            'node': parsed.variables.get('node'),
+            'storage': parsed.variables.get('storage'),
+            'network': parsed.variables.get('network'),
+            'score': placement_resolution.selected.get('score'),
+            'reason': placement_resolution.decision.decision_reason,
+            'override': bool(placement_override),
+        }
+
+        deployment = Deployment(
+            name=parsed.name,
+            provider_id=provider.id,
+            provider=provider.type,
+            template=parsed.template,
+            credentials_id=parsed.credentials_id,
+            variables=parsed.variables,
+            workflow={
+                'ansible_runs': [run.model_dump() for run in configured_ansible],
+                'awx': awx.model_dump() if awx else None,
+                'blueprint': {
+                    'id': row.id,
+                    'slug': row.slug,
+                    'version': row.version,
+                    'variables': blueprint_variables,
+                    'steps': row.workflow,
+                    'placement': placement_snapshot,
+                    'guest_credential_id': guest_credential_id,
+                    'template_guest_credential_id': template_guest_credential_id,
+                    'guest_account_mode': (row.deployment or {}).get('guest_account_mode', 'cloud_init_managed'),
+                    'awx': awx.model_dump() if awx else None,
+                    'requires_approval': (
+                        row.requires_approval
+                        or policy_result.get('decision') == 'approval_required'
+                    ),
+                    'policy_decision_id': policy_result.get('decision_id'),
+                    'policy_matched_ids': policy_result.get('matched_policy_ids') or [],
+                    'policy_approvals': policy_result.get('approvals') or [],
+                    'policy_obligations': policy_result.get('obligations') or [],
+                    'policy_warnings': policy_result.get('warnings') or [],
+                    'auto_approve_for_executors': (
+                        False
+                        if policy_result.get('decision') == 'approval_required'
+                        else row.auto_approve_for_executors
+                    ),
+                    'approval_timeout_hours': row.approval_timeout_hours,
+                    'recovery_policy': row.recovery_policy,
+                },
+            },
+            created_by=actor.user_id,
+            executor=parsed.executor,
+        )
         db.add(deployment)
         db.flush()
+        bind_resolution(placement_resolution, deployment)
+
         if data.availability_plan_id:
             from app.availability.service import attach_to_deployment
             attach_to_deployment(
                 db, request.state.resource_scope, deployment,
                 data.availability_plan_id, actor.user_id,
             )
+
         direct_proxmox = parsed.executor == 'proxmox'
         deployment.state_location = (
             f'provider://proxmox/{deployment.id}'
@@ -932,13 +1069,46 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             else f'database://terraform-states/{deployment.id}'
         )
         operation = 'proxmox.provision' if direct_proxmox else 'terraform.apply'
-        job = new_job(db, request, actor, operation, deployment,
-                      {'ansible_runs': [run.model_dump() for run in configured_ansible],
-                       'blueprint': deployment.workflow['blueprint']})
-        if reservation:
-            reservation.status, reservation.resource_id = 'assigned', deployment.id
+        job = new_job(
+            db, request, actor, operation, deployment,
+            {
+                'ansible_runs': [run.model_dump() for run in configured_ansible],
+                'blueprint': deployment.workflow['blueprint'],
+                '_placement_runtime': {
+                    'decision_id': placement_resolution.decision.id,
+                    'reservation_id': (
+                        placement_resolution.reservation.id
+                        if placement_resolution.reservation else None
+                    ),
+                    'attempts': 0,
+                    'invalidated': [],
+                    'selected': {
+                        'provider_id': provider.id,
+                        'platform': provider.name,
+                        'node': parsed.variables.get('node'),
+                        'storage': parsed.variables.get('storage'),
+                        'network': parsed.variables.get('network'),
+                    },
+                },
+            },
+        )
+        bind_resolution(placement_resolution, deployment, job)
+
+        if hostname_reservation:
+            hostname_reservation.status, hostname_reservation.resource_id = 'assigned', deployment.id
         if ip_allocation:
             ip_allocation.status, ip_allocation.resource_id = 'assigned', deployment.id
+
+        audit(
+            db, request,
+            'PLACEMENT_OVERRIDE' if placement_override else 'PLACEMENT_SELECTED',
+            'placement_decisions', placement_resolution.decision.id,
+        )
+        if placement_resolution.reservation:
+            audit(
+                db, request, 'RESOURCE_RESERVED',
+                'resource_reservations', placement_resolution.reservation.id,
+            )
         audit(db, request, 'blueprint.executed', 'blueprints', row.id)
         audit(db, request, 'deployment.created', 'deployments', deployment.id)
         return {**deployment_public(deployment), 'job': job_public(job)}
