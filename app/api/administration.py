@@ -107,7 +107,7 @@ def user_update(id: int, data: UserUpdate, request: Request, actor=Depends(requi
 def user_action(db, request, id, action):
     governance_lock(db)
     u = find(db, User, id)
-    can_grant(request, effective_permissions(u))
+    can_grant(db, request, actor, effective_permissions(u))
     if action == 'enable':
         u.is_active = True
     elif action == 'disable':
@@ -142,7 +142,7 @@ def delete_user(id: int, request: Request, actor=Depends(require('users.delete')
     # Keep the immutable user ID for deployments and audit; remove identity and access.
     governance_lock(db)
     u = find(db, User, id)
-    can_grant(request, effective_permissions(u))
+    can_grant(db, request, actor, effective_permissions(u))
     u.is_active = False
     u.is_locked = True
     u.roles = []
@@ -159,7 +159,7 @@ def delete_user(id: int, request: Request, actor=Depends(require('users.delete')
 @router.post('/users/{id}/reset-password', response_model=IssuedResetOutput, response_model_exclude_unset=True)
 def reset_user(id: int, request: Request, actor=Depends(require('users.update')), db=Depends(get_db, scope='function')):
     u = find(db, User, id)
-    can_grant(request, effective_permissions(u))
+    can_grant(db, request, actor, effective_permissions(u))
     if u.is_service_account or not u.is_active:
         raise HTTPException(409, 'Password reset requires an active human account')
     if u.auth_source != 'local':
@@ -332,7 +332,7 @@ def role(id: int, actor=Depends(require('roles.read')), db=Depends(get_db, scope
 
 @router.post('/roles', status_code=201, response_model=RoleOutput)
 def create_role(data: RoleInput, request: Request, actor=Depends(require('roles.create')), db=Depends(get_db, scope='function')):
-    can_grant(request, data.permissions)
+    can_grant(db, request, actor, data.permissions)
     def create():
         r = Role(name=data.name, permissions=permissions_from_names(db, data.permissions))
         db.add(r)
@@ -346,8 +346,8 @@ def create_role(data: RoleInput, request: Request, actor=Depends(require('roles.
 def update_role(id: int, data: RoleInput, request: Request, actor=Depends(require('roles.update')), db=Depends(get_db, scope='function')):
     governance_lock(db)
     r = find(db, Role, id)
-    can_grant(request, [p.name for p in r.permissions])
-    can_grant(request, data.permissions)
+    can_grant(db, request, actor, [p.name for p in r.permissions])
+    can_grant(db, request, actor, data.permissions)
     r.name = data.name
     r.permissions = permissions_from_names(db, data.permissions)
     ensure_admin_remains(db)
@@ -359,7 +359,7 @@ def update_role(id: int, data: RoleInput, request: Request, actor=Depends(requir
 def delete_role(id: int, request: Request, actor=Depends(require('roles.delete')), db=Depends(get_db, scope='function')):
     governance_lock(db)
     r = find(db, Role, id)
-    can_grant(request, [p.name for p in r.permissions])
+    can_grant(db, request, actor, [p.name for p in r.permissions])
     if r.name in SYSTEM_ROLE_NAMES:
         raise HTTPException(409, 'System roles cannot be deleted; clone the role instead')
     if db.scalar(select(UserRole).where(UserRole.role_id == id)):
@@ -379,9 +379,9 @@ def user_roles(id: int, actor=Depends(require('roles.read')), db=Depends(get_db,
 def assign_roles(id: int, data: AssignRoles, request: Request, actor=Depends(require('roles.assign')), db=Depends(get_db, scope='function')):
     governance_lock(db)
     u = find(db, User, id)
-    can_grant(request, effective_permissions(u))
+    can_grant(db, request, actor, effective_permissions(u))
     roles = [find(db, Role, rid) for rid in set(data.role_ids)]
-    can_grant(request, {p.name for r in [*roles, *u.roles] for p in r.permissions})
+    can_grant(db, request, actor, {p.name for r in [*roles, *u.roles] for p in r.permissions})
     u.roles = roles
     ensure_admin_remains(db)
     audit(db, request, 'role.assigned', 'users', id)
@@ -404,14 +404,27 @@ def token(id: int, actor=Depends(require('tokens.read')), db=Depends(get_db, sco
 @router.post('/tokens', status_code=201, response_model=IssuedTokenOutput, response_model_exclude_unset=True)
 def create_token(data: TokenInput, request: Request, actor=Depends(require('tokens.create')), db=Depends(get_db, scope='function')):
     user_id = data.user_id or actor.user_id
-    if user_id != actor.user_id and 'users.update' not in request.state.permissions:
-        raise HTTPException(403, 'users.update required for another account')
+    if user_id != actor.user_id:
+        from app.iam.service import authorize_or_raise, request_context, validate_permission_patterns
+        authorize_or_raise(
+            db, actor, 'users.update',
+            scope={'scope_type': 'GLOBAL'},
+            context=request_context(request),
+            write=True,
+        )
+        authorize_or_raise(
+            db, actor, 'tokens.manage_scopes',
+            scope={'scope_type': 'GLOBAL'},
+            context=request_context(request),
+            write=True,
+        )
     user = find(db, User, user_id)
     if not user.is_active or user.is_locked:
         raise HTTPException(409, 'Account unavailable')
-    can_grant(request, data.scopes)
-    if not set(data.scopes) <= effective_permissions(user):
-        raise HTTPException(422, 'Token scopes must be a subset of account permissions')
+    try:
+        normalized_scopes = validate_permission_patterns(data.scopes)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     seconds = None
     if data.expires_at:
         expiry = data.expires_at.astimezone(timezone.utc).replace(tzinfo=None) if data.expires_at.tzinfo else data.expires_at
@@ -419,7 +432,7 @@ def create_token(data: TokenInput, request: Request, actor=Depends(require('toke
         if seconds <= 0:
             raise HTTPException(422, 'Expiration must be in the future')
     def create():
-        token, plain = issue_token(db, user, data.name, data.scopes, seconds=seconds)
+        token, plain = issue_token(db, user, data.name, normalized_scopes, seconds=seconds)
         audit(db, request, 'token.created', 'tokens', token.id)
         return {**token_public(token), 'token': plain}
     return idempotent(db, request, actor, data.model_dump(mode='json'), create)
