@@ -110,6 +110,7 @@ class RoleAssignment(Timestamp, Base):
     apmid: Mapped[str | None] = mapped_column(String(63), index=True)
     environment: Mapped[str | None] = mapped_column(String(32), index=True)
     conditions: Mapped[dict] = mapped_column(JSON, default=dict)
+    permission_ceiling: Mapped[list | None] = mapped_column(JSON)
     inherit: Mapped[bool] = mapped_column(Boolean, default=True)
     approval_required: Mapped[bool] = mapped_column(Boolean, default=False)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime, index=True)
