@@ -559,23 +559,38 @@ def register_inventory(context):
 
 def destroy(context, timeout=1800):
     node, vm_id, adapter = identity(context)
+    force = (context.job.payload or {}).get('force') is True
     context.stage('proxmox.destroy.check')
     try:
         status = _status_or_none(adapter, node, vm_id)
-    except Exception:
-        raise ExecutionFailed('Nie udało się sprawdzić VM przed usunięciem') from None
+    except Exception as exc:
+        if not force:
+            raise ExecutionFailed('Nie udało się sprawdzić VM przed usunięciem') from None
+        status = {}
+        context.log(
+            f'proxmox.destroy.force_precheck_failed: {node}/{vm_id}; '
+            f'{type(exc).__name__}: {str(exc)[:200]}'
+        )
     if status is None:
         context.log(f'proxmox.destroy.absent: {node}/{vm_id}')
         return True
 
-    if str(status.get('status') or '').lower() != 'stopped':
+    if force or str(status.get('status') or '').lower() != 'stopped':
         context.stage('proxmox.destroy.force_stop')
         context.progress(None, 'Twarde zatrzymywanie VM', phase='destroy')
-        task = adapter.vm_power(node, vm_id, 'stop')
-        if task:
-            wait_task(
-                context, adapter, task_node(task, node), task, 'Twarde zatrzymywanie VM',
-                phase='destroy', timeout=min(timeout, 300),
+        try:
+            task = adapter.vm_power(node, vm_id, 'stop')
+            if task:
+                wait_task(
+                    context, adapter, task_node(task, node), task, 'Twarde zatrzymywanie VM',
+                    phase='destroy', timeout=min(timeout, 300),
+                )
+        except Exception as exc:
+            if not force:
+                raise
+            context.log(
+                f'proxmox.destroy.force_stop_failed: {node}/{vm_id}; '
+                f'{type(exc).__name__}: {str(exc)[:200]}'
             )
 
     context.stage('proxmox.destroy.delete')
