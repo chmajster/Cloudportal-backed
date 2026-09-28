@@ -7,7 +7,7 @@ from app.database import get_db
 from app.day2.errors import Day2Failure, failure
 from app.day2.models import BulkDay2ActionRequest, Day2ActionRequest
 from app.day2.providers import day2_provider
-from app.day2.registry import get_action
+from app.day2.registry import all_actions, get_action
 from app.day2.schemas import Day2BulkInput, Day2ExecuteInput, Day2ResourceStateInput, Day2SettingsInput
 from app.day2.service import (
     action_catalog,
@@ -40,10 +40,45 @@ def _permissions(request):
     return set(getattr(request.state, 'permissions', set()))
 
 
-def _require_action(request, action_id):
-    permission = get_action(action_id).permission
-    if permission not in _permissions(request):
+def _authorize_scoped_permission(db, request, actor, permission):
+    from app.iam.service import authorize, request_context, scope_from_resource_scope
+    scope = getattr(request.state, 'resource_scope', None)
+    if scope is None:
         raise failure('PERMISSION_DENIED', status_code=403, details={'permission': permission})
+    decision = authorize(
+        db,
+        actor,
+        permission,
+        scope=scope_from_resource_scope(scope),
+        context=request_context(request),
+        write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
+    )
+    if decision.decision != 'ALLOW':
+        code = 'APPROVAL_REQUIRED' if decision.decision == 'REQUIRES_APPROVAL' else 'PERMISSION_DENIED'
+        status = 409 if decision.decision == 'REQUIRES_APPROVAL' else 403
+        raise failure(code, status_code=status, details={
+            'permission': permission,
+            'reason': decision.reason,
+        })
+    request.state.permissions = set(_permissions(request)) | {permission}
+    return decision
+
+
+def _require_action(db, request, actor, action_id):
+    permission = get_action(action_id).permission
+    _authorize_scoped_permission(db, request, actor, permission)
+
+
+def _catalog_permissions(db, request, actor):
+    permissions = set(_permissions(request))
+    for definition in all_actions():
+        try:
+            _authorize_scoped_permission(db, request, actor, definition.permission)
+            permissions.add(definition.permission)
+        except Day2Failure:
+            continue
+    request.state.permissions = permissions
+    return permissions
 
 
 def _bulk_child_error(resource_id, error):
@@ -73,11 +108,11 @@ def _owned_action(db, id, actor, request):
 
 
 @router.get('/resources/{resource_id}/actions')
-def resource_actions(resource_id: str, request: Request, actor=Depends(require('day2.view')),
+def resource_actions(resource_id: str, request: Request, actor=Depends(require('machines.read')),
                      db=Depends(get_db, scope='function')):
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
-        return action_catalog(db, target, credential, _permissions(request))
+        return action_catalog(db, target, credential, _catalog_permissions(db, request, actor))
     except Day2Failure as error:
         _raise(error)
 
@@ -103,6 +138,7 @@ def validate_resource_action(resource_id: str, action_id: str, data: Day2Execute
     from app.day2.service import validate_action
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
+        _require_action(db, request, actor, action_id)
         return validate_action(db, target, credential, action_id, data.parameters, data.reason, _permissions(request))
     except Day2Failure as error:
         _raise(error)
@@ -113,7 +149,7 @@ def execute_resource_action(resource_id: str, action_id: str, data: Day2ExecuteI
                             actor=Depends(require('day2.view')), db=Depends(get_db, scope='function')):
     try:
         target, credential, _ = resolve_target(db, resource_id, request, actor)
-        _require_action(request, action_id)
+        _require_action(db, request, actor, action_id)
         payload = {'resource_id': resource_id, 'action': action_id.lower(), **data.model_dump(mode='json')}
 
         def create():
@@ -173,10 +209,18 @@ def update_resource_day2_state(resource_id: str, data: Day2ResourceStateInput, r
     try:
         resolve_target(db, resource_id, request, actor)
         permissions = _permissions(request)
-        if data.protected is not None and 'day2.admin' not in permissions:
-            raise failure('PERMISSION_DENIED', status_code=403, details={'permission': 'day2.admin'})
-        if data.platform_metadata is not None and 'day2.metadata.manage' not in permissions:
-            raise failure('PERMISSION_DENIED', status_code=403, details={'permission': 'day2.metadata.manage'})
+        if data.protected is not None:
+            from app.iam.service import authorize, request_context
+            decision = authorize(
+                db, actor, 'day2.admin', scope={'scope_type': 'GLOBAL'},
+                context=request_context(request), write=True,
+            )
+            if decision.decision != 'ALLOW':
+                raise failure('PERMISSION_DENIED', status_code=403, details={'permission': 'day2.admin'})
+            permissions.add('day2.admin')
+        if data.platform_metadata is not None:
+            _authorize_scoped_permission(db, request, actor, 'machines.metadata.update')
+            permissions.add('machines.metadata.update')
         state = get_resource_state(db, resource_id, create=True)
         if data.protected is not None:
             state.protected = data.protected
@@ -232,8 +276,7 @@ def resource_console(resource_id: str, request: Request, actor=Depends(require('
                      db=Depends(get_db, scope='function')):
     try:
         permissions = _permissions(request)
-        if 'vms.console' not in permissions:
-            raise failure('PERMISSION_DENIED', status_code=403, details={'permission': 'vms.console'})
+        _authorize_scoped_permission(db, request, actor, 'machines.console.open')
         target, _, _ = resolve_target(db, resource_id, request, actor)
         if target.provider_type != 'proxmox' or target.node is None or target.vm_id is None:
             raise failure('ACTION_NOT_SUPPORTED', message='Console is not available for this provider resource')
@@ -269,7 +312,7 @@ def day2_action(id: str, request: Request, actor=Depends(require('day2.view')),
 
 
 @router.post('/day2-actions/{id}/cancel')
-def cancel_day2_action(id: str, request: Request, actor=Depends(require('day2.cancel')),
+def cancel_day2_action(id: str, request: Request, actor=Depends(require('machines.actions.cancel')),
                        db=Depends(get_db, scope='function')):
     try:
         row = _owned_action(db, id, actor, request)
@@ -279,7 +322,7 @@ def cancel_day2_action(id: str, request: Request, actor=Depends(require('day2.ca
 
 
 @router.post('/day2-actions/{id}/approve')
-def approve_day2_action(id: str, request: Request, actor=Depends(require('day2.approve')),
+def approve_day2_action(id: str, request: Request, actor=Depends(require('approvals.approve')),
                         db=Depends(get_db, scope='function')):
     try:
         row = db.get(Day2ActionRequest, id)
@@ -291,14 +334,14 @@ def approve_day2_action(id: str, request: Request, actor=Depends(require('day2.a
 
 
 @router.post('/day2-actions/{id}/retry', status_code=202)
-def retry_day2_action(id: str, request: Request, actor=Depends(require('day2.retry')),
+def retry_day2_action(id: str, request: Request, actor=Depends(require('machines.actions.retry')),
                       db=Depends(get_db, scope='function')):
     try:
         previous = _owned_action(db, id, actor, request)
         if previous.status != 'FAILED':
             raise failure('INVALID_STATE', message='Only failed Day-2 actions can be retried')
         target, credential, _ = resolve_target(db, previous.resource_id, request, actor)
-        _require_action(request, previous.action)
+        _require_action(db, request, actor, previous.action)
         payload = {'retry_of': previous.id, 'attempt': previous.attempt + 1}
 
         def create():
@@ -324,7 +367,7 @@ def retry_day2_action(id: str, request: Request, actor=Depends(require('day2.ret
 def bulk_day2_actions(data: Day2BulkInput, request: Request, actor=Depends(require('day2.view')),
                       db=Depends(get_db, scope='function')):
     try:
-        _require_action(request, data.action)
+        _require_action(db, request, actor, data.action)
         config = day2_settings(db)
         resource_ids = list(dict.fromkeys(data.resource_ids))
         if len(resource_ids) > config['max_bulk_action_size']:
