@@ -5,14 +5,14 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import or_, select, update
-from app.api.schemas import Login, Refresh, ResetPassword, ChangePassword, SSOExchangeInput
+from app.api.schemas import Login, Refresh, ResetPassword, ChangePassword
 from app.api.outputs import IdentityOutput, SessionOutput, LogoutOutput, ResetOutput, PasswordChangedOutput
 from app.database import get_db
 from app.models import PasswordReset, Token, User, now
 from app.config import settings
 from app.auth.ldap import authenticate_ldap
-from app.auth.oidc import (authenticate_sso_callback, begin_sso, consume_sso_handoff, discard_sso_state,
-                           issue_sso_handoff, sso_settings)
+from app.auth.oidc import (SSOExchangeInput, authenticate_sso_callback, begin_sso, consume_sso_handoff,
+                           discard_sso_state, issue_sso_handoff, sso_settings)
 from app.security.core import (authenticate, audit, digest, dummy_hash, effective_permissions, issue_token,
                                password_hasher, revoke_user, throttle, verify_password)
 
@@ -157,7 +157,7 @@ def login(data: Login, request: Request, db=Depends(get_db, scope='function')):
                     user.last_name = ldap_profile['last_name']
 
     if not user or not valid or locked or not user.is_active or user.is_service_account:
-        if user and not locked and user.is_active:
+        if user and user.auth_source in {'local', 'ldap'} and not locked and user.is_active:
             user.failed_login_attempts += 1
             if user.failed_login_attempts >= settings().login_attempts:
                 user.locked_until = now() + timedelta(seconds=settings().lockout_seconds)
