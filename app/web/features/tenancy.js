@@ -33,6 +33,81 @@
       'Etap fundamentu governance: uprawnienia poniżej dotyczą zarządzania tenantami. Istniejące VM, deploymenty i credentials nie są jeszcze izolowane przez ten moduł.' });
   }
 
+  function tenantUpdateValues(item, name = item.name) {
+    return {
+      name,
+      slug: item.slug,
+      status: item.status,
+      description: item.description || '',
+      labels: item.labels || {},
+      metadata: item.metadata || {},
+      expected_version: item.version,
+    };
+  }
+
+  async function renameTenant(item) {
+    const [current, scope] = await Promise.all([
+      api('/tenants/' + encodeURIComponent(item.id)),
+      api('/tenants/' + encodeURIComponent(item.id) + '/permissions'),
+    ]);
+    const editable = current.status === 'active' || scope.global_administration;
+    if (current.is_system) throw new Error('Organizacja systemowa jest chroniona przed zmianą nazwy.');
+    if (!editable || !scope.permissions.includes('tenants.update')) {
+      throw new Error('Brak uprawnienia do zmiany nazwy organizacji.');
+    }
+    const body = node('div', { class: 'form-grid' },
+      field('Nowa nazwa organizacji', 'name', { value: current.name, required: true, maxlength: 100, autofocus: true }),
+      node('p', { class: 'field-help', text: 'Slug organizacji pozostanie bez zmian: ' + current.slug }));
+    openModal({
+      title: 'Zmień nazwę organizacji',
+      body,
+      submitLabel: 'Zapisz nazwę',
+      onSubmit: async data => {
+        const name = String(data.get('name') || '').trim();
+        if (!name) throw new Error('Nazwa organizacji nie może być pusta.');
+        await api('/tenants/' + encodeURIComponent(current.id), {
+          method: 'PUT',
+          body: tenantUpdateValues(current, name),
+        });
+        toast('Nazwa organizacji została zmieniona.');
+        await navigate('tenants');
+        return false;
+      },
+    });
+  }
+
+  async function deleteTenant(item) {
+    const [current, scope] = await Promise.all([
+      api('/tenants/' + encodeURIComponent(item.id)),
+      api('/tenants/' + encodeURIComponent(item.id) + '/permissions'),
+    ]);
+    if (current.is_system) throw new Error('Organizacja systemowa jest chroniona przed usunięciem.');
+    if (!scope.global_administration || !scope.permissions.includes('tenants.delete')) {
+      throw new Error('Usunięcie organizacji wymaga globalnego uprawnienia tenants.delete.');
+    }
+    const body = node('div', { class: 'stack' },
+      node('p', { text: 'Usunięcie organizacji jest możliwe dopiero po usunięciu jej projektów i członkostw. Historia audytu oraz techniczna tożsamość pozostaną zachowane.' }),
+      field('Wpisz nazwę organizacji, aby potwierdzić', 'confirmation', { required: true, maxlength: 100, autocomplete: 'off' }));
+    openModal({
+      title: 'Usuń organizację: ' + current.name,
+      danger: true,
+      submitLabel: 'Usuń organizację',
+      body,
+      onSubmit: async data => {
+        if (String(data.get('confirmation') || '').trim() !== current.name) {
+          throw new Error('Nazwa potwierdzająca nie zgadza się z nazwą organizacji.');
+        }
+        await api('/tenants/' + encodeURIComponent(current.id) + '?expected_version=' + encodeURIComponent(current.version), {
+          method: 'DELETE',
+        });
+        toast('Organizacja została usunięta.');
+        listOffset = 0;
+        await navigate('tenants');
+        return false;
+      },
+    });
+  }
+
   async function tenantsView() {
     const current = ++generation;
     const page = await api(`/tenants?limit=${pageSize}&offset=${listOffset}${listStatus ? '&status=' + encodeURIComponent(listStatus) : ''}`);
@@ -51,7 +126,14 @@
         { label: 'Status', value: item => badge(labels[item.status], item.status === 'active' ? 'ok' : 'warning') },
         { label: 'Systemowy', value: item => item.is_system ? 'Tak — chroniony' : 'Nie' },
         { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
-      ], page.items, item => [action('Szczegóły', () => navigate('/tenants/' + encodeURIComponent(item.id)))]),
+      ], page.items, item => {
+        const rowActions = [action('Szczegóły', () => navigate('/tenants/' + encodeURIComponent(item.id)))];
+        if (!item.is_system) {
+          rowActions.push(action('Zmień nazwę', () => renameTenant(item)));
+          rowActions.push(action('Usuń', () => deleteTenant(item), 'danger'));
+        }
+        return rowActions;
+      }),
       pageControls(page, offset => { listOffset = offset; return tenantsView(); }));
   }
 
@@ -62,19 +144,15 @@
     const permits = permission => scope.permissions.includes(permission);
     const editable = item.status === 'active' || scope.global_administration;
     const actions = [];
-    if (permits('tenants.update') && editable) actions.push(action('Edytuj', () => navigate('/tenants/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'tenant'))));
+    if (permits('tenants.update') && editable) {
+      if (!item.is_system) actions.push(action('Zmień nazwę', () => renameTenant(item)));
+      actions.push(action('Edytuj', () => navigate('/tenants/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'tenant'))));
+    }
     if (permits('tenants.members.read')) actions.push(action('Członkowie', () => navigate('/tenants/' + encodeURIComponent(item.id) + '/members')));
     if (permits('projects.read')) actions.push(action('Projekty', () => document.dispatchEvent(new CustomEvent('cloudportal:tenant-projects', { detail: { tenantId: item.id } }))));
     if (permits('tenants.audit.read')) actions.push(action('Historia audytu', () => navigate('/tenants/' + encodeURIComponent(item.id) + '/audit')));
     if (!item.is_system && scope.global_administration && permits('tenants.delete')) {
-      actions.push(action('Usuń tenant', () => openModal({
-        title: `Usuń tenant: ${item.name}`, danger: true, submitLabel: 'Usuń pusty tenant',
-        body: node('p', { text: 'Backend wymaga pustego tenanta i zgodnej wersji. Historia audytu pozostanie zachowana.' }),
-        onSubmit: async () => {
-          await api(`/tenants/${item.id}?expected_version=${item.version}`, { method: 'DELETE' });
-          listOffset = 0; await navigate('tenants'); return false;
-        },
-      }), 'danger'));
+      actions.push(action('Usuń organizację', () => deleteTenant(item), 'danger'));
     }
     openModal({ title: item.name, eyebrow: 'Tenant / szczegóły', wide: true,
       body: node('div', { class: 'stack' }, foundationNotice(),
@@ -260,45 +338,45 @@
   document.addEventListener('cloudportal:app-hidden', () => { generation++; listOffset = 0; listStatus = ''; });
   registerRoutedForm({
     id: 'tenants-details',
-    pattern: /^\/tenants\/(?<id>\d+)$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
-  }, match => tenantDetails(Number(match.params.id)));
+  }, match => tenantDetails(match.params.id));
   registerRoutedForm({
     id: 'tenants-members',
-    pattern: /^\/tenants\/(?<id>\d+)\/members$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
-  }, match => membersView(Number(match.params.id)));
+  }, match => membersView(match.params.id));
   registerRoutedForm({
     id: 'tenants-audit',
-    pattern: /^\/tenants\/(?<id>\d+)\/audit$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/audit$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
-  }, match => auditView(Number(match.params.id)));
+  }, match => auditView(match.params.id));
   registerRoutedForm({
     id: 'tenants-member-create',
-    pattern: /^\/tenants\/(?<id>\d+)\/members\/new$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/new$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
   }, async match => {
-    const id = Number(match.params.id);
+    const id = match.params.id;
     const scope = await api('/tenants/' + id + '/permissions');
     if (!scope.permissions.includes('tenants.members.manage')) throw new Error('Brak uprawnienia do dodawania członków.');
     await memberForm(id, scope.permissions.includes('tenants.roles.assign'));
   });
   registerRoutedForm({
     id: 'tenants-member-roles',
-    pattern: /^\/tenants\/(?<id>\d+)\/members\/(?<userId>\d+)\/roles$/,
+    pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/(?<userId>\d+)\/roles$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',
   }, async match => {
-    const id = Number(match.params.id);
+    const id = match.params.id;
     const [scope, page] = await Promise.all([
       api('/tenants/' + id + '/permissions'),
       api('/tenants/' + id + '/members?limit=200&offset=0'),
@@ -321,7 +399,7 @@
   });
   registerRoutedForm({
     id: 'tenants-edit',
-    pattern: /^\/tenants\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+    pattern: /^\/tenants\/edit\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})(?:\/[^/]+)?$/,
     parent: 'tenants',
     permission: null,
     label: 'Tenanci',

@@ -7,6 +7,14 @@ def test_tenant_ui_uses_server_scope_and_safe_rendering():
     source = Path('app/web/features/tenancy.js').read_text()
     assert 'localStorage' not in source and '.innerHTML' not in source
     assert 'prompt(' not in source and 'alert(' not in source and 'confirm(' not in source
+    assert "async function renameTenant(item)" in source
+    assert "async function deleteTenant(item)" in source
+    assert "action('Zmień nazwę', () => renameTenant(item))" in source
+    assert "action('Usuń', () => deleteTenant(item), 'danger')" in source
+    assert "pattern: /^\\/tenants\\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/" in source
+    assert "tenantDetails(match.params.id)" in source
+    assert "await navigate('tenants');" in source
+    assert "const id = Number(match.params.id);" not in source
     script = r"""
 const fs = require('node:fs');
 const vm = require('node:vm');

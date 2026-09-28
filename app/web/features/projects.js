@@ -34,6 +34,79 @@
       'Uprawnienia projektowe są sprawdzane przez backend. Ta warstwa administracji projektami nie włącza jeszcze izolacji istniejącej infrastruktury ani egzekwowania quota i policy.' });
   }
 
+  function projectUpdateValues(item, name = item.name) {
+    return {
+      name,
+      slug: item.slug,
+      status: item.status,
+      default_environment: item.default_environment,
+      blueprint_auto_approve_for_executors: item.blueprint_auto_approve_for_executors,
+      blueprint_approval_timeout_hours: item.blueprint_approval_timeout_hours,
+      description: item.description || '',
+      labels: item.labels || {},
+      metadata: item.metadata || {},
+      expected_version: item.version,
+    };
+  }
+
+  async function renameProject(item) {
+    const [current, scope] = await Promise.all([
+      api('/projects/' + encodeURIComponent(item.id)),
+      api('/projects/' + encodeURIComponent(item.id) + '/permissions'),
+    ]);
+    if (current.is_system) throw new Error('Projekt systemowy jest chroniony przed zmianą nazwy.');
+    if (!scope.permissions.includes('projects.update')) throw new Error('Brak uprawnienia do zmiany nazwy projektu.');
+    const body = node('div', { class: 'form-grid' },
+      field('Nowa nazwa projektu', 'name', { value: current.name, required: true, maxlength: 100, autofocus: true }),
+      node('p', { class: 'field-help', text: 'Slug projektu pozostanie bez zmian: ' + current.slug }));
+    openModal({
+      title: 'Zmień nazwę projektu',
+      body,
+      submitLabel: 'Zapisz nazwę',
+      onSubmit: async data => {
+        const name = String(data.get('name') || '').trim();
+        if (!name) throw new Error('Nazwa projektu nie może być pusta.');
+        await api('/projects/' + encodeURIComponent(current.id), {
+          method: 'PUT',
+          body: projectUpdateValues(current, name),
+        });
+        toast('Nazwa projektu została zmieniona.');
+        await navigate('projects');
+        return false;
+      },
+    });
+  }
+
+  async function deleteProject(item) {
+    const [current, scope] = await Promise.all([
+      api('/projects/' + encodeURIComponent(item.id)),
+      api('/projects/' + encodeURIComponent(item.id) + '/permissions'),
+    ]);
+    if (current.is_system) throw new Error('Projekt systemowy jest chroniony przed usunięciem.');
+    if (!scope.permissions.includes('projects.delete')) throw new Error('Brak uprawnienia do usunięcia projektu.');
+    const body = node('div', { class: 'stack' },
+      node('p', { text: 'Usunięcie projektu jest możliwe tylko wtedy, gdy nie ma członków, infrastruktury, historii ani przypisań dostępu. Historia audytu pozostanie zachowana.' }),
+      field('Wpisz nazwę projektu, aby potwierdzić', 'confirmation', { required: true, maxlength: 100, autocomplete: 'off' }));
+    openModal({
+      title: 'Usuń projekt: ' + current.name,
+      danger: true,
+      submitLabel: 'Usuń projekt',
+      body,
+      onSubmit: async data => {
+        if (String(data.get('confirmation') || '').trim() !== current.name) {
+          throw new Error('Nazwa potwierdzająca nie zgadza się z nazwą projektu.');
+        }
+        await api('/projects/' + encodeURIComponent(current.id) + '?expected_version=' + encodeURIComponent(current.version), {
+          method: 'DELETE',
+        });
+        toast('Projekt został usunięty.');
+        listOffset = 0;
+        await navigate('projects');
+        return false;
+      },
+    });
+  }
+
   async function projectsView() {
     const current = ++generation;
     const query = new URLSearchParams({ limit: pageSize, offset: listOffset });
@@ -57,7 +130,14 @@
         { label: 'Środowisko domyślne', value: row => row.default_environment },
         { label: 'Status', value: row => labels[row.status] },
         { label: 'Systemowy', value: row => row.is_system ? 'Tak — chroniony' : 'Nie' },
-      ], page.items, row => [action('Szczegóły', () => navigate('/projects/' + encodeURIComponent(row.id)))]),
+      ], page.items, row => {
+        const rowActions = [action('Szczegóły', () => navigate('/projects/' + encodeURIComponent(row.id)))];
+        if (!row.is_system) {
+          rowActions.push(action('Zmień nazwę', () => renameProject(row)));
+          rowActions.push(action('Usuń', () => deleteProject(row), 'danger'));
+        }
+        return rowActions;
+      }),
       controls(page, offset => { listOffset = offset; return projectsView(); }));
   }
 
@@ -69,17 +149,15 @@
     const actions = [];
     if (permits('projects.select') && globalThis.CPProjectContext) actions.push(action('Wybierz kontekst',
       () => globalThis.CPProjectContext.choose(item, () => current === generation && viewIs('projects'))));
-    if (permits('projects.update')) actions.push(action('Edytuj', () => navigate('/projects/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'project'))));
+    if (permits('projects.update')) {
+      if (!item.is_system) actions.push(action('Zmień nazwę', () => renameProject(item)));
+      actions.push(action('Edytuj', () => navigate('/projects/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'project'))));
+    }
     if (permits('projects.members.read')) actions.push(action('Członkowie', () => navigate('/projects/' + encodeURIComponent(id) + '/members')));
     if (permits('projects.audit.read')) actions.push(action('Audyt', () => navigate('/projects/' + encodeURIComponent(id) + '/audit')));
-    if (!item.is_system && permits('projects.delete')) actions.push(action('Usuń pusty projekt', () => openModal({
-      title: `Usuń projekt: ${item.name}`, danger: true, submitLabel: 'Usuń projekt',
-      body: node('p', { text: 'Backend wymaga pustego projektu i zgodnej wersji. Historia audytu zostanie zachowana.' }),
-      onSubmit: async () => {
-        await api(`/projects/${id}?expected_version=${item.version}`, { method: 'DELETE' });
-        await navigate('projects'); return false;
-      },
-    }), 'danger'));
+    if (!item.is_system && permits('projects.delete')) {
+      actions.push(action('Usuń projekt', () => deleteProject(item), 'danger'));
+    }
     openModal({ title: item.name, eyebrow: 'Projekt / szczegóły', wide: true,
       body: node('div', { class: 'stack' }, notice(), node('div', { class: 'action-group' }, actions),
         node('p', { text: item.description || 'Brak opisu.' }),
@@ -238,45 +316,45 @@
   }
   registerRoutedForm({
     id: 'projects-details',
-    pattern: /^\/projects\/(?<id>\d+)$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
-  }, match => details(Number(match.params.id)));
+  }, match => details(match.params.id));
   registerRoutedForm({
     id: 'projects-members',
-    pattern: /^\/projects\/(?<id>\d+)\/members$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
-  }, match => members(Number(match.params.id)));
+  }, match => members(match.params.id));
   registerRoutedForm({
     id: 'projects-audit',
-    pattern: /^\/projects\/(?<id>\d+)\/audit$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/audit$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
-  }, match => history(Number(match.params.id)));
+  }, match => history(match.params.id));
   registerRoutedForm({
     id: 'projects-member-create',
-    pattern: /^\/projects\/(?<id>\d+)\/members\/new$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/new$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
   }, async match => {
-    const id = Number(match.params.id);
+    const id = match.params.id;
     const scope = await api('/projects/' + id + '/permissions');
     if (!scope.permissions.includes('projects.members.manage')) throw new Error('Brak uprawnienia do dodawania członków projektu.');
     await memberForm(id, scope.permissions.includes('projects.roles.assign'));
   });
   registerRoutedForm({
     id: 'projects-member-roles',
-    pattern: /^\/projects\/(?<id>\d+)\/members\/(?<userId>\d+)\/roles$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/(?<userId>\d+)\/roles$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
   }, async match => {
-    const id = Number(match.params.id);
+    const id = match.params.id;
     const [scope, page] = await Promise.all([
       api('/projects/' + id + '/permissions'),
       api('/projects/' + id + '/members?limit=200&offset=0'),
@@ -296,7 +374,7 @@
   }, () => projectForm());
   registerRoutedForm({
     id: 'projects-edit',
-    pattern: /^\/projects\/edit\/(?<id>\d+)(?:\/[^/]+)?$/,
+    pattern: /^\/projects\/edit\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})(?:\/[^/]+)?$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
