@@ -221,7 +221,9 @@ function validateStep(index, state, data, editingItem) {
       errors.executor = 'Bezpośredni tryb Proxmox API jest dostępny tylko dla providera Proxmox.';
     }
     if (provider?.type === 'proxmox') {
-      if (!state.node) errors.node = 'Wybierz docelowy node.';
+      if (!state.node) errors.node = ['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase())
+        ? 'Wybierz node do discovery template.'
+        : 'Wybierz docelowy node.';
       if (!state.selectedTemplateVmid) errors.template = 'Wybierz template/VM bazową.';
       if (!state.providerConnected) errors.provider = state.providerError || 'Nie udało się odczytać zasobów Proxmox.';
     } else if (!state.terraformTemplateId) {
@@ -243,8 +245,10 @@ function validateStep(index, state, data, editingItem) {
         const vlan = Number(state.vlanId);
         if (!Number.isInteger(vlan) || vlan < 1 || vlan > 4094) errors.vlan_id = 'VLAN ID musi mieścić się w zakresie 1–4094.';
       }
-      if (!state.storage) errors.storage = 'Wybierz storage.';
-      if (!state.network) errors.network = 'Wybierz sieć/bridge.';
+      if (!['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase())) {
+        if (!state.storage) errors.storage = 'Wybierz storage.';
+        if (!state.network) errors.network = 'Wybierz sieć/bridge.';
+      }
       if (state.sshPublicKey && (
         !String(state.sshPublicKey).startsWith('ssh-ed25519 ')
         && !String(state.sshPublicKey).startsWith('ssh-rsa ')
@@ -299,6 +303,29 @@ function validateStep(index, state, data, editingItem) {
     Object.assign(errors, validateWorkflow(state, editingItem));
   } else if (index === 7) {
     Object.assign(errors, parts.awx.validate(state));
+  } else if (index === 9) {
+    const mode = String(state.placementMode || 'FIXED').toUpperCase();
+    if (!['FIXED', 'POOL', 'POLICY'].includes(mode)) errors.placement_mode = 'Nieobsługiwany Placement Mode.';
+    if (mode === 'POOL') {
+      if (!state.resourcePoolId) errors.resource_pool_id = 'Wybierz Resource Pool.';
+      else if (!(data.resourcePools || []).some(row => String(row.id) === String(state.resourcePoolId))) {
+        errors.resource_pool_id = 'Wybrana Resource Pool nie jest dostępna w tym projekcie.';
+      }
+    }
+    if (mode === 'POLICY' && !(data.resourcePools || []).length) {
+      errors.resource_pool_id = 'Brak Resource Pool dostępnych dla policy based placement.';
+    }
+    if (state.logicalNetwork && !(data.logicalNetworks || []).some(row =>
+      String(row.name) === String(state.logicalNetwork) || String(row.id) === String(state.logicalNetwork))) {
+      errors.logical_network = 'Logical Network nie istnieje w wybranym projekcie.';
+    }
+    if (state.storageClass && !(data.storageClasses || []).some(row =>
+      String(row.name) === String(state.storageClass) || String(row.id) === String(state.storageClass))) {
+      errors.storage_class = 'Storage Class nie istnieje w wybranym projekcie.';
+    }
+    if (state.placementAffinityType && !String(state.placementAffinityGroup || '').trim()) {
+      errors.placement_affinity_group = 'Affinity / anti-affinity wymaga nazwy grupy.';
+    }
   }
   state.errors = errors;
   return !Object.keys(errors).length;
