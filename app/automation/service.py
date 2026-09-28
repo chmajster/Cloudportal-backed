@@ -11,7 +11,7 @@ from app.credentials.ssh import public_key_from_private_key
 from app.ipam.service import allocate_address
 from app.models import Blueprint, Credential, HostnameReservation, HostnameScheme, now
 from app.security.core import decrypt_secret
-from app.vm_classification import vm_classification_settings
+from app.vm_classification import vm_classification_for_tenant, vm_classification_settings
 
 
 HOSTNAME_FIELDS = 'id scheme_id hostname values status resource_id created_by created_at updated_at released_at'
@@ -285,7 +285,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     runtime_apmid = str(apmid or '').strip().upper() or None
     runtime_environment = str(environment or '').strip().lower() or None
 
-    classification = vm_classification_settings(db)
+    classification = vm_classification_for_tenant(db, blueprint.tenant_id)
     if select_apmid_on_execute:
         if not runtime_apmid:
             raise HTTPException(422, 'APMID must be selected when this Blueprint is executed')
