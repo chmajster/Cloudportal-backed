@@ -46,6 +46,9 @@ function jobStageInfo(item) {
 
   const exact = {
     'job.running': 'Uruchamianie zadania',
+    'placement.validating': 'Wybieranie lokalizacji',
+    'placement.selected': 'Wybrano lokalizację',
+    'placement.retry': 'Ponowny wybór lokalizacji',
     'terraform.state.restore': 'Przywracanie stanu Terraform',
     'cloud-init.preparing': 'Przygotowanie Cloud-init',
     'terraform.init': 'Inicjalizacja Terraform',
