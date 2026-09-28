@@ -237,6 +237,14 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     ip_allocation = None
     deployment = deepcopy(blueprint.deployment)
 
+    placement_mode = str(deployment.pop('placement_mode', 'FIXED') or 'FIXED').upper()
+    resource_pool_id = deployment.pop('resource_pool_id', None)
+    logical_network = deployment.pop('logical_network', None)
+    storage_class = deployment.pop('storage_class', None)
+    placement_location = deployment.pop('placement_location', None)
+    placement_affinity = deployment.pop('placement_affinity', None)
+    placement_metadata = deployment.pop('placement_metadata', {}) or {}
+
     select_apmid_on_execute = deployment.pop('select_apmid_on_execute', False)
     select_environment_on_execute = deployment.pop('select_environment_on_execute', False)
     fixed_apmid = deployment.pop('apmid', None)
@@ -367,9 +375,24 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         deployment['variables'].setdefault('ipv4_gateway', '{{ ip_gateway }}')
 
     rendered = render_template(deployment, variables)
+    placement_config = {
+        'placement_mode': placement_mode,
+        'resource_pool_id': resource_pool_id,
+        'logical_network': logical_network,
+        'storage_class': storage_class,
+        'location': placement_location,
+        'affinity': placement_affinity,
+        'metadata': placement_metadata,
+    }
+    validation_variables = dict(rendered['variables'])
+    if placement_mode in {'POOL', 'POLICY'}:
+        validation_variables.setdefault('node', 'placement-auto')
+        validation_variables.setdefault('storage', 'placement-auto')
+        validation_variables.setdefault('network', 'placement-auto')
     rendered['variables'] = validate_template_variables(
-        rendered.get('template', 'proxmox-vm'), rendered['variables']
+        rendered.get('template', 'proxmox-vm'), validation_variables
     ).model_dump(mode='json')
+    rendered['_placement'] = placement_config
     if rendered.get('ansible'):
         rendered['ansible'] = AnsibleInput.model_validate(rendered['ansible'])
     ansible_runs = [
@@ -380,6 +403,8 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         AwxOnboardingInput.model_validate(render_template(awx_raw, variables))
         if awx_raw else None
     )
+    variables['apmid'] = effective_apmid
+    variables['environment'] = effective_environment
     rendered['blueprint_variables'] = variables
     return (
         rendered,
