@@ -231,7 +231,7 @@ def guest_credential_cloud_init(db, credential_id):
     }
 
 
-def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None):
+def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None, awx_onboarding=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
     ip_allocation = None
@@ -246,6 +246,15 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     guest_account_mode = deployment.pop('guest_account_mode', 'cloud_init_managed')
     ansible_runs_raw = deployment.pop('ansible_runs', []) or []
     awx_raw = deployment.pop('awx', None)
+    prompt_awx_on_execute = bool(deployment.pop('prompt_awx_on_execute', False))
+    if prompt_awx_on_execute:
+        if awx_onboarding is None:
+            raise HTTPException(422, 'Choose whether this Blueprint execution should add the server to AWX')
+        use_awx = bool(awx_onboarding)
+    else:
+        if awx_onboarding is not None:
+            raise HTTPException(422, 'This Blueprint does not allow changing AWX onboarding at runtime')
+        use_awx = bool(awx_raw)
     scheme_id = deployment.pop('hostname_scheme_id', None)
     ipam_pool_id = deployment.pop('ipam_pool_id', None)
     default_hostname_values = deployment.pop('hostname_values', {})
@@ -378,7 +387,7 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     ]
     awx = (
         AwxOnboardingInput.model_validate(render_template(awx_raw, variables))
-        if awx_raw else None
+        if awx_raw and use_awx else None
     )
     rendered['blueprint_variables'] = variables
     return (

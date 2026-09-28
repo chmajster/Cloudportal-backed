@@ -803,6 +803,7 @@ class BlueprintDeployment(Input):
     executor: Literal['terraform', 'opentofu', 'proxmox'] = 'terraform'
     ansible_runs: Annotated[list[AnsibleInput], Field(max_length=20)] = Field(default_factory=list)
     awx: AwxOnboardingInput | None = None
+    prompt_awx_on_execute: bool = False
     hostname_scheme_id: int | None = Field(default=None, gt=0)
     ipam_pool_id: int | None = Field(default=None, gt=0)
     hostname_values: dict[Slug, Annotated[str, Field(min_length=1, max_length=253)]] = Field(default_factory=dict)
@@ -1026,6 +1027,8 @@ class BlueprintInput(Input):
             raise ValueError('run_ansible_playbook requires Ansible configuration')
 
         awx_steps = [step for step in self.workflow if step.type == 'register_awx']
+        if self.deployment.prompt_awx_on_execute and not self.deployment.awx:
+            raise ValueError('Runtime AWX prompt requires AWX onboarding configuration')
         if self.deployment.awx and len(awx_steps) != 1:
             raise ValueError('AWX onboarding requires exactly one explicit register_awx workflow step')
         if not self.deployment.awx and awx_steps:
@@ -1040,6 +1043,7 @@ class BlueprintExecuteInput(Input):
     hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
     environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
+    awx_onboarding: bool | None = None
 
 
 class ScheduledOperationInput(Input):

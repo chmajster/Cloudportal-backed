@@ -299,6 +299,18 @@ async function executeBlueprint(item, scope = null) {
       }
     }
 
+    if (item.deployment?.prompt_awx_on_execute && item.deployment?.awx) {
+      fields.append(formSection(
+        'AWX / Automation Controller',
+        'Ten Blueprint pozwala zdecydować osobno dla każdego wdrożenia, czy nowy serwer ma zostać dodany do AWX.',
+        selectField('Dodać serwer do AWX?', 'awx_onboarding', [
+          { value: '', label: 'Wybierz decyzję' },
+          { value: 'true', label: 'Tak — dodaj serwer do AWX' },
+          { value: 'false', label: 'Nie — pomiń onboarding AWX' },
+        ], '', { required: true })
+      ));
+    }
+
     let scheme = null;
     if (item.deployment?.hostname_scheme_id && scopeAllows('hostnames.read')) {
       const result = await api('/hostname-schemes?limit=200', { headers: scopeHeaders });
@@ -351,6 +363,12 @@ async function executeBlueprint(item, scope = null) {
         if (runtimeClassification.environment) payload.environment = runtimeClassification.environment;
         const availabilityPlanId = String(form.elements.availability_plan_id?.value || '').trim();
         if (availabilityPlanId) payload.availability_plan_id = availabilityPlanId;
+
+        if (item.deployment?.prompt_awx_on_execute && item.deployment?.awx) {
+          const awxChoice = String(form.elements.awx_onboarding?.value || '').trim();
+          if (!awxChoice) throw new Error('Wybierz, czy serwer ma zostać dodany do AWX.');
+          payload.awx_onboarding = awxChoice === 'true';
+        }
 
         const result = await api(`/blueprints/${item.id}/execute`, {
           method: 'POST',

@@ -230,6 +230,7 @@
       ansibleCredentialId: '',
       ansibleVariables: {},
       awxEnabled: false,
+      promptAwxOnExecute: false,
       awxCredentialId: '',
       awxOrganizationId: '',
       awxProjectId: '',
@@ -359,6 +360,7 @@
 
     const awx = deployment.awx || {};
     state.awxEnabled = Boolean(deployment.awx || workflowTypes.has('register_awx'));
+    state.promptAwxOnExecute = Boolean(deployment.prompt_awx_on_execute);
     state.awxCredentialId = awx.credential_id == null ? '' : String(awx.credential_id);
     // Organization/Project are derived from the immutable CloudPortal Tenant/Project scope.
     // Manual AWX scope overrides are intentionally not part of the Blueprint model.
@@ -498,6 +500,7 @@
     deployment.select_environment_on_execute = Boolean(state.selectEnvironmentOnExecute);
 
     if (state.awxEnabled && state.awxCredentialId) {
+      deployment.prompt_awx_on_execute = Boolean(state.promptAwxOnExecute);
       deployment.awx = {
         credential_id: Number(state.awxCredentialId),
         inventory_id: state.awxInventoryId ? Number(state.awxInventoryId) : null,
