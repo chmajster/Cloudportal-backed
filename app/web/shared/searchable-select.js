@@ -21,6 +21,7 @@
       class: 'searchable-select-input',
       autocomplete: 'off',
       spellcheck: 'false',
+      required: options.required,
       placeholder: options.placeholder || 'Wpisz, aby filtrować…',
       role: 'combobox',
       'aria-autocomplete': 'list',
@@ -53,7 +54,12 @@
       return rows.find(choice => String(choice.value) === String(selectedValue)) || null;
     }
   
-    function closeList() {
+    function updateValidity() {
+    if (!options.required) return;
+    searchInput.setCustomValidity(valueInput.value ? '' : 'Wybierz wartość z listy.');
+  }
+
+  function closeList() {
       listbox.hidden = true;
       searchInput.setAttribute('aria-expanded', 'false');
       searchInput.removeAttribute('aria-activedescendant');
@@ -125,6 +131,7 @@
       valueInput.value = selectedValue;
       searchInput.value = String(choice.label || '');
       editing = false;
+      updateValidity();
       closeList();
       if (notify) listeners.forEach(listener => listener(selectedValue, choice));
     }
@@ -141,7 +148,7 @@
       }));
       const preferredChoice = rows.find(choice => String(choice.value) === String(preferred));
       const retainedChoice = rows.find(choice => String(choice.value) === String(selectedValue));
-      const next = preferredChoice || retainedChoice || rows[0] || null;
+      const next = preferredChoice || retainedChoice || (options.selectFirst === false ? null : rows[0]) || null;
       searchInput.disabled = rows.length === 0;
       if (next) commit(next, false);
       else {

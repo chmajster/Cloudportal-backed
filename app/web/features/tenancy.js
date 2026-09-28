@@ -288,12 +288,17 @@
       const users = await api('/users?limit=200');
       if (current !== generation || !viewIs('tenants')) return;
       const candidates = (users.items || []).filter(user => user.is_active !== false && user.is_locked !== true);
-      userField = selectField('Użytkownik', 'user_id',
+      userField = searchableSelectField('Użytkownik', 'user_id',
         candidates.map(user => ({
           value: String(user.id),
           label: user.username + (user.email ? ' — ' + user.email : '') + ' (#' + user.id + ')',
         })),
-        '', { required: true, placeholder: 'Wybierz użytkownika' });
+        '', {
+          required: true,
+          selectFirst: false,
+          placeholder: 'Wpisz login, e-mail lub ID użytkownika…',
+          help: 'Wpisuj tekst, aby na bieżąco zawężać listę użytkowników.',
+        });
       userField.append(node('span', { class: 'field-help',
         text: 'Po dodaniu użytkownika wybierz role RBAC. Backend nie pozwoli nadać uprawnień szerszych niż Twoje w tej organizacji.' }));
     }
