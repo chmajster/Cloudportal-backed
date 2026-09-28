@@ -200,7 +200,11 @@ def validate_authorization(db, job):
     try:
         permissions = set(permissions_for_identity(db, identity, scope, write=True))
         bind_scope(db, scope)
-        ensure_execution_ready(db, identity, scope)
+        # Brownfield onboarding has its own fail-closed provider/credential target
+        # validation below, so it does not rely on the legacy multi-project
+        # execution rollout gate used by Terraform/Ansible workflows.
+        if not job.operation.startswith('onboarding.'):
+            ensure_execution_ready(db, identity, scope)
         target = None
         if job.deployment_id:
             target = db.get(Deployment, job.deployment_id)
@@ -237,6 +241,62 @@ def validate_authorization(db, job):
                 raise ExecutionFailed('Provider access has been revoked')
             if not reference_visible(db, 'credential', provider.credentials_id, scope):
                 raise ExecutionFailed('Credential access has been revoked')
+        if job.operation.startswith('onboarding.'):
+            from app.onboarding.models import (
+                DiscoveredResource, DiscoverySession, ResourceExternalIdentity,
+            )
+
+            provider_ids = set()
+            credential_ids = set()
+            if job.operation == 'onboarding.discovery':
+                discovery = db.get(DiscoverySession, str((job.payload or {}).get('session_id') or ''))
+                if discovery is None:
+                    raise ExecutionFailed('Discovery session is unavailable in this project')
+                provider_ids.add(int(discovery.provider_id))
+            elif job.operation == 'onboarding.import':
+                items = (job.payload or {}).get('items') or []
+                if not isinstance(items, list) or not items:
+                    raise ExecutionFailed('Onboarding import payload is empty or invalid')
+                for item in items:
+                    if not isinstance(item, dict):
+                        raise ExecutionFailed('Onboarding import item is invalid')
+                    discovered = db.get(DiscoveredResource, str(item.get('discovered_resource_id') or ''))
+                    if discovered is None:
+                        raise ExecutionFailed('Discovered resource is unavailable in this project')
+                    provider_ids.add(int(discovered.provider_id))
+                    for key in ('guest_credential_id', 'awx_credential_id'):
+                        value = item.get(key)
+                        if value:
+                            credential_ids.add(int(value))
+            elif job.operation == 'onboarding.sync':
+                identity_ids = list((job.payload or {}).get('identity_ids') or [])
+                if (job.payload or {}).get('identity_id'):
+                    identity_ids.append((job.payload or {}).get('identity_id'))
+                if not identity_ids:
+                    raise ExecutionFailed('Onboarding sync payload has no resource identities')
+                for identity_id in set(str(value) for value in identity_ids if value):
+                    external_identity = db.get(ResourceExternalIdentity, identity_id)
+                    if external_identity is None or external_identity.retired_at is not None:
+                        raise ExecutionFailed('External identity is unavailable in this project')
+                    provider_ids.add(int(external_identity.provider_id))
+                    for value in (
+                        external_identity.guest_credential_id,
+                        external_identity.awx_credential_id,
+                    ):
+                        if value:
+                            credential_ids.add(int(value))
+            else:
+                raise ExecutionFailed('Unsupported onboarding job operation')
+
+            for provider_id in provider_ids:
+                provider = db.get(Provider, provider_id)
+                if provider is None or not reference_visible(db, 'provider', provider_id, scope):
+                    raise ExecutionFailed('Onboarding provider access has been revoked')
+                if not reference_visible(db, 'credential', provider.credentials_id, scope):
+                    raise ExecutionFailed('Onboarding provider credential access has been revoked')
+            for credential_id in credential_ids:
+                if not reference_visible(db, 'credential', credential_id, scope):
+                    raise ExecutionFailed('Onboarding integration credential access has been revoked')
         ansible = (job.payload or {}).get('ansible') or {}
         if ansible and not reference_visible(db, 'credential', ansible.get('credentials_id'), scope):
             raise ExecutionFailed('Ansible credential access has been revoked')
@@ -274,6 +334,24 @@ def validate_authorization(db, job):
         raise ExecutionFailed('Job project authorization has been revoked') from None
     if job.operation == 'blueprint.delete':
         needed = {'blueprints.delete'}
+    elif job.operation == 'onboarding.discovery':
+        needed = {'vm.discovery.read'}
+    elif job.operation == 'onboarding.sync':
+        needed = {'vm.onboarding.manage'}
+    elif job.operation == 'onboarding.import':
+        onboarding_items = (job.payload or {}).get('items') or []
+        needed = {'vm.onboarding.create'}
+        if len(onboarding_items) > 1:
+            needed.add('vm.onboarding.bulk')
+        if any(item.get('mode') == 'FULL_ADOPTION' for item in onboarding_items if isinstance(item, dict)):
+            needed.add('vm.onboarding.full_adoption')
+        if any(item.get('guest_credential_id') for item in onboarding_items if isinstance(item, dict)):
+            needed.add('vm.onboarding.credentials.assign')
+        if any(
+            item.get('awx_credential_id') or (item.get('integrations') or {}).get('add_to_awx')
+            for item in onboarding_items if isinstance(item, dict)
+        ):
+            needed.add('vm.onboarding.awx.configure')
     elif job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
         needed = {'jobs.execute', 'vms.read', 'vms.clone', 'vms.template'}
     elif job.operation == 'proxmox.provision':
@@ -2520,7 +2598,10 @@ def _execute_unfenced(job_id):
             clear_provider_wait(job.id)
 
         context.stage('job.running')
-        if job.operation == 'blueprint.delete':
+        if job.operation.startswith('onboarding.'):
+            from app.onboarding.worker import execute as execute_onboarding
+            execute_onboarding(context)
+        elif job.operation == 'blueprint.delete':
             from app.automation.deletion import perform_blueprint_delete
             context.stage('blueprint.delete.start')
             with session() as delete_db:
