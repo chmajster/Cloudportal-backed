@@ -128,8 +128,8 @@ class SSOSettingsInput(Input):
         if not value:
             return ''
         parsed = urlsplit(value)
-        if parsed.scheme not in {'https', 'http'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {'', '/'}:
-            raise ValueError('SSO issuer must be an origin URL without credentials, query, fragment or path')
+        if parsed.scheme not in {'https', 'http'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('SSO issuer must be an absolute HTTP(S) URL without credentials, query or fragment')
         return value
 
     @field_validator('redirect_uri')
