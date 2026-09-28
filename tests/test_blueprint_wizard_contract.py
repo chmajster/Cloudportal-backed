@@ -797,3 +797,46 @@ def test_wizard_offers_replace_when_blueprint_name_or_slug_already_exists():
     assert '.blueprint-wizard-replace-existing' in stylesheet
     assert '.blueprint-wizard-replace-meta' in stylesheet
 
+
+
+def test_wizard_persists_runtime_awx_prompt_and_execution_ui_asks_for_choice():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'AWX prompt VM';
+state.slug = 'awx-prompt-vm';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = false;
+state.manualVmName = 'awx-prompt-vm';
+state.awxEnabled = true;
+state.promptAwxOnExecute = true;
+state.awxCredentialId = '77';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+
+console.log(JSON.stringify(core.buildDeployment(state, data)));
+""")
+
+    assert result['prompt_awx_on_execute'] is True
+    assert result['awx']['credential_id'] == 77
+
+    awx_source = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-awx.js').read_text()
+    execute_source = (ROOT / 'app' / 'web' / 'features' / 'blueprints.js').read_text()
+    assert 'Przy uruchomieniu Blueprintu pytaj, czy dodać serwer do AWX' in awx_source
+    assert "selectField('Dodać serwer do AWX?'" in execute_source
+    assert "payload.awx_onboarding = awxChoice === 'true'" in execute_source
