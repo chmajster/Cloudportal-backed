@@ -390,6 +390,15 @@ def preflight(db, request, items):
         if item.integrations.add_to_awx and awx_credential is None:
             errors.append({'code': 'AWX_CREDENTIAL_REQUIRED', 'message': 'AWX onboarding requires AWX credential'})
 
+        resolved_conflict = db.scalar(
+            select(OnboardingConflict)
+            .where(
+                OnboardingConflict.discovered_resource_id == row.id,
+                OnboardingConflict.status == 'RESOLVED',
+            )
+            .order_by(OnboardingConflict.resolved_at.desc())
+            .limit(1)
+        )
         if row.discovery_status in {'POSSIBLE_MATCH', 'CONFLICT', 'DUPLICATE'}:
             errors.append({
                 'code': 'UNRESOLVED_MATCH_CONFLICT',
@@ -397,7 +406,25 @@ def preflight(db, request, items):
             })
 
         match = find_matches(db, normalized)
-        if match['status'] in {'POSSIBLE_MATCH', 'CONFLICT', 'DUPLICATE'}:
+        explicit_import_new = bool(
+            resolved_conflict and resolved_conflict.resolution == 'IMPORT_NEW'
+        )
+        hard_legacy_identity = any(
+            {'provider_id', 'vmid'} <= set(candidate.get('reasons') or [])
+            for candidate in (match.get('candidates') or [])
+        )
+        if explicit_import_new and hard_legacy_identity:
+            errors.append({
+                'code': 'LEGACY_IDENTITY_ALREADY_REGISTERED',
+                'message': (
+                    'This provider/VMID is already registered. Link the existing '
+                    'record or remove the stale record instead of importing a duplicate.'
+                ),
+            })
+        elif (
+            match['status'] in {'POSSIBLE_MATCH', 'CONFLICT', 'DUPLICATE'}
+            and not explicit_import_new
+        ):
             errors.append({
                 'code': 'UNRESOLVED_MATCH_CONFLICT',
                 'message': 'Matching engine found a possible existing resource',
