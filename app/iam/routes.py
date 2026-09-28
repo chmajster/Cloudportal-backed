@@ -148,6 +148,20 @@ def _group_public(db, row: Group) -> dict:
     }
 
 
+def _break_glass_public(row: BreakGlassAccess) -> dict:
+    return {
+        'id': row.id,
+        'user_id': row.user_id,
+        'reason': row.reason,
+        'valid_from': row.valid_from,
+        'valid_until': row.valid_until,
+        'enabled': row.enabled,
+        'created_by': row.created_by,
+        'ended_by': row.ended_by,
+        'ended_at': row.ended_at,
+    }
+
+
 def _jit_public(db, row: JITAccessRequest) -> dict:
     role = db.get(Role, row.role_id)
     return {
@@ -1233,7 +1247,7 @@ def start_break_glass(
     db.flush()
     request.state.break_glass_id = row.id
     audit(db, request, 'break_glass.started', 'iam_break_glass', row.id)
-    return row
+    return _break_glass_public(row)
 
 
 @router.delete('/break-glass/{access_id}', response_model=BreakGlassOutput)
@@ -1256,7 +1270,7 @@ def stop_break_glass(
     row.ended_at = now()
     request.state.break_glass_id = row.id
     audit(db, request, 'break_glass.ended', 'iam_break_glass', row.id)
-    return row
+    return _break_glass_public(row)
 
 
 @router.get('/rbac/access-review', response_model=AccessReviewOutput)
