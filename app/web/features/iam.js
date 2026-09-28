@@ -89,42 +89,42 @@ function subjectField(users, groups, forcedUserId = null) {
     node('select', { name: 'subject_id', required: true }));
 
   const typeSelect = type.querySelector('select');
-  const subjectSelect = wrap.querySelector('select');
 
   function refresh() {
     const kind = typeSelect.value;
-    subjectSelect.replaceChildren();
+    let subjectControl = wrap.querySelector('[name="subject_id"]');
     let choices = [];
     if (kind === 'USER') choices = users.filter(item => !item.is_service_account);
     else if (kind === 'SERVICE_ACCOUNT') choices = users.filter(item => item.is_service_account);
     else if (kind === 'GROUP') choices = groups;
     if (kind === 'API_TOKEN') {
-      subjectSelect.replaceWith(node('input', {
-        name: 'subject_id',
-        type: 'number',
-        min: 1,
-        required: true,
-        placeholder: 'Token ID',
-      }));
+      if (subjectControl?.tagName !== 'INPUT') {
+        subjectControl?.replaceWith(node('input', {
+          name: 'subject_id',
+          type: 'number',
+          min: 1,
+          required: true,
+          placeholder: 'Token ID',
+        }));
+      }
       return;
     }
+    if (subjectControl?.tagName !== 'SELECT') {
+      subjectControl?.replaceWith(node('select', { name: 'subject_id', required: true }));
+      subjectControl = wrap.querySelector('[name="subject_id"]');
+    }
+    subjectControl.replaceChildren();
     for (const item of choices) {
       const value = item.id;
       const label = item.username || item.name || String(value);
-      subjectSelect.append(node('option', {
+      subjectControl.append(node('option', {
         value,
         text: label,
         selected: forcedUserId && String(value) === String(forcedUserId),
       }));
     }
   }
-  typeSelect.addEventListener('change', () => {
-    const current = wrap.querySelector('[name="subject_id"]');
-    if (current?.tagName !== 'SELECT') {
-      current.replaceWith(node('select', { name: 'subject_id', required: true }));
-    }
-    refresh();
-  });
+  typeSelect.addEventListener('change', refresh);
   refresh();
   if (forcedUserId) typeSelect.disabled = true;
   return [type, wrap];
