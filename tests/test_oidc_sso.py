@@ -44,9 +44,11 @@ def test_sso_settings_encrypt_secret_and_public_config(client, headers):
     update = sso_payload()
     update.pop('client_secret')
     update['provider_name'] = 'OpenSSO Lab'
+    update['issuer'] = 'http://sso.example.test/'
     preserved = client.put('/api/v1/settings/sso', headers=headers, json=update)
     assert preserved.status_code == 200, preserved.text
     assert preserved.json()['client_secret_configured'] is True
+    assert preserved.json()['issuer'] == 'http://sso.example.test/'
 
 
 def test_sso_authorization_code_pkce_jit_and_one_time_handoff(client, headers, monkeypatch):
@@ -143,16 +145,22 @@ def test_sso_authorization_code_pkce_jit_and_one_time_handoff(client, headers, m
     assert replay.status_code == 303
     assert 'sso_error=authentication_failed' in replay.headers['location']
 
-    password_login = client.post('/api/v1/auth/login', json={
-        'username': 'sso-user',
-        'password': 'not-an-sso-password',
-    })
-    assert password_login.status_code == 401
+    for _ in range(10):
+        password_login = client.post('/api/v1/auth/login', json={
+            'username': 'sso-user',
+            'password': 'not-an-sso-password',
+        })
+        assert password_login.status_code == 401
+
+    still_valid = client.get('/api/v1/auth/me', headers={'Authorization': 'Bearer ' + pair['access_token']})
+    assert still_valid.status_code == 200, still_valid.text
 
     with session() as db:
         user = db.query(User).filter(User.username == 'sso-user').one()
         assert user.external_id.startswith('oidc:')
         assert user.must_change_password is False
+        assert user.failed_login_attempts == 0
+        assert user.locked_until is None
         assert user.roles == []
 
 
