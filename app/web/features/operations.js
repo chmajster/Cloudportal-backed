@@ -331,12 +331,11 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
         || projects[0]?.id
         || ''
       );
-      let classification = globalClassification;
-      if (selectedTenantId && selectedLevel !== 'global') {
-        classification = await api(
-          '/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'
-        ).catch(() => globalClassification);
-      }
+      const classificationForTenant = tenantId =>
+        scopeOptions?.classifications?.[String(tenantId)] || globalClassification;
+      let classification = selectedLevel === 'global'
+        ? globalClassification
+        : classificationForTenant(selectedTenantId);
 
       const levelChoices = [];
       if (scopeOptions?.global_allowed || selectedLevel === 'global') {
@@ -578,12 +577,9 @@ registerView({ id: 'webhooks', label: 'Webhooki', icon: 'W', permission: 'webhoo
       async function reloadClassification(preserveSelection = true) {
         const selectedApmids = preserveSelection ? selectedValues('scope_apmids') : [];
         const selectedEnvironments = preserveSelection ? selectedValues('scope_environments') : [];
-        classification = globalClassification;
-        if (selectedLevel !== 'global' && selectedTenantId) {
-          classification = await api(
-            '/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'
-          ).catch(() => globalClassification);
-        }
+        classification = selectedLevel === 'global'
+          ? globalClassification
+          : classificationForTenant(selectedTenantId);
         renderClassificationFields(classification, selectedApmids, selectedEnvironments);
         refreshPreview();
       }
