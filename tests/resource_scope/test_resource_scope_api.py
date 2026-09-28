@@ -430,6 +430,49 @@ def test_provider_raw_surfaces_and_foreign_import_fail_closed(system, monkeypatc
     assert [row['vmid'] for row in default.json()['items']] == [702],default.text
 
 
+def test_provider_templates_remain_visible_when_provider_has_foreign_workloads(system, monkeypatch):
+    from app.providers.proxmox import ProxmoxProvider
+    client, headers, _ = system
+    alpha = project(client, headers, 'template-alpha')
+    beta = project(client, headers, 'template-beta')
+    c, provider = infrastructure(client, headers, 'shared-template-provider')
+    assign(client, headers, alpha, c, provider)
+    assign(client, headers, beta, c, provider)
+    create(client, scope_headers(headers, beta), c, provider, 'beta-workload')
+
+    def discover(_self, resource, node=None):
+        if resource == 'templates':
+            return [{
+                'vmid': 9000,
+                'name': 'ubuntu-template',
+                'node': 'pve',
+                'template': 1,
+                'type': 'qemu',
+                'status': 'stopped',
+            }]
+        if resource == 'vms':
+            return [{
+                'vmid': 9001,
+                'name': 'untracked-vm',
+                'node': 'pve',
+                'template': 0,
+                'type': 'qemu',
+                'status': 'stopped',
+            }]
+        return []
+
+    monkeypatch.setattr(ProxmoxProvider, 'discover', discover)
+    alpha_headers = scope_headers(headers, alpha)
+
+    templates = client.get(f"/api/v1/providers/{provider['id']}/templates", headers=alpha_headers)
+    assert templates.status_code == 200, templates.text
+    assert [row['vmid'] for row in templates.json()['items']] == [9000], templates.text
+
+    vms = client.get(f"/api/v1/providers/{provider['id']}/vms", headers=alpha_headers)
+    assert vms.status_code == 200, vms.text
+    assert vms.json()['items'] == [], vms.text
+
+
 def test_worker_success_creates_inventory_in_the_saved_project(system, monkeypatch, tmp_path):
     import json
     client, headers, _ = system
