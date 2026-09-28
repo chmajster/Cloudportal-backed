@@ -13,8 +13,7 @@ RESOURCE_ACTIONS = {
     'schedules': 'read create update delete',
     'providers': 'read', 'credentials': 'read test',
     'quotas': 'read manage tenant.manage',
-    'policies': 'read manage simulate audit exception.manage',
-}
+    'policies': 'read manage simulate audit exception.manage',\n    'events': 'read view publish replay',\n    'event_subscriptions': 'read view create update delete enable',\n    'event_deliveries': 'read view retry',\n    'event_dlq': 'read view replay delete',\n    'event_schemas': 'read view',\n}
 RESOURCE_PERMISSIONS = frozenset(f'{area}.{action}' for area, actions in RESOURCE_ACTIONS.items()
                                  for action in actions.split())
 SCOPE_PERMISSION_ACTIONS = {'governance': ['admin', 'access.read', 'access.manage']}

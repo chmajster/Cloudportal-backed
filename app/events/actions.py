@@ -16,10 +16,9 @@ from urllib.parse import urljoin
 import httpx
 
 from app.awx import AwxClient
-from app.credentials.service import ensure_credential_usable
 from app.events.security import pinned_url, redact, resolve_webhook_target
 from app.events.templates import render_template
-from app.models import Credential
+from app.models import Credential, now
 from app.resource_scope.authorization import Scope
 from app.resource_scope.database import reference_visible
 from app.security.core import decrypt_blob, decrypt_secret
@@ -88,7 +87,8 @@ def _credential(db, subscription, envelope: dict) -> tuple[Credential | None, di
     credential = db.get(Credential, subscription.credential_id)
     if credential is None:
         raise ActionFailure("Event subscription credential no longer exists")
-    ensure_credential_usable(credential)
+    if credential.expires_at is not None and credential.expires_at <= now():
+        raise ActionFailure("Event subscription credential is expired")
     scope = envelope.get("scope") or {}
     tenant_id, project_id = scope.get("organization_id"), scope.get("project_id")
     if tenant_id and project_id:
