@@ -65,7 +65,10 @@ def _target_from_url(label, raw_url, verify_ssl=True):
     if not parsed.hostname:
         return None
     scheme = parsed.scheme.lower() or 'https'
-    port = parsed.port or (443 if scheme == 'https' else 80)
+    try:
+        port = parsed.port or (443 if scheme == 'https' else 80)
+    except ValueError:
+        return None
     return {
         'label': label,
         'url': raw if '://' in raw else f'{scheme}://{raw}',
@@ -482,11 +485,35 @@ def diagnose_provider(provider, credential, *, deep=False):
                 'Test HTTP pominięto, ponieważ połączenie TCP nie działa.',
             ))
 
-    adapter = provider_for(credential)
-    auth = _auth_check(adapter, provider.type)
+    try:
+        adapter = provider_for(credential)
+    except HTTPException as exc:
+        adapter = None
+        auth = _check(
+            'provider_auth',
+            'Autoryzacja i API',
+            'provider',
+            'fail',
+            _detail_text(exc.detail),
+            critical=True,
+            details={'http_status': exc.status_code},
+        )
+    except Exception as exc:
+        adapter = None
+        auth = _check(
+            'provider_auth',
+            'Autoryzacja i API',
+            'provider',
+            'fail',
+            'Nie udało się zainicjalizować adaptera providera.',
+            critical=True,
+            details={'reason': exc.__class__.__name__},
+        )
+    else:
+        auth = _auth_check(adapter, provider.type)
     checks.append(auth)
 
-    if auth['status'] == 'pass':
+    if auth['status'] == 'pass' and adapter is not None:
         resources = _DISCOVERY_RESOURCES.get(provider.type, ()) if deep else _QUICK_DISCOVERY.get(provider.type, ())
         for resource in resources:
             checks.append(_discovery_check(adapter, resource))
