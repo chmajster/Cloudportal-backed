@@ -22,7 +22,7 @@ from app.auth.ldap import diagnose_ldap_login, ldap_settings, save_ldap_settings
 from app.vm_classification import save_vm_classification_settings, vm_classification_settings
 from app.database import get_db
 from app.models import Audit, PasswordReset, Role, Token, User, UserRole, now
-from app.rbac.service import ALL_PERMISSIONS, ensure_admin_remains, governance_lock, permissions_from_names
+from app.rbac.service import ALL_PERMISSIONS, SYSTEM_ROLE_NAMES, ensure_admin_remains, governance_lock, permissions_from_names
 from app.security.core import audit, digest, effective_permissions, issue_token, password_hasher, require, revoke_user
 from app.updates.service import UpdaterError, updater_request
 
@@ -47,9 +47,24 @@ def token_public(token):
     return public(token, 'id name token_prefix user_id scopes kind created_at expires_at last_used_at revoked_at')
 
 
-def can_grant(request, permissions):
-    if not set(permissions) <= request.state.permissions:
-        raise HTTPException(403, 'Cannot grant permissions outside your effective permissions')
+def can_grant(db, request, actor, permissions):
+    from app.iam.service import authorize, request_context
+    missing = [
+        permission for permission in sorted(set(permissions))
+        if not authorize(
+            db,
+            actor,
+            permission,
+            scope={'scope_type': 'GLOBAL'},
+            context=request_context(request),
+        ).allowed
+    ]
+    if missing:
+        raise HTTPException(403, {
+            'error': 'delegation_boundary_exceeded',
+            'missing_permissions': missing[:20],
+            'request_id': request.state.request_id,
+        })
 
 
 @router.get('/users', response_model=Items[UserOutput])
@@ -79,7 +94,7 @@ def user_create(data: UserCreate, request: Request, actor=Depends(require('users
 @router.put('/users/{id}', response_model=UserOutput)
 def user_update(id: int, data: UserUpdate, request: Request, actor=Depends(require('users.update')), db=Depends(get_db, scope='function')):
     u = find(db, User, id)
-    can_grant(request, effective_permissions(u))
+    can_grant(db, request, actor, effective_permissions(u))
     for key, value in data.model_dump(exclude_unset=True).items():
         if value is None:
             raise HTTPException(422, 'User fields cannot be null')
@@ -345,6 +360,8 @@ def delete_role(id: int, request: Request, actor=Depends(require('roles.delete')
     governance_lock(db)
     r = find(db, Role, id)
     can_grant(request, [p.name for p in r.permissions])
+    if r.name in SYSTEM_ROLE_NAMES:
+        raise HTTPException(409, 'System roles cannot be deleted; clone the role instead')
     if db.scalar(select(UserRole).where(UserRole.role_id == id)):
         raise HTTPException(409, 'Unassign the role before deleting it')
     db.delete(r)
