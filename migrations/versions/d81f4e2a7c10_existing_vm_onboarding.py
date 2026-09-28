@@ -173,8 +173,16 @@ def upgrade():
         sa.Column('updated_at', sa.DateTime(), nullable=False),
         *_scope_columns(),
         sa.ForeignKeyConstraint(['provider_id'], ['providers.id'], ondelete='RESTRICT'),
-        sa.ForeignKeyConstraint(['managed_vm_id'], ['managed_vms.id'], ondelete='SET NULL'),
-        sa.ForeignKeyConstraint(['managed_resource_id'], ['managed_resources.id'], ondelete='SET NULL'),
+        sa.ForeignKeyConstraint(
+            ['tenant_id', 'project_id', 'managed_vm_id'],
+            ['managed_vms.tenant_id', 'managed_vms.project_id', 'managed_vms.id'],
+            name='fk_resource_external_identity_vm_scope', ondelete='RESTRICT',
+        ),
+        sa.ForeignKeyConstraint(
+            ['tenant_id', 'project_id', 'managed_resource_id'],
+            ['managed_resources.tenant_id', 'managed_resources.project_id', 'managed_resources.id'],
+            name='fk_resource_external_identity_resource_scope', ondelete='RESTRICT',
+        ),
         sa.ForeignKeyConstraint(['guest_credential_id'], ['credentials.id'], ondelete='SET NULL'),
         sa.ForeignKeyConstraint(['awx_credential_id'], ['credentials.id'], ondelete='SET NULL'),
         sa.ForeignKeyConstraint(['onboarded_by'], ['users.id'], ondelete='SET NULL'),
