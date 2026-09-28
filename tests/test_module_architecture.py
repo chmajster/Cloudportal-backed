@@ -16,6 +16,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'policy-engine',
         'infrastructure',
         'custom-ansible',
+        'provider-diagnostics',
         'proxmox-management',
         'automation',
         'appliances',
@@ -52,6 +53,7 @@ def test_feature_registry_exposes_expected_router_contracts():
     assert '/policies' in paths('policy-engine')
     assert '/policies/evaluate' in paths('policy-engine')
     assert '/providers' in paths('infrastructure')
+    assert '/diagnostics/providers/{provider_id}' in paths('provider-diagnostics')
     assert '/blueprints' in paths('automation')
     assert '/appliances/ova-blueprints' in paths('appliances')
     assert '/ipam/pools' in paths('ipam')
