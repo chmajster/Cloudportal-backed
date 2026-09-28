@@ -512,7 +512,7 @@ def discover(id: int, resource: Literal['nodes', 'storages', 'networks', 'templa
              actor=Depends(require('providers.read')), db=Depends(get_db, scope='function')):
     p = find(db, Provider, id)
     rows = provider_for(find(db, Credential, p.credentials_id)).discover(resource, node)
-    if resource in {'vms', 'templates'}:
+    if resource == 'vms':
         from app.resource_scope.service import filter_provider_vms
         rows = filter_provider_vms(db, id, rows)
     # Providers can expose storage passwords or plugin configuration; publish only discovery metadata.

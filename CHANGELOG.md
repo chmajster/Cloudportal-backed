@@ -519,6 +519,8 @@ Legenda:
 - **#265 [OPEN] Show real Proxmox clone status during Terraform provisioning** — W widoku Moje zasoby provisioning Terraform pokazywał tylko Terraform apply, mimo że provider wykonywał w tym czasie pełne klonowanie VM w Proxmox. Dodatkowo brak wartości progress percent był konwertowany przez JS z null na 0, więc UI pokazywał fałszywe 0%.
 - **#282 [OPEN] Fix forced Proxmox destroy after failed VM precheck** — Naprawia przypadek, w którym przycisk „Wymuś usunięcie” tworzył zwykły job `proxmox.destroy`, więc ponownie kończył się na etapie „Sprawdzanie VM przed usunięciem”. UI przekazuje teraz `force=true`; backend zapisuje flagę w payloadzie joba. W trybie force błąd odczytu statusu VM nie blokuje usunięcia, błąd/timeout zadania hard-stop jest best-effort, a następnie wykonywany jest bezpośredni `delete_vm` przez Proxmox API. Anulowanie joba, runtime timeout i cofnięcie autoryzacji nie są omijane przez force. Zwykłe usuwanie nadal zachowuje bezpieczny precheck i kończy się błędem, jeśli stanu VM nie można zweryfikować.
 
+- **#284 [OPEN] Fix scoped Proxmox template discovery in Blueprint wizard** — Współdzielony provider Proxmox mógł pokazywać działające połączenie i node, ale pustą sekcję „Template / VM bazowa” w kreatorze Blueprintu. Przyczyną było przepuszczanie `/providers/{id}/templates` przez filtr ownership przeznaczony dla runtime VM. Template są bazowymi obrazami dostępnymi w zakresie przypisanego providera, a nie workloadami należącymi do projektu. Discovery template pozostaje teraz widoczne dla projektu mającego dostęp do providera, natomiast `/vms` nadal zachowuje tenant/project ownership filtering. Dodano test regresyjny dla współdzielonego providera z workloadem innego projektu.
+
 ---
 
 # 4. Procedura przy nowej regresji
