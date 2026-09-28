@@ -146,6 +146,10 @@ def _discovery(context):
         if discovery is None:
             raise ExecutionFailed('Discovery session disappeared during execution')
         provider = db.get(Provider, discovery.provider_id)
+        auto_import_enabled = bool((job.payload or {}).get('automatic_inventory_import'))
+        auto_classification_enabled = bool((job.payload or {}).get('auto_classification', True))
+        auto_import_items = []
+        status_counts = {}
         for index, normalized in enumerate(resources, start=1):
             context.check()
             item = normalized.public()
@@ -175,6 +179,24 @@ def _discovery(context):
             )
             db.add(row)
             db.flush()
+            status_counts[match['status']] = status_counts.get(match['status'], 0) + 1
+            mapping = dict(preview.get('mapping') or {})
+            if (
+                auto_import_enabled
+                and auto_classification_enabled
+                and match['status'] == 'NEW'
+                and mapping.get('apmid')
+                and mapping.get('environment')
+            ):
+                auto_import_items.append({
+                    'discovered_resource_id': row.id,
+                    'mode': 'INVENTORY_IMPORT',
+                    'mapping': mapping,
+                    'mapping_sources': dict(preview.get('sources') or {}),
+                    'guest_credential_id': None,
+                    'awx_credential_id': None,
+                    'integrations': {},
+                })
             if match['status'] in {'POSSIBLE_MATCH', 'CONFLICT', 'DUPLICATE'}:
                 db.add(OnboardingConflict(
                     tenant_id=job.tenant_id,
@@ -201,13 +223,62 @@ def _discovery(context):
                 'provider': {'id': discovery.provider_id},
                 'summary': {
                     'discovered': len(resources),
-                    'available': sum(1 for item in resources),
+                    'available': status_counts.get('NEW', 0),
+                    'managed': status_counts.get('MANAGED', 0),
+                    'inventory_only': status_counts.get('INVENTORY_ONLY', 0),
+                    'conflicts': (
+                        status_counts.get('CONFLICT', 0)
+                        + status_counts.get('POSSIBLE_MATCH', 0)
+                        + status_counts.get('DUPLICATE', 0)
+                    ),
                 },
             },
         )
+        if auto_import_items:
+            auto_job = Job(
+                operation='onboarding.import',
+                payload={
+                    'items': auto_import_items,
+                    'selected': len(auto_import_items),
+                    'automatic_inventory_import': True,
+                    'discovery_job_id': job.id,
+                },
+                created_by=job.created_by,
+                token_id=None if job.source == 'Scheduler' else job.token_id,
+                request_id=job.request_id,
+                ip=job.ip,
+                source=job.source,
+                tenant_id=job.tenant_id,
+                project_id=job.project_id,
+            )
+            db.add(auto_job)
+            db.flush()
+            for config_item in auto_import_items:
+                discovered_item = db.get(
+                    DiscoveredResource, config_item['discovered_resource_id']
+                )
+                db.add(OnboardingJobItem(
+                    job_id=auto_job.id,
+                    discovered_resource_id=discovered_item.id,
+                    provider_id=discovered_item.provider_id,
+                    external_id=discovered_item.external_id,
+                    name=discovered_item.name,
+                    status='QUEUED',
+                ))
+            worker_audit_event(
+                db, job, 'vm.onboarding.requested', 'onboarding_job', auto_job.id,
+                {
+                    'automatic_inventory_import': True,
+                    'discovery_job_id': job.id,
+                    'selected': len(auto_import_items),
+                },
+            )
         db.commit()
     context.log('[3/4] Identity matching .......... OK')
-    context.log('[4/4] Discovery persistence ...... OK')
+    if auto_import_items:
+        context.log(f'[4/4] Discovery persistence ...... OK; queued {len(auto_import_items)} inventory imports')
+    else:
+        context.log('[4/4] Discovery persistence ...... OK')
     context.progress(100, 'Discovery completed', phase='complete')
 
 
