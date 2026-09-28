@@ -297,6 +297,11 @@ def validate_authorization(db, job):
             ).limit(1)):
                 needed.add('availability.assign')
         blueprint = job.payload.get('blueprint') or {}
+        placement = blueprint.get('placement') or {}
+        if str(placement.get('mode') or 'FIXED').upper() in {'POOL', 'POLICY'}:
+            needed.add('resource_pool.assign')
+        if placement.get('override'):
+            needed.add('placement.override')
         if blueprint.get('recovery_policy') == 'destroy_on_failure':
             needed.add('deployments.destroy')
         workflow_types = {str(step.get('type')) for step in (blueprint.get('steps') or [])}
@@ -2501,6 +2506,27 @@ def _execute_unfenced(job_id):
                 context.ansible_credential = ensure_runtime_credential(db.get(Credential, context.ansible.credentials_id))
             elif context.ansible_runs:
                 context.ansible, context.ansible_credential = context.ansible_runs[0]
+        placement_mode = str(
+            (((context.job.payload or {}).get('blueprint') or {}).get('placement') or {}).get('mode')
+            or 'FIXED'
+        ).upper()
+        if (
+            job.operation in {'terraform.apply', 'proxmox.provision'}
+            and context.deployment is not None
+            and placement_mode in {'POOL', 'POLICY'}
+        ):
+            from app.resource_pools.placement import prepare_job_placement
+            context.stage('placement.validating')
+            prepare_job_placement(context)
+            selected = dict(((context.job.payload or {}).get('_placement_runtime') or {}).get('selected') or {})
+            context.stage('placement.selected')
+            context.log(
+                'placement.target: '
+                f"{selected.get('platform') or context.deployment.provider_id} / "
+                f"{selected.get('node') or (context.deployment.variables or {}).get('node')} / "
+                f"{selected.get('storage') or (context.deployment.variables or {}).get('storage')}"
+            )
+
         if (
             settings().provider_offline_queue_enabled
             and job.operation in {'terraform.apply', 'terraform.destroy', 'proxmox.provision', 'proxmox.destroy'}
@@ -2508,6 +2534,15 @@ def _execute_unfenced(job_id):
             and context.deployment.provider == 'proxmox'
         ):
             availability = provider_for(context.credential).execution_availability()
+            if not availability.get('ok') and placement_mode in {'POOL', 'POLICY'} and job.operation in {'terraform.apply', 'proxmox.provision'}:
+                from app.resource_pools.placement import prepare_job_placement
+                while not availability.get('ok'):
+                    prepare_job_placement(
+                        context,
+                        invalidate_current=True,
+                        reason=availability.get('reason') or 'provider unavailable before provisioning',
+                    )
+                    availability = provider_for(context.credential).execution_availability()
             if not availability.get('ok'):
                 if availability.get('retryable'):
                     defer_for_provider(job.id, availability.get('reason') or 'unreachable')
@@ -2533,7 +2568,26 @@ def _execute_unfenced(job_id):
         elif job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
             execute_proxmox_clone_template(context)
         elif job.operation == 'proxmox.provision':
-            run_proxmox_blueprint_workflow(context)
+            while True:
+                try:
+                    run_proxmox_blueprint_workflow(context)
+                    break
+                except ExecutionFailed as exc:
+                    if context.quota_provider_submitted or placement_mode not in {'POOL', 'POLICY'}:
+                        raise
+                    from app.resource_pools.placement import prepare_job_placement
+                    context.stage('placement.retry')
+                    changed = prepare_job_placement(
+                        context,
+                        invalidate_current=True,
+                        reason=str(exc)[:300],
+                    )
+                    if not changed:
+                        raise
+                    context.log(
+                        'placement.failover: retrying direct Proxmox provisioning on '
+                        f"{context.deployment.provider_id}/{(context.deployment.variables or {}).get('node')}"
+                    )
             if not context.blueprint_workflow_completed:
                 raise ExecutionFailed('Direct Proxmox Blueprint workflow did not complete')
         elif job.operation == 'proxmox.destroy':
@@ -2642,6 +2696,33 @@ def _execute_unfenced(job_id):
         else:
             release_job_reservation(db, current)
         current.status, current.error = status, error
+        from app.resource_pools.placement import release_job_placement
+        released_placement_reservations = release_job_placement(db, current.id)
+        for reservation_id in released_placement_reservations:
+            db.add(Audit(
+                user_id=current.created_by,
+                token_id=current.token_id,
+                ip=current.ip,
+                source=current.source,
+                action='RESOURCE_RESERVATION_RELEASED',
+                resource='resource_reservations',
+                resource_id=reservation_id,
+                result='success',
+                request_id=current.request_id,
+            ))
+        placement_runtime = dict((current.payload or {}).get('_placement_runtime') or {})
+        if status == 'failed' and placement_runtime.get('decision_id'):
+            db.add(Audit(
+                user_id=current.created_by,
+                token_id=current.token_id,
+                ip=current.ip,
+                source=current.source,
+                action='PLACEMENT_FAILED',
+                resource='placement_decisions',
+                resource_id=placement_runtime.get('decision_id'),
+                result='failure',
+                request_id=current.request_id,
+            ))
         runtime_checkpoint = dict((current.payload or {}).get('_workflow_runtime') or {})
         uncertain_terraform_result = (
             status in {'failed', 'cancelled'}
