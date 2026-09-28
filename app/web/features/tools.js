@@ -546,28 +546,27 @@ async function hostnameDefaultsView() {
 }
 
 
-function apmidTool(config) {
-  const apmids = config?.apmids || [];
+function apmidTool(tenants = []) {
+  const currentTenantId = globalThis.CPProjectContext?.current?.()?.tenant_id || '';
+  const currentTenant = tenants.find(item => String(item.id) === String(currentTenantId));
   return node('article', { class: 'panel tool-card' },
     node('div', { class: 'tool-card-head' },
       node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('list-check')),
       node('div', { class: 'tool-title' },
         node('span', { class: 'tool-category', text: 'Klasyfikacja VM' }),
-        node('h2', { text: 'APMID' }),
-        node('p', { class: 'muted', text: 'Zarządzaj listą APMID używaną przez kreator VM i automatyczne tagi Proxmox.' })),
-      badge(apmids.length ? String(apmids.length) + ' pozycji' : 'Pusta lista', apmids.length ? 'ok' : 'warning')),
+        node('h2', { text: 'APMID per organizacja' }),
+        node('p', { class: 'muted', text: 'Każda organizacja ma własną listę APMID. Dla każdego APMID automatycznie powstają warianty dla wszystkich aktywnych Environment.' })),
+      badge(String(tenants.length) + ' organizacji', tenants.length ? 'ok' : 'warning')),
     node('div', { class: 'tool-meta-grid' },
-      toolMeta('Liczba APMID', String(apmids.length)),
-      toolMeta('Przykład', apmids[0] || '—', true)),
+      toolMeta('Zakres', 'Organizacja'),
+      toolMeta('Bieżąca', currentTenant?.name || 'Wybierana po otwarciu', true)),
     node('div', { class: 'tool-card-footer' },
       node('span', { class: 'tool-health' },
-        node('span', { class: 'status-dot ' + (apmids.length ? 'ok' : 'warn') }),
-        apmids.length ? 'Lista gotowa do użycia' : 'Dodaj pierwszy APMID'),
-      button('Otwórz listę APMID', () => navigate('apmid'), 'primary'))
+        node('span', { class: 'status-dot ' + (tenants.length ? 'ok' : 'warn') }),
+        tenants.length ? 'APMID są izolowane między organizacjami' : 'Brak dostępnej organizacji'),
+      button('Zarządzaj APMID', () => navigate('apmid'), 'primary', !tenants.length))
   );
 }
-
-const IMMUTABLE_APMIDS = new Set(['LEO']);
 
 function normalizeApmid(value) {
   return String(value || '').trim().toUpperCase();
@@ -577,35 +576,34 @@ function validateApmid(value) {
   return /^[A-Z0-9][A-Z0-9_-]{0,62}$/.test(value);
 }
 
-async function saveApmids(config, apmids, message) {
-  const requested = apmids.map(normalizeApmid).filter(Boolean);
-  requested.forEach(value => {
+async function loadVisibleTenants() {
+  const items = [];
+  let offset = 0;
+  while (true) {
+    const page = await api('/tenants?limit=200&offset=' + offset);
+    const rows = page.items || [];
+    items.push(...rows);
+    offset += rows.length;
+    if (!rows.length || offset >= Number(page.total || 0)) return items;
+  }
+}
+
+async function saveTenantApmids(tenantId, apmids, message) {
+  const normalized = apmids.map(normalizeApmid).filter(Boolean);
+  normalized.forEach(value => {
     if (!validateApmid(value)) {
       throw new Error('APMID może zawierać litery, cyfry, _ oraz -, maksymalnie 63 znaki.');
     }
   });
-  if (new Set(requested).size !== requested.length) {
+  if (new Set(normalized).size !== normalized.length) {
     throw new Error('Lista APMID zawiera duplikaty.');
   }
-  const normalized = [
-    'LEO',
-    ...requested.filter(value => !IMMUTABLE_APMIDS.has(value)),
-  ];
 
-  await api('/settings/vm-classification', {
+  await api('/tenants/' + encodeURIComponent(tenantId) + '/vm-classification', {
     method: 'PUT',
-    body: {
-      environments: {
-        test: config.environments?.test !== false,
-        dev: config.environments?.dev !== false,
-        nonprod: config.environments?.nonprod !== false,
-        prod: config.environments?.prod !== false,
-      },
-      apmids: normalized,
-    },
+    body: { apmids: normalized },
   });
   toast(message);
-  await apmidView();
 }
 
 function apmidInputForm(initialValue, submitLabel, onSubmit, onCancel) {
@@ -613,7 +611,7 @@ function apmidInputForm(initialValue, submitLabel, onSubmit, onCancel) {
     type: 'text',
     name: 'apmid',
     value: initialValue || '',
-    placeholder: 'np. IAASTEAM',
+    placeholder: 'np. XD',
     maxlength: 63,
     autocomplete: 'off',
     spellcheck: 'false',
@@ -643,91 +641,164 @@ function apmidInputForm(initialValue, submitLabel, onSubmit, onCancel) {
 }
 
 async function apmidView() {
-  const config = await api('/settings/vm-classification');
-  const canEdit = allowed('settings.update');
-  const apmids = [...(config.apmids || [])];
-  const list = node('div', { class: 'apmid-list' });
-  const addArea = node('div', { class: 'apmid-add-area', hidden: true });
+  const tenants = await loadVisibleTenants();
+  if (!tenants.length) {
+    dom.content.replaceChildren(
+      heading('APMID per organizacja.', [button('← Narzędzia', () => navigate('tools'))]),
+      node('section', { class: 'panel empty', text: 'Nie masz dostępu do żadnej organizacji.' })
+    );
+    return;
+  }
 
-  const showAddForm = () => {
-    addArea.hidden = false;
-    addArea.replaceChildren(apmidInputForm('', 'Dodaj APMID', async value => {
-      if (apmids.includes(value)) throw new Error('APMID „' + value + '” już istnieje.');
-      await saveApmids(config, [...apmids, value], 'APMID dodany.');
-    }, () => {
+  const currentTenantId = globalThis.CPProjectContext?.current?.()?.tenant_id || '';
+  let selectedTenantId = String(
+    tenants.find(item => String(item.id) === String(currentTenantId))?.id
+    || tenants[0].id
+  );
+  let renderGeneration = 0;
+
+  const tenantField = selectField('Organizacja', 'tenant_id',
+    tenants.map(tenant => ({
+      value: String(tenant.id),
+      label: tenant.name + (tenant.slug ? ' (' + tenant.slug + ')' : ''),
+    })),
+    selectedTenantId,
+    {
+      required: true,
+      wide: true,
+      help: 'Lista APMID jest zapisywana oddzielnie dla każdej organizacji.',
+    });
+  const tenantSelect = tenantField.querySelector('select');
+  const host = node('div', { class: 'stack' });
+
+  async function renderTenant() {
+    const generation = ++renderGeneration;
+    const tenant = tenants.find(item => String(item.id) === String(selectedTenantId));
+    if (!tenant) return;
+
+    host.replaceChildren(node('section', { class: 'panel', text: 'Ładowanie APMID organizacji…' }));
+    const [config, scope] = await Promise.all([
+      api('/tenants/' + encodeURIComponent(selectedTenantId) + '/vm-classification'),
+      api('/tenants/' + encodeURIComponent(selectedTenantId) + '/permissions'),
+    ]);
+    if (generation !== renderGeneration) return;
+
+    const editable = (tenant.status === 'active' || scope.global_administration)
+      && scope.permissions.includes('tenants.update');
+    const apmids = [...(config.apmids || [])];
+    const list = node('div', { class: 'apmid-list' });
+    const addArea = node('div', { class: 'apmid-add-area', hidden: true });
+
+    const reload = async () => {
       addArea.hidden = true;
       addArea.replaceChildren();
-    }));
-  };
+      await renderTenant();
+    };
 
-  const renderList = () => {
-    list.replaceChildren();
+    const showAddForm = () => {
+      addArea.hidden = false;
+      addArea.replaceChildren(apmidInputForm('', 'Dodaj APMID', async value => {
+        if (apmids.includes(value)) throw new Error('APMID „' + value + '” już istnieje w tej organizacji.');
+        await saveTenantApmids(selectedTenantId, [...apmids, value], 'APMID dodany do organizacji.');
+        await reload();
+      }, () => {
+        addArea.hidden = true;
+        addArea.replaceChildren();
+      }));
+    };
+
     if (!apmids.length) {
       list.append(node('div', { class: 'apmid-empty' },
-        node('strong', { text: 'Brak APMID' }),
-        node('span', { class: 'muted', text: 'Dodaj pierwszy APMID, aby był dostępny w kreatorze VM.' })));
-      return;
+        node('strong', { text: 'Brak APMID w tej organizacji' }),
+        node('span', { class: 'muted', text:
+          'Dodaj APMID. Automatycznie otrzyma wszystkie aktualnie włączone Environment.' })));
     }
 
     apmids.forEach((value, index) => {
-      const locked = IMMUTABLE_APMIDS.has(value);
+      const environments = config.apmid_environments?.[value] || [];
+      const variants = environments.map(environment => value + '.' + String(environment).toUpperCase());
       const valueBox = node('div', { class: 'apmid-list-value' },
         node('strong', { class: 'mono', text: value }),
-        node('small', { class: 'muted', text: locked
-          ? 'Domyślny APMID systemowy — nie można edytować ani usunąć'
-          : 'Dostępny w kreatorze VM' }));
-      const actions = node('div', { class: 'apmid-list-actions' });
+        node('small', { class: 'muted', text:
+          variants.length
+            ? 'Automatyczne warianty: ' + variants.join(', ')
+            : 'Brak aktywnych Environment — APMID nie ma wariantów.' }));
+      if (variants.length) {
+        valueBox.append(node('div', { class: 'apmid-environment-tags' },
+          ...variants.map(variant => badge(variant, 'info'))));
+      }
 
+      const actions = node('div', { class: 'apmid-list-actions' });
       const row = node('div', { class: 'apmid-list-row' },
         node('div', { class: 'apmid-list-index mono', text: String(index + 1) }),
         valueBox,
         actions);
 
-      if (canEdit && !locked) {
+      if (editable) {
         actions.append(
           button('Edytuj', () => {
             valueBox.replaceChildren(apmidInputForm(value, 'Zapisz', async nextValue => {
               const duplicate = apmids.some((item, itemIndex) => itemIndex !== index && item === nextValue);
-              if (duplicate) throw new Error('APMID „' + nextValue + '” już istnieje.');
+              if (duplicate) throw new Error('APMID „' + nextValue + '” już istnieje w tej organizacji.');
               const next = [...apmids];
               next[index] = nextValue;
-              await saveApmids(config, next, 'APMID zaktualizowany.');
-            }, () => renderList()));
+              await saveTenantApmids(selectedTenantId, next, 'APMID zaktualizowany.');
+              await reload();
+            }, () => renderTenant().catch(error => toast(error.message, 'error'))));
           }, 'ghost'),
           button('Usuń', () => confirmAction(
-            'Usuń APMID',
-            'Usunąć APMID „' + value + '” z listy?',
+            'Usuń APMID z organizacji',
+            'Usunąć APMID „' + value + '” oraz jego warianty '
+              + (variants.join(', ') || 'Environment') + ' z organizacji „' + tenant.name + '”?',
             async () => {
-              await saveApmids(config, apmids.filter((_, itemIndex) => itemIndex !== index), 'APMID usunięty.');
-            },
-            'danger'
-          ), 'ghost')
+              await saveTenantApmids(
+                selectedTenantId,
+                apmids.filter((_, itemIndex) => itemIndex !== index),
+                'APMID usunięty z organizacji.'
+              );
+              await reload();
+            }
+          ), 'danger')
         );
       }
 
-      if (locked) actions.append(badge('Domyślny · zablokowany', 'info'));
-
       list.append(row);
     });
-  };
 
-  renderList();
+    const enabledEnvironments = Object.entries(config.environments || {})
+      .filter(([, enabled]) => enabled)
+      .map(([name]) => name.toUpperCase());
 
-  const panel = node('section', { class: 'panel apmid-list-panel' },
-    node('div', { class: 'apmid-list-head' },
-      node('div', {},
-        node('span', { class: 'tools-eyebrow', text: 'Lista APMID' }),
-        node('h2', { text: 'APMID' }),
-        node('p', { class: 'muted', text: 'LEO jest domyślnym APMID systemowym i jest zablokowany. Pozostałe APMID możesz dodawać, edytować i usuwać.' })),
-      canEdit ? button('Dodaj APMID', showAddForm, 'primary') : badge('Tylko odczyt', 'info')),
-    addArea,
-    list
-  );
+    host.replaceChildren(node('section', { class: 'panel apmid-list-panel' },
+      node('div', { class: 'apmid-list-head' },
+        node('div', {},
+          node('span', { class: 'tools-eyebrow', text: 'Organizacja · ' + tenant.name }),
+          node('h2', { text: 'APMID' }),
+          node('p', { class: 'muted', text:
+            'Każdy APMID automatycznie ma wszystkie aktywne Environment. '
+            + (enabledEnvironments.length
+              ? 'Aktywne: ' + enabledEnvironments.join(', ') + '.'
+              : 'Obecnie brak aktywnych Environment.') })),
+        editable ? button('Dodaj APMID', showAddForm, 'primary') : badge('Tylko odczyt', 'info')),
+      addArea,
+      list
+    ));
+  }
+
+  tenantSelect.addEventListener('change', event => {
+    selectedTenantId = String(event.currentTarget.value || '');
+    renderTenant().catch(error => toast(error.message, 'error'));
+  });
 
   dom.content.replaceChildren(
-    heading('Zarządzanie listą APMID.', [button('← Narzędzia', () => navigate('tools'))]),
-    panel
+    heading('APMID per organizacja.', [button('← Narzędzia', () => navigate('tools'))]),
+    node('section', { class: 'panel' },
+      node('div', { class: 'form-grid' }, tenantField),
+      node('p', { class: 'muted', text:
+        'Przykład: jeżeli aktywne są DEV, PROD i NONPROD, utworzenie APMID XD daje automatycznie XD.DEV, XD.PROD i XD.NONPROD.' })),
+    host
   );
+  await renderTenant();
 }
 
 
@@ -988,7 +1059,6 @@ async function toolsView() {
     try {
       const vmClassification = await api('/settings/vm-classification');
       cards.push(environmentTool(vmClassification));
-      cards.push(apmidTool(vmClassification));
       cards.push(hostnameDefaultsTool(vmClassification));
     } catch (error) {
       cards.push(node('article', { class: 'panel tool-card' },
@@ -1001,6 +1071,14 @@ async function toolsView() {
           badge('Niedostępny', 'warning')),
         node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać ustawień klasyfikacji VM.' })));
     }
+  }
+
+  try {
+    const tenants = await loadVisibleTenants();
+    if (tenants.length) cards.push(apmidTool(tenants));
+  } catch (error) {
+    // Tenant visibility is scope-driven. Users without a visible organization
+    // simply do not get the organization-scoped APMID tool.
   }
 
   if (allowed('settings.read')) {
@@ -1110,7 +1188,7 @@ registerView({
   iconName: 'list-check',
   navigation: false,
   navigationParent: 'tools',
-  permission: 'settings.read',
+  permission: null,
   order: 156,
 }, apmidView);
 registerView({
