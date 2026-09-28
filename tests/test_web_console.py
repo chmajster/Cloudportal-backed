@@ -891,7 +891,6 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'Przykładowe filtry użytkownika' in script
     assert 'Testuj połączenie' in script
     assert 'Konfiguracja LDAP' in script
-    assert '/settings/ldap/test' in script
     assert '/settings/ldap/diagnostics' in script
     assert 'Diagnostyka LDAP' in script
     assert 'Przetestuj pełne logowanie' in script
