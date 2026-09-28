@@ -217,6 +217,14 @@ def validate_blueprint_template_variables(data: BlueprintInput):
     if isinstance(name, str) and re.fullmatch(r'{{\s*hostname\s*}}', name):
         variables['name'] = 'blueprint-validation'
 
+    if data.deployment.placement_mode in {'POOL', 'POLICY'}:
+        # Physical placement is resolved at execution time. Validate the rest of
+        # the Proxmox contract without forcing a Blueprint to persist a node,
+        # storage or network from one specific platform.
+        variables.setdefault('node', 'placement-auto')
+        variables.setdefault('storage', 'placement-auto')
+        variables.setdefault('network', 'placement-auto')
+
     if any(_contains_template_placeholder(value) for value in variables.values()):
         return
 
@@ -330,7 +338,6 @@ def validate_blueprint_user_scope(db, data, request: Request, actor, blueprint_i
 def validate_blueprint_references(db, data, blueprint_id=None):
     if data.avatar_id:
         blueprint_avatar(db, data.avatar_id)
-    provider = find(db, Provider, data.deployment.provider_id)
     existing = db.get(Blueprint, blueprint_id) if blueprint_id is not None else None
     existing_template = existing.deployment.get('template') if existing else None
     existing_playbooks = set()
@@ -343,20 +350,59 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     if data.deployment.template != existing_template:
         require_catalog_item_enabled(db, 'templates', data.deployment.template)
     template_meta, _ = template_definition(data.deployment.template)
+
+    placement_mode = data.deployment.placement_mode
+    provider = None
+    effective_provider_type = template_meta['provider']
+    if placement_mode == 'FIXED':
+        provider = find(db, Provider, data.deployment.provider_id)
+        effective_provider_type = provider.type
+        if provider.type != template_meta['provider']:
+            raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
+        if provider.credentials_id != data.deployment.credentials_id:
+            raise HTTPException(422, 'Blueprint credential does not belong to its provider')
+    else:
+        from app.resource_pools.models import ResourcePool, ResourcePoolMember
+        scope = db.info.get('resource_scope')
+        if scope is None:
+            raise HTTPException(403, 'Resource-scoped Blueprint placement is required')
+        pool_query = select(ResourcePool).where(
+            ResourcePool.tenant_id == scope.tenant_id,
+            ResourcePool.project_id == scope.project_id,
+            ResourcePool.enabled.is_(True),
+        )
+        if placement_mode == 'POOL':
+            pool_query = pool_query.where(ResourcePool.id == data.deployment.resource_pool_id)
+        pool_ids = list(db.scalars(pool_query))
+        if not pool_ids:
+            raise HTTPException(422, 'Blueprint placement has no enabled Resource Pool in the selected project')
+        available = db.scalar(
+            select(ResourcePoolMember.id)
+            .join(ResourcePool, ResourcePool.id == ResourcePoolMember.pool_id)
+            .where(
+                ResourcePool.id.in_([pool.id for pool in pool_ids]),
+                ResourcePoolMember.enabled.is_(True),
+                ResourcePoolMember.provider_type == template_meta['provider'],
+            )
+            .limit(1)
+        )
+        if available is None:
+            raise HTTPException(
+                422,
+                'Blueprint placement has no enabled Resource Pool member compatible with its template provider'
+            )
+
     requested_ansible = list(data.deployment.ansible_runs)
     for ansible_run in requested_ansible:
         if ansible_run.playbook not in existing_playbooks:
             require_catalog_item_enabled(db, 'playbooks', ansible_run.playbook)
-    if provider.type != template_meta['provider']:
-        raise HTTPException(422, 'Blueprint provider does not match its Terraform template')
     validate_blueprint_template_variables(data)
-    if provider.credentials_id != data.deployment.credentials_id:
-        raise HTTPException(422, 'Blueprint credential does not belong to its provider')
+
     workflow_types = {str(step.type) for step in data.workflow}
     direct_proxmox = data.deployment.executor == 'proxmox'
     if direct_proxmox:
-        if provider.type != 'proxmox' or data.deployment.template != 'proxmox-vm':
-            raise HTTPException(422, 'Direct Proxmox provisioning requires a Proxmox provider and proxmox-vm template')
+        if effective_provider_type != 'proxmox' or data.deployment.template != 'proxmox-vm':
+            raise HTTPException(422, 'Direct Proxmox provisioning requires a Proxmox-compatible placement target and proxmox-vm template')
         if workflow_types & {'terraform_plan', 'terraform_apply'}:
             raise HTTPException(422, 'Direct Proxmox provisioning cannot contain Terraform plan/apply steps')
         if sum(1 for step in data.workflow if step.type == 'clone_vm') != 1:
@@ -368,13 +414,13 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         'cloud_init', 'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
         'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
     }
-    invalid_provider_steps = sorted(workflow_types & proxmox_only_steps) if provider.type != 'proxmox' else []
+    invalid_provider_steps = sorted(workflow_types & proxmox_only_steps) if effective_provider_type != 'proxmox' else []
     if invalid_provider_steps:
         raise HTTPException(
             422,
             'Workflow steps supported only for Proxmox: ' + ', '.join(invalid_provider_steps),
         )
-    if requested_ansible and provider.type != 'proxmox':
+    if requested_ansible and effective_provider_type != 'proxmox':
         raise HTTPException(422, 'Blueprint Ansible post-provisioning currently requires Proxmox')
     if data.deployment.awx:
         awx_credential = find(db, Credential, data.deployment.awx.credential_id)
@@ -408,11 +454,11 @@ def validate_blueprint_references(db, data, blueprint_id=None):
         if 'cloud_init' not in workflow_types:
             raise HTTPException(422, 'Existing template account mode requires an explicit cloud_init workflow step')
     if data.deployment.guest_credential_id:
-        if provider.type != 'proxmox':
+        if effective_provider_type != 'proxmox':
             raise HTTPException(422, 'Guest credential injection is currently supported only for Proxmox templates')
         guest_credential_cloud_init(db, data.deployment.guest_credential_id)
     if data.deployment.template_guest_credential_id:
-        if provider.type != 'proxmox':
+        if effective_provider_type != 'proxmox':
             raise HTTPException(422, 'Template guest credential is currently supported only for Proxmox templates')
         guest_credential_cloud_init(db, data.deployment.template_guest_credential_id)
     for role_id in set(data.allowed_role_ids):
