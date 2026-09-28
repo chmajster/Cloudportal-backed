@@ -72,6 +72,7 @@
 - Restore może używać wyłącznie backupu wcześniej odkrytego/zweryfikowanego przez backend.
 - Token bootstrap Proxmox nie może utrwalać hasła użytego do utworzenia tokenu.
 - Duplikat nazwy tokenu ma być weryfikowany, nie zgadywany na podstawie ogólnego HTTP 400.
+- Diagnostyka łączności providera działa z backendu Cloudportal i wyłącznie na zapisanych endpointach platform; nie przyjmuje arbitralnego hosta z requestu. Rozróżnia DNS, ICMP, TCP/port, TLS, HTTP, autoryzację API i read-only discovery. Brak ICMP jest ostrzeżeniem, natomiast timeout/refused TCP ma pozostać jawną diagnozą routingu/ACL/firewalla/usługi.
 
 ## 1.5. Inventory, missing VM i reconciliation
 
