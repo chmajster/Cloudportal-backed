@@ -13,6 +13,7 @@ def test_tenant_ui_uses_server_scope_and_safe_rendering():
     assert "action('Usuń', () => deleteTenant(item), 'danger')" in source
     assert "pattern: /^\\/tenants\\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/" in source
     assert "tenantDetails(match.params.id)" in source
+    assert "await navigate('tenants');" in source
     assert "const id = Number(match.params.id);" not in source
     script = r"""
 const fs = require('node:fs');
