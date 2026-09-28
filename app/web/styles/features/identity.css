@@ -527,6 +527,82 @@
 .rbac-role-option-copy small {
   overflow-wrap: anywhere;
 }
+.rbac-scope-memberships {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.rbac-scope-membership-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  box-shadow: none;
+}
+.rbac-scope-membership-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.rbac-scope-membership-head h3 {
+  margin: 4px 0 0;
+}
+.rbac-scope-membership-head p {
+  max-width: 780px;
+  margin: 5px 0 0;
+  line-height: 1.45;
+}
+.rbac-scope-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 3px;
+}
+.rbac-scope-option {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.rbac-scope-option:hover {
+  border-color: var(--accent-border);
+}
+.rbac-scope-option.selected {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.rbac-scope-option.disabled {
+  opacity: .62;
+  cursor: not-allowed;
+}
+.rbac-scope-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.rbac-scope-option-copy strong,
+.rbac-scope-option-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rbac-scope-option-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+}
 .rbac-analysis-form {
   display: grid;
   gap: 14px;
@@ -647,12 +723,14 @@
   .rbac-quick-grid,
   .rbac-role-grid,
   .rbac-governance-grid,
-  .rbac-role-options {
+  .rbac-role-options,
+  .rbac-scope-options {
     grid-template-columns: 1fr;
   }
   .rbac-section-heading,
   .rbac-role-card-head,
   .rbac-assignment-toolbar,
+  .rbac-scope-membership-head,
   .rbac-decision-head,
   .rbac-permission-toolbar {
     align-items: stretch;

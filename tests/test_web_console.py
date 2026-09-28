@@ -902,6 +902,12 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.settings-ldap-diagnostic-steps' in stylesheet
     assert '.settings-ldap-diagnostic-step.error' in stylesheet
     assert 'JIT provisioning i RBAC' in script
+    assert "api('/users/' + encodeURIComponent(user.id) + '/tenant-memberships'" in script
+    assert "api('/users/' + encodeURIComponent(user.id) + '/project-memberships'" in script
+    assert 'Użytkownik może należeć do wielu organizacji jednocześnie.' in script
+    assert 'Użytkownik może należeć do wielu projektów, także w różnych organizacjach.' in script
+    assert 'Zapisz organizacje' in script
+    assert 'Zapisz projekty' in script
     assert "function environmentTool(config)" in script
     assert "function environmentsView()" in script
     assert "button('Zarządzaj środowiskami'" in script
@@ -1236,6 +1242,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert '.rbac-stats' in stylesheet
     assert '.rbac-role-grid' in stylesheet
     assert '.rbac-assignment-editor' in stylesheet
+    assert '.rbac-scope-memberships' in stylesheet
+    assert '.rbac-scope-options' in stylesheet
+    assert '.rbac-scope-option.selected' in stylesheet
     assert '.rbac-analysis-result' in stylesheet
     assert '.rbac-governance-grid' in stylesheet
     assert '.account-overview-grid' in stylesheet

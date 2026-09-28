@@ -69,6 +69,52 @@ def test_project_http_isolation_membership_and_context(system):
         assert db.scalar(select(func.count()).select_from(EventRecord).where(EventRecord.type == 'project.created')) == 3
 
 
+def test_global_admin_can_manage_user_membership_in_projects_across_tenants(system):
+    client, headers, _ = system
+    first_tenant = create_tenant(client, headers, 'multi-project-first')
+    second_tenant = create_tenant(client, headers, 'multi-project-second')
+    first_project = create_project(client, headers, first_tenant['id'], 'alpha')
+    second_project = create_project(client, headers, second_tenant['id'], 'beta')
+    user, _ = new_user(client, headers, 'multi-project-user')
+
+    tenant_memberships = client.put(
+        f"/api/v1/users/{user['id']}/tenant-memberships",
+        headers=headers,
+        json={'tenant_ids': [first_tenant['id'], second_tenant['id']]},
+    )
+    assert tenant_memberships.status_code == 200, tenant_memberships.text
+
+    saved = client.put(
+        f"/api/v1/users/{user['id']}/project-memberships",
+        headers=headers,
+        json={'project_ids': [first_project['id'], second_project['id']]},
+    )
+    assert saved.status_code == 200, saved.text
+    rows = saved.json()['items']
+    assert {row['project_id'] for row in rows} == {first_project['id'], second_project['id']}
+    assert {row['tenant_id'] for row in rows} == {first_tenant['id'], second_tenant['id']}
+    assert {row['project_name'] for row in rows} == {'alpha', 'beta'}
+
+    listed = client.get(
+        f"/api/v1/users/{user['id']}/project-memberships?limit=200",
+        headers=headers,
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()['total'] == 2
+
+    reduced = client.put(
+        f"/api/v1/users/{user['id']}/project-memberships",
+        headers=headers,
+        json={'project_ids': [second_project['id']]},
+    )
+    assert reduced.status_code == 200, reduced.text
+    assert [row['project_id'] for row in reduced.json()['items']] == [second_project['id']]
+
+    with session() as db:
+        assert db.get(ProjectMembership, (first_project['id'], user['id'])) is None
+        assert db.get(ProjectMembership, (second_project['id'], user['id'])) is not None
+
+
 def test_project_idempotency_replay_reauthorizes_and_never_duplicates_events(system):
     client, headers, _ = system
     t = create_tenant(client, headers, 'idempotent')

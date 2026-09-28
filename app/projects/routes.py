@@ -13,7 +13,8 @@ from app.projects.authorization import authorize_creation, resolve_context
 from app.tenancy.schemas import MemberCreate, MemberRoles, MemberUpdate, RolePage, TenantStatus
 from app.projects.schemas import (ProjectMemberOutput as MemberOutput, ProjectMemberPage as MemberPage,
     ProjectAuditPage, ProjectCreate, ProjectOutput, ProjectPage, ProjectPermissions, ProjectUpdate,
-    EligibleMemberPage, ContextInput, ContextOutput, CreationScopePage)
+    EligibleMemberPage, ContextInput, ContextOutput, CreationScopePage,
+    ProjectMembershipSelection, UserProjectMembershipPage)
 
 router = APIRouter(tags=['projects'])
 
@@ -61,6 +62,50 @@ def delete_project(project_id: UUID, request: Request, expected_version: int = Q
     result = service.project_delete(db, Principal.from_token(actor), project_id, expected_version)
     audit(db, request, 'project.deleted', 'projects', project_id)
     return result
+
+
+@router.get('/users/{user_id}/project-memberships', response_model=UserProjectMembershipPage)
+def user_project_memberships(user_id: int, limit: Limit = 100, offset: Offset = 0,
+                             actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    return service.user_memberships(
+        db, Principal.from_token(actor), user_id, limit=limit, offset=offset
+    )
+
+
+@router.put('/users/{user_id}/project-memberships', response_model=UserProjectMembershipPage)
+def set_user_project_memberships(user_id: int, data: ProjectMembershipSelection, request: Request,
+                                 actor=Depends(authenticate), db=Depends(get_db, scope='function')):
+    principal = Principal.from_token(actor)
+    service.require_global_membership_access(db, principal, 'projects.members.manage')
+    current = []
+    offset = 0
+    while True:
+        page = service.user_memberships(db, principal, user_id, limit=500, offset=offset)
+        current.extend(page['items'])
+        offset += len(page['items'])
+        if offset >= page['total'] or not page['items']:
+            break
+    current_by_id = {str(item['project_id']): item for item in current}
+    desired = {str(project_id) for project_id in data.project_ids}
+
+    for project_id, item in current_by_id.items():
+        if project_id not in desired:
+            service.member_delete(db, principal, project_id, user_id, item['version'])
+            audit(db, request, 'project.member.removed', 'project_memberships', f'{project_id}:{user_id}')
+
+    for project_id in sorted(desired):
+        item = current_by_id.get(project_id)
+        if item is None:
+            service.member_create(db, principal, project_id, MemberCreate(user_id=user_id))
+            audit(db, request, 'project.member.added', 'project_memberships', f'{project_id}:{user_id}')
+        elif item['status'] != 'active':
+            service.member_update(
+                db, principal, project_id, user_id,
+                MemberUpdate(status='active', expected_version=item['version']),
+            )
+            audit(db, request, 'project.member.updated', 'project_memberships', f'{project_id}:{user_id}')
+
+    return service.user_memberships(db, principal, user_id, limit=500, offset=0)
 
 
 @router.get('/projects/{project_id}/members', response_model=MemberPage)

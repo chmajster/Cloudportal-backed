@@ -91,6 +91,42 @@ def test_tenant_crud_scope_tokens_membership_and_events(system):
     assert client.get(f"/api/v1/tenants/{own['id']}", headers=alice_headers).status_code == 404
 
 
+def test_global_admin_can_manage_user_membership_in_multiple_tenants(system):
+    client, headers, _ = system
+    first = tenant(client, headers, 'multi-first')
+    second = tenant(client, headers, 'multi-second')
+    user, _ = new_user(client, headers, 'multi-tenant-user')
+
+    saved = client.put(
+        f"/api/v1/users/{user['id']}/tenant-memberships",
+        headers=headers,
+        json={'tenant_ids': [first['id'], second['id']]},
+    )
+    assert saved.status_code == 200, saved.text
+    assert {row['tenant_id'] for row in saved.json()['items']} == {first['id'], second['id']}
+    assert all(row['status'] == 'active' for row in saved.json()['items'])
+    assert {row['tenant_name'] for row in saved.json()['items']} == {'Multi-First', 'Multi-Second'}
+
+    listed = client.get(
+        f"/api/v1/users/{user['id']}/tenant-memberships?limit=200",
+        headers=headers,
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()['total'] == 2
+
+    reduced = client.put(
+        f"/api/v1/users/{user['id']}/tenant-memberships",
+        headers=headers,
+        json={'tenant_ids': [second['id']]},
+    )
+    assert reduced.status_code == 200, reduced.text
+    assert [row['tenant_id'] for row in reduced.json()['items']] == [second['id']]
+
+    with session() as db:
+        assert db.get(TenantMembership, (first['id'], user['id'])) is None
+        assert db.get(TenantMembership, (second['id'], user['id'])) is not None
+
+
 def test_idempotency_replay_reauthorizes_and_emits_one_event(system):
     client, headers, _ = system
     key = str(uuid4())

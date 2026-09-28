@@ -121,6 +121,207 @@ function rbacOverviewPanel(roles, users, permissions) {
       node('span', { class: 'muted', text: `${roles.length} ról · ${users?.length ?? '—'} użytkowników · ${permissions.length} zdefiniowanych uprawnień` })));
 }
 
+async function rbacFetchAll(path) {
+  const items = [];
+  let offset = 0;
+  while (true) {
+    const separator = path.includes('?') ? '&' : '?';
+    const page = await api(path + separator + 'limit=200&offset=' + offset);
+    const rows = Array.isArray(page?.items) ? page.items : [];
+    items.push(...rows);
+    offset += rows.length;
+    if (!rows.length || offset >= Number(page?.total || rows.length)) break;
+  }
+  return items;
+}
+
+function rbacScopeOption({ id, name, subtitle, checked, disabled, roleCount = 0, status = 'active', inputName }) {
+  const input = node('input', {
+    type: 'checkbox',
+    name: inputName,
+    value: id,
+    checked,
+    disabled,
+  });
+  const option = node('label', {
+    class: 'rbac-scope-option' + (checked ? ' selected' : '') + (disabled ? ' disabled' : ''),
+  },
+    input,
+    node('span', { class: 'rbac-scope-option-copy' },
+      node('strong', { text: name }),
+      node('small', { class: 'muted', text: subtitle || '' })),
+    node('span', { class: 'rbac-scope-option-meta' },
+      roleCount ? badge(roleCount + (roleCount === 1 ? ' rola' : ' role'), 'info') : badge('Bez roli', ''),
+      status !== 'active' ? badge('Wyłączone', 'warning') : null));
+  input.addEventListener('change', () => option.classList.toggle('selected', input.checked));
+  return option;
+}
+
+function bindScopeFilter(fieldNode, container) {
+  const input = fieldNode.querySelector('input');
+  input.addEventListener('input', () => {
+    const query = searchable(input.value);
+    container.querySelectorAll('.rbac-scope-option').forEach(option => {
+      option.hidden = Boolean(query) && !searchable(option.textContent).includes(query);
+    });
+  });
+}
+
+async function rbacScopeMembershipEditor(user, refresh) {
+  const tenantReadable = allowed('tenants.admin') && allowed('tenants.read') && allowed('tenants.members.read');
+  const tenantManageable = tenantReadable && allowed('tenants.members.manage');
+  const projectReadable = allowed('projects.admin') && allowed('projects.read') && allowed('projects.members.read');
+  const projectManageable = projectReadable && tenantReadable && allowed('projects.members.manage');
+
+  if (!tenantReadable && !projectReadable) {
+    return node('section', { class: 'rbac-scope-memberships' },
+      node('div', { class: 'rbac-section-heading' },
+        node('div', {},
+          node('span', { class: 'rbac-kicker', text: 'Zakres dostępu' }),
+          node('h3', { text: 'Organizacje i projekty' }),
+          node('p', { class: 'muted', text: 'Do centralnego zarządzania członkostwami wymagane są globalne uprawnienia administracyjne tenantów lub projektów.' }))));
+  }
+
+  const [tenants, tenantMembershipPage, projects, projectMembershipPage] = await Promise.all([
+    tenantReadable ? rbacFetchAll('/tenants') : Promise.resolve([]),
+    tenantReadable ? rbacFetchAll('/users/' + encodeURIComponent(user.id) + '/tenant-memberships') : Promise.resolve([]),
+    projectReadable ? rbacFetchAll('/projects') : Promise.resolve([]),
+    projectReadable ? rbacFetchAll('/users/' + encodeURIComponent(user.id) + '/project-memberships') : Promise.resolve([]),
+  ]);
+
+  const tenantMemberships = new Map((tenantMembershipPage || []).map(item => [String(item.tenant_id), item]));
+  const projectMemberships = new Map((projectMembershipPage || []).map(item => [String(item.project_id), item]));
+  const activeTenantIds = new Set(
+    [...tenantMemberships.values()].filter(item => item.status === 'active').map(item => String(item.tenant_id))
+  );
+  const tenantsById = new Map(tenants.map(item => [String(item.id), item]));
+
+  const sections = [];
+
+  if (tenantReadable) {
+    const tenantSearch = field('Szukaj organizacji', 'tenant_membership_filter', {
+      type: 'search',
+      placeholder: 'Nazwa lub slug organizacji…',
+      wide: true,
+    });
+    const tenantOptions = node('div', { class: 'rbac-scope-options' },
+      ...tenants.map(tenant => {
+        const membership = tenantMemberships.get(String(tenant.id));
+        const checked = membership?.status === 'active';
+        return rbacScopeOption({
+          id: String(tenant.id),
+          name: tenant.name,
+          subtitle: tenant.slug,
+          checked,
+          disabled: !tenantManageable || (!checked && tenant.status !== 'active'),
+          roleCount: membership?.role_ids?.length || 0,
+          status: membership?.status || tenant.status,
+          inputName: 'tenant_scope_id',
+        });
+      }));
+    bindScopeFilter(tenantSearch, tenantOptions);
+
+    const tenantForm = node('form', {
+      class: 'panel rbac-scope-membership-card',
+      onSubmit: async event => {
+        event.preventDefault();
+        if (!tenantManageable) return;
+        const tenant_ids = [...tenantForm.querySelectorAll('[name="tenant_scope_id"]:checked')].map(input => input.value);
+        const submit = tenantForm.querySelector('[type="submit"]');
+        submit.disabled = true;
+        try {
+          await api('/users/' + encodeURIComponent(user.id) + '/tenant-memberships', {
+            method: 'PUT',
+            body: { tenant_ids },
+          });
+          toast('Członkostwa w organizacjach zapisane.');
+          await refresh();
+        } catch (error) {
+          toast(error.message, 'error');
+        } finally {
+          submit.disabled = false;
+        }
+      },
+    },
+      node('div', { class: 'rbac-scope-membership-head' },
+        node('div', {},
+          node('span', { class: 'rbac-kicker', text: 'Organization / Tenant' }),
+          node('h3', { text: 'Organizacje użytkownika' }),
+          node('p', { class: 'muted', text: 'Użytkownik może należeć do wielu organizacji jednocześnie. Odznaczenie organizacji usuwa również jego członkostwa projektowe w tej organizacji.' })),
+        tenantManageable ? node('button', { type: 'submit', class: 'button primary' }, 'Zapisz organizacje') : badge('Tylko odczyt', 'info')),
+      tenantSearch,
+      tenants.length ? tenantOptions : node('div', { class: 'empty', text: 'Brak dostępnych organizacji.' }));
+    sections.push(tenantForm);
+  }
+
+  if (projectReadable) {
+    const projectSearch = field('Szukaj projektu', 'project_membership_filter', {
+      type: 'search',
+      placeholder: 'Organizacja, projekt lub slug…',
+      wide: true,
+    });
+    const projectOptions = node('div', { class: 'rbac-scope-options' },
+      ...projects.map(project => {
+        const membership = projectMemberships.get(String(project.id));
+        const checked = membership?.status === 'active';
+        const tenant = tenantsById.get(String(project.tenant_id));
+        const parentActive = activeTenantIds.has(String(project.tenant_id));
+        const unavailable = !checked && (!parentActive || project.status !== 'active' || tenant?.status === 'disabled');
+        return rbacScopeOption({
+          id: String(project.id),
+          name: project.name,
+          subtitle: (tenant?.name || project.tenant_id) + ' · ' + project.slug,
+          checked,
+          disabled: !projectManageable || unavailable,
+          roleCount: membership?.role_ids?.length || 0,
+          status: membership?.status || project.status,
+          inputName: 'project_scope_id',
+        });
+      }));
+    bindScopeFilter(projectSearch, projectOptions);
+
+    const projectForm = node('form', {
+      class: 'panel rbac-scope-membership-card',
+      onSubmit: async event => {
+        event.preventDefault();
+        if (!projectManageable) return;
+        const project_ids = [...projectForm.querySelectorAll('[name="project_scope_id"]:checked')].map(input => input.value);
+        const submit = projectForm.querySelector('[type="submit"]');
+        submit.disabled = true;
+        try {
+          await api('/users/' + encodeURIComponent(user.id) + '/project-memberships', {
+            method: 'PUT',
+            body: { project_ids },
+          });
+          toast('Członkostwa w projektach zapisane.');
+          await refresh();
+        } catch (error) {
+          toast(error.message, 'error');
+        } finally {
+          submit.disabled = false;
+        }
+      },
+    },
+      node('div', { class: 'rbac-scope-membership-head' },
+        node('div', {},
+          node('span', { class: 'rbac-kicker', text: 'Project' }),
+          node('h3', { text: 'Projekty użytkownika' }),
+          node('p', { class: 'muted', text: 'Użytkownik może należeć do wielu projektów, także w różnych organizacjach. Projekt można przypisać dopiero po aktywnym członkostwie w jego organizacji.' })),
+        projectManageable ? node('button', { type: 'submit', class: 'button primary' }, 'Zapisz projekty') : badge('Tylko odczyt', 'info')),
+      projectSearch,
+      projects.length ? projectOptions : node('div', { class: 'empty', text: 'Brak dostępnych projektów.' }));
+    sections.push(projectForm);
+  }
+
+  return node('section', { class: 'rbac-scope-memberships' },
+    node('div', { class: 'rbac-section-heading' },
+      node('div', {},
+        node('span', { class: 'rbac-kicker', text: 'Zakres dostępu' }),
+        node('h2', { text: 'Organizacje i projekty' }),
+        node('p', { class: 'muted', text: 'Członkostwo określa gdzie użytkownik może działać. Role zakresowe nadal są niezależne i mogą różnić się pomiędzy organizacjami i projektami.' }))),
+    ...sections);
+}
+
 async function rbacAssignmentsPanel(roles, users) {
   if (!allowed('users.read')) {
     return node('section', { class: 'panel' },
@@ -141,9 +342,9 @@ async function rbacAssignmentsPanel(roles, users) {
     selection.replaceChildren(
       node('div', { class: 'rbac-section-heading' },
         node('div', {},
-          node('span', { class: 'rbac-kicker', text: 'Przypisanie globalne' }),
+          node('span', { class: 'rbac-kicker', text: 'Dostęp użytkownika' }),
           node('h2', { text: user.username }),
-          node('p', { class: 'muted', text: user.email || 'Brak adresu e-mail' })),
+          node('p', { class: 'muted', text: (user.email || 'Brak adresu e-mail') + ' · role globalne + wiele organizacji i projektów' })),
         button('Zmień użytkownika', () => {
           rbacSelectedUserId = null;
           rbacAssignmentsPanel(roles, users).then(panel => {
@@ -175,7 +376,7 @@ async function rbacAssignmentsPanel(roles, users) {
         submit.disabled = true;
         try {
           await api(`/users/${user.id}/roles`, { method: 'PUT', body: { role_ids } });
-          toast('Dostęp użytkownika zapisany.');
+          toast('Role globalne użytkownika zapisane.');
           await renderUser(user);
         } catch (error) {
           toast(error.message, 'error');
@@ -186,11 +387,13 @@ async function rbacAssignmentsPanel(roles, users) {
     },
     node('div', { class: 'rbac-assignment-toolbar' },
       node('div', {},
-        node('strong', { text: 'Role użytkownika' }),
-        node('span', { class: 'muted', text: allowed('roles.assign') ? 'Zaznacz role i zapisz zmiany.' : 'Tryb tylko do odczytu.' })),
-      allowed('roles.assign') ? node('button', { type: 'submit', class: 'button primary' }, 'Zapisz przypisanie') : null),
+        node('strong', { text: 'Role globalne użytkownika' }),
+        node('span', { class: 'muted', text: allowed('roles.assign') ? 'Te role obowiązują globalnie, niezależnie od członkostw zakresowych.' : 'Tryb tylko do odczytu.' })),
+      allowed('roles.assign') ? node('button', { type: 'submit', class: 'button primary' }, 'Zapisz role globalne') : null),
     roleOptions);
     selection.append(form);
+    const scopeMemberships = await rbacScopeMembershipEditor(user, () => renderUser(user));
+    selection.append(scopeMemberships);
   }
 
   const rows = users || [];
