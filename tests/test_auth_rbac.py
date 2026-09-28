@@ -306,6 +306,83 @@ def test_ldap_settings_secret_and_jit_rbac(client, headers, monkeypatch):
     assert client.post('/api/v1/users/' + str(alice['id']) + '/reset-password', headers=headers).status_code == 409
 
 
+def test_ldap_diagnostics_do_not_fail_on_missing_mapped_attributes(monkeypatch):
+    from app.auth import ldap as ldap_module
+
+    config = {
+        **ldap_module.LDAP_DEFAULTS,
+        'enabled': True,
+        'url': 'ldap://ldap.example.test:389',
+        'bind_dn': 'uid=admin,ou=people,dc=example,dc=com',
+        'bind_password': 'bind-secret',
+        'base_dn': 'ou=people,dc=example,dc=com',
+        'user_filter': '(&(objectClass=person)(uid={username}))',
+        'username_attribute': 'uid',
+        'email_attribute': 'mail',
+        'first_name_attribute': 'givenName',
+        'last_name_attribute': 'sn',
+    }
+
+    class Attribute:
+        def __init__(self, value):
+            self.value = value
+
+    class Entry:
+        entry_dn = 'uid=alice,ou=people,dc=example,dc=com'
+        entry_attributes = ['uid', 'mail']
+
+        def __getitem__(self, name):
+            values = {
+                'uid': Attribute('alice'),
+                'mail': Attribute('alice@example.com'),
+            }
+            return values[name]
+
+    class DiagnosticConnection:
+        def __init__(self, *args, **kwargs):
+            self.entries = []
+            self.result = {'description': 'success'}
+
+        def open(self):
+            return True
+
+        def bind(self):
+            return True
+
+        def search(self, base, ldap_filter, search_scope=None, attributes=None, size_limit=None):
+            if search_scope == ldap_module.BASE:
+                assert attributes == []
+                return True
+            assert ldap_filter == '(&(objectClass=person)(uid=alice))'
+            assert attributes == ldap_module.ALL_ATTRIBUTES
+            self.entries = [Entry()]
+            return True
+
+        def unbind(self):
+            return True
+
+    class UserConnection:
+        def unbind(self):
+            return True
+
+    monkeypatch.setattr(ldap_module, 'Connection', DiagnosticConnection)
+    monkeypatch.setattr(ldap_module, '_server', lambda config: object())
+    monkeypatch.setattr(ldap_module, '_connection', lambda *args, **kwargs: UserConnection())
+
+    steps, profile, password_tested = ldap_module._directory_diagnostics(
+        config, 'alice', 'directory-secret'
+    )
+
+    assert password_tested is True
+    assert profile['username'] == 'alice'
+    assert profile['email'] == 'alice@example.com'
+    assert profile['first_name'] == ''
+    assert profile['last_name'] == ''
+    assert next(step for step in steps if step['key'] == 'user_search')['status'] == 'ok'
+    assert next(step for step in steps if step['key'] == 'attributes')['status'] == 'warning'
+    assert next(step for step in steps if step['key'] == 'user_bind')['status'] == 'ok'
+
+
 def test_ldap_authentication_tolerates_missing_optional_attributes(monkeypatch):
     from app.auth import ldap as ldap_module
 
