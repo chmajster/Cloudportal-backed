@@ -169,6 +169,13 @@
       description: '',
       avatarId: '',
       active: true,
+      placementMode: 'FIXED',
+      resourcePoolId: '',
+      logicalNetwork: '',
+      storageClass: '',
+      placementLocation: '',
+      placementAffinityType: '',
+      placementAffinityGroup: '',
       providerId: '',
       providerType: '',
       providerCredentialId: '',
@@ -288,9 +295,17 @@
     state.active = blueprint.is_active !== false;
     state.variablesSchema = { ...(blueprint.variables_schema || {}) };
 
+    state.placementMode = String(deployment.placement_mode || 'FIXED').toUpperCase();
+    state.resourcePoolId = String(deployment.resource_pool_id || '');
+    state.logicalNetwork = String(deployment.logical_network || '');
+    state.storageClass = String(deployment.storage_class || '');
+    state.placementLocation = String(deployment.placement_location || '');
+    state.placementAffinityType = String(deployment.placement_affinity?.type || '');
+    state.placementAffinityGroup = String(deployment.placement_affinity?.group_key || '');
     state.providerId = String(deployment.provider_id || '');
     const provider = (data.providers || []).find(value => String(value.id) === state.providerId);
-    state.providerType = provider?.type || state.providerType || '';
+    const templateDefinition = (data.templates || []).find(value => String(value.id) === String(deployment.template || ''));
+    state.providerType = provider?.type || templateDefinition?.provider || state.providerType || '';
     state.providerCredentialId = String(deployment.credentials_id || provider?.credentials_id || '');
     state.terraformTemplateId = deployment.template || state.terraformTemplateId || '';
     state.executor = deployment.executor || 'terraform';
@@ -422,11 +437,14 @@
   function buildDeployment(state, data) {
     const provider = data.providers.find(value => String(value.id) === String(state.providerId));
     const template = data.templates.find(value => value.id === state.terraformTemplateId)
-      || data.templates.find(value => value.provider === provider?.type);
-    if (!provider || !template) throw new Error('Brak platformy lub szablonu IaC.');
+      || data.templates.find(value => value.provider === (provider?.type || state.providerType));
+    const dynamicPlacement = ['POOL', 'POLICY'].includes(String(state.placementMode || 'FIXED').toUpperCase());
+    if (!template) throw new Error('Brak szablonu IaC.');
+    if (!provider && !dynamicPlacement) throw new Error('Brak platformy dla placement FIXED.');
+    const effectiveProviderType = provider?.type || template.provider || state.providerType;
 
     let variables;
-    if (provider.type === 'proxmox') {
+    if (effectiveProviderType === 'proxmox') {
       const tags = String(state.tags || '').split(/[,\n]+/).map(value => value.trim().toLowerCase()).filter(Boolean);
       const fixedApmid = state.selectApmidOnExecute ? '' : String(state.apmid || '').trim();
       const fixedEnvironment = state.selectEnvironmentOnExecute ? '' : String(state.environment || '').trim();
@@ -472,13 +490,34 @@
       delete hostnameValues.environment;
     }
 
+    if (dynamicPlacement) {
+      delete variables.node;
+      delete variables.template_node;
+      delete variables.storage;
+      delete variables.network;
+    }
+
     const deployment = {
       name: state.hostnameEnabled ? '{{ hostname }}' : state.manualVmName,
-      provider_id: Number(state.providerId),
-      credentials_id: Number(provider.credentials_id || state.providerCredentialId),
+      provider_id: dynamicPlacement ? null : Number(state.providerId),
+      credentials_id: dynamicPlacement ? null : Number(provider.credentials_id || state.providerCredentialId),
       template: template.id,
       variables,
       executor: state.executor,
+      placement_mode: String(state.placementMode || 'FIXED').toUpperCase(),
+      resource_pool_id: String(state.placementMode).toUpperCase() === 'POOL'
+        ? (state.resourcePoolId || null) : null,
+      logical_network: dynamicPlacement ? (state.logicalNetwork || null) : null,
+      storage_class: dynamicPlacement ? (state.storageClass || null) : null,
+      placement_location: dynamicPlacement ? (state.placementLocation || null) : null,
+      placement_affinity: dynamicPlacement && state.placementAffinityType
+        ? {
+            type: state.placementAffinityType,
+            group_key: state.placementAffinityGroup || null,
+            peer_deployment_ids: [],
+          }
+        : null,
+      placement_metadata: {},
       hostname_values: hostnameValues,
     };
     if (state.hostnameEnabled && state.hostnameSchemeId && state.hostnameSchemeId !== '__pending__') {
