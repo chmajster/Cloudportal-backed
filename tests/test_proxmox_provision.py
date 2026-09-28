@@ -37,11 +37,13 @@ def test_parse_proxmox_clone_progress_clamps_to_valid_provider_values():
 
 
 class DestroyContext:
-    def __init__(self, *, force=False):
+    def __init__(self, *, force=False, forced_check_error=None):
         self.job = SimpleNamespace(payload={'force': True} if force else {})
         self.stages = []
         self.logs = []
         self.progress_events = []
+        self.check_calls = []
+        self.forced_check_error = forced_check_error
         self.quota_provider_submitted = False
 
     def stage(self, value):
@@ -53,7 +55,10 @@ class DestroyContext:
     def progress(self, percent, message, **kwargs):
         self.progress_events.append((percent, message, kwargs))
 
-    def check(self):
+    def check(self, *, force=False):
+        self.check_calls.append(force)
+        if force and self.forced_check_error is not None:
+            raise self.forced_check_error
         return None
 
 
@@ -194,3 +199,22 @@ def test_forced_proxmox_destroy_continues_after_provider_task_failure(monkeypatc
     assert proxmox_provision.destroy(context) is True
     assert ('delete', 'pve', 124, True, False) in adapter.calls
     assert any('ProxmoxTaskFailed' in message for message in context.logs)
+
+
+def test_forced_proxmox_destroy_revalidates_before_direct_delete(monkeypatch):
+    adapter = DestroyAdapter(fail_stop=True)
+    context = DestroyContext(
+        force=True,
+        forced_check_error=ExecutionFailed('Job authorization has been revoked'),
+    )
+    monkeypatch.setattr(
+        proxmox_provision,
+        'identity',
+        lambda _context: ('pve', 124, adapter),
+    )
+
+    with pytest.raises(ExecutionFailed, match='authorization has been revoked'):
+        proxmox_provision.destroy(context)
+
+    assert context.check_calls[-1] is True
+    assert ('delete', 'pve', 124, True, False) not in adapter.calls
