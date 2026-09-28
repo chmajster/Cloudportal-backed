@@ -15,7 +15,7 @@ from app.models import (
 from app.projects.models import Project, ProjectMembership, ProjectRoleAssignment
 from app.tenancy.models import Tenant, TenantMembership, TenantRoleAssignment
 from app.security.core import audit, authenticate
-from app.rbac.service import ALL_PERMISSIONS, SYSTEM_ROLE_NAMES, permissions_from_names
+from app.rbac.service import ALL_PERMISSIONS, SYSTEM_ROLE_NAMES, ensure_admin_remains, permissions_from_names
 from app.iam.models import (
     BreakGlassAccess, Group, GroupMember, JITAccessRequest, RoleAssignment,
     RoleConflict, RoleProfile, SCOPE_TYPES,
@@ -552,8 +552,9 @@ def update_role(
     for field in ('description', 'scope_types', 'inheritance_enabled', 'enabled', 'assignable_by'):
         if field in values:
             setattr(profile, field, values[field])
-    audit(db, request, 'role.updated', 'roles', role.id)
     db.flush()
+    ensure_admin_remains(db)
+    audit(db, request, 'role.updated', 'roles', role.id)
     return _role_public(db, role)
 
 
@@ -736,8 +737,10 @@ def update_assignment(
         raise HTTPException(422, {'error': 'invalid_validity_window'})
     for key, value in values.items():
         setattr(row, key, value)
-    audit(db, request, 'role_assignment.updated', 'iam_role_assignments', row.id)
     db.flush()
+    if row.scope_type == 'GLOBAL':
+        ensure_admin_remains(db)
+    audit(db, request, 'role_assignment.updated', 'iam_role_assignments', row.id)
     return _assignment_public(db, row)
 
 
@@ -761,7 +764,11 @@ def delete_assignment(
         'environment': row.environment,
     }))
     _assert_delegatable(db, actor, role, scope, request)
+    was_global = row.scope_type == 'GLOBAL'
     db.delete(row)
+    db.flush()
+    if was_global:
+        ensure_admin_remains(db)
     audit(db, request, 'role_assignment.deleted', 'iam_role_assignments', assignment_id)
     return {'deleted': True}
 
@@ -823,8 +830,9 @@ def update_group(
     )
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(row, key, value)
-    audit(db, request, 'group.updated', 'iam_groups', row.id)
     db.flush()
+    ensure_admin_remains(db)
+    audit(db, request, 'group.updated', 'iam_groups', row.id)
     return _group_public(db, row)
 
 
@@ -843,6 +851,8 @@ def delete_group(
         context=request_context(request), write=True,
     )
     db.delete(row)
+    db.flush()
+    ensure_admin_remains(db)
     audit(db, request, 'group.deleted', 'iam_groups', group_id)
     return {'deleted': True}
 
@@ -931,6 +941,8 @@ def remove_group_member(
         context=request_context(request), write=True,
     )
     db.delete(row)
+    db.flush()
+    ensure_admin_remains(db)
     audit(db, request, 'user.removed_from_group', 'iam_groups', f'{group_id}:{user_id}')
     return {'deleted': True}
 
