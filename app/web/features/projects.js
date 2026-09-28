@@ -316,28 +316,28 @@
   }
   registerRoutedForm({
     id: 'projects-details',
-    pattern: /^\/projects\/(?<id>[^/]+)$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
   }, match => details(match.params.id));
   registerRoutedForm({
     id: 'projects-members',
-    pattern: /^\/projects\/(?<id>[^/]+)\/members$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
   }, match => members(match.params.id));
   registerRoutedForm({
     id: 'projects-audit',
-    pattern: /^\/projects\/(?<id>[^/]+)\/audit$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/audit$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
   }, match => history(match.params.id));
   registerRoutedForm({
     id: 'projects-member-create',
-    pattern: /^\/projects\/(?<id>[^/]+)\/members\/new$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/new$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
@@ -349,7 +349,7 @@
   });
   registerRoutedForm({
     id: 'projects-member-roles',
-    pattern: /^\/projects\/(?<id>[^/]+)\/members\/(?<userId>\d+)\/roles$/,
+    pattern: /^\/projects\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/(?<userId>\d+)\/roles$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
@@ -374,7 +374,7 @@
   }, () => projectForm());
   registerRoutedForm({
     id: 'projects-edit',
-    pattern: /^\/projects\/edit\/(?<id>[^/]+)(?:\/[^/]+)?$/,
+    pattern: /^\/projects\/edit\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})(?:\/[^/]+)?$/,
     parent: 'projects',
     permission: null,
     label: 'Projekty',
