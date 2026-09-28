@@ -745,6 +745,11 @@ def test_blueprint_runtime_apmid_and_environment_can_be_selected_together(client
 
 def test_blueprint_fixed_apmid_cannot_be_overridden_at_runtime(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
+    saved = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': True},
+        'apmids': ['CRM', 'IAASTEAM'],
+    })
+    assert saved.status_code == 200, saved.text
     created = client.post('/api/v1/blueprints', headers=headers, json={
         'slug': 'fixed-apmid',
         'name': 'Fixed APMID',
@@ -782,6 +787,84 @@ def test_blueprint_fixed_apmid_cannot_be_overridden_at_runtime(client, headers):
     )
     assert override.status_code == 422
     assert 'does not allow changing APMID' in override.text
+
+
+def test_blueprint_fixed_apmid_remains_usable_after_catalog_change(client, headers):
+    from app.tenancy.permissions import DEFAULT_TENANT_ID
+
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'fixed-apmid-org-scope',
+        'name': 'Fixed APMID Organization Scope',
+        'deployment': {
+            'name': 'fixed-apmid-org-scope',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'apmid': 'CRM',
+            'environment': 'dev',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'fixed-apmid-org-scope',
+                'tags': ['apmid-crm', 'env-dev', 'crm.dev'],
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    configured = client.put(
+        f'/api/v1/tenants/{DEFAULT_TENANT_ID}/vm-classification',
+        headers=headers,
+        json={'apmids': ['LEO']},
+    )
+    assert configured.status_code == 200, configured.text
+
+    allowed = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert allowed.status_code == 202, allowed.text
+    assert allowed.json()['variables']['tags'] == [
+        'apmid-crm',
+        'crm.dev',
+        'env-dev',
+    ]
+
+
+def test_blueprint_fixed_environment_remains_usable_after_disable(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'fixed-disabled-environment',
+        'name': 'Fixed Disabled Environment',
+        'deployment': {
+            'name': 'fixed-disabled-environment',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'apmid': 'LEO',
+            'environment': 'prod',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'fixed-disabled-environment',
+                'tags': ['apmid-leo', 'env-prod', 'leo.prod'],
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    disabled = client.put('/api/v1/settings/vm-classification', headers=headers, json={
+        'environments': {'test': True, 'dev': True, 'nonprod': True, 'prod': False},
+        'apmids': ['LEO'],
+    })
+    assert disabled.status_code == 200, disabled.text
+
+    allowed = client.post(
+        f"/api/v1/blueprints/{created.json()['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert allowed.status_code == 202, allowed.text
 
 
 def test_blueprint_validates_dag_visibility_and_compiles_deployment(client, headers):
