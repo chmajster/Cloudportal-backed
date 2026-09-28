@@ -1,6 +1,17 @@
 'use strict';
 
 (() => {
+function hostnameApi(path, options = {}) {
+  const scopeHeaders = globalThis.CPProjectContext?.headers?.() || {};
+  return api(path, {
+    ...options,
+    headers: {
+      ...scopeHeaders,
+      ...(options.headers || {}),
+    },
+  });
+}
+
 function generatorPatternTokens(pattern) {
   const automatic = new Set(['number', 'random', 'year']);
   return [...new Set(Array.from(String(pattern || '').matchAll(/{([a-z]+)}/g), match => match[1]))]
@@ -61,9 +72,9 @@ function hostnameSchemePreview(pattern, padding, nextNumber) {
 
 async function hostnamesView() {
   const [schemes, reservations, blueprintResult] = await Promise.all([
-    api('/hostname-schemes?limit=200'),
-    api('/hostnames?limit=200'),
-    allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
+    hostnameApi('/hostname-schemes?limit=200'),
+    hostnameApi('/hostnames?limit=200'),
+    allowed('blueprints.read') ? hostnameApi('/blueprints?limit=200') : Promise.resolve({ items: [] }),
   ]);
   const blueprintUsage = new Map();
   blueprintResult.items.forEach(blueprint => {
@@ -109,7 +120,7 @@ async function hostnamesView() {
           'Usuń pattern hostname',
           `Pattern „${item.name}” zostanie usunięty, jeśli nie ma historii rezerwacji.`,
           async () => {
-            await api(`/hostname-schemes/${item.id}`, { method: 'DELETE' });
+            await hostnameApi(`/hostname-schemes/${item.id}`, { method: 'DELETE' });
             toast('Pattern hostname usunięty.');
             navigate('hostnames');
           },
@@ -130,7 +141,7 @@ async function hostnamesView() {
           'Zwolnij nazwę hosta',
           `${item.hostname} będzie ponownie dostępny po wygaśnięciu historii kolizji.`,
           async () => {
-            await api(`/hostnames/${item.id}/release`, { method: 'POST' });
+            await hostnameApi(`/hostnames/${item.id}/release`, { method: 'POST' });
             toast('Nazwa hosta zwolniona.');
             navigate('hostnames');
           },
@@ -143,8 +154,8 @@ async function hostnamesView() {
 async function assignHostname(item) {
   try {
     const [deploymentResult, resourceResult] = await Promise.all([
-      allowed('deployments.read') ? api('/deployments?limit=200') : Promise.resolve({ items: [] }),
-      allowed('inventory.read') ? api('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
+      allowed('deployments.read') ? hostnameApi('/deployments?limit=200') : Promise.resolve({ items: [] }),
+      allowed('inventory.read') ? hostnameApi('/inventory/resources?limit=200') : Promise.resolve({ items: [] }),
     ]);
     const choices = [
       ...deploymentResult.items.map(row => ({ value: row.id, label: `Wdrożenie: ${row.name}` })),
@@ -164,7 +175,7 @@ async function assignHostname(item) {
       onSubmit: async data => {
         const resourceId = data.get('known_resource_id') || data.get('resource_id')?.trim();
         if (!resourceId) throw new Error('Wybierz lub podaj identyfikator zasobu.');
-        await api(`/hostnames/${item.id}/assign?resource_id=${encodeURIComponent(resourceId)}`, { method: 'POST' });
+        await hostnameApi(`/hostnames/${item.id}/assign?resource_id=${encodeURIComponent(resourceId)}`, { method: 'POST' });
         toast('Nazwa hosta przypisana.');
         navigate('hostnames');
       },
@@ -218,7 +229,7 @@ function hostnameSchemeForm(item = null) {
     submitLabel: editing ? 'Zapisz pattern' : 'Utwórz pattern',
     onSubmit: async data => {
       const normalized = normalizeGeneratorPattern(data.get('pattern'), data.get('padding'));
-      await api(editing ? `/hostname-schemes/${schemeId}` : '/hostname-schemes', {
+      await hostnameApi(editing ? `/hostname-schemes/${schemeId}` : '/hostname-schemes', {
         method: editing ? 'PUT' : 'POST',
         body: {
           name: data.get('name'),
@@ -258,7 +269,7 @@ function generateHostname(schemes) {
     body: fields,
     submitLabel: 'Generuj',
     onSubmit: async (_data, form) => {
-      const result = await api('/hostnames/generate', {
+      const result = await hostnameApi('/hostnames/generate', {
         method: 'POST',
         body: {
           scheme_id: Number(form.elements.scheme_id.value),
@@ -278,7 +289,7 @@ registerRoutedForm({
   parent: 'tools',
   permission: 'hostnames.reserve',
   label: 'Generator hostname',
-}, async () => generateHostname((await api('/hostname-schemes?limit=200')).items));
+}, async () => generateHostname((await hostnameApi('/hostname-schemes?limit=200')).items));
 registerRoutedForm({
   id: 'hostname-reservation-assign',
   pattern: /^\/admin\/tools\/hostnames\/reservations\/(?<id>\d+)\/assign$/,
@@ -286,7 +297,7 @@ registerRoutedForm({
   permission: 'hostnames.reserve',
   label: 'Generator hostname',
 }, async match => {
-  const rows = (await api('/hostnames?limit=200')).items;
+  const rows = (await hostnameApi('/hostnames?limit=200')).items;
   const item = rows.find(value => Number(value.id) === Number(match.params.id));
   if (!item) throw new Error('Nie znaleziono rezerwacji hostname.');
   await assignHostname(item);
@@ -305,7 +316,7 @@ registerRoutedForm({
   permission: 'hostnames.update',
   label: 'Generator hostname',
 }, async match => {
-  const schemes = (await api('/hostname-schemes?limit=200')).items;
+  const schemes = (await hostnameApi('/hostname-schemes?limit=200')).items;
   const item = schemes.find(value => Number(value.id) === Number(match.params.id));
   if (!item) throw new Error('Nie znaleziono patternu hostname.');
   hostnameSchemeForm(item);
