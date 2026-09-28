@@ -139,3 +139,58 @@ def test_forced_proxmox_destroy_does_not_swallow_cancellation(monkeypatch):
         proxmox_provision.destroy(context)
 
     assert ('delete', 'pve', 124, True, False) not in adapter.calls
+
+
+def test_forced_proxmox_destroy_preserves_control_plane_execution_failure(monkeypatch):
+    adapter = DestroyAdapter()
+    context = DestroyContext(force=True)
+
+    def task_power(node, vm_id, action):
+        adapter.calls.append(('power', node, vm_id, action))
+        return 'UPID:pve:stop'
+
+    adapter.vm_power = task_power
+    monkeypatch.setattr(
+        proxmox_provision,
+        'identity',
+        lambda _context: ('pve', 124, adapter),
+    )
+    monkeypatch.setattr(
+        proxmox_provision,
+        'wait_task',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ExecutionFailed('Job authorization has been revoked')
+        ),
+    )
+
+    with pytest.raises(ExecutionFailed, match='authorization has been revoked'):
+        proxmox_provision.destroy(context)
+
+    assert ('delete', 'pve', 124, True, False) not in adapter.calls
+
+
+def test_forced_proxmox_destroy_continues_after_provider_task_failure(monkeypatch):
+    adapter = DestroyAdapter()
+    context = DestroyContext(force=True)
+
+    def task_power(node, vm_id, action):
+        adapter.calls.append(('power', node, vm_id, action))
+        return 'UPID:pve:stop'
+
+    adapter.vm_power = task_power
+    monkeypatch.setattr(
+        proxmox_provision,
+        'identity',
+        lambda _context: ('pve', 124, adapter),
+    )
+    monkeypatch.setattr(
+        proxmox_provision,
+        'wait_task',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            proxmox_provision.ProxmoxTaskFailed('hard stop failed in Proxmox')
+        ),
+    )
+
+    assert proxmox_provision.destroy(context) is True
+    assert ('delete', 'pve', 124, True, False) in adapter.calls
+    assert any('ProxmoxTaskFailed' in message for message in context.logs)
