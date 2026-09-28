@@ -78,6 +78,33 @@ class TenantUpdate(TenantFields):
     expected_version: int = Field(ge=1)
 
 
+class TenantVMClassificationInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    apmids: list[str] = Field(default_factory=list, max_length=200)
+
+    @field_validator('apmids')
+    @classmethod
+    def valid_apmids(cls, value):
+        import re
+        result = []
+        for item in value:
+            normalized = str(item).strip().upper()
+            if not re.fullmatch(r'[A-Z0-9][A-Z0-9_-]{0,62}', normalized):
+                raise ValueError('APMID must use letters, digits, underscore or hyphen')
+            if normalized not in result:
+                result.append(normalized)
+        return result
+
+
+class TenantVMClassificationOutput(BaseModel):
+    tenant_id: UUID
+    environments: dict[str, bool]
+    apmids: list[str]
+    apmid_environments: dict[str, list[str]]
+    classifications: list[str]
+    hostname_defaults: dict[str, str]
+
+
 class MemberCreate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     user_id: int = Field(ge=1, strict=True)
