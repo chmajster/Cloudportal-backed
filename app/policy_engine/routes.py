@@ -16,6 +16,7 @@ from app.resource_scope.http import require
 from app.security.core import audit, authenticate
 from app.tenancy.authorization import Principal, identity as scoped_identity, visible_tenants
 from app.tenancy.models import Tenant
+from app.vm_classification import vm_classification_for_tenant
 
 router = APIRouter(tags=["policies"])
 
@@ -81,8 +82,18 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
         .order_by(Tenant.name, Tenant.id, Project.name, Project.id)
     ).all()
 
+    classification_tenant_ids = {
+        str(row.id) for row in tenants
+    } | {
+        str(tenant.id) for _project, tenant in projects
+    }
+
     return {
         "global_allowed": "governance.admin" in identity.global_permissions,
+        "classifications": {
+            tenant_id: vm_classification_for_tenant(db, tenant_id)
+            for tenant_id in sorted(classification_tenant_ids)
+        },
         "tenants": [
             {"id": row.id, "name": row.name, "slug": row.slug}
             for row in tenants
