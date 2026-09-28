@@ -11,7 +11,7 @@ def test_tenant_ui_uses_server_scope_and_safe_rendering():
     assert "async function deleteTenant(item)" in source
     assert "action('Zmień nazwę', () => renameTenant(item))" in source
     assert "action('Usuń', () => deleteTenant(item), 'danger')" in source
-    assert "pattern: /^\\/tenants\\/(?<id>[^/]+)$/" in source
+    assert "pattern: /^\\/tenants\\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/" in source
     assert "tenantDetails(match.params.id)" in source
     assert "const id = Number(match.params.id);" not in source
     script = r"""
