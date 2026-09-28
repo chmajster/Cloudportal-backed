@@ -585,6 +585,8 @@ def destroy(context, timeout=1800):
                     context, adapter, task_node(task, node), task, 'Twarde zatrzymywanie VM',
                     phase='destroy', timeout=min(timeout, 300),
                 )
+        except Cancelled:
+            raise
         except Exception as exc:
             if not force:
                 raise
