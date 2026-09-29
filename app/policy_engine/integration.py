@@ -368,11 +368,8 @@ def revalidate_job_operation(db, job, user, permissions, deployment=None):
         "proxmox.provision", "proxmox.destroy", "ansible.execute",
     }:
         return None
-    payload = dict(getattr(job, "payload", {}) or {})
-    blueprint = dict(payload.get("blueprint") or {})
-    if blueprint and operation in {"terraform.apply", "proxmox.provision"}:
-        return revalidate_blueprint_job(db, job, user, permissions, deployment)
 
+    payload = dict(getattr(job, "payload", {}) or {})
     parameters = dict(payload.get("ansible") or {}) if operation == "ansible.execute" else {}
     resource_type = "ansible" if operation == "ansible.execute" else "terraform"
     resource, apmid, environment = _deployment_policy_resource(
@@ -383,6 +380,9 @@ def revalidate_job_operation(db, job, user, permissions, deployment=None):
             "playbook": parameters.get("playbook"),
             "credential_id": parameters.get("credentials_id"),
         })
+        apmid = parameters.get("apmid") or apmid
+        environment = parameters.get("environment") or environment
+
     scope_context = _scope_from_ids(
         db,
         getattr(job, "tenant_id", ""),
@@ -403,8 +403,39 @@ def revalidate_job_operation(db, job, user, permissions, deployment=None):
         },
         "resource": resource,
     }
-    return evaluate_context(db, context, persist=True)
+    result = evaluate_context(db, context, persist=True)
 
+    credential_id = (
+        parameters.get("credentials_id")
+        if operation == "ansible.execute"
+        else getattr(deployment, "credentials_id", None)
+    )
+    if credential_id:
+        credential_context = {
+            "actor": _user_actor(user, permissions, db, scope_context),
+            "scope": scope_context,
+            "request": {
+                "action": "credentials.use",
+                "source": getattr(job, "source", "Worker"),
+                "phase": "worker_revalidate",
+                "purpose": operation,
+            },
+            "resource": {
+                **resource,
+                "id": str(credential_id),
+                "type": "credentials",
+                "credential_id": credential_id,
+            },
+        }
+        credential_result = evaluate_context(db, credential_context, persist=True)
+        result = _merge_policy_results(result, credential_result)
+
+    blueprint = dict(payload.get("blueprint") or {})
+    if blueprint and operation in {"terraform.apply", "proxmox.provision"} and deployment is not None:
+        blueprint_result = revalidate_blueprint_job(db, job, user, permissions, deployment)
+        if blueprint_result:
+            result = _merge_policy_results(blueprint_result, result)
+    return result
 
 def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rendered, *, apmid=None, environment=None):
     rendered = copy.deepcopy(rendered)
