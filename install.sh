@@ -653,7 +653,7 @@ def wait_for_result(docker, timeout_seconds=4 * 3600, poll_seconds=10):
     transport_failures = 0
     while time.monotonic() < deadline:
         try:
-            state = request_updater(docker, "/status", method="GET")
+            state = request_updater(docker, "/status?compact=1", method="GET")
             transport_failures = 0
         except (OSError, ValueError, http.client.HTTPException):
             transport_failures += 1
