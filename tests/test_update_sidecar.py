@@ -687,3 +687,25 @@ def test_automatic_update_defers_same_failed_sha_until_cooldown_expires(tmp_path
     assert state['automatic'] is True
     assert state['consecutive_failures'] == 2
     assert state['failed_target_sha'] == target
+
+
+def test_update_status_compact_omits_large_history(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    updater.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    updater.atomic_json(updater.STATE_FILE, {
+        **updater.default_state(),
+        'status': 'running',
+        'phase': 'install',
+        'progress': 50,
+        'events': [{'at': updater.utcnow(), 'phase': 'install', 'progress': 50, 'message': 'x' * 1000}] * 120,
+        'output': ['y' * 2000] * 160,
+    })
+    updater.update_thread = None
+
+    state = updater.runtime_state()
+    compact = {key: value for key, value in state.items() if key not in {'events', 'output'}}
+
+    assert 'events' not in compact
+    assert 'output' not in compact
+    assert compact['status'] in {'failed', 'running'}
+    assert len(json.dumps(compact).encode('utf-8')) < 65536
