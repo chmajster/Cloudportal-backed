@@ -65,6 +65,7 @@
     credentials: '/access/credentials',
     tokens: '/access/tokens',
     tools: '/admin/tools',
+    'ansible-playbooks': '/admin/tools/ansible-playbooks',
     environments: '/admin/tools/environments',
     apmid: '/admin/tools/apmid',
     hostnames: '/admin/tools/hostnames',
