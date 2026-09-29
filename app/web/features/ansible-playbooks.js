@@ -89,7 +89,7 @@ async function customPlaybookForm(item = null, seed = null) {
 
     openModal({
       title: item ? 'Edytuj własny playbook Ansible' : 'Dodaj własny playbook Ansible',
-      eyebrow: item ? ('Ansible · ' + detail.id + ' · v' + detail.version) : 'Ansible · własny katalog',
+      eyebrow: item ? ('Ansible · ' + detail.id + ' · v' + detail.version) : 'Ansible · własny playbook',
       body,
       submitLabel: item ? 'Zapisz nową wersję' : 'Dodaj playbook',
       wide: true,
@@ -187,7 +187,7 @@ function removeSystemPlaybookFromUse(item) {
   }
   return confirmAction(
     'Usuń systemowy playbook z użycia',
-    'Playbook „' + item.name + '” jest dostarczany z aplikacją, więc jego plik pozostanie w instalacji. Zostanie wyłączony w katalogu i nie będzie można uruchamiać go w nowych zadaniach. Można go później przywrócić.',
+    'Playbook „' + item.name + '” jest dostarczany z aplikacją, więc jego plik pozostanie w instalacji. Zostanie wyłączony na liście playbooków i nie będzie można uruchamiać go w nowych zadaniach. Można go później przywrócić.',
     async () => {
       await api('/catalog/playbooks/' + encodeURIComponent(item.id) + '/enabled', {
         method: 'PUT',
