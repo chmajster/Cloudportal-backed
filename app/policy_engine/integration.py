@@ -434,7 +434,11 @@ def revalidate_job_operation(db, job, user, permissions, deployment=None):
     if blueprint and operation in {"terraform.apply", "proxmox.provision"} and deployment is not None:
         blueprint_result = revalidate_blueprint_job(db, job, user, permissions, deployment)
         if blueprint_result:
-            result = _merge_policy_results(blueprint_result, result)
+            result = _merge_policy_results(result, blueprint_result)
+            if blueprint_result.get("input_policy_drift"):
+                result["input_policy_drift"] = copy.deepcopy(
+                    blueprint_result["input_policy_drift"]
+                )
     return result
 
 def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rendered, *, apmid=None, environment=None):
