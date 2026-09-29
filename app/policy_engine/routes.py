@@ -7,7 +7,8 @@ from app.api.common import Limit, Offset
 from app.database import get_db
 from app.policy_engine import service
 from app.policy_engine.schemas import (
-    EvaluationInput, PolicyExceptionInput, PolicyInput, PolicyRollback,
+    EvaluationInput, PolicyConflictInput, PolicyExceptionInput, PolicyImpactInput,
+    PolicyInput, PolicyRollback, PolicyStatusChange, PolicyTestInput,
     PolicyUpdate, PreviewInput,
 )
 from app.projects.authorization import visible_projects
@@ -112,6 +113,58 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
     }
 
 
+@router.get("/policies/templates")
+def policy_templates(actor=Depends(require("policies.read"))):
+    return service.templates()
+
+
+@router.post("/policies/test")
+def test_policy_definition(data: PolicyTestInput, request: Request,
+                           actor=Depends(require("policies.simulate")),
+                           db=Depends(get_db, scope="function")):
+    context = _context_from_input(request, data.evaluation)
+    return service.test_definition(
+        db,
+        request.state.resource_scope,
+        data.policy,
+        context,
+        exclude_policy_id=data.exclude_policy_id,
+        include_existing=data.include_existing,
+    )
+
+
+@router.post("/policies/conflicts")
+def policy_conflicts(data: PolicyConflictInput, request: Request,
+                     actor=Depends(require("policies.simulate")),
+                     db=Depends(get_db, scope="function")):
+    return service.detect_conflicts(
+        db,
+        request.state.resource_scope,
+        data.policy,
+        exclude_policy_id=data.exclude_policy_id,
+    )
+
+
+@router.post("/policies/simulate-impact")
+def policy_impact(data: PolicyImpactInput, request: Request,
+                  actor=Depends(require("policies.simulate")),
+                  db=Depends(get_db, scope="function")):
+    return service.simulate_impact(
+        db,
+        request.state.resource_scope,
+        data.policy,
+        exclude_policy_id=data.exclude_policy_id,
+        limit=data.limit,
+    )
+
+
+@router.get("/policies/compliance")
+def policy_compliance(request: Request, limit: Limit = 200,
+                      actor=Depends(require("policies.read")),
+                      db=Depends(get_db, scope="function")):
+    return service.compliance(db, request.state.resource_scope, limit=limit)
+
+
 @router.post("/policies/evaluate")
 @router.post("/policies/explain")
 def evaluate_policy(data: EvaluationInput, request: Request,
@@ -188,6 +241,30 @@ def update_policy(policy_id: str, data: PolicyUpdate, request: Request,
         db, actor, request.state.resource_scope, request.state.permissions, policy_id, data
     )
     audit(db, request, "policy.updated", "policy_definitions", row.id)
+    return service.policy_public(row)
+
+
+@router.post("/policies/{policy_id}/enable")
+def enable_policy(policy_id: str, data: PolicyStatusChange, request: Request,
+                  actor=Depends(require("policies.manage")),
+                  db=Depends(get_db, scope="function")):
+    row = service.set_policy_status(
+        db, actor, request.state.resource_scope, request.state.permissions,
+        policy_id, status="enforced", expected_version=data.expected_version,
+    )
+    audit(db, request, "policy.enabled", "policy_definitions", row.id)
+    return service.policy_public(row)
+
+
+@router.post("/policies/{policy_id}/disable")
+def disable_policy(policy_id: str, data: PolicyStatusChange, request: Request,
+                   actor=Depends(require("policies.manage")),
+                   db=Depends(get_db, scope="function")):
+    row = service.set_policy_status(
+        db, actor, request.state.resource_scope, request.state.permissions,
+        policy_id, status="disabled", expected_version=data.expected_version,
+    )
+    audit(db, request, "policy.disabled", "policy_definitions", row.id)
     return service.policy_public(row)
 
 
