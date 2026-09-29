@@ -64,15 +64,14 @@ async function toggleGeneratedTemplate(item) {
   }
 }
 
-async function toggleCatalogItem(kind, item) {
+async function toggleCatalogTemplate(item) {
   const enabled = item.enabled === false;
-  const label = kind === 'templates' ? 'szablon' : 'playbook';
   try {
-    await api('/catalog/' + kind + '/' + encodeURIComponent(item.id) + '/enabled', {
+    await api('/catalog/templates/' + encodeURIComponent(item.id) + '/enabled', {
       method: 'PUT',
       body: { enabled },
     });
-    toast((enabled ? 'Włączono ' : 'Wyłączono ') + label + ' „' + item.name + '”.');
+    toast((enabled ? 'Włączono ' : 'Wyłączono ') + 'szablon „' + item.name + '”.');
     navigate('catalog');
   } catch (error) {
     toast(error.message, 'error');
@@ -115,7 +114,7 @@ async function catalogView() {
       ], templates.items, item => {
         const rowActions = [button('Pola', () => navigate('/catalog/templates/' + encodeURIComponent(item.id) + '/fields'))];
         if (allowed('settings.update')) {
-          rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCatalogItem('templates', item), item.enabled === false ? 'primary' : 'danger'));
+          rowActions.push(button(item.enabled === false ? 'Włącz' : 'Wyłącz', () => toggleCatalogTemplate(item), item.enabled === false ? 'primary' : 'danger'));
         }
         return rowActions;
       })
