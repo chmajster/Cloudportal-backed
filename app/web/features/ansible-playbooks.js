@@ -318,7 +318,7 @@ async function toggleCustomPlaybook(item) {
 function deleteCustomPlaybook(item) {
   return confirmAction(
     'Usuń własny playbook',
-    'Playbook „' + item.name + '” zostanie usunięty z katalogu. Już utworzone joby zachowują snapshot użytej wersji.',
+    'Playbook „' + item.name + '” zostanie usunięty z listy playbooków. Już utworzone joby zachowują snapshot użytej wersji.',
     async () => {
       await api('/ansible/custom-playbooks/' + encodeURIComponent(item.id), { method: 'DELETE' });
       toast('Własny playbook został usunięty.');
