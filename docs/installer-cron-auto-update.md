@@ -30,7 +30,7 @@ Uruchomienie instalatora bez argumentów udostępnia także opcje menu 11–14: 
 
 Cron wywołuje lokalnego klienta, który uwierzytelnia się do istniejącej usługi `cloudportal-updater.service` i zleca `/run` jako operację automatyczną. Dzięki temu obowiązuje także preflight zdrowia aktualnie działającej instalacji, a nie tylko bramki CI/kandydata. Dla systemd używany jest adres loopback `127.0.0.1:8766`, a dla Dockera socket Unix `/run/cloudportal-updater-docker/updater.sock`. Nie jest otwierany dodatkowy port sieciowy.
 
-Po przyjęciu zlecenia klient cron odpytuje `/status` aż do stanu końcowego. Do logu trafiają zmiany etapu oraz końcowy wynik: sukces, brak nowszego commita, odroczenie albo błąd. Krótkie restarty usługi updatera podczas wdrożenia są tolerowane i status jest ponawiany. Maksymalny czas oczekiwania klienta wynosi 4 godziny.
+Po przyjęciu zlecenia klient cron odpytuje kompaktowy `/status?compact=1` aż do stanu końcowego. Odpowiedź nie zawiera pełnych `events` ani `output`, więc polling pozostaje mały nawet przy długiej aktualizacji i rozbudowanym logu technicznym. Do logu trafiają zmiany etapu oraz końcowy wynik: sukces, brak nowszego commita, odroczenie albo błąd. Krótkie restarty usługi updatera podczas wdrożenia są tolerowane i status jest ponawiany. Maksymalny czas oczekiwania klienta wynosi 4 godziny.
 
 Updater nadal sprawdza dostępność nowszej wersji i używa swoich dotychczasowych ustawień kontroli CI, backupu oraz weryfikacji kandydata. Cron nie omija tych mechanizmów. Brak nowej wersji nie powoduje ponownej instalacji. Wyłączone wcześniej kontrole bezpieczeństwa nie są samoczynnie włączane przez konfigurację crona.
 
