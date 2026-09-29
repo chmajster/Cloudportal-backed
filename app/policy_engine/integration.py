@@ -543,6 +543,57 @@ def revalidate_job_operation(db, job, user, permissions, deployment=None):
                 )
     return result
 
+def enforce_vm_create(db, request, actor, permissions, rendered):
+    """Apply vm.create policy to a non-Blueprint deployment request."""
+    rendered = copy.deepcopy(dict(rendered or {}))
+    variables = dict(rendered.get("variables") or {})
+    tags = _tags(variables)
+    tagged_apmid, tagged_environment = _classification_from_tags(tags)
+    apmid = variables.get("apmid") or tagged_apmid
+    environment = variables.get("environment") or tagged_environment
+    scope_context = _scope(db, request, apmid=apmid, environment=environment)
+    context = {
+        "actor": _actor(actor, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "vm.create",
+            "source": getattr(request.state, "source", "API"),
+            "phase": "pre_provision",
+            "payload": copy.deepcopy(rendered),
+        },
+        "resource": {
+            "type": "vm",
+            "apmid": apmid,
+            "environment": environment,
+            "organization": scope_context.get("organization"),
+            "project": scope_context.get("project"),
+            "scope_key": scope_context.get("key"),
+            "provider_id": rendered.get("provider_id"),
+            "template": rendered.get("template"),
+            "cpu": _number_from(variables, ("cores", "cpu", "vcpu", "cpu_cores")),
+            "memory_mb": _number_from(variables, ("memory", "memory_mb", "ram_mb")),
+            "disk_gb": _number_from(variables, ("disk_size_gb", "disk_gb", "disk_size")),
+            "storage": variables.get("storage") or variables.get("datastore") or variables.get("datastore_id"),
+            "network": variables.get("network") or variables.get("bridge") or variables.get("network_id"),
+            "node": variables.get("node") or variables.get("host") or variables.get("target_node"),
+            "cluster": variables.get("cluster") or variables.get("cluster_id"),
+            "tags": tags,
+            "variables": copy.deepcopy(variables),
+        },
+    }
+    result = evaluate_context(db, context, persist=True, durable_denies=True)
+    _deny(result)
+    effective = result.get("effective_context") or context
+    payload = (effective.get("request") or {}).get("payload")
+    if isinstance(payload, dict):
+        rendered = copy.deepcopy(payload)
+    _write_aliases(
+        db, rendered, effective.get("resource") or {},
+        effective.get("scope") or {},
+    )
+    return rendered, result
+
+
 def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rendered, *, apmid=None, environment=None):
     rendered = copy.deepcopy(rendered)
     variables = dict(rendered.get("variables") or {})
