@@ -686,10 +686,27 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
     if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
         raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
+    from app.policy_engine.integration import enforce_job_operation
+    policy_parameters = {}
+    if isinstance(payload, dict) and isinstance(payload.get('ansible'), dict):
+        policy_parameters = dict(payload['ansible'])
+    policy_result = enforce_job_operation(
+        db, request, actor, request.state.permissions, operation,
+        deployment=deployment, parameters=policy_parameters,
+    )
+
     job_payload = snapshot_ansible_payload(
         db,
         payload or (deployment.workflow if deployment and provisioning_operation else {}),
     )
+    job_payload['_policy'] = {
+        'decision_id': policy_result.get('decision_id'),
+        'related_decision_ids': policy_result.get('related_decision_ids') or [],
+        'matched_policy_ids': policy_result.get('matched_policy_ids') or [],
+        'approvals': policy_result.get('approvals') or [],
+        'obligations': policy_result.get('obligations') or [],
+        'warnings': policy_result.get('warnings') or [],
+    }
     if deployment:
         job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
