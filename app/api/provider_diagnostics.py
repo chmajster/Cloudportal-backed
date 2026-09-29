@@ -352,6 +352,38 @@ def _detail_text(detail):
     return str(detail or 'Błąd providera.')
 
 
+def provider_availability(provider, credential):
+    """Run the provider's lightweight read-only connectivity test."""
+    started = monotonic()
+    try:
+        result = provider_for(credential).test() or {}
+    except HTTPException as exc:
+        return {
+            'provider_id': provider.id,
+            'status': 'unavailable',
+            'available': False,
+            'latency_ms': round((monotonic() - started) * 1000),
+            'message': _detail_text(exc.detail),
+        }
+    except Exception as exc:
+        return {
+            'provider_id': provider.id,
+            'status': 'unavailable',
+            'available': False,
+            'latency_ms': round((monotonic() - started) * 1000),
+            'message': f'Test dostępności zakończył się błędem ({exc.__class__.__name__}).',
+        }
+
+    available = result.get('ok') is not False
+    return {
+        'provider_id': provider.id,
+        'status': 'available' if available else 'unavailable',
+        'available': available,
+        'latency_ms': round((monotonic() - started) * 1000),
+        'message': 'API platformy odpowiada.' if available else 'API platformy zgłosiło brak dostępności.',
+    }
+
+
 def _auth_check(adapter, provider_type):
     started = monotonic()
     try:
@@ -557,6 +589,20 @@ def diagnose_provider(provider, credential, *, deep=False):
         },
         'checks': checks,
     }
+
+
+@router.get('/providers/{provider_id}/availability')
+def get_provider_availability(
+    provider_id: int,
+    actor=Depends(require('providers.read')),
+    db=Depends(get_db, scope='function'),
+):
+    provider = find(db, Provider, provider_id)
+    require_platform_enabled(db, provider.type)
+    credential = find(db, Credential, provider.credentials_id)
+    if provider.type != credential.type:
+        raise HTTPException(409, 'Provider i przypisane dane dostępowe mają różne typy.')
+    return provider_availability(provider, credential)
 
 
 @router.post('/providers/{provider_id}')

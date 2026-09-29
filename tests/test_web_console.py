@@ -218,6 +218,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "button('Dokumentacja OpenAPI'" in script
     assert "window.open('/docs', '_blank', 'noopener,noreferrer')" in script
     assert "registerCommand('providers.create'" in script
+    assert "{ label: 'Dostępność', value: item => providerAvailabilityCell(item) }" in script
+    assert "'/diagnostics/providers/' + encodeURIComponent(item.id) + '/availability'" in script
+    assert "badge('Dostępna', 'ok')" in script
+    assert "badge('Niedostępna', 'danger')" in script
     assert "registerCommand('blueprints.create'" in script
     assert "id: 'blueprint-wizard'" in script
     assert "navigationParent: 'blueprints'" in script
