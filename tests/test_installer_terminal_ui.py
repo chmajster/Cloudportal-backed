@@ -228,3 +228,6 @@ def test_docker_bind_ip_is_detected_selected_persisted_and_used_by_compose():
     assert "public_bind_ip=$(sed -n 's/^CP_BIND_IP=//p'" in INSTALLER
     assert 'Publikacja Docker: $bind_ip:$backend_port' in INSTALLER
     assert "ports: ['${CP_BIND_IP:-0.0.0.0}:${CP_HTTPS_PORT:-8443}:8443']" in compose
+    selector = INSTALLER[INSTALLER.index('docker_select_bind_ip() {'):INSTALLER.index("DOCKER_INSTALL_LOCK_FD=''")]
+    assert selector.index('if ((update_in_progress)); then') < selector.index('if [[ "$backend_host" == localhost')
+    assert 'Auto-update zachowuje adres publikacji Docker' in selector
