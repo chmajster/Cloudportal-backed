@@ -216,3 +216,15 @@ def test_default_worker_concurrency_is_ten_and_legacy_auto_update_is_migrated():
     assert "workers=${previous_docker_workers:-$default_workers}" in INSTALLER
     assert 'Auto-update podnosi stary domyślny CP_WORKER_COUNT=1 do $default_workers.' in INSTALLER
     assert '--workers N                 Liczba workerów 1-64; domyślnie 10.' in INSTALLER
+
+
+def test_docker_bind_ip_is_detected_selected_persisted_and_used_by_compose():
+    compose = (ROOT / 'docker-compose.yml').read_text(encoding='utf-8')
+    assert '--bind-ip IP' in INSTALLER
+    assert 'docker_detect_bind_ips()' in INSTALLER
+    assert 'docker_select_bind_ip()' in INSTALLER
+    assert 'docker_probe_ip()' in INSTALLER
+    assert 'CP_BIND_IP=$bind_ip' in INSTALLER
+    assert "public_bind_ip=$(sed -n 's/^CP_BIND_IP=//p'" in INSTALLER
+    assert 'Publikacja Docker: $bind_ip:$backend_port' in INSTALLER
+    assert "ports: ['${CP_BIND_IP:-0.0.0.0}:${CP_HTTPS_PORT:-8443}:8443']" in compose
