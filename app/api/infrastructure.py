@@ -32,7 +32,7 @@ from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, te
 from app.projects.models import Project
 from app.tenancy.models import Tenant
 from app.security.core import audit, decrypt_secret
-from app.resource_scope.http import require
+from app.resource_scope.http import require, require_any
 from app.terraform.state import delete_plan
 
 router = APIRouter(tags=['infrastructure'])
@@ -831,7 +831,7 @@ def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='
 
 
 @router.post('/jobs/{id}/approve', response_model=JobOutput)
-def approve_job(id: str, request: Request, actor=Depends(require('blueprints.approve')),
+def approve_job(id: str, request: Request, actor=Depends(require_any('approvals.approve', 'blueprints.approve')),
                 db=Depends(get_db, scope='function')):
     job = db.scalar(select(Job).where(Job.id == id).with_for_update())
     if job is None:
@@ -839,8 +839,9 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
     if job.status != 'waiting_approval':
         raise HTTPException(409, 'Job is not waiting for approval')
     blueprint = (job.payload or {}).get('blueprint') or {}
-    if not blueprint.get('requires_approval'):
-        raise HTTPException(409, 'Job does not require Blueprint approval')
+    policy_approval = dict((job.payload or {}).get('_policy_approval') or {})
+    if not blueprint.get('requires_approval') and not policy_approval.get('stages'):
+        raise HTTPException(409, 'Job does not require approval')
 
     payload = dict(job.payload or {})
     workflow_approval = dict(payload.get('_workflow_approval') or {})
