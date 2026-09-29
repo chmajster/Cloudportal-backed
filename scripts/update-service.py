@@ -2069,7 +2069,8 @@ class Handler(BaseHTTPRequestHandler):
         return value
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"ok": True})
             return
@@ -2077,7 +2078,11 @@ class Handler(BaseHTTPRequestHandler):
             if not status_authorized(self):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "Unauthorized"})
                 return
-            self.send_json(HTTPStatus.OK, runtime_state())
+            state = runtime_state()
+            compact = parse_qs(parsed.query).get("compact", [])
+            if compact == ["1"]:
+                state = {key: value for key, value in state.items() if key not in {"events", "output"}}
+            self.send_json(HTTPStatus.OK, state)
             return
         if path == "/settings":
             if not control_authorized(self.headers):
