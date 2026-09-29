@@ -203,3 +203,57 @@ def test_provider_diagnostics_endpoint_uses_saved_provider(system, monkeypatch):
     assert payload['mode'] == 'deep'
     assert payload['provider']['name'] == 'Diagnostics LAB'
     assert 'private-diagnostic-token' not in response.text
+
+
+def test_provider_availability_reports_unavailable_without_raising(monkeypatch):
+    class Adapter:
+        def test(self):
+            raise HTTPException(502, 'Provider offline')
+
+    monkeypatch.setattr(diagnostics, 'provider_for', lambda credential: Adapter())
+
+    result = diagnostics.provider_availability(FakeProvider(), FakeCredential())
+
+    assert result['provider_id'] == FakeProvider.id
+    assert result['status'] == 'unavailable'
+    assert result['available'] is False
+    assert result['latency_ms'] >= 0
+    assert result['message'] == 'Provider offline'
+
+
+def test_provider_availability_endpoint_returns_live_status(system, monkeypatch):
+    client, headers, _ = system
+    credential = client.post('/api/v1/credentials', headers=headers, json={
+        'name': 'Availability PVE',
+        'type': 'proxmox',
+        'endpoint': 'https://127.0.0.1:8006',
+        'username': 'root@pam',
+        'verify_ssl': False,
+        'secrets': {'token_id': 'root@pam!availability', 'token_secret': 'availability-secret'},
+    })
+    assert credential.status_code == 201, credential.text
+    provider = client.post('/api/v1/providers', headers=headers, json={
+        'name': 'Availability LAB',
+        'type': 'proxmox',
+        'credentials_id': credential.json()['id'],
+    })
+    assert provider.status_code == 201, provider.text
+
+    class Adapter:
+        def test(self):
+            return {'ok': True, 'provider': 'proxmox', 'version': '9.0'}
+
+    monkeypatch.setattr(diagnostics, 'provider_for', lambda value: Adapter())
+
+    response = client.get(
+        f"/api/v1/diagnostics/providers/{provider.json()['id']}/availability",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['provider_id'] == provider.json()['id']
+    assert payload['status'] == 'available'
+    assert payload['available'] is True
+    assert payload['latency_ms'] >= 0
+    assert 'availability-secret' not in response.text
