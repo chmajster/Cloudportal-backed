@@ -314,6 +314,17 @@ def enforce_job_operation(db, request, actor, permissions, operation, *, deploym
     }
     result = evaluate_context(db, context, persist=True, durable_denies=True)
     _deny(result)
+    credential_id = (
+        parameters.get("credentials_id")
+        if resource_type == "ansible"
+        else getattr(deployment, "credentials_id", None)
+    )
+    if credential_id:
+        credential_result = enforce_credential_use(
+            db, request, actor, permissions, credential_id,
+            deployment=deployment, purpose=str(operation),
+        )
+        result = _merge_policy_results(result, credential_result)
     return result
 
 
