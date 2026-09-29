@@ -2348,7 +2348,12 @@ docker_install() {
     elif [[ "$bind_ip" != 0.0.0.0 ]]; then
       backend_host=$bind_ip
     else
-      backend_host=$(docker_detect_bind_ips | awk '$0 != "127.0.0.1" {print; exit}')
+      local detected_public_ip=''
+      while IFS= read -r detected_public_ip; do
+        [[ "$detected_public_ip" == 127.0.0.1 ]] && continue
+        backend_host=$detected_public_ip
+        break
+      done < <(docker_detect_bind_ips)
       backend_host=${backend_host:-127.0.0.1}
     fi
   fi
