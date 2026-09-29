@@ -48,9 +48,11 @@ def _snapshot(row) -> dict:
 
 
 def policy_public(row) -> dict:
+    snapshot = _snapshot(row)
     return {
         "id": row.id,
-        **_snapshot(row),
+        **snapshot,
+        "summary": human_policy_summary(snapshot),
         "version": row.version,
         "created_by": row.created_by,
         "updated_by": row.updated_by,
