@@ -41,12 +41,9 @@ def policy_approval_stages_from_effects(effects):
 
 def policy_approval_stages(job, deployment=None):
     payload = dict(job.payload or {})
-    direct = dict(payload.get('_policy') or {}).get('approvals') or []
-    if direct:
-        return policy_approval_stages_from_effects(direct)
-    return policy_approval_stages_from_effects(
-        blueprint_snapshot(job, deployment).get('policy_approvals') or []
-    )
+    effects = list(dict(payload.get('_policy') or {}).get('approvals') or [])
+    effects.extend(blueprint_snapshot(job, deployment).get('policy_approvals') or [])
+    return policy_approval_stages_from_effects(effects)
 
 
 def policy_approval_signature(effects):
