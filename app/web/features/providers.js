@@ -1,6 +1,55 @@
 'use strict';
 
 (() => {
+function providerAvailabilityCell(item) {
+  const cell = node('span', { 'data-provider-availability': String(item.id) });
+  if (!item.enabled) {
+    cell.append(badge('Wyłączona', 'warning'));
+  } else if (!item.configured) {
+    cell.append(badge('Brak konfiguracji', 'warning'));
+  } else {
+    cell.append(badge('Sprawdzanie…', 'info'));
+  }
+  return cell;
+}
+
+function providerAvailabilityBadge(result) {
+  const available = result?.status === 'available' && result?.available !== false;
+  const indicator = available
+    ? badge('Dostępna', 'ok')
+    : badge('Niedostępna', 'danger');
+  const latency = Number(result?.latency_ms);
+  const details = [];
+  if (result?.message) details.push(String(result.message));
+  if (Number.isFinite(latency)) details.push(Math.round(latency) + ' ms');
+  if (details.length) indicator.title = details.join(' · ');
+  return indicator;
+}
+
+async function refreshProviderAvailability(providers) {
+  const pending = providers.filter(item => item.enabled && item.configured);
+  if (!pending.length) return;
+
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < pending.length) {
+      const item = pending[cursor++];
+      let indicator;
+      try {
+        const result = await api('/diagnostics/providers/' + encodeURIComponent(item.id) + '/availability');
+        indicator = providerAvailabilityBadge(result);
+      } catch (error) {
+        indicator = badge('Nie sprawdzono', 'warning');
+        indicator.title = error?.message || 'Nie udało się sprawdzić dostępności platformy.';
+      }
+      const cell = dom.content.querySelector('[data-provider-availability="' + item.id + '"]');
+      if (cell) cell.replaceChildren(indicator);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(4, pending.length) }, worker));
+}
+
 async function providersView() {
   const [providerResult, credentialResult] = await Promise.all([
     api('/providers?limit=200'),
@@ -13,7 +62,8 @@ async function providersView() {
     table([
       { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
       { label: 'Platforma', value: item => badge(CREDENTIAL_TYPE_CONFIG[item.type]?.label || item.type, 'info') },
-      { label: 'Status', value: item => badge(item.enabled ? 'Włączona' : 'Wyłączona', item.enabled ? 'ok' : 'warning') },
+      { label: 'Stan', value: item => badge(item.enabled ? 'Włączona' : 'Wyłączona', item.enabled ? 'ok' : 'warning') },
+      { label: 'Dostępność', value: item => providerAvailabilityCell(item) },
       { label: 'Dane dostępowe', value: item => credentialNames.get(Number(item.credentials_id)) || `#${item.credentials_id}` },
       { label: 'Aktualizacja', value: item => formatDate(item.updated_at) },
     ], providers, item => {
@@ -29,6 +79,7 @@ async function providersView() {
       }), 'danger'));
       return actions;
     }));
+  void refreshProviderAvailability(providers);
 }
 
 async function providerForm(item = null) {
