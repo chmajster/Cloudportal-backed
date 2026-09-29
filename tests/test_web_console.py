@@ -72,6 +72,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
         'features/credentials.js',
         'features/providers.js',
         'features/catalog.js',
+        'features/ansible-playbooks.js',
         'features/blueprint-provisioning-guards.js',
         'features/blueprint-runtime-apmid.js',
         'features/blueprint-vra-designer.js',
@@ -620,9 +621,14 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'data:image/x-icon;base64' in script
     assert '.blueprint-avatar-manager' in stylesheet
     assert 'Wczytaj plik .yml / .yaml' in script
+    assert "id: 'ansible-playbooks'" in script
+    assert "label: 'Playbooki Ansible'" in script
+    assert "navigationParent: 'tools'" in script
+    assert "button('Zarządzaj playbookami', () => navigate('ansible-playbooks'), 'primary')" in script
+    assert "/admin/tools/ansible-playbooks/new" in script
     assert 'ansible.manage' in script
-    assert "button('Podgląd', () => showCatalogPlaybookPreview(item))" in script
-    assert 'async function showCatalogPlaybookPreview(item)' in script
+    assert "button('Podgląd', () => showAnsiblePlaybookPreview(item))" in script
+    assert 'async function showAnsiblePlaybookPreview(item)' in script
     assert 'async function copySystemPlaybook(item)' in script
     assert "button('Edytuj kopię', () => copySystemPlaybook(item))" in script
     assert 'Usuń systemowy playbook z użycia' in script
