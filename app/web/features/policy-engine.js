@@ -1,5 +1,4 @@
 'use strict';
-
 (() => {
   const STEPS = [
     'Podstawowe informacje',
@@ -14,7 +13,6 @@
     'Test polityki',
     'Zapis',
   ];
-
   const STATUS_LABELS = {
     draft: 'Draft',
     dry_run: 'Dry-run',
@@ -30,18 +28,15 @@
     gt: 'większe niż', gte: 'większe lub równe', lt: 'mniejsze niż',
     lte: 'mniejsze lub równe', exists: 'istnieje', not_exists: 'nie istnieje',
   };
-
   let cache = null;
   let wizard = null;
   let listState = { search: '', status: '', type: '', section: 'policies' };
   let lastPolicies = [];
-
   const can = (...permissions) => permissions.some(permission => allowed(permission));
   const copy = value => JSON.parse(JSON.stringify(value ?? null));
   const optionalApi = (path, fallback, options) => api(path, options).catch(() => fallback);
   const asArray = value => Array.isArray(value) ? value : value == null || value === '' ? [] : [value];
   const unique = values => [...new Set(values.filter(value => value !== null && value !== undefined && value !== ''))];
-
   function policyHeaders(target, item = null) {
     let tenantId = String(target.tenantId || '');
     let projectId = String(target.projectId || '');
@@ -58,7 +53,6 @@
     }
     return tenantId && projectId ? { 'X-Tenant-ID': tenantId, 'X-Project-ID': projectId } : {};
   }
-
   async function loadData(force = false) {
     if (cache && !force) return cache;
     const [capabilities, scopes, templates, users, roles, providers, blueprints, terraformTemplates, resources] = await Promise.all([
@@ -86,7 +80,6 @@
     };
     return cache;
   }
-
   function firstScope() {
     const project = cache?.scopes?.projects?.[0] || null;
     const tenant = cache?.scopes?.tenants?.[0] || null;
@@ -96,11 +89,9 @@
       projectId: String(project?.id || ''),
     };
   }
-
   function blankLeaf() {
     return { field: 'resource.environment', operator: 'eq', value: 'dev' };
   }
-
   function emptyWizard() {
     const base = firstScope();
     return {
@@ -130,13 +121,11 @@
       },
     };
   }
-
   function limitEffectMap(effects) {
     const result = new Map();
     effects.filter(effect => effect.type === 'limit_value').forEach(effect => result.set(effect.field, effect));
     return result;
   }
-
   function wizardFromPolicy(item) {
     const base = blankWizard();
     const scope = item.scope || {};
@@ -206,11 +195,9 @@
       conflicts: null, impact: null, testResult: null,
     };
   }
-
   function tenantProjects(tenantId) {
     return (cache?.scopes?.projects || []).filter(row => String(row.tenant_id) === String(tenantId));
   }
-
   function classification(target = wizard) {
     if (target.scopeLevel === 'global') {
       const all = Object.values(cache?.scopes?.classifications || {});
@@ -225,11 +212,9 @@
       apmids: [], environments: { dev: true, test: true, nonprod: true, prod: true },
     };
   }
-
   function option(value, label, selected = false) {
     return node('option', { value: String(value), text: label, selected });
   }
-
   function selectControl(label, options, value, onChange, config = {}) {
     const select = node('select', {
       disabled: config.disabled,
@@ -240,7 +225,6 @@
       node('span', { text: label }), select,
       config.help ? node('small', { text: config.help }) : null);
   }
-
   function textControl(label, value, onInput, config = {}) {
     const tag = config.multiline ? 'textarea' : 'input';
     const input = node(tag, {
@@ -254,13 +238,11 @@
       node('span', { text: label }), input,
       config.help ? node('small', { text: config.help }) : null);
   }
-
   function checkboxControl(label, checked, onChange, help = '') {
     return node('label', { class: 'policy-switch' },
       node('input', { type: 'checkbox', checked, onChange: event => onChange(event.currentTarget.checked) }),
       node('span', {}, node('strong', { text: label }), help ? node('small', { text: help }) : null));
   }
-
   function checklist(title, options, selected, onChange, config = {}) {
     const selectedSet = new Set((selected || []).map(String));
     const body = node('div', { class: 'policy-check-grid' },
@@ -291,7 +273,6 @@
       options.length ? body : node('p', { class: 'muted', text: config.empty || 'Brak dostępnych wartości.' })
     );
   }
-
   function section(title, description, ...children) {
     return node('section', { class: 'policy-section' },
       node('div', { class: 'policy-section-head' },
@@ -299,19 +280,16 @@
         description ? node('p', { class: 'muted', text: description }) : null),
       node('div', { class: 'policy-section-body' }, ...children));
   }
-
   function priorityPreset(value, label) {
     return button(value + ' — ' + label, () => {
       wizard.priority = Number(value);
       renderWizard();
     }, wizard.priority === Number(value) ? 'primary' : 'ghost');
   }
-
   function conditionField(path) {
     return cache.capabilities.condition_fields.find(field => field.path === path)
       || { path, label: path, type: 'text', operators: ['eq', 'neq'] };
   }
-
   function conditionOptions(field) {
     const cls = classification();
     if (field.type === 'environment') {
@@ -339,7 +317,6 @@
     ];
     return [];
   }
-
   function conditionValueControl(leaf) {
     const meta = conditionField(leaf.field);
     const choices = conditionOptions(meta);
@@ -374,7 +351,6 @@
       },
     });
   }
-
   function renderConditionNode(value, onRemove, depth = 0) {
     if (!value || typeof value !== 'object') return null;
     const logical = ['all', 'any', 'not'].find(key => Object.prototype.hasOwnProperty.call(value, key));
@@ -413,7 +389,6 @@
       );
       return group;
     }
-
     if (!value.field) return null;
     const meta = conditionField(value.field);
     const operators = meta.operators || ['eq', 'neq'];
@@ -436,7 +411,6 @@
       button('Usuń', onRemove, 'ghost')
     );
   }
-
   function replaceConditionReference(root, needle, replacement) {
     if (root === needle) return replacement;
     if (!root || typeof root !== 'object') return root;
@@ -448,7 +422,6 @@
     if (root.not) root.not = root.not === needle ? replacement : replaceConditionReference(root.not, needle, replacement);
     return root;
   }
-
   function renderConditionBuilder() {
     if (!wizard.condition || Object.keys(wizard.condition).length === 0) {
       return node('div', { class: 'policy-empty-builder' },
@@ -459,7 +432,6 @@
     }
     return renderConditionNode(wizard.condition, () => { wizard.condition = {}; renderWizard(); });
   }
-
   async function ensurePlacementCatalog() {
     if (cache.placement.loaded || cache.placement.loading) return;
     cache.placement.loading = true;
@@ -493,14 +465,12 @@
     cache.placement.loading = false;
     cache.placement.loaded = true;
   }
-
   function inputNumber(label, key, suffix = '') {
     return textControl(label + (suffix ? ' (' + suffix + ')' : ''), wizard.limits[key], value => {
       wizard.limits[key] = value === '' ? '' : Number(value);
       persistWizard();
     }, { type: 'number', min: 0 });
   }
-
   function renderBasics() {
     return section('Podstawowe informacje', 'Nadaj nazwę i określ zachowanie polityki.',
       node('div', { class: 'policy-form-grid' },
@@ -516,7 +486,6 @@
       )
     );
   }
-
   function renderSubjects() {
     return section('Kogo dotyczy', 'Wybierz odbiorców polityki bez wpisywania identyfikatorów.',
       selectControl('Ta polityka dotyczy', [
@@ -532,7 +501,6 @@
       })), wizard.roleIds, values => { wizard.roleIds = values; renderWizard(); }, { selectAll: true }) : null
     );
   }
-
   function renderScope() {
     const tenantRows = cache.scopes.tenants || [];
     const projectRows = tenantProjects(wizard.tenantId);
@@ -577,12 +545,10 @@
         wizard.resourceTypes, values => { wizard.resourceTypes = values; renderWizard(); }, { selectAll: true })
     );
   }
-
   function renderConditions() {
     return section('No-code Condition Builder', 'Buduj zagnieżdżone AND / OR / NOT. Kod, regex i JSON nie są wymagane.',
       renderConditionBuilder());
   }
-
   function renderActions() {
     return section('Dozwolone / zabronione akcje', 'Efekt i akcje są wybierane checkboxami.',
       node('div', { class: 'policy-effect-choice' },
@@ -602,7 +568,6 @@
       ))
     );
   }
-
   function renderLimits() {
     if (!cache.placement.loaded && !cache.placement.loading) {
       ensurePlacementCatalog().then(() => { if (wizard?.step === 5) renderWizard(); });
@@ -634,7 +599,6 @@
         values => { wizard.limits.templates = values; renderWizard(); }, { selectAll: true })
     );
   }
-
   function renderApproval() {
     const meta = conditionField(wizard.approval.field);
     return section('Approval', 'Approval może być wymagany tylko po spełnieniu wskazanego warunku.',
@@ -667,7 +631,6 @@
       ) : null
     );
   }
-
   async function checkConflicts() {
     const payload = buildPayload();
     wizard.conflicts = await api('/policies/conflicts', {
@@ -677,7 +640,6 @@
     });
     renderWizard();
   }
-
   function renderConflicts() {
     const conflicts = wizard.conflicts?.items || [];
     return section('Priorytet i konflikty', 'Wyższy numer ma wyższy priorytet. Conflict detector wyjaśnia wynik.',
@@ -702,7 +664,6 @@
       ) : node('p', { class: 'muted', text: 'Uruchom detektor przed aktywacją polityki.' })
     );
   }
-
   function humanCondition(value) {
     if (!value || !Object.keys(value).length) return 'brak dodatkowych warunków';
     if (value.all) return '(' + value.all.map(humanCondition).join(' ORAZ ') + ')';
@@ -712,7 +673,6 @@
     return field.label + ' ' + (cache.capabilities.operator_labels?.[value.operator] || value.operator) + ' ' +
       (Array.isArray(value.value) ? value.value.join(', ') : String(value.value ?? ''));
   }
-
   function localSummary() {
     const chunks = [];
     chunks.push((wizard.effect === 'deny' ? 'Zabrania' : 'Pozwala') + ' wykonywać: ' +
@@ -729,7 +689,6 @@
     if (wizard.approval.enabled) chunks.push('Po spełnieniu warunku approval operacja wymaga zatwierdzenia.');
     return chunks.join(' ');
   }
-
   function renderSummary() {
     return section('Podsumowanie', 'Deterministyczny opis polityki przed zapisem.',
       node('div', { class: 'policy-natural-language' },
@@ -744,7 +703,6 @@
       )
     );
   }
-
   function testContext() {
     const selectedProject = (cache.scopes.projects || []).find(row => String(row.id) === String(wizard.projectId));
     const selectedTenant = (cache.scopes.tenants || []).find(row => String(row.id) === String(wizard.tenantId));
@@ -769,7 +727,6 @@
       },
     };
   }
-
   async function runTest() {
     wizard.testResult = await api('/policies/test', {
       method: 'POST',
@@ -783,7 +740,6 @@
     });
     renderWizard();
   }
-
   function renderTest() {
     const cls = classification();
     const envs = Object.entries(cls.environments || {}).filter(([, enabled]) => enabled !== false)
@@ -813,7 +769,6 @@
       ) : null
     );
   }
-
   async function simulateImpact() {
     wizard.impact = await api('/policies/simulate-impact', {
       method: 'POST',
@@ -822,7 +777,6 @@
     });
     renderWizard();
   }
-
   function renderSave() {
     const impact = wizard.impact;
     return section('Zapis', 'Przed zapisem możesz sprawdzić wpływ na istniejące zasoby. Symulacja niczego nie modyfikuje.',
@@ -843,11 +797,9 @@
       ], impact.samples) : null
     );
   }
-
   function numeric(value) {
     return value === '' || value === null || value === undefined ? null : Number(value);
   }
-
   function buildPayload() {
     const scope = {};
     if (wizard.subjectMode === 'users' && wizard.userIds.length) scope.user_ids = wizard.userIds.map(value => Number(value));
@@ -860,7 +812,6 @@
     if (wizard.blueprintIds.length) scope.blueprint_ids = wizard.blueprintIds.map(value => /^\d+$/.test(value) ? Number(value) : value);
     if (wizard.resourceTypes.length) scope.resource_types = [...wizard.resourceTypes];
     if (wizard.actions.length) scope.actions = [...wizard.actions];
-
     const effects = [{
       type: wizard.effect,
       ...(wizard.effect === 'allow' && wizard.policyType === 'access' ? { mode: 'whitelist' } : {}),
@@ -909,7 +860,6 @@
       effects,
     };
   }
-
   function validateCurrentStep() {
     if (wizard.step === 0 && !wizard.name.trim()) return 'Podaj nazwę polityki.';
     if (wizard.step === 1 && wizard.subjectMode === 'users' && !wizard.userIds.length) return 'Wybierz co najmniej jednego użytkownika.';
@@ -926,34 +876,29 @@
     }
     return '';
   }
-
   function persistWizard() {
     if (!wizard) return;
     const key = wizard.mode === 'edit' ? 'policy-wizard-edit-' + wizard.itemId : 'policy-wizard-create';
     try { sessionStorage.setItem(key, JSON.stringify(wizard)); } catch {}
   }
-
   function clearWizardStorage() {
     try {
       sessionStorage.removeItem('policy-wizard-create');
       if (wizard?.itemId) sessionStorage.removeItem('policy-wizard-edit-' + wizard.itemId);
     } catch {}
   }
-
   function wizardPath(step = wizard.step) {
     const number = Number(step) + 1;
     return wizard.mode === 'edit'
       ? '/access/policies/edit/' + encodeURIComponent(wizard.itemId) + '/step/' + number
       : '/access/policies/new/step/' + number;
   }
-
   function stepBody() {
     return [
       renderBasics, renderSubjects, renderScope, renderConditions, renderActions,
       renderLimits, renderApproval, renderConflicts, renderSummary, renderTest, renderSave,
     ][wizard.step]();
   }
-
   function renderWizard() {
     persistWizard();
     const progress = node('div', { class: 'policy-wizard-progress' },
@@ -988,7 +933,6 @@
       footer
     );
   }
-
   async function saveWizard() {
     for (let step = 0; step < STEPS.length; step++) {
       const previous = wizard.step;
@@ -1010,7 +954,6 @@
     toast('Polityka została zapisana.');
     await navigate('policies');
   }
-
   function restoreSession(key) {
     try {
       const raw = sessionStorage.getItem(key);
@@ -1019,14 +962,12 @@
       return null;
     }
   }
-
   async function openCreateWizard(step) {
     await loadData();
     if (!wizard || wizard.mode !== 'create') wizard = restoreSession('policy-wizard-create') || emptyWizard();
     wizard.step = Math.max(0, Math.min(STEPS.length - 1, Number(step || 1) - 1));
     renderWizard();
   }
-
   async function openEditWizard(id, step) {
     await loadData();
     if (!wizard || wizard.mode !== 'edit' || String(wizard.itemId) !== String(id)) {
@@ -1037,7 +978,6 @@
     wizard.step = Math.max(0, Math.min(STEPS.length - 1, Number(step || 1) - 1));
     renderWizard();
   }
-
   async function useTemplate(template) {
     await loadData();
     wizard = wizardFromPolicy(template.policy);
@@ -1049,7 +989,6 @@
     persistWizard();
     await navigate('/access/policies/new/step/1');
   }
-
   function countConditions(value) {
     if (!value || typeof value !== 'object' || !Object.keys(value).length) return 0;
     if (value.all) return value.all.reduce((sum, child) => sum + countConditions(child), 0);
@@ -1057,7 +996,6 @@
     if (value.not) return countConditions(value.not);
     return value.field ? 1 : 0;
   }
-
   function scopeLabel(item) {
     if (item.scope_level === 'global') return 'Global';
     const tenant = (cache.scopes.tenants || []).find(row => String(row.id) === String(item.tenant_id));
@@ -1068,12 +1006,10 @@
     if (item.scope?.environments?.length) parts.push('ENV ' + item.scope.environments.map(value => String(value).toUpperCase()).join(', '));
     return parts.join(' · ');
   }
-
   function policyStatusBadge(item) {
     const kind = item.status === 'enforced' ? 'ok' : item.status === 'disabled' ? 'muted' : item.status === 'dry_run' ? 'warning' : 'info';
     return badge(STATUS_LABELS[item.status] || item.status, kind);
   }
-
   function filterPolicies(rows) {
     const search = listState.search.toLowerCase();
     return rows.filter(item => {
@@ -1083,7 +1019,6 @@
       return true;
     });
   }
-
   async function togglePolicy(item) {
     const enable = item.status !== 'enforced';
     await api('/policies/' + encodeURIComponent(item.id) + '/' + (enable ? 'enable' : 'disable'), {
@@ -1094,7 +1029,6 @@
     cache = null;
     await policiesView();
   }
-
   async function duplicatePolicy(item) {
     await loadData();
     wizard = wizardFromPolicy(item);
@@ -1104,7 +1038,6 @@
     persistWizard();
     await navigate('/access/policies/new/step/1');
   }
-
   function exportPolicy(item) {
     const payload = copy(item);
     ['id','version','created_by','updated_by','created_at','updated_at','summary','tenant_id','project_id'].forEach(key => delete payload[key]);
@@ -1114,7 +1047,6 @@
     document.body.append(anchor); anchor.click(); anchor.remove();
     URL.revokeObjectURL(url);
   }
-
   async function importPolicy(file) {
     if (!file) return;
     const parsed = JSON.parse(await file.text());
@@ -1132,14 +1064,12 @@
     await navigate('/access/policies/new/step/1');
     if (temp && temp.mode === 'edit') clearWizardStorage();
   }
-
   function exceptionCondition(type, value) {
     if (type === 'user') return { field: 'actor.id', operator: 'eq', value: Number(value) };
     if (type === 'resource') return { field: 'resource.id', operator: 'eq', value: String(value) };
     if (type === 'project') return { field: 'scope.project_id', operator: 'eq', value: String(value) };
     return { field: 'scope.tenant_id', operator: 'eq', value: String(value) };
   }
-
   async function exceptionForm(item) {
     await loadData();
     let targetType = 'user';
@@ -1192,7 +1122,6 @@
       },
     });
   }
-
   async function policyDetails(id) {
     await loadData();
     const [item, exceptions, versions] = await Promise.all([
@@ -1206,7 +1135,6 @@
     if (can('policies.enable','policies.manage')) actions.push(button(item.status === 'enforced' ? 'Wyłącz' : 'Włącz', () => togglePolicy(item), 'ghost'));
     if (can('policies.exceptions','policies.exception.manage')) actions.push(button('Dodaj wyjątek', () => exceptionForm(item), 'ghost'));
     actions.push(button('Eksportuj', () => exportPolicy(item), 'ghost'));
-
     dom.content.replaceChildren(
       heading(item.name, actions),
       node('div', { class: 'policy-detail-hero' },
@@ -1256,7 +1184,6 @@
       )
     );
   }
-
   async function complianceView() {
     const result = await api('/policies/compliance?limit=500');
     dom.content.replaceChildren(
@@ -1284,7 +1211,6 @@
       ] : [])
     );
   }
-
   async function templatesView() {
     await loadData();
     dom.content.replaceChildren(
@@ -1298,7 +1224,6 @@
       )
     );
   }
-
   async function policiesView() {
     await loadData();
     if (listState.section === 'compliance' && can('policies.compliance')) return complianceView();
@@ -1313,13 +1238,11 @@
     actions.push(button('Szablony', () => { listState.section = 'templates'; templatesView(); }, 'ghost'));
     if (can('policies.compliance')) actions.push(button('Compliance', () => { listState.section = 'compliance'; complianceView(); }, 'ghost'));
     if (can('policies.audit')) actions.push(button('Decision Log', decisionLog, 'ghost'));
-
     const fileInput = node('input', {
       type: 'file', accept: 'application/json,.json', hidden: true,
       onChange: event => importPolicy(event.currentTarget.files?.[0]).catch(error => toast(error.message, 'error')),
     });
     if (can('policies.create','policies.manage')) actions.push(button('Importuj', () => fileInput.click(), 'ghost'));
-
     const search = node('input', {
       type: 'search', value: listState.search, placeholder: 'Szukaj polityki…',
       onInput: event => { listState.search = event.currentTarget.value; renderPolicyTable(); },
@@ -1358,7 +1281,6 @@
     );
     renderPolicyTable();
   }
-
   async function decisionLog() {
     const rows = (await api('/policies/decisions?limit=200&offset=0')).items || [];
     openModal({
@@ -1388,9 +1310,7 @@
       submitLabel: null,
     });
   }
-
   registerCommand('policies.create', () => navigate('/access/policies/new/step/1'));
-
   registerRoutedForm({
     id: 'policy-create',
     pattern: /^\/access\/policies\/new\/step\/(?<step>\d+)$/,
@@ -1398,7 +1318,6 @@
     permission: 'policies.read',
     label: 'Policy Engine',
   }, match => openCreateWizard(match.params.step));
-
   registerRoutedForm({
     id: 'policy-edit',
     pattern: /^\/access\/policies\/edit\/(?<id>[^/]+)\/step\/(?<step>\d+)$/,
@@ -1406,7 +1325,6 @@
     permission: 'policies.read',
     label: 'Policy Engine',
   }, match => openEditWizard(match.params.id, match.params.step));
-
   registerView({
     id: 'policies',
     label: 'Policy Engine',
