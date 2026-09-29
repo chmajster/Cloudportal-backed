@@ -612,7 +612,7 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert 'VM z Moich zasobów' in script
     assert 'Lista respektuje Twój zakres RBAC' in script
     assert "option.dataset.address" in script
-    assert "'/catalog/' + kind + '/'" in script
+    assert "'/catalog/templates/'" in script
     assert '/ansible/custom-playbooks' in script
     assert 'Dodaj własny playbook Ansible' in script
     assert '/settings/blueprint-avatars' in script
