@@ -20,7 +20,7 @@ import tarfile
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -63,6 +63,7 @@ CI_POLL_SECONDS = 15
 HTTP_RETRY_ATTEMPTS = 3
 HTTP_RETRY_BASE_SECONDS = 1.0
 HTTP_RETRY_STATUS = {429, 500, 502, 503, 504}
+AUTO_FAILURE_COOLDOWN_MINUTES = 180
 
 lock = threading.RLock()
 update_thread: threading.Thread | None = None
@@ -150,6 +151,13 @@ def default_state() -> dict:
         "started_at": None,
         "finished_at": None,
         "last_check_at": None,
+        "last_attempt_at": None,
+        "last_success_at": None,
+        "last_failure_at": None,
+        "last_result": None,
+        "consecutive_failures": 0,
+        "failed_target_sha": None,
+        "retry_not_before": None,
         "current_version": None,
         "target_version": None,
         "current_commit_at": None,
@@ -1745,22 +1753,66 @@ def pre_update_backup() -> Path:
     raise RuntimeError("Pre-update backup finished without a verifiable backup directory")
 
 
+def automatic_retry_deferred(target_sha: str) -> bool:
+    state = load_state()
+    if str(state.get("failed_target_sha") or "") != target_sha:
+        return False
+    raw_deadline = str(state.get("retry_not_before") or "")
+    if not raw_deadline:
+        return False
+    try:
+        deadline = datetime.fromisoformat(raw_deadline)
+    except ValueError:
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) >= deadline:
+        return False
+    event(
+        "cooldown",
+        8,
+        "Automatyczne ponowienie tego samego commita jest czasowo wstrzymane po poprzednim błędzie.",
+        status="deferred",
+        finished_at=utcnow(),
+        update_available=True,
+        automatic=True,
+    )
+    return True
+
+
 def run_update(ref: str | None = None, automatic: bool = False) -> None:
     global update_thread
+    settings = load_settings()
+    target_sha = ""
     try:
-        settings = load_settings()
         ref = validate_ref(ref or settings.get("ref", "main"))
+        previous = load_state()
+        started_at = utcnow()
+        durable_fields = {
+            key: previous.get(key)
+            for key in (
+                "last_success_at",
+                "last_failure_at",
+                "last_result",
+                "consecutive_failures",
+                "failed_target_sha",
+                "retry_not_before",
+            )
+        }
         with lock:
             # In-memory thread ownership is the source of truth for concurrency.
             # A persisted "running" state can survive an updater restart and must
-            # never block a new, legitimate update attempt.
+            # never block a new, legitimate update attempt. Keep retry metadata
+            # across attempts so automation can quarantine a repeatedly failing SHA.
             atomic_json(STATE_FILE, {
                 **default_state(),
+                **durable_fields,
                 "status": "running",
                 "phase": "preflight",
                 "progress": 1,
                 "message": "Rozpoczynanie bezpiecznej aktualizacji.",
-                "started_at": utcnow(),
+                "started_at": started_at,
+                "last_attempt_at": started_at,
                 "ref": ref,
                 "automatic": automatic,
                 "events": [],
@@ -1769,10 +1821,14 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
 
         checked = check_remote(ref, update_context=True)
         if not checked["update_available"]:
+            save_state(last_result="up_to_date")
             return
 
         target_sha = checked["target_sha"]
         save_state(status="running", finished_at=None, automatic=automatic)
+
+        if automatic and automatic_retry_deferred(target_sha):
+            return
 
         if automatic:
             event("current_health", 8, "Sprawdzanie stanu bieżącej instalacji przed auto-update.")
@@ -1823,6 +1879,7 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
 
         event("postcheck", 97, "Weryfikowanie aktywnego commita, usług i healthchecku po instalacji.")
         verify_installed_release(target_sha)
+        finished_at = utcnow()
         save_state(
             status="success",
             update_available=False,
@@ -1834,14 +1891,39 @@ def run_update(ref: str | None = None, automatic: bool = False) -> None:
             ahead_by=0,
             behind_by=0,
             version_strategy="git_commit",
-            finished_at=utcnow(),
+            finished_at=finished_at,
+            last_success_at=finished_at,
+            last_result="success",
+            consecutive_failures=0,
+            failed_target_sha=None,
+            retry_not_before=None,
             ci_status="success" if bool(settings.get("require_ci", True)) else "disabled",
             candidate_validation="success" if bool(settings.get("candidate_validation", True)) else "disabled",
             runtime_preflight="success" if bool(settings.get("runtime_preflight", True)) else "disabled",
         )
         event("complete", 100, "Aktualizacja zakończona pomyślnie po wszystkich bramkach bezpieczeństwa.", status="success")
     except Exception as exc:
-        save_state(status="failed", finished_at=utcnow())
+        failed_at = utcnow()
+        failure_changes = {
+            "status": "failed",
+            "finished_at": failed_at,
+            "last_result": "failed",
+        }
+        if automatic:
+            state = load_state()
+            failures = max(0, int(state.get("consecutive_failures") or 0)) + 1
+            failure_changes.update({
+                "last_failure_at": failed_at,
+                "consecutive_failures": failures,
+            })
+            if target_sha:
+                failure_changes.update({
+                    "failed_target_sha": target_sha,
+                    "retry_not_before": (
+                        datetime.now(timezone.utc) + timedelta(minutes=AUTO_FAILURE_COOLDOWN_MINUTES)
+                    ).isoformat(),
+                })
+        save_state(**failure_changes)
         event(
             "failed",
             load_state().get("progress", 0),
@@ -1906,6 +1988,13 @@ def runtime_state() -> dict:
             state["phase"] = "preflight"
             state["message"] = "Aktualizacja jest już uruchomiona."
             state["finished_at"] = None
+    return state
+
+
+def status_payload(*, compact: bool = False) -> dict:
+    state = runtime_state()
+    if compact:
+        return {key: value for key, value in state.items() if key not in {"events", "output"}}
     return state
 
 
@@ -1987,7 +2076,8 @@ class Handler(BaseHTTPRequestHandler):
         return value
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"ok": True})
             return
@@ -1995,7 +2085,8 @@ class Handler(BaseHTTPRequestHandler):
             if not status_authorized(self):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "Unauthorized"})
                 return
-            self.send_json(HTTPStatus.OK, runtime_state())
+            compact = parse_qs(parsed.query).get("compact", []) == ["1"]
+            self.send_json(HTTPStatus.OK, status_payload(compact=compact))
             return
         if path == "/settings":
             if not control_authorized(self.headers):
@@ -2024,7 +2115,10 @@ class Handler(BaseHTTPRequestHandler):
                 ref = payload.get("ref")
                 if ref is not None:
                     validate_ref(ref)
-                if not start_update(ref, automatic=False):
+                automatic = payload.get("automatic", False)
+                if not isinstance(automatic, bool):
+                    raise ValueError("automatic must be boolean")
+                if not start_update(ref, automatic=automatic):
                     self.send_json(HTTPStatus.ACCEPTED, {
                         "accepted": False,
                         "already_running": True,

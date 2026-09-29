@@ -74,8 +74,9 @@ def test_submit_preserves_saved_settings(client, monkeypatch, capsys, docker):
         calls.append(args)
         return {'accepted': True, 'already_running': False}
     monkeypatch.setattr(client, 'request_updater', request)
+    monkeypatch.setattr(client, 'wait_for_result', lambda docker_mode: 0)
     assert client.main(['--docker'] if docker else []) == 0
-    assert calls == [(docker, '/run', {})]
+    assert calls == [(docker, '/run', {'automatic': True})]
     assert 'Zlecono' in capsys.readouterr().out
 
 
@@ -166,3 +167,53 @@ def test_transport_and_token_header(client, monkeypatch, docker):
         assert constructor_calls == [(('/run/cloudportal-updater-docker/updater.sock',), {})]
     else:
         assert constructor_calls == [(('127.0.0.1', 8766), {'timeout': 15})]
+
+
+def test_wait_for_result_reports_success(client, monkeypatch, capsys):
+    prepare_client(client, monkeypatch)
+    states = iter([
+        {'status': 'running', 'phase': 'backup', 'progress': 14, 'operation_active': True},
+        {'status': 'success', 'phase': 'complete', 'progress': 100, 'operation_active': False,
+         'current_version': 'abc123def456'},
+    ])
+    monkeypatch.setattr(client, 'request_updater', lambda *a, **kw: next(states))
+    monkeypatch.setattr(client.time, 'sleep', lambda *_: None)
+    assert client.wait_for_result(False, timeout_seconds=60, poll_seconds=0) == 0
+    output = capsys.readouterr().out
+    assert 'backup (14%)' in output
+    assert 'abc123def456' in output
+
+
+def test_wait_for_result_reports_failure(client, monkeypatch, capsys):
+    prepare_client(client, monkeypatch)
+    monkeypatch.setattr(client, 'request_updater', lambda *a, **kw: {
+        'status': 'failed', 'phase': 'runtime_preflight', 'progress': 18, 'operation_active': False,
+    })
+    assert client.wait_for_result(False, timeout_seconds=60, poll_seconds=0) == 1
+    assert 'runtime_preflight' in capsys.readouterr().out
+
+
+def test_wait_for_result_accepts_cooldown(client, monkeypatch, capsys):
+    prepare_client(client, monkeypatch)
+    monkeypatch.setattr(client, 'request_updater', lambda *a, **kw: {
+        'status': 'deferred', 'phase': 'cooldown', 'progress': 8, 'operation_active': False,
+        'retry_not_before': '2026-09-29T12:00:00+00:00',
+    })
+    assert client.wait_for_result(True, timeout_seconds=60, poll_seconds=0) == 0
+    assert 'odroczony' in capsys.readouterr().out
+
+
+def test_wait_for_result_requests_compact_status(client, monkeypatch):
+    prepare_client(client, monkeypatch)
+    calls = []
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {
+            'status': 'up_to_date',
+            'phase': 'up_to_date',
+            'progress': 100,
+            'operation_active': False,
+        }
+    monkeypatch.setattr(client, 'request_updater', request)
+    assert client.wait_for_result(False, timeout_seconds=60, poll_seconds=0) == 0
+    assert calls == [((False, '/status?compact=1'), {'method': 'GET'})]

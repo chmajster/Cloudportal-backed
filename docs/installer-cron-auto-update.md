@@ -28,13 +28,17 @@ Uruchomienie instalatora bez argumentów udostępnia także opcje menu 11–14: 
 
 ## Jak działa aktualizacja
 
-Cron wywołuje lokalnego klienta, który uwierzytelnia się do istniejącej usługi `cloudportal-updater.service` i zleca `/run`. Dla systemd używany jest adres loopback `127.0.0.1:8766`, a dla Dockera socket Unix `/run/cloudportal-updater-docker/updater.sock`. Nie jest otwierany dodatkowy port sieciowy.
+Cron wywołuje lokalnego klienta, który uwierzytelnia się do istniejącej usługi `cloudportal-updater.service` i zleca `/run` jako operację automatyczną. Dzięki temu obowiązuje także preflight zdrowia aktualnie działającej instalacji, a nie tylko bramki CI/kandydata. Dla systemd używany jest adres loopback `127.0.0.1:8766`, a dla Dockera socket Unix `/run/cloudportal-updater-docker/updater.sock`. Nie jest otwierany dodatkowy port sieciowy.
+
+Po przyjęciu zlecenia klient cron odpytuje kompaktowy `/status?compact=1` aż do stanu końcowego. Odpowiedź nie zawiera pełnych `events` ani `output`, więc polling pozostaje mały nawet przy długiej aktualizacji i rozbudowanym logu technicznym. Do logu trafiają zmiany etapu oraz końcowy wynik: sukces, brak nowszego commita, odroczenie albo błąd. Krótkie restarty usługi updatera podczas wdrożenia są tolerowane i status jest ponawiany. Maksymalny czas oczekiwania klienta wynosi 4 godziny.
 
 Updater nadal sprawdza dostępność nowszej wersji i używa swoich dotychczasowych ustawień kontroli CI, backupu oraz weryfikacji kandydata. Cron nie omija tych mechanizmów. Brak nowej wersji nie powoduje ponownej instalacji. Wyłączone wcześniej kontrole bezpieczeństwa nie są samoczynnie włączane przez konfigurację crona.
 
 Aby nie działały dwa niezależne harmonogramy, włączenie crona ustawia `enabled=false` w wewnętrznym harmonogramie updatera przez jego API. **Usługa updatera pozostaje aktywna**. W panelu wewnętrzne automatyczne sprawdzanie może więc wyglądać na wyłączone mimo aktywnego crona; źródłem informacji o cron jest `--auto-update-status`. Nie włączaj jednocześnie wewnętrznego harmonogramu w panelu, jeśli zadaniami ma zarządzać cron.
 
 Klient pomija termin, gdy blokada instalatora jest zajęta; updater nie przyjmuje drugiego równoległego zadania. Instalator uruchomiony przez updater nie przejmuje siłą blokady innego instalatora. Brak aktywnej instalacji nie powoduje jej odtworzenia od zera. Przy aktualizacji należy liczyć się z restartem usług aplikacji.
+
+Jeżeli automatyczna instalacja konkretnego SHA zakończy się błędem, updater zapisuje ten commit oraz blokuje kolejną automatyczną próbę tego samego SHA przez 180 minut. Ręczne uruchomienie aktualizacji nie jest blokowane przez ten cooldown. Pojawienie się innego, nowszego SHA również omija blokadę poprzedniego wadliwego kandydata. Po udanej aktualizacji licznik błędów i cooldown są zerowane.
 
 ## Status, logi i wyłączenie
 
@@ -52,7 +56,7 @@ Log przyjęcia lub pominięcia zleceń:
 sudo tail -n 100 /var/log/cloudportal-auto-update.log
 ```
 
-Przyjęcie zlecenia **nie jest potwierdzeniem udanej instalacji**. Końcowy wynik i postęp sprawdzaj w panelu aktualizacji oraz w usłudze updatera:
+Klient cron czeka na stan końcowy, więc wpis `[ OK ] Auto-update zakonczony pomyslnie` w tym logu jest potwierdzeniem zakończenia operacji. Pełny postęp, historię etapów i log techniczny nadal można sprawdzić w panelu aktualizacji oraz w usłudze updatera:
 
 ```bash
 sudo journalctl -u cloudportal-updater.service -n 100 --no-pager

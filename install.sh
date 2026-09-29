@@ -599,6 +599,7 @@ import os
 import re
 import socket
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -618,17 +619,19 @@ def report(level, message):
     print("{} [{}] {}".format(datetime.now(timezone.utc).isoformat(), level, message), flush=True)
 
 
-def request_updater(docker, path, payload):
+def request_updater(docker, path, payload=None, method="POST"):
     config = Path("/etc/cloudportal-backed-docker" if docker else "/etc/cloudportal-backed")
     token = (config / "updater.token").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"[A-Za-z0-9._-]{20,512}", token):
         raise ValueError("Nieprawidlowy updater.token; uruchom instalator, aby naprawic updater.")
     connection = (UnixHTTPConnection("/run/cloudportal-updater-docker/updater.sock")
                   if docker else http.client.HTTPConnection("127.0.0.1", 8766, timeout=15))
+    body = None if method == "GET" else json.dumps(payload or {}).encode("utf-8")
+    headers = {"X-Updater-Token": token}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
     try:
-        connection.request("POST", path, body=json.dumps(payload).encode("utf-8"), headers={
-            "Content-Type": "application/json", "X-Updater-Token": token,
-        })
+        connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         raw = response.read(65537)
         if len(raw) > 65536:
@@ -642,6 +645,58 @@ def request_updater(docker, path, payload):
         return result
     finally:
         connection.close()
+
+
+def wait_for_result(docker, timeout_seconds=4 * 3600, poll_seconds=10):
+    deadline = time.monotonic() + timeout_seconds
+    last_marker = None
+    transport_failures = 0
+    while time.monotonic() < deadline:
+        try:
+            state = request_updater(docker, "/status?compact=1", method="GET")
+            transport_failures = 0
+        except (OSError, ValueError, http.client.HTTPException):
+            transport_failures += 1
+            if transport_failures == 1 or transport_failures % 6 == 0:
+                report("WARN", "Updater chwilowo niedostepny podczas oczekiwania na wynik; ponawiam odczyt statusu.")
+            if transport_failures >= 18:
+                report("FAIL", "Updater pozostaje niedostepny; sprawdz cloudportal-updater.service.")
+                return 1
+            time.sleep(poll_seconds)
+            continue
+
+        status = str(state.get("status") or "")
+        phase = str(state.get("phase") or "")
+        progress = max(0, min(100, int(state.get("progress") or 0)))
+        active = bool(state.get("operation_active"))
+        marker = (status, phase, progress)
+        if active:
+            if marker != last_marker:
+                report("INFO", "Auto-update w toku: {} ({}%).".format(phase or "uruchamianie", progress))
+                last_marker = marker
+            time.sleep(poll_seconds)
+            continue
+
+        if status == "success":
+            report(" OK ", "Auto-update zakonczony pomyslnie; aktywny commit: {}.".format(
+                state.get("current_version") or "nieznany"))
+            return 0
+        if status in ("up_to_date", "local_ahead"):
+            report(" OK ", "Brak aktualizacji do instalacji; stan: {}.".format(status))
+            return 0
+        if status == "deferred":
+            retry = state.get("retry_not_before") or "pozniej"
+            report("INFO", "Auto-update odroczony dla tego samego wadliwego commita; ponowienie najwczesniej {}.".format(retry))
+            return 0
+        if status == "failed":
+            report("FAIL", "Auto-update nie powiodl sie; etap: {}. Sprawdz panel aktualizacji i cloudportal-updater.service.".format(
+                phase or "nieznany"))
+            return 1
+
+        time.sleep(poll_seconds)
+
+    report("FAIL", "Przekroczono maksymalny czas oczekiwania na wynik auto-update.")
+    return 1
 
 
 def main(argv=None):
@@ -672,14 +727,14 @@ def main(argv=None):
                 report("INFO", "Instalator jest zajety; pomijam ten termin aktualizacji.")
                 return 0
             fcntl.flock(lock, fcntl.LOCK_UN)
-        result = request_updater(args.docker, "/run", {})
+        result = request_updater(args.docker, "/run", {"automatic": True})
         if result.get("already_running") is True:
             report("INFO", "Aktualizacja juz trwa; nie uruchamiam drugiej.")
-        elif result.get("accepted") is True:
-            report(" OK ", "Zlecono sprawdzenie i aktualizacje. Wynik: panel aktualizacji / cloudportal-updater.service.")
-        else:
+            return 0
+        if result.get("accepted") is not True:
             raise ValueError("Updater nie potwierdzil przyjecia zadania.")
-        return 0
+        report(" OK ", "Zlecono automatyczne sprawdzenie i aktualizacje; czekam na wynik koncowy.")
+        return wait_for_result(args.docker)
     except (OSError, ValueError, http.client.HTTPException) as exc:
         # Exception text can contain response data or paths; expose only its class.
         report("FAIL", "Nie udalo sie wywolac updatera ({}). Sprawdz cloudportal-updater.service i jego konfiguracje.".format(type(exc).__name__))

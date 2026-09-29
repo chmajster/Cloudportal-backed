@@ -50,7 +50,7 @@ function normalizedUpdateStatus(status) {
 function updateStatusKind(status) {
   if (status === 'success' || status === 'up_to_date' || status === 'local_ahead') return 'ok';
   if (status === 'failed') return 'danger';
-  if (status === 'running' || status === 'checking') return 'warning';
+  if (status === 'running' || status === 'checking' || status === 'deferred') return 'warning';
   if (status === 'update_available') return 'info';
   return '';
 }
@@ -63,6 +63,7 @@ function updateStatusLabel(status) {
     running: 'Aktualizacja trwa',
     success: 'Zakończono',
     failed: 'Błąd',
+    deferred: 'Automatyczne ponowienie odroczone',
     up_to_date: 'Aktualny commit',
     local_ahead: 'Zainstalowany commit nowszy',
   };
@@ -79,6 +80,7 @@ function phaseLabel(phase) {
     install: 'Uruchamianie instalatora',
     failed: 'Błąd aktualizacji',
     interrupted: 'Przerwany proces',
+    cooldown: 'Cooldown po błędzie auto-update',
     local_ahead: 'Zainstalowany commit nowszy',
   };
   return new Map(UPDATE_PHASES).get(phase) || special[phase] || phase || 'Oczekiwanie';
@@ -160,6 +162,7 @@ function statusDescription(status) {
   if (status.status === 'local_ahead') return 'Zainstalowany commit jest nowszy niż commit kanału. Updater nie wykona downgrade’u.';
   if (status.status === 'success') return 'Ostatnia aktualizacja zakończyła się instalacją nowszego commita.';
   if (status.status === 'failed') return 'Proces aktualizacji został zatrzymany. Szczegóły znajdują się w logu technicznym.';
+  if (status.status === 'deferred') return 'Ten sam commit wcześniej nie przeszedł automatycznej aktualizacji. Kolejna automatyczna próba nastąpi po cooldownie; ręczne uruchomienie pozostaje dostępne.';
   return 'Wersja Cloudportal jest identyfikowana przez commit Git.';
 }
 
@@ -273,6 +276,10 @@ function updateFacts(status, settings) {
     info('Commit lokalny', formatDate(status.current_commit_at)),
     info('Commit kanału', formatDate(status.target_commit_at)),
     info('Ostatnie sprawdzenie', formatDate(status.last_check_at)),
+    info('Ostatnia próba', formatDate(status.last_attempt_at)),
+    info('Ostatni sukces', formatDate(status.last_success_at)),
+    info('Nieudane auto-update', String(Number(status.consecutive_failures || 0))),
+    info('Ponowienie najwcześniej', formatDate(status.retry_not_before)),
     info('Rozpoczęto', formatDate(status.started_at)),
     info('Zakończono', formatDate(status.finished_at)),
     info('Czas operacji', formatDuration(status.started_at, status.finished_at)),
@@ -488,7 +495,9 @@ function statusPanel(status, settings, container) {
           ? 'Gotowa do instalacji'
           : status.status === 'checking'
             ? 'Sprawdzanie'
-            : status.status === 'running'
+            : status.status === 'deferred'
+              ? 'Odroczono'
+              : status.status === 'running'
               ? 'Uruchamianie'
               : 'Nie rozpoczęto';
   const tone = updateTone(status.status);
