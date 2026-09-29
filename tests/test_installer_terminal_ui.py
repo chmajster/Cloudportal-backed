@@ -231,3 +231,5 @@ def test_docker_bind_ip_is_detected_selected_persisted_and_used_by_compose():
     selector = INSTALLER[INSTALLER.index('docker_select_bind_ip() {'):INSTALLER.index("DOCKER_INSTALL_LOCK_FD=''")]
     assert selector.index('if ((update_in_progress)); then') < selector.index('if [[ "$backend_host" == localhost')
     assert 'Auto-update zachowuje adres publikacji Docker' in selector
+    assert 'Istniejąca konfiguracja nie zawiera CP_BIND_IP; domyślnie zachowuję publikację na wszystkich interfejsach.' in selector
+    assert 'docker_detect_bind_ips | grep' not in INSTALLER
