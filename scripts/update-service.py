@@ -1991,6 +1991,13 @@ def runtime_state() -> dict:
     return state
 
 
+def status_payload(*, compact: bool = False) -> dict:
+    state = runtime_state()
+    if compact:
+        return {key: value for key, value in state.items() if key not in {"events", "output"}}
+    return state
+
+
 def parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -2078,11 +2085,8 @@ class Handler(BaseHTTPRequestHandler):
             if not status_authorized(self):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "Unauthorized"})
                 return
-            state = runtime_state()
-            compact = parse_qs(parsed.query).get("compact", [])
-            if compact == ["1"]:
-                state = {key: value for key, value in state.items() if key not in {"events", "output"}}
-            self.send_json(HTTPStatus.OK, state)
+            compact = parse_qs(parsed.query).get("compact", []) == ["1"]
+            self.send_json(HTTPStatus.OK, status_payload(compact=compact))
             return
         if path == "/settings":
             if not control_authorized(self.headers):
