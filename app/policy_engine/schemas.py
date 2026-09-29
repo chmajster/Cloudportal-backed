@@ -105,6 +105,36 @@ class PreviewInput(BaseModel):
     contexts: list[EvaluationInput] = Field(min_length=1, max_length=200)
 
 
+class PolicyTestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy: PolicyInput
+    evaluation: EvaluationInput
+    exclude_policy_id: str | None = Field(default=None, max_length=36)
+    include_existing: bool = True
+
+
+class PolicyConflictInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy: PolicyInput
+    exclude_policy_id: str | None = Field(default=None, max_length=36)
+
+
+class PolicyImpactInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy: PolicyInput
+    exclude_policy_id: str | None = Field(default=None, max_length=36)
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
+class PolicyStatusChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+
+
 class DecisionFilter(BaseModel):
     action: str | None = None
     decision: Literal["allow", "deny", "approval_required"] | None = None
