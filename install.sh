@@ -950,10 +950,13 @@ docker_detect_bind_ips() {
 }
 
 docker_bind_ip_is_local() {
-  local value=$1
+  local value=$1 candidate=''
   docker_valid_ipv4 "$value" || return 1
   [[ "$value" == 0.0.0.0 ]] && return 0
-  docker_detect_bind_ips | grep -Fxq "$value"
+  while IFS= read -r candidate; do
+    [[ "$candidate" == "$value" ]] && return 0
+  done < <(docker_detect_bind_ips)
+  return 1
 }
 
 docker_probe_ip() {
@@ -1008,6 +1011,11 @@ docker_select_bind_ip() {
 
   if [[ -n "$previous" ]] && docker_bind_ip_is_local "$previous"; then
     default_ip=$previous
+  elif [[ -r "$docker_env" && -z "$previous" ]]; then
+    # A legacy installation without CP_BIND_IP used Docker's wildcard bind.
+    # Preserve that exposure unless the operator deliberately chooses another IP.
+    default_ip=0.0.0.0
+    ui_warn 'Istniejąca konfiguracja nie zawiera CP_BIND_IP; domyślnie zachowuję publikację na wszystkich interfejsach.'
   elif [[ -n "$hint_ip" ]]; then
     default_ip=$hint_ip
   else
