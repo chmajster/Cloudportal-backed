@@ -699,13 +699,21 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         db,
         payload or (deployment.workflow if deployment and provisioning_operation else {}),
     )
+    prior_policy = dict((payload or {}).get('_policy') or {}) if isinstance(payload, dict) else {}
     job_payload['_policy'] = {
-        'decision_id': policy_result.get('decision_id'),
-        'related_decision_ids': policy_result.get('related_decision_ids') or [],
-        'matched_policy_ids': policy_result.get('matched_policy_ids') or [],
-        'approvals': policy_result.get('approvals') or [],
-        'obligations': policy_result.get('obligations') or [],
-        'warnings': policy_result.get('warnings') or [],
+        'decision_id': policy_result.get('decision_id') or prior_policy.get('decision_id'),
+        'related_decision_ids': list(prior_policy.get('related_decision_ids') or [])
+            + list(policy_result.get('related_decision_ids') or []),
+        'matched_policy_ids': list(dict.fromkeys(
+            list(prior_policy.get('matched_policy_ids') or [])
+            + list(policy_result.get('matched_policy_ids') or [])
+        )),
+        'approvals': list(prior_policy.get('approvals') or [])
+            + list(policy_result.get('approvals') or []),
+        'obligations': list(prior_policy.get('obligations') or [])
+            + list(policy_result.get('obligations') or []),
+        'warnings': list(prior_policy.get('warnings') or [])
+            + list(policy_result.get('warnings') or []),
     }
     if deployment:
         job_payload['previous_status'] = deployment.status
