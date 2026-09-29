@@ -741,36 +741,78 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
             'Direct Proxmox provisioning must be launched from a Blueprint so the provider workflow is immutable and auditable',
         )
     check_job_permissions(db, request, actor, 'terraform.apply')
-    p = find(db, Provider, data.provider_id)
+
+    from app.policy_engine.integration import enforce_vm_create
+    rendered, vm_policy_result = enforce_vm_create(
+        db, request, actor, request.state.permissions, data.model_dump(mode='python')
+    )
+    effective = data.model_copy(deep=True)
+    effective.provider_id = int(rendered.get('provider_id', effective.provider_id))
+    effective.template = str(rendered.get('template') or effective.template)
+    effective.credentials_id = int(rendered.get('credentials_id', effective.credentials_id))
+    effective.variables = dict(rendered.get('variables') or effective.variables)
+
+    p = find(db, Provider, effective.provider_id)
     require_platform_enabled(db, p.type)
     ensure_credential_usable(find(db, Credential, p.credentials_id))
-    require_catalog_item_enabled(db, 'templates', data.template)
-    template_meta, _ = template_definition(data.template)
+    require_catalog_item_enabled(db, 'templates', effective.template)
+    template_meta, _ = template_definition(effective.template)
     if p.type != template_meta['provider']:
-        raise HTTPException(422, 'Selected infrastructure provider does not match the Terraform template')
-    variables = validate_template_variables(data.template, data.variables)
-    if p.credentials_id != data.credentials_id:
+        raise HTTPException(422, 'Policy-selected infrastructure provider does not match the Terraform template')
+    variables = validate_template_variables(effective.template, effective.variables)
+    if p.credentials_id != effective.credentials_id:
         raise HTTPException(422, 'Credential does not belong to the selected provider')
-    # Share the same row locks with credential mutation/deletion to preserve references.
-    for credential_id in sorted({data.credentials_id} | ({data.ansible.credentials_id} if data.ansible else set())):
+    for credential_id in sorted(
+        {effective.credentials_id}
+        | ({effective.ansible.credentials_id} if effective.ansible else set())
+    ):
         locked_credential(db, credential_id)
-    if data.ansible:
+    if effective.ansible:
         if p.type != 'proxmox':
             raise HTTPException(422, 'Ansible post-provisioning currently requires the Proxmox guest-agent workflow')
         if 'ansible.execute' not in request.state.permissions:
             raise HTTPException(403, 'ansible.execute required')
-        validate_ansible(db, data.ansible)
+        validate_ansible(db, effective.ansible)
+
     def create():
-        d = Deployment(name=data.name, provider_id=p.id, provider=p.type, template=data.template, credentials_id=data.credentials_id,
-                       variables=variables.model_dump(mode='json'), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
+        d = Deployment(
+            name=effective.name,
+            provider_id=p.id,
+            provider=p.type,
+            template=effective.template,
+            credentials_id=effective.credentials_id,
+            variables=variables.model_dump(mode='json'),
+            workflow={
+                'ansible': effective.ansible.model_dump() if effective.ansible else None
+            },
+            created_by=actor.user_id,
+            executor=effective.executor,
+        )
         db.add(d)
         db.flush()
         d.state_location = f'database://terraform-states/{d.id}'
-        job = new_job(db, request, actor, 'terraform.apply', d, {'ansible': data.ansible.model_dump() if data.ansible else None})
+        pre_policy = {
+            'decision_id': vm_policy_result.get('decision_id'),
+            'matched_policy_ids': vm_policy_result.get('matched_policy_ids') or [],
+            'approvals': vm_policy_result.get('approvals') or [],
+            'obligations': vm_policy_result.get('obligations') or [],
+            'warnings': vm_policy_result.get('warnings') or [],
+        }
+        job = new_job(
+            db,
+            request,
+            actor,
+            'terraform.apply',
+            d,
+            {
+                'ansible': effective.ansible.model_dump() if effective.ansible else None,
+                '_policy': pre_policy,
+            },
+        )
         audit(db, request, 'deployment.created', 'deployments', d.id)
         return {**deployment_public(d), 'job': job_public(job)}
-    return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
+    return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 @router.get('/deployments', response_model=Items[DeploymentOutput])
 def deployments(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
