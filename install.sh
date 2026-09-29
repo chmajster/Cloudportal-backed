@@ -965,7 +965,7 @@ docker_probe_ip() {
 }
 
 docker_select_bind_ip() {
-  local previous=${1:-} choice='' default_ip='' i
+  local previous=${1:-} choice='' default_ip='' hint_ip='' i
   local -a detected_ips=()
 
   if ((bind_ip_explicit)); then
@@ -977,26 +977,18 @@ docker_select_bind_ip() {
     return 0
   fi
 
-  if [[ "$backend_host" == localhost || "$backend_host" == 127.0.0.1 ]]; then
-    bind_ip=127.0.0.1
-    ui_info 'Host publiczny wskazuje localhost; Docker zostanie związany z 127.0.0.1.'
-    return 0
-  fi
-  if docker_valid_ipv4 "$backend_host" 2>/dev/null && docker_bind_ip_is_local "$backend_host"; then
-    bind_ip=$backend_host
-    ui_info "Host publiczny jest lokalnym IPv4; Docker zostanie związany z $bind_ip."
-    return 0
-  fi
-
   mapfile -t detected_ips < <(docker_detect_bind_ips)
   ((${#detected_ips[@]} > 0)) || {
     ui_fail 'Nie udało się wykryć żadnego lokalnego adresu IPv4 dla publikacji Docker.'
     return 1
   }
 
+  # Auto-update must not silently change network exposure. Preserve the
+  # previously selected bind before considering CP_PUBLIC_HOST as a hint.
   if ((update_in_progress)); then
     if [[ -n "$previous" ]] && docker_bind_ip_is_local "$previous"; then
       bind_ip=$previous
+      ui_info "Auto-update zachowuje adres publikacji Docker: $bind_ip"
     elif [[ -z "$previous" ]]; then
       # Legacy installs published on all interfaces before CP_BIND_IP existed.
       bind_ip=0.0.0.0
@@ -1008,8 +1000,16 @@ docker_select_bind_ip() {
     return 0
   fi
 
+  if [[ "$backend_host" == localhost || "$backend_host" == 127.0.0.1 ]]; then
+    hint_ip=127.0.0.1
+  elif docker_valid_ipv4 "$backend_host" 2>/dev/null && docker_bind_ip_is_local "$backend_host"; then
+    hint_ip=$backend_host
+  fi
+
   if [[ -n "$previous" ]] && docker_bind_ip_is_local "$previous"; then
     default_ip=$previous
+  elif [[ -n "$hint_ip" ]]; then
+    default_ip=$hint_ip
   else
     default_ip=${detected_ips[0]}
   fi
