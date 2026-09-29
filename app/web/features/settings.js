@@ -24,6 +24,26 @@ function settingsHealth(value) {
   return badge(String(value ?? 'Nieznany'), 'info');
 }
 
+const SETTINGS_LAYOUT_STORAGE_KEY = 'cloudportal.console.settings.layout';
+
+function readSettingsLayout() {
+  try {
+    return localStorage.getItem(SETTINGS_LAYOUT_STORAGE_KEY) === 'list' ? 'list' : 'grid';
+  } catch {
+    return 'grid';
+  }
+}
+
+function saveSettingsLayout(layout) {
+  const selected = layout === 'list' ? 'list' : 'grid';
+  try {
+    localStorage.setItem(SETTINGS_LAYOUT_STORAGE_KEY, selected);
+  } catch {
+    // Ustawienie pozostaje aktywne tylko dla bieżącego renderu, jeśli storage jest niedostępny.
+  }
+  return selected;
+}
+
 function ldapDetailRow(label, value, options = {}) {
   return node('div', { class: 'settings-ldap-detail' + (options.wide ? ' wide' : '') },
     node('span', { class: 'settings-ldap-detail-label', text: label }),
@@ -439,6 +459,7 @@ async function settingsView() {
   const roles = state.identity?.roles || [];
   const permissions = state.identity?.permissions || [];
   const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  const settingsLayout = readSettingsLayout();
   const checks = health?.checks || {};
   const workers = checks.workers || {};
   const parallelLimit = Number(executionSettings.max_parallel_jobs || 10);
@@ -467,21 +488,46 @@ async function settingsView() {
     'sun',
     'Wygląd',
     'Ustaw wygląd panelu na tym urządzeniu.',
-    node('div', { class: 'settings-choice-row' },
-      node('button', {
-        type: 'button',
-        class: 'settings-choice' + (theme === 'light' ? ' active' : ''),
-        onClick: () => { setTheme('light'); settingsView(); },
+    node('div', { class: 'settings-appearance-section' },
+      node('span', { class: 'settings-appearance-label', text: 'Motyw' }),
+      node('div', { class: 'settings-choice-row' },
+        node('button', {
+          type: 'button',
+          class: 'settings-choice' + (theme === 'light' ? ' active' : ''),
+          onClick: () => { setTheme('light'); settingsView(); },
+        },
+          node('span', { class: 'settings-choice-icon' }, appIcon('sun')),
+          node('span', {}, node('strong', { text: 'Jasny' }), node('small', { text: 'Jasne tło interfejsu' }))),
+        node('button', {
+          type: 'button',
+          class: 'settings-choice' + (theme === 'dark' ? ' active' : ''),
+          onClick: () => { setTheme('dark'); settingsView(); },
+        },
+          node('span', { class: 'settings-choice-icon' }, appIcon('moon')),
+          node('span', {}, node('strong', { text: 'Ciemny' }), node('small', { text: 'Ciemny motyw operatorski' }))))),
+    node('div', { class: 'settings-appearance-section' },
+      node('span', { class: 'settings-appearance-label', text: 'Układ ustawień' }),
+      node('div', {
+        class: 'settings-choice-row',
+        role: 'group',
+        'aria-label': 'Sposób wyświetlania ustawień',
       },
-        node('span', { class: 'settings-choice-icon' }, appIcon('sun')),
-        node('span', {}, node('strong', { text: 'Jasny' }), node('small', { text: 'Jasne tło interfejsu' }))),
-      node('button', {
-        type: 'button',
-        class: 'settings-choice' + (theme === 'dark' ? ' active' : ''),
-        onClick: () => { setTheme('dark'); settingsView(); },
-      },
-        node('span', { class: 'settings-choice-icon' }, appIcon('moon')),
-        node('span', {}, node('strong', { text: 'Ciemny' }), node('small', { text: 'Ciemny motyw operatorski' }))))
+        node('button', {
+          type: 'button',
+          class: 'settings-choice' + (settingsLayout === 'grid' ? ' active' : ''),
+          'aria-pressed': String(settingsLayout === 'grid'),
+          onClick: () => { saveSettingsLayout('grid'); settingsView(); },
+        },
+          node('span', { class: 'settings-choice-icon' }, appIcon('dashboard')),
+          node('span', {}, node('strong', { text: 'Kafelki' }), node('small', { text: 'Dwie kolumny sekcji' }))),
+        node('button', {
+          type: 'button',
+          class: 'settings-choice' + (settingsLayout === 'list' ? ' active' : ''),
+          'aria-pressed': String(settingsLayout === 'list'),
+          onClick: () => { saveSettingsLayout('list'); settingsView(); },
+        },
+          node('span', { class: 'settings-choice-icon' }, appIcon('list-check')),
+          node('span', {}, node('strong', { text: 'Lista' }), node('small', { text: 'Jedna sekcja pod drugą' })))))
   );
 
   const account = settingsCard(
@@ -685,7 +731,7 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.'),
-    node('div', { class: 'settings-grid' }, appearance, account, system, updates, platforms, blueprints, security, sso),
+    node('div', { class: 'settings-grid' + (settingsLayout === 'list' ? ' settings-list' : '') }, appearance, account, system, updates, platforms, blueprints, security, sso),
     ldap
   );
 }
