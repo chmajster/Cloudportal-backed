@@ -1193,24 +1193,6 @@
     });
   }
 
-  async function versionsPanel(item) {
-    const rows = (await api('/policies/' + encodeURIComponent(item.id) + '/versions')).items || [];
-    return table([
-      { label: 'Wersja', value: row => '#' + row.version },
-      { label: 'Autor', value: row => row.created_by },
-      { label: 'Data', value: row => formatDate(row.created_at) },
-      { label: 'Status', value: row => STATUS_LABELS[row.snapshot?.status] || row.snapshot?.status || '—' },
-    ], rows, row => row.version !== item.version && can('policies.update','policies.manage') ? [
-      button('Przywróć tę wersję', async () => {
-        await api('/policies/' + encodeURIComponent(item.id) + '/rollback', {
-          method: 'POST', body: { version: row.version, expected_version: item.version },
-        });
-        toast('Wersja przywrócona.');
-        await policyDetails(item.id);
-      }, 'ghost'),
-    ] : []);
-  }
-
   async function policyDetails(id) {
     await loadData();
     const [item, exceptions, versions] = await Promise.all([
