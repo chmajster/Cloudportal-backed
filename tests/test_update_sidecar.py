@@ -702,8 +702,7 @@ def test_update_status_compact_omits_large_history(tmp_path, monkeypatch):
     })
     updater.update_thread = None
 
-    state = updater.runtime_state()
-    compact = {key: value for key, value in state.items() if key not in {'events', 'output'}}
+    compact = updater.status_payload(compact=True)
 
     assert 'events' not in compact
     assert 'output' not in compact
