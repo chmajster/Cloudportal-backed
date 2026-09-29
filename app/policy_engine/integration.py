@@ -358,6 +358,108 @@ def enforce_credential_use(db, request, actor, permissions, credential_id, *, de
     return result
 
 
+def evaluate_scheduled_operation(db, schedule, deployment, user, permissions):
+    """Evaluate schedule.execute and the scheduled infrastructure operation."""
+    resource, apmid, environment = _deployment_policy_resource(
+        deployment, resource_type="schedule"
+    )
+    scope_context = _scope_from_ids(
+        db, getattr(schedule, "tenant_id", ""), getattr(schedule, "project_id", ""),
+        apmid=apmid, environment=environment,
+    )
+    schedule_context = {
+        "actor": _user_actor(user, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "schedule.execute",
+            "source": "Scheduler",
+            "phase": "scheduled",
+            "scheduled_operation": str(getattr(schedule, "operation", "") or ""),
+        },
+        "resource": {
+            **resource,
+            "id": str(getattr(schedule, "id", "") or ""),
+            "type": "schedule",
+            "schedule_id": str(getattr(schedule, "id", "") or ""),
+        },
+    }
+    result = evaluate_context(db, schedule_context, persist=True)
+
+    operation = str(getattr(schedule, "operation", "") or "")
+    op_resource, _, _ = _deployment_policy_resource(
+        deployment, resource_type="terraform"
+    )
+    op_resource.update({
+        "organization": scope_context.get("organization"),
+        "project": scope_context.get("project"),
+        "scope_key": scope_context.get("key"),
+    })
+    operation_context = {
+        "actor": _user_actor(user, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": operation,
+            "source": "Scheduler",
+            "phase": "scheduled",
+        },
+        "resource": op_resource,
+    }
+    operation_result = evaluate_context(db, operation_context, persist=True)
+    result = _merge_policy_results(result, operation_result)
+
+    credential_id = getattr(deployment, "credentials_id", None)
+    if credential_id:
+        credential_context = {
+            "actor": _user_actor(user, permissions, db, scope_context),
+            "scope": scope_context,
+            "request": {
+                "action": "credentials.use",
+                "source": "Scheduler",
+                "phase": "scheduled",
+                "purpose": operation,
+            },
+            "resource": {
+                **op_resource,
+                "id": str(credential_id),
+                "type": "credentials",
+                "credential_id": credential_id,
+            },
+        }
+        result = _merge_policy_results(
+            result, evaluate_context(db, credential_context, persist=True)
+        )
+    return result
+
+
+def evaluate_webhook_delivery(db, endpoint, delivery, user, permissions):
+    """Authorize an outbound webhook immediately before network delivery."""
+    payload = dict(getattr(delivery, "payload", {}) or {})
+    scope_data = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+    tenant_id = str(scope_data.get("tenant_id") or "")
+    project_id = str(scope_data.get("project_id") or "")
+    scope_context = _scope_from_ids(db, tenant_id, project_id)
+    context = {
+        "actor": _user_actor(user, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "webhook.execute",
+            "source": "WebhookWorker",
+            "phase": "pre_request",
+            "event": str(getattr(delivery, "event", "") or ""),
+        },
+        "resource": {
+            "id": str(getattr(endpoint, "id", "") or ""),
+            "type": "webhook",
+            "name": str(getattr(endpoint, "name", "") or ""),
+            "event": str(getattr(delivery, "event", "") or ""),
+            "organization": scope_context.get("organization"),
+            "project": scope_context.get("project"),
+            "scope_key": scope_context.get("key"),
+        },
+    }
+    return evaluate_context(db, context, persist=True)
+
+
 def revalidate_job_operation(db, job, user, permissions, deployment=None):
     """Re-evaluate a queued direct job immediately before worker execution."""
     operation = str(getattr(job, "operation", "") or "")
