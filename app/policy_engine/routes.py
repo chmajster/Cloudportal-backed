@@ -1,7 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.api.common import Limit, Offset
 from app.database import get_db
@@ -63,7 +63,11 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
     tenants = db.scalars(
         select(Tenant)
         .where(
-            visible_tenants(identity, permission="policies.manage"),
+            or_(
+                visible_tenants(identity, permission="policies.manage"),
+                visible_tenants(identity, permission="policies.create"),
+                visible_tenants(identity, permission="policies.update"),
+            ),
             Tenant.status == "active",
             Tenant.deleted_at.is_(None),
         )
@@ -74,7 +78,11 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
         select(Project, Tenant)
         .join(Tenant, Tenant.id == Project.tenant_id)
         .where(
-            visible_projects(identity, permission="policies.manage"),
+            or_(
+                visible_projects(identity, permission="policies.manage"),
+                visible_projects(identity, permission="policies.create"),
+                visible_projects(identity, permission="policies.update"),
+            ),
             Project.status == "active",
             Tenant.status == "active",
             Project.deleted_at.is_(None),
