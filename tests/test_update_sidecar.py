@@ -620,3 +620,70 @@ def test_pre_update_backup_requires_verifiable_snapshot(tmp_path, monkeypatch):
 
     monkeypatch.setattr(updater.subprocess, 'run', lambda *args, **kwargs: Result())
     assert updater.pre_update_backup() == backup_root
+
+
+def test_automatic_update_failure_records_retry_cooldown(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    target = 'f' * 40
+    monkeypatch.setattr(updater, 'check_remote', lambda ref, update_context=False: {
+        'update_available': True,
+        'target_sha': target,
+        'target_version': target[:12],
+        'target_commit_at': '2026-09-29T07:00:00Z',
+    })
+    monkeypatch.setattr(updater, 'ensure_current_installation_healthy', lambda: None)
+    monkeypatch.setattr(
+        updater,
+        'wait_for_required_ci',
+        lambda sha, settings: (_ for _ in ()).throw(RuntimeError('candidate CI failed')),
+    )
+
+    updater.run_update('main', automatic=True)
+
+    state = updater.load_state()
+    assert state['status'] == 'failed'
+    assert state['automatic'] is True
+    assert state['consecutive_failures'] == 1
+    assert state['failed_target_sha'] == target
+    assert state['retry_not_before']
+    assert state['last_failure_at']
+    assert state['last_result'] == 'failed'
+
+
+def test_automatic_update_defers_same_failed_sha_until_cooldown_expires(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    target = '9' * 40
+    updater.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    updater.atomic_json(updater.STATE_FILE, {
+        **updater.default_state(),
+        'status': 'failed',
+        'failed_target_sha': target,
+        'consecutive_failures': 2,
+        'retry_not_before': '2999-01-01T00:00:00+00:00',
+    })
+    monkeypatch.setattr(updater, 'check_remote', lambda ref, update_context=False: {
+        'update_available': True,
+        'target_sha': target,
+        'target_version': target[:12],
+        'target_commit_at': '2026-09-29T07:00:00Z',
+    })
+    monkeypatch.setattr(
+        updater,
+        'ensure_current_installation_healthy',
+        lambda: (_ for _ in ()).throw(AssertionError('health preflight must not run during cooldown')),
+    )
+    monkeypatch.setattr(
+        updater,
+        'wait_for_required_ci',
+        lambda *args: (_ for _ in ()).throw(AssertionError('CI must not run during cooldown')),
+    )
+
+    updater.run_update('main', automatic=True)
+
+    state = updater.load_state()
+    assert state['status'] == 'deferred'
+    assert state['phase'] == 'cooldown'
+    assert state['update_available'] is True
+    assert state['automatic'] is True
+    assert state['consecutive_failures'] == 2
+    assert state['failed_target_sha'] == target
