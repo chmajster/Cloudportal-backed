@@ -201,3 +201,19 @@ def test_wait_for_result_accepts_cooldown(client, monkeypatch, capsys):
     })
     assert client.wait_for_result(True, timeout_seconds=60, poll_seconds=0) == 0
     assert 'odroczony' in capsys.readouterr().out
+
+
+def test_wait_for_result_requests_compact_status(client, monkeypatch):
+    prepare_client(client, monkeypatch)
+    calls = []
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {
+            'status': 'up_to_date',
+            'phase': 'up_to_date',
+            'progress': 100,
+            'operation_active': False,
+        }
+    monkeypatch.setattr(client, 'request_updater', request)
+    assert client.wait_for_result(False, timeout_seconds=60, poll_seconds=0) == 0
+    assert calls == [((False, '/status?compact=1'), {'method': 'GET'})]
