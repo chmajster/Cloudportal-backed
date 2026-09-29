@@ -64,6 +64,7 @@ Konfiguracja:
   --host HOST                 Host/DNS backendu.
   --port PORT                 Port HTTPS, domyślnie 8443.
   --workers N                 Liczba workerów 1-64; domyślnie 10.
+  --bind-ip IP                 IPv4 hosta, na którym Docker publikuje HTTPS. Bez tej opcji adres jest wykrywany automatycznie.
   --k8s-image IMAGE           Obraz aplikacji dla Kubernetes; wymagany przy instalacji --k8s.
   --k8s-namespace NAME        Namespace Kubernetes; domyślnie cloudportal.
   --k8s-context NAME          Context kubectl; domyślnie bieżący context.
@@ -95,6 +96,7 @@ Blokada instalatora:
 Przykłady:
   sudo ./install.sh --non-interactive --port 8443
   sudo ./install.sh --docker --non-interactive --port 8443
+  sudo ./install.sh --docker --bind-ip 192.168.1.20 --port 8443
   sudo ./install.sh --docker --status
   ./install.sh --k8s --k8s-image registry.example/cloudportal-backed:1.0 --non-interactive
   ./install.sh --k8s --status
@@ -134,6 +136,8 @@ initial_argc=$#
 ref='main'
 backend_host=''
 backend_port=''
+bind_ip=''
+bind_ip_explicit=0
 default_workers=10
 workers=''
 workers_explicit=0
@@ -182,10 +186,10 @@ install_progress() {
 }
 while (($#)); do
   case "$1" in
-    --host|--port|--workers|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days|--auto-update-interval|--recovery-username|--recovery-email|--recovery-project|--recovery-password-file|--k8s-image|--k8s-namespace|--k8s-context|--k8s-storage-class|--k8s-service-type|--k8s-node-port)
+    --host|--port|--workers|--bind-ip|--ref|--github-token-file|--github-config|--cert-file|--cert-key|--backup-retention-days|--auto-update-interval|--recovery-username|--recovery-email|--recovery-project|--recovery-password-file|--k8s-image|--k8s-namespace|--k8s-context|--k8s-storage-class|--k8s-service-type|--k8s-node-port)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing value for $1" >&2; exit 2; }
       case "$1" in
-        --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2; workers_explicit=1;; --ref) ref=$2;;
+        --host) backend_host=$2;; --port) backend_port=$2;; --workers) workers=$2; workers_explicit=1;; --bind-ip) bind_ip=$2; bind_ip_explicit=1;; --ref) ref=$2;;
         --github-token-file) github_token_file=$2;; --github-config) github_config=$2;; --cert-file) cert_file=$2;; --cert-key) cert_key=$2;; --backup-retention-days) backup_retention_days=$2;;
         --auto-update-interval) auto_update_interval=$2; auto_update_interval_explicit=1;;
         --recovery-username) recovery_username=$2;; --recovery-email) recovery_email=$2;; --recovery-project) recovery_project=$2;; --recovery-password-file) recovery_password_file=$2;;
@@ -399,6 +403,10 @@ mode_count=$((status_mode + uninstall_mode + check_platform + recovery_mode + au
 ((k8s_mode == 0 || auto_update_mode == 0)) || { ui_fail 'Hostowy cron auto-update nie jest obsługiwany w trybie --k8s; aktualizuj obraz przez ponowne uruchomienie instalatora.'; exit 2; }
 ((k8s_mode == 0 || recovery_mode == 0)) || { ui_fail 'Recovery przez install.sh nie jest jeszcze obsługiwane w trybie --k8s.'; exit 2; }
 ((docker_auto_repair_explicit == 0 || (docker_mode == 1 && status_mode == 1))) || { ui_fail '--no-auto-repair wymaga --docker --status.'; exit 2; }
+if ((bind_ip_explicit)) && ((docker_mode == 0 || status_mode == 1 || uninstall_mode == 1 || recovery_mode == 1 || auto_update_mode == 1)); then
+  ui_fail '--bind-ip jest obsługiwane wyłącznie podczas instalacji/aktualizacji z --docker.'
+  exit 2
+fi
 ((gui == 0 || auto_update_mode == 0)) || { ui_fail '--gui nie łączy się z zarządzaniem cron.'; exit 2; }
 if ((auto_update_interval_explicit)) && [[ "$auto_update_action" != enable ]]; then
   ui_fail '--auto-update-interval wymaga --enable-auto-update.'
@@ -904,6 +912,152 @@ docker_valid_workers() {
   [[ "$1" =~ ^[0-9]{1,2}$ ]] && ((10#$1 >= 1 && 10#$1 <= 64))
 }
 
+docker_valid_ipv4() {
+  local ip=$1 a b c d extra octet
+  IFS=. read -r a b c d extra <<< "$ip"
+  [[ -z "$extra" && -n "$a" && -n "$b" && -n "$c" && -n "$d" ]] || return 1
+  for octet in "$a" "$b" "$c" "$d"; do
+    [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
+    ((10#$octet >= 0 && 10#$octet <= 255)) || return 1
+  done
+}
+
+docker_detect_bind_ips() {
+  local primary='' candidate='' seen=' '
+  local -a candidates=()
+
+  if command -v ip >/dev/null 2>&1; then
+    primary=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' || true)
+    [[ -z "$primary" ]] || candidates+=("$primary")
+    while IFS= read -r candidate; do
+      [[ -z "$candidate" ]] || candidates+=("$candidate")
+    done < <(ip -o -4 addr show up scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]}')
+  fi
+
+  if ((${#candidates[@]} == 0)); then
+    for candidate in $(hostname -I 2>/dev/null || true); do
+      [[ "$candidate" == *:* ]] || candidates+=("$candidate")
+    done
+  fi
+
+  candidates+=("127.0.0.1")
+  for candidate in "${candidates[@]}"; do
+    docker_valid_ipv4 "$candidate" || continue
+    [[ "$seen" == *" $candidate "* ]] && continue
+    printf '%s\n' "$candidate"
+    seen+="$candidate "
+  done
+}
+
+docker_bind_ip_is_local() {
+  local value=$1 candidate=''
+  docker_valid_ipv4 "$value" || return 1
+  [[ "$value" == 0.0.0.0 ]] && return 0
+  while IFS= read -r candidate; do
+    [[ "$candidate" == "$value" ]] && return 0
+  done < <(docker_detect_bind_ips)
+  return 1
+}
+
+docker_probe_ip() {
+  if [[ "$1" == 0.0.0.0 ]]; then
+    printf '127.0.0.1\n'
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+docker_select_bind_ip() {
+  local previous=${1:-} choice='' default_ip='' hint_ip='' i
+  local -a detected_ips=()
+
+  if ((bind_ip_explicit)); then
+    docker_bind_ip_is_local "$bind_ip" || {
+      ui_fail "Adres --bind-ip $bind_ip nie jest poprawnym IPv4 przypisanym do tego hosta."
+      return 1
+    }
+    ui_info "Adres publikacji Docker ustawiony jawnie: $bind_ip"
+    return 0
+  fi
+
+  mapfile -t detected_ips < <(docker_detect_bind_ips)
+  ((${#detected_ips[@]} > 0)) || {
+    ui_fail 'Nie udało się wykryć żadnego lokalnego adresu IPv4 dla publikacji Docker.'
+    return 1
+  }
+
+  # Auto-update must not silently change network exposure. Preserve the
+  # previously selected bind before considering CP_PUBLIC_HOST as a hint.
+  if ((update_in_progress)); then
+    if [[ -n "$previous" ]] && docker_bind_ip_is_local "$previous"; then
+      bind_ip=$previous
+      ui_info "Auto-update zachowuje adres publikacji Docker: $bind_ip"
+    elif [[ -z "$previous" ]]; then
+      # Legacy installs published on all interfaces before CP_BIND_IP existed.
+      bind_ip=0.0.0.0
+      ui_warn 'Stara konfiguracja Docker nie zawiera CP_BIND_IP; auto-update zachowuje dotychczasowe 0.0.0.0.'
+    else
+      ui_fail "Zapisany CP_BIND_IP=$previous nie jest już przypisany do hosta. Uruchom ręcznie instalator z --docker --bind-ip IP."
+      return 1
+    fi
+    return 0
+  fi
+
+  if [[ "$backend_host" == localhost || "$backend_host" == 127.0.0.1 ]]; then
+    hint_ip=127.0.0.1
+  elif docker_valid_ipv4 "$backend_host" 2>/dev/null && docker_bind_ip_is_local "$backend_host"; then
+    hint_ip=$backend_host
+  fi
+
+  if [[ -n "$previous" ]] && docker_bind_ip_is_local "$previous"; then
+    default_ip=$previous
+  elif [[ -r "$docker_env" && -z "$previous" ]]; then
+    # A legacy installation without CP_BIND_IP used Docker's wildcard bind.
+    # Preserve that exposure unless the operator deliberately chooses another IP.
+    default_ip=0.0.0.0
+    ui_warn 'Istniejąca konfiguracja nie zawiera CP_BIND_IP; domyślnie zachowuję publikację na wszystkich interfejsach.'
+  elif [[ -n "$hint_ip" ]]; then
+    default_ip=$hint_ip
+  else
+    default_ip=${detected_ips[0]}
+  fi
+
+  if ((non_interactive)) || [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    bind_ip=$default_ip
+    ui_info "Automatycznie wybrano adres publikacji Docker: $bind_ip"
+    return 0
+  fi
+
+  ui_header 'Adres publikacji Docker'
+  printf 'Wykryte adresy IPv4 hosta:\n' >/dev/tty
+  for i in "${!detected_ips[@]}"; do
+    printf '  [%d] %s' "$((i + 1))" "${detected_ips[$i]}" >/dev/tty
+    [[ "${detected_ips[$i]}" != "$previous" ]] || printf '  (obecny)' >/dev/tty
+    printf '\n' >/dev/tty
+  done
+  printf '  [0] 0.0.0.0  (wszystkie interfejsy)\n' >/dev/tty
+
+  while :; do
+    printf 'Wybierz numer lub wpisz IPv4 [%s]: ' "$default_ip" >/dev/tty
+    IFS= read -r choice </dev/tty || return 1
+    if [[ -z "$choice" ]]; then
+      bind_ip=$default_ip
+    elif [[ "$choice" == 0 ]]; then
+      bind_ip=0.0.0.0
+    elif [[ "$choice" =~ ^[0-9]+$ ]] && ((10#$choice >= 1 && 10#$choice <= ${#detected_ips[@]})); then
+      bind_ip=${detected_ips[$((10#$choice - 1))]}
+    else
+      bind_ip=$choice
+    fi
+
+    if docker_bind_ip_is_local "$bind_ip"; then
+      ui_ok "Docker będzie publikował aplikację na $bind_ip."
+      return 0
+    fi
+    ui_warn "Adres $bind_ip nie jest poprawnym IPv4 przypisanym do tego hosta."
+  done
+}
+
 DOCKER_INSTALL_LOCK_FD=''
 
 docker_acquire_install_lock() {
@@ -936,7 +1090,7 @@ docker_acquire_install_lock() {
 docker_preflight() {
   local failed=0 command free_kib auth_tmp docker_root_dir docker_root_kib registry_code registry_auth_code
   ui_info "System: $NAME $VERSION_ID · $arch · tryb Docker"
-  ui_info "Cel: https://$backend_host:$backend_port · workery: $workers · ref: $ref"
+  ui_info "Cel: https://$backend_host:$backend_port · bind: $bind_ip:$backend_port · workery: $workers · ref: $ref"
 
   for command in awk sed grep tar openssl curl df sha256sum stat hostname flock ss "$python_command" systemctl; do
     if ! command -v "$command" >/dev/null 2>&1; then
@@ -1015,15 +1169,26 @@ docker_preflight() {
     failed=1
   fi
 
-  if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$backend_port$"; then
+  local listen_conflict=0 local_addr=''
+  if command -v ss >/dev/null 2>&1; then
+    while IFS= read -r local_addr; do
+      case "$local_addr" in
+        "$bind_ip:$backend_port"|"0.0.0.0:$backend_port"|"*:$backend_port"|"[::]:$backend_port"|":::$backend_port")
+          listen_conflict=1
+          break
+          ;;
+      esac
+    done < <(ss -H -ltn 2>/dev/null | awk -v suffix=":$backend_port" '$4 ~ suffix"$" {print $4}')
+  fi
+  if ((listen_conflict)); then
     if command -v docker >/dev/null 2>&1 && docker ps         --filter "label=com.docker.compose.project=$docker_project"         --filter "label=com.docker.compose.service=proxy"         --format '{{.Ports}}' 2>/dev/null | grep -Eq "(^|:)$backend_port->"; then
-      ui_info "Port $backend_port jest używany przez istniejący proxy Cloudportal; reinstalacja może go przejąć."
+      ui_info "Adres $bind_ip:$backend_port jest używany przez istniejący proxy Cloudportal; reinstalacja może go przejąć."
     else
-      ui_fail "Port $backend_port jest już zajęty przez proces lub kontener spoza projektu $docker_project."
+      ui_fail "Adres $bind_ip:$backend_port jest już zajęty przez proces lub kontener spoza projektu $docker_project."
       failed=1
     fi
   else
-    ui_ok "Port $backend_port jest dostępny."
+    ui_ok "Adres $bind_ip:$backend_port jest dostępny."
   fi
 
   ((failed == 0))
@@ -1258,13 +1423,17 @@ EOF
 }
 
 docker_updater_status_probe() {
-  local public_port=${1:-8443} token=''
+  local public_port=${1:-8443} token='' public_bind_ip='' probe_ip=''
   [[ -s "$docker_config/updater-status.token" ]] || return 1
   token=$(tr -d '\r\n' < "$docker_config/updater-status.token")
   [[ -n "$token" ]] || return 1
+  [[ ! -r "$docker_env" ]] || public_bind_ip=$(sed -n 's/^CP_BIND_IP=//p' "$docker_env" | tail -n 1)
+  public_bind_ip=${public_bind_ip:-0.0.0.0}
+  docker_valid_ipv4 "$public_bind_ip" || return 1
+  probe_ip=$(docker_probe_ip "$public_bind_ip")
   curl -kfsS --connect-timeout 2 --max-time 8 \
     -H "X-Update-Status-Token: $token" \
-    "https://127.0.0.1:$public_port/update-status" >/dev/null
+    "https://$probe_ip:$public_port/update-status" >/dev/null
 }
 
 docker_prepare_candidate_rollback_backup() {
@@ -1368,7 +1537,7 @@ docker_status_check() {
   auto_update_show_status
 
   local failed=0
-  local release public_port='8443' public_host='' expected_workers='1'
+  local release public_port='8443' public_host='' public_bind_ip='0.0.0.0' probe_ip='' expected_workers='1'
   local required_services=(postgres redis migrate api worker dispatcher proxy)
   local long_running_services=(postgres redis api dispatcher proxy)
   local compose_services=()
@@ -1397,10 +1566,13 @@ docker_status_check() {
   if [[ -r "$docker_env" ]]; then
     public_host=$(sed -n 's/^CP_PUBLIC_HOST=//p' "$docker_env" | tail -n 1)
     public_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
+    public_bind_ip=$(sed -n 's/^CP_BIND_IP=//p' "$docker_env" | tail -n 1)
     expected_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
     public_port=${public_port:-8443}
+    public_bind_ip=${public_bind_ip:-0.0.0.0}
     expected_workers=${expected_workers:-$default_workers}
     ui_info "Endpoint HTTPS: https://${public_host:-localhost}:$public_port"
+    ui_info "Publikacja Docker: $public_bind_ip:$public_port"
     ui_info "Oczekiwana liczba workerów: $expected_workers"
   else
     ui_fail "Brak konfiguracji Docker: $docker_env"
@@ -1524,9 +1696,10 @@ docker_status_check() {
     failed=1
   fi
 
-  if [[ "$public_port" =~ ^[0-9]+$ ]] && command -v curl >/dev/null 2>&1; then
-    if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
-      ui_ok "HTTPS healthcheck: /api/v1/health odpowiada na porcie $public_port"
+  probe_ip=$(docker_probe_ip "$public_bind_ip")
+  if [[ "$public_port" =~ ^[0-9]+$ ]] && docker_valid_ipv4 "$public_bind_ip" && command -v curl >/dev/null 2>&1; then
+    if curl -kfsS --connect-timeout 2 --max-time 5 "https://$probe_ip:$public_port/api/v1/health" >/dev/null 2>&1; then
+      ui_ok "HTTPS healthcheck: /api/v1/health odpowiada na $public_bind_ip:$public_port"
     else
       ui_fail "HTTPS healthcheck nie odpowiada na porcie $public_port."
       failed=1
@@ -1614,7 +1787,7 @@ docker_repair() {
   CURRENT_STAGE='auto-naprawa Docker'
   ui_header 'Cloudportal-backed — auto-naprawa Docker'
 
-  local release expected_workers='1' public_port='8443'
+  local release expected_workers='1' public_port='8443' public_bind_ip='0.0.0.0' probe_ip=''
   local docker_ready=0 https_ready=0 running_workers=0 total_workers=0
   local infra_repaired=0 network_repaired=0 migrate_repaired=0 api_repaired=0
   local ids=() state health exit_code service attempt
@@ -1661,8 +1834,10 @@ docker_repair() {
 
   expected_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
   public_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
+  public_bind_ip=$(sed -n 's/^CP_BIND_IP=//p' "$docker_env" | tail -n 1)
   expected_workers=${expected_workers:-$default_workers}
   public_port=${public_port:-8443}
+  public_bind_ip=${public_bind_ip:-0.0.0.0}
   docker_valid_workers "$expected_workers" || {
     ui_fail "Nieprawidłowa wartość CP_WORKER_COUNT: ${expected_workers:-brak}"
     return 1
@@ -1671,6 +1846,11 @@ docker_repair() {
     ui_fail "Nieprawidłowa wartość CP_HTTPS_PORT: ${public_port:-brak}"
     return 1
   }
+  docker_valid_ipv4 "$public_bind_ip" || {
+    ui_fail "Nieprawidłowa wartość CP_BIND_IP: ${public_bind_ip:-brak}"
+    return 1
+  }
+  probe_ip=$(docker_probe_ip "$public_bind_ip")
 
   ui_info 'Weryfikuję hostowy serwis updatera i jego tokeny.'
   docker_prepare_updater_config ''
@@ -1945,7 +2125,7 @@ docker_repair() {
 
   ui_info 'Oczekuję na końcowy HTTPS healthcheck.'
   for ((attempt=1; attempt<=30; attempt++)); do
-    if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
+    if curl -kfsS --connect-timeout 2 --max-time 5 "https://$probe_ip:$public_port/api/v1/health" >/dev/null 2>&1; then
       https_ready=1
       break
     fi
@@ -1956,7 +2136,7 @@ docker_repair() {
     ui_warn 'HTTPS nadal nie odpowiada; wykonuję jeden celowany restart proxy.'
     docker_compose restart proxy || true
     for ((attempt=1; attempt<=15; attempt++)); do
-      if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$public_port/api/v1/health" >/dev/null 2>&1; then
+      if curl -kfsS --connect-timeout 2 --max-time 5 "https://$probe_ip:$public_port/api/v1/health" >/dev/null 2>&1; then
         https_ready=1
         break
       fi
@@ -2161,14 +2341,30 @@ docker_install() {
   local docker_tls_changed=0 had_previous_tls=0
   docker_tmp_dir=''
   previous_release=$(docker_current_release)
-  local previous_docker_host='' previous_docker_port='' previous_docker_workers=''
+  local previous_docker_host='' previous_docker_port='' previous_docker_bind_ip='' previous_docker_workers=''
   if [[ -r "$docker_env" ]]; then
     previous_docker_host=$(sed -n 's/^CP_PUBLIC_HOST=//p' "$docker_env" | tail -n 1)
     previous_docker_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
+    previous_docker_bind_ip=$(sed -n 's/^CP_BIND_IP=//p' "$docker_env" | tail -n 1)
     previous_docker_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
   fi
-  backend_host=${backend_host:-${previous_docker_host:-$(hostname -f 2>/dev/null || hostname)}}
   backend_port=${backend_port:-${previous_docker_port:-8443}}
+  docker_select_bind_ip "$previous_docker_bind_ip" || exit 2
+  if [[ -z "$backend_host" ]]; then
+    if [[ -n "$previous_docker_host" ]]; then
+      backend_host=$previous_docker_host
+    elif [[ "$bind_ip" != 0.0.0.0 ]]; then
+      backend_host=$bind_ip
+    else
+      local detected_public_ip=''
+      while IFS= read -r detected_public_ip; do
+        [[ "$detected_public_ip" == 127.0.0.1 ]] && continue
+        backend_host=$detected_public_ip
+        break
+      done < <(docker_detect_bind_ips)
+      backend_host=${backend_host:-127.0.0.1}
+    fi
+  fi
   if [[ -z "$workers" ]]; then
     if ((update_in_progress)) && [[ "${previous_docker_workers:-}" == 1 ]]; then
       workers=$default_workers
@@ -2260,6 +2456,7 @@ PY
 CP_POSTGRES_PASSWORD=$postgres_password
 CP_BUILD_COMMIT=$release_sha
 CP_HTTPS_PORT=$backend_port
+CP_BIND_IP=$bind_ip
 CP_TLS_DIR=$docker_tls
 CP_PUBLIC_HOST=$backend_host
 CP_WORKER_COUNT=$workers
@@ -2414,14 +2611,15 @@ EOF
     exit 1
   fi
   local ready=0
-  local docker_tls_source=''
+  local docker_tls_source='' docker_health_ip=''
   local docker_health_curl=(-fsS --connect-timeout 2 --max-time 5)
   [[ -r "$docker_tls/source" ]] && docker_tls_source=$(tr -d '\r\n' < "$docker_tls/source")
   if [[ "$docker_tls_source" == managed-self-signed ]] || docker_certificate_is_self_signed "$docker_tls/server.crt"; then
     docker_health_curl+=(--cacert "$docker_tls/server.crt")
   fi
+  docker_health_ip=$(docker_probe_ip "$bind_ip")
   for ((attempt=1; attempt<=45; attempt++)); do
-    if curl "${docker_health_curl[@]}" --resolve "$backend_host:$backend_port:127.0.0.1" "https://$backend_host:$backend_port/api/v1/health" >/dev/null 2>&1; then
+    if curl "${docker_health_curl[@]}" --resolve "$backend_host:$backend_port:$docker_health_ip" "https://$backend_host:$backend_port/api/v1/health" >/dev/null 2>&1; then
       ready=1
       break
     fi
@@ -2484,6 +2682,7 @@ EOF
   ui_header 'Podsumowanie'
   ui_ok 'Instalacja Docker Cloudportal-backed zakończona.'
   ui_info "Panel: https://$backend_host:$backend_port/ui/"
+  ui_info "Publikacja Docker: $bind_ip:$backend_port"
   ui_info "Runtime: $release"
   ui_info "Konfiguracja: $docker_config"
   ui_info "Workery: $workers"
