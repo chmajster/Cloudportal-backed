@@ -264,6 +264,10 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
             "cpu": _number_from(variables, ("cores", "cpu", "vcpu", "cpu_cores")),
             "memory_mb": _number_from(variables, ("memory", "memory_mb", "ram_mb")),
             "disk_gb": _number_from(variables, ("disk_size_gb", "disk_gb", "disk_size")),
+            "storage": variables.get("storage") or variables.get("datastore") or variables.get("datastore_id"),
+            "network": variables.get("network") or variables.get("bridge") or variables.get("network_id"),
+            "node": variables.get("node") or variables.get("host") or variables.get("target_node"),
+            "cluster": variables.get("cluster") or variables.get("cluster_id"),
             "tags": classification_tags,
             "variables": copy.deepcopy(variables),
         },
@@ -291,6 +295,61 @@ def _resource_metadata(db, target):
     if isinstance(tags, str):
         tags = [item for item in tags.replace(",", ";").split(";") if item]
     return row, metadata, list(tags) if isinstance(tags, list) else []
+
+
+def _day2_requested_resource(action_id, params):
+    """Project requested Day-2 values onto canonical resource fields.
+
+    Policy constraints are defined against resource.*. Provider request schemas
+    use action-specific names, so this adapter prevents limits from silently
+    ignoring a resize, disk or network value because the canonical field would
+    otherwise be missing from the evaluation context.
+    """
+    action = str(action_id or "")
+    values = dict(params or {})
+    requested = {}
+    if action == "resize_compute":
+        if values.get("cpu_cores") is not None:
+            requested["cpu"] = values["cpu_cores"]
+        if values.get("memory_mb") is not None:
+            requested["memory_mb"] = values["memory_mb"]
+    elif action == "add_disk":
+        requested["disk_gb"] = values.get("size_gib")
+        requested["storage"] = values.get("storage")
+    elif action == "resize_disk":
+        requested["disk_gb"] = values.get("new_size_gib")
+    elif action in {"add_nic", "edit_nic"}:
+        requested["network"] = values.get("bridge")
+        requested["vlan"] = values.get("vlan")
+    elif action == "migrate_vm":
+        requested["node"] = values.get("target_node")
+    elif action == "move_storage":
+        requested["storage"] = values.get("target_storage")
+    elif action == "clone_vm":
+        requested["node"] = values.get("target_node")
+        requested["storage"] = values.get("target_storage")
+    return {key: value for key, value in requested.items() if value is not None}
+
+
+def _apply_day2_effective_values(action_id, params, resource):
+    """Write policy-selected canonical values back to the provider parameters."""
+    action = str(action_id or "")
+    result = copy.deepcopy(dict(params or {}))
+    resource = dict(resource or {})
+    mapping = {
+        "resize_compute": {"cpu": "cpu_cores", "memory_mb": "memory_mb"},
+        "add_disk": {"disk_gb": "size_gib", "storage": "storage"},
+        "resize_disk": {"disk_gb": "new_size_gib"},
+        "add_nic": {"network": "bridge", "vlan": "vlan"},
+        "edit_nic": {"network": "bridge", "vlan": "vlan"},
+        "migrate_vm": {"node": "target_node"},
+        "move_storage": {"storage": "target_storage"},
+        "clone_vm": {"node": "target_node", "storage": "target_storage"},
+    }.get(action, {})
+    for canonical, parameter in mapping.items():
+        if resource.get(canonical) is not None:
+            result[parameter] = resource[canonical]
+    return result
 
 
 def enforce_day2(db, request, actor, permissions, target, action_id, params):
@@ -327,6 +386,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
             "scope_key": scope_context.get("key") or metadata.get("resource_scope_key"),
             "tags": tags,
             "metadata": metadata,
+            **_day2_requested_resource(action_id, params),
         },
     }
     result = evaluate_context(db, context, persist=True, durable_denies=True)
@@ -335,6 +395,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
     effective_params = ((effective.get("request") or {}).get("parameters"))
     if isinstance(effective_params, dict):
         params = copy.deepcopy(effective_params)
+    params = _apply_day2_effective_values(action_id, params, effective.get("resource") or {})
     return params, result
 
 
@@ -449,6 +510,10 @@ def revalidate_day2_job(db, job, action_request, user, permissions, target):
             "scope_key": scope_context.get("key") or metadata.get("resource_scope_key"),
             "tags": tags,
             "metadata": metadata,
+            **_day2_requested_resource(
+                getattr(action_request, "action", ""),
+                getattr(action_request, "parameters", {}) or {},
+            ),
         },
     }
     return evaluate_context(db, context, persist=True)
