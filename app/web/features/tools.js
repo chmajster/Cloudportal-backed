@@ -102,6 +102,33 @@ function hostnameGeneratorTool(schemes = []) {
   );
 }
 
+function ansiblePlaybooksTool(playbooks = [], error = null) {
+  const active = playbooks.filter(item => item.enabled !== false);
+  const custom = playbooks.filter(item => item.custom);
+  const system = playbooks.filter(item => !item.custom);
+  return node('article', { class: 'panel tool-card tool-card-featured' },
+    node('div', { class: 'tool-card-head' },
+      node('div', { class: 'tool-icon', 'aria-hidden': 'true' }, appIcon('file-text')),
+      node('div', { class: 'tool-title' },
+        node('span', { class: 'tool-category', text: 'Ansible' }),
+        node('h2', { text: 'Playbooki Ansible' }),
+        node('p', { class: 'muted', text: 'Osobne centrum zarządzania playbookami systemowymi i własnymi, poza Katalogiem IaC.' })),
+      badge(error ? 'Niedostępne' : (String(active.length) + ' aktywnych'), error ? 'warning' : 'ok')),
+    error
+      ? node('p', { class: 'tool-error muted', text: error?.message || 'Nie udało się pobrać playbooków Ansible.' })
+      : node('div', { class: 'tool-meta-grid' },
+          toolMeta('Wszystkie', playbooks.length),
+          toolMeta('Systemowe', system.length),
+          toolMeta('Własne', custom.length),
+          toolMeta('Wyłączone', playbooks.length - active.length)),
+    node('div', { class: 'tool-card-footer' },
+      node('span', { class: 'tool-health' },
+        node('span', { class: 'status-dot ' + (error ? 'warn' : 'ok') }),
+        error ? 'Stan playbooków nieznany' : 'Zarządzanie i uruchamianie playbooków'),
+      button('Zarządzaj playbookami', () => navigate('ansible-playbooks'), 'primary'))
+  );
+}
+
 function ansibleHostEntryTool() {
   return node('article', { class: 'panel tool-card' },
     node('div', { class: 'tool-card-head' },
@@ -1144,7 +1171,15 @@ async function toolsView() {
     if (availabilityCard) cards.push(availabilityCard);
   }
 
-  if (allowed('ansible.read')) cards.push(ansibleHostEntryTool());
+  if (allowed('ansible.read')) {
+    try {
+      const playbooks = await api('/ansible/playbooks');
+      cards.push(ansiblePlaybooksTool(playbooks.items || []));
+    } catch (error) {
+      cards.push(ansiblePlaybooksTool([], error));
+    }
+    cards.push(ansibleHostEntryTool());
+  }
   if (allowed('instance_backups.read')) cards.push(instanceBackupTool());
 
   if (allowed('updates.read')) {
