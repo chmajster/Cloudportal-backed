@@ -232,9 +232,14 @@ async function tlsSettingsView() {
           node('p', { text: 'Oczekiwane są katalogi zawierające fullchain.pem i privkey.pem, np. /etc/letsencrypt/live/kynlab.ddnsfree.com/.' }))
   );
 
+  const certificateNames = certificateDescription(certificate);
   const note = node('section', { class: 'panel tls-settings-warning' },
     node('strong', { text: 'Dopasowanie adresu do certyfikatu' }),
-    node('p', { text: 'Certyfikat dla kynlab.ddnsfree.com jest poprawny wyłącznie przy otwieraniu panelu przez tę nazwę DNS. Wejście przez https://100.118.132.40:8443/ nadal spowoduje błąd nazwy certyfikatu.' }));
+    node('p', {
+      text: 'Adres używany w przeglądarce musi być objęty przez SAN certyfikatu. '
+        + 'Aktualny endpoint: https://' + status.hostname + ':' + status.port + '/. '
+        + 'Nazwy/adresy w aktywnym certyfikacie: ' + certificateNames + '.',
+    }));
 
   dom.content.replaceChildren(
     heading('Konfiguracja certyfikatu HTTPS dla panelu i API.'),
