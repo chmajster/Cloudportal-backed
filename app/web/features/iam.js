@@ -7,21 +7,21 @@ let selectedUserId = null;
 const TABS = [
   ['assignments', 'Przypisania'],
   ['groups', 'Grupy'],
-  ['simulator', 'RBAC Simulator'],
-  ['review', 'Access Review'],
+  ['simulator', 'Zaawansowane · Simulator'],
+  ['review', 'Zaawansowane · Access Review'],
 ];
 
 const SCOPE_TYPES = [
-  ['GLOBAL', 'System'],
-  ['ORGANIZATION', 'Organization'],
-  ['PROJECT', 'Project'],
+  ['GLOBAL', 'Cała platforma'],
+  ['ORGANIZATION', 'Cała Organizacja'],
+  ['PROJECT', 'Cały Projekt'],
   ['APMID', 'APMID'],
-  ['ENVIRONMENT', 'Environment'],
-  ['RESOURCE_POOL', 'Resource Pool'],
-  ['BLUEPRINT', 'Blueprint'],
-  ['DEPLOYMENT', 'Deployment'],
-  ['RESOURCE', 'Resource'],
-  ['MACHINE', 'Machine'],
+  ['ENVIRONMENT', 'ENV'],
+  ['RESOURCE_POOL', 'Konkretny Resource Pool'],
+  ['BLUEPRINT', 'Konkretny Blueprint'],
+  ['DEPLOYMENT', 'Konkretny Deployment'],
+  ['RESOURCE', 'Konkretny Zasób'],
+  ['MACHINE', 'Konkretna VM / Machine'],
 ];
 
 async function iamApi(path, options = {}, canRefresh = true) {
@@ -170,8 +170,8 @@ async function accessAssignmentForm(forcedUserId = null) {
   let loadSubjects = async () => {};
 
   openModal({
-    title: forcedUserId ? 'Przypisz dostęp użytkownikowi' : 'Nowy RoleAssignment',
-    eyebrow: 'Enterprise IAM',
+    title: forcedUserId ? 'Przypisz dostęp użytkownikowi' : 'Przypisz dostęp',
+    eyebrow: 'Dostęp i uprawnienia',
     body: formHost,
     wide: true,
     submitLabel: 'Przypisz dostęp',
@@ -264,11 +264,11 @@ async function accessAssignmentForm(forcedUserId = null) {
   }
 
   const organizations = organizationsResult.items || [];
-  const subjectType = selectField('Subject type', 'subject_type', [
-    { value: 'USER', label: 'User' },
-    { value: 'GROUP', label: 'Group' },
-    { value: 'SERVICE_ACCOUNT', label: 'Service Account' },
-    { value: 'API_TOKEN', label: 'API Token' },
+  const subjectType = selectField('Kto?', 'subject_type', [
+    { value: 'USER', label: 'Użytkownik' },
+    { value: 'GROUP', label: 'Grupa' },
+    { value: 'SERVICE_ACCOUNT', label: 'Konto serwisowe' },
+    { value: 'API_TOKEN', label: 'Token API · zaawansowane' },
   ], 'USER', { required: true });
 
   const subjectHost = node('div', { class: 'wide' });
@@ -284,15 +284,15 @@ async function accessAssignmentForm(forcedUserId = null) {
   role.classList.add('iam-role-searchable-select');
   role.searchableSelect.setState('loading', 'Ładowanie ról…');
 
-  const effect = selectField('Effect', 'effect', [
+  const effect = selectField('Efekt', 'effect', [
     { value: 'ALLOW', label: 'ALLOW' },
     { value: 'DENY', label: 'DENY' },
   ], 'ALLOW', { required: true });
-  const scopeType = selectField('Scope', 'scope_type',
+  const scopeType = selectField('Zakres', 'scope_type',
     SCOPE_TYPES.map(([scopeValue, label]) => ({ value: scopeValue, label })),
     'GLOBAL', { required: true });
 
-  const organization = searchableSelectField('Organization', 'tenant_id', organizations.map(item => ({
+  const organization = searchableSelectField('Organizacja', 'tenant_id', organizations.map(item => ({
     value: item.id,
     label: item.name + (item.slug ? ' · ' + item.slug : ''),
   })), '', {
@@ -306,10 +306,10 @@ async function accessAssignmentForm(forcedUserId = null) {
   });
   organization.append(organizationStatus);
 
-  const project = searchableSelectField('Project', 'project_id', [], '', {
+  const project = searchableSelectField('Projekt', 'project_id', [], '', {
     wide: true,
     selectFirst: false,
-    placeholder: 'Najpierw wybierz Organization',
+    placeholder: 'Najpierw wybierz Organizację',
   });
   const projectStatus = node('span', { class: 'field-help', text: '' });
   project.append(projectStatus);
@@ -330,21 +330,27 @@ async function accessAssignmentForm(forcedUserId = null) {
   const environmentStatus = node('span', { class: 'field-help', text: '' });
   environment.append(environmentStatus);
 
-  const scopeId = field('Resource / scope ID', 'scope_id', { maxlength: 160, wide: true });
+  const scopeId = field('Konkretny zasób', 'scope_id', { maxlength: 160, wide: true });
   const conditions = field('Conditions JSON', 'conditions', {
     tag: 'textarea',
     value: '{}',
     wide: true,
     help: 'Bez eval(). Obsługiwany jest bezpieczny condition tree Policy Engine.',
   });
-  const validFrom = field('Valid from', 'valid_from', { type: 'datetime-local' });
-  const validUntil = field('Valid until', 'valid_until', { type: 'datetime-local' });
-  const inherit = checkboxField('Dziedzicz do scope potomnych', 'inherit', true);
+  const validFrom = field('Ważny od', 'valid_from', { type: 'datetime-local' });
+  const validUntil = field('Ważny do', 'valid_until', { type: 'datetime-local' });
+  const inherit = checkboxField('Dziedzicz do zakresów podrzędnych', 'inherit', true);
   const approval = checkboxField('Wymagaj approval przed operacją', 'approval_required', false);
+  const summary = node('div', { class: 'wide panel' },
+    node('strong', { text: 'Podsumowanie' }),
+    node('div', { class: 'muted', text: 'Wybierz podmiot, zakres i rolę.' }));
+  const advanced = node('details', { class: 'wide panel' },
+    node('summary', { text: 'Zaawansowane' }),
+    node('div', { class: 'form-grid' }, effect, approval, conditions));
 
   formHost.replaceChildren(
-    subjectType, subjectHost, role, effect, scopeType, organization, project, apmid,
-    environment, scopeId, validFrom, validUntil, inherit, approval, conditions);
+    subjectType, subjectHost, organization, project, scopeType, apmid, environment,
+    scopeId, role, inherit, validFrom, validUntil, summary, advanced);
 
   const subjectTypeSelect = subjectType.querySelector('select');
   const scopeSelect = scopeType.querySelector('select');
@@ -402,7 +408,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     apmid.searchableSelect.setChoices([], '');
     environment.searchableSelect.setChoices([], '');
     if (!organizationId) {
-      projectStatus.textContent = 'Najpierw wybierz Organization';
+      projectStatus.textContent = 'Najpierw wybierz Organizację';
       updateSubmitState();
       return;
     }
@@ -1004,7 +1010,7 @@ async function enterpriseIamView() {
   if (allowed('roles.read')) actions.push(button('Role i permission catalog', () => navigate('roles')));
 
   dom.content.replaceChildren(
-    heading('Enterprise IAM: scope-aware RBAC, explicit DENY, ABAC, temporal access i diagnostyka.', actions),
+    heading('Dostęp i uprawnienia: Kto + co może robić + gdzie.', actions),
     tabBar(),
     body);
 }
@@ -1023,7 +1029,7 @@ registerRoutedForm({
 
 registerView({
   id: 'iam-access',
-  label: 'IAM / Dostępy',
+  label: 'Dostęp i uprawnienia',
   icon: 'A',
   permission: 'rbac.assignments.read',
   order: 21,
