@@ -203,6 +203,9 @@
       tags: '',
       sshUsername: 'clouduser',
       sshPublicKey: '',
+      sshPassword: '',
+      managedGuestCredentialId: '',
+      guestCredentialManaged: false,
       guestCredentialId: '',
       templateGuestCredentialId: '',
       guestAccountMode: 'cloud_init_managed',
@@ -309,8 +312,15 @@
     state.tags = Array.isArray(variables.tags) ? variables.tags.join(', ') : String(variables.tags || '');
     state.sshUsername = String(variables.ssh_username || 'clouduser');
     state.sshPublicKey = String(variables.ssh_public_key || '');
+    state.sshPassword = '';
 
-    state.guestCredentialId = deployment.guest_credential_id == null ? '' : String(deployment.guest_credential_id);
+    state.guestCredentialManaged = Boolean(deployment.guest_credential_managed);
+    state.managedGuestCredentialId = state.guestCredentialManaged && deployment.guest_credential_id != null
+      ? String(deployment.guest_credential_id)
+      : '';
+    state.guestCredentialId = state.guestCredentialManaged
+      ? ''
+      : (deployment.guest_credential_id == null ? '' : String(deployment.guest_credential_id));
     state.templateGuestCredentialId = deployment.template_guest_credential_id == null ? '' : String(deployment.template_guest_credential_id);
     state.guestAccountMode = deployment.guest_account_mode || 'cloud_init_managed';
 
@@ -487,13 +497,21 @@
       deployment.hostname_scheme_id = Number(state.hostnameSchemeId);
     }
     if (state.ipMode === 'ipam' && state.ipamPoolId) deployment.ipam_pool_id = Number(state.ipamPoolId);
-    if (state.guestCredentialId) deployment.guest_credential_id = Number(state.guestCredentialId);
+    if (state.guestCredentialManaged && state.managedGuestCredentialId) {
+      deployment.guest_credential_id = Number(state.managedGuestCredentialId);
+    } else if (state.guestCredentialId) {
+      deployment.guest_credential_id = Number(state.guestCredentialId);
+    }
     if (state.templateGuestCredentialId) {
       deployment.template_guest_credential_id = Number(state.templateGuestCredentialId);
     }
     deployment.guest_account_mode = state.guestAccountMode === 'existing_template'
       ? 'existing_template'
       : 'cloud_init_managed';
+    deployment.guest_credential_managed = Boolean(state.guestCredentialManaged);
+    if (state.guestCredentialManaged && state.sshPassword) {
+      deployment.guest_password = state.sshPassword;
+    }
     if (!state.selectApmidOnExecute && state.apmid) deployment.apmid = String(state.apmid).trim().toUpperCase();
     if (!state.selectEnvironmentOnExecute && state.environment) deployment.environment = String(state.environment).trim().toLowerCase();
     deployment.select_apmid_on_execute = Boolean(state.selectApmidOnExecute);
