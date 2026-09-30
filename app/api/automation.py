@@ -226,6 +226,31 @@ def validate_blueprint_template_variables(data: BlueprintInput):
     validate_template_variables(data.deployment.template, variables)
 
 
+def validate_blueprint_entity_context(data, request: Request):
+    scope = getattr(request.state, 'resource_scope', None)
+    if scope is None or not getattr(scope, 'entity_key', None):
+        return
+    deployment = data.deployment
+    fixed_apmid = None if deployment.select_apmid_on_execute else deployment.apmid
+    fixed_environment = (
+        None if deployment.select_environment_on_execute else deployment.environment
+    )
+    if fixed_apmid and str(fixed_apmid).strip().upper() != str(scope.apmid or '').upper():
+        raise HTTPException(
+            409,
+            'Blueprint APMID does not match the selected Entity',
+        )
+    if (
+        fixed_environment
+        and str(fixed_environment).strip().lower()
+        != str(scope.environment or '').lower()
+    ):
+        raise HTTPException(
+            409,
+            'Blueprint Environment does not match the selected Entity',
+        )
+
+
 def validate_blueprint_role_scope(db, data, request: Request, actor, blueprint_id=None):
     """Reject newly added Blueprint role references outside the actor's delegable scope.
 
@@ -683,6 +708,7 @@ def blueprint_with_inline_hostname_scheme(db, data: BlueprintInput, hostname_sch
 
 @router.post('/blueprints', status_code=201, response_model=BlueprintOutput)
 def create_blueprint(data: BlueprintInput, request: Request, actor=Depends(require('blueprints.create')), db=Depends(get_db, scope='function')):
+    validate_blueprint_entity_context(data, request)
     validate_blueprint_role_scope(db, data, request, actor)
     validate_blueprint_user_scope(db, data, request, actor)
     manager_roles = validate_blueprint_references(db, data)
@@ -702,6 +728,7 @@ def create_blueprint_bundle(bundle: BlueprintBundleInput, request: Request,
                             actor=Depends(require('blueprints.create')), db=Depends(get_db, scope='function')):
     def create():
         data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
+        validate_blueprint_entity_context(data, request)
         validate_blueprint_role_scope(db, data, request, actor)
         validate_blueprint_user_scope(db, data, request, actor)
         manager_roles = validate_blueprint_references(db, data)
@@ -729,6 +756,7 @@ def update_blueprint(
         raise HTTPException(404, 'Blueprint not found')
     require_blueprint_manager(db, row, actor, request)
     require_blueprint_version(row, if_match)
+    validate_blueprint_entity_context(data, request)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
     validate_blueprint_user_scope(db, data, request, actor, blueprint_id=id)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
@@ -756,6 +784,7 @@ def update_blueprint_bundle(
     require_blueprint_manager(db, row, actor, request)
     require_blueprint_version(row, if_match)
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
+    validate_blueprint_entity_context(data, request)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
     validate_blueprint_user_scope(db, data, request, actor, blueprint_id=id)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
