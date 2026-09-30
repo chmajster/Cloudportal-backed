@@ -303,6 +303,9 @@ def actor_matches_entity(
     from app.iam.service import authorize
 
     authorization_actor = _authorization_actor(actor)
+    simulated_user_id = (
+        user_id if getattr(authorization_actor, "kind", None) == "simulation" else None
+    )
     scope = {
         "scope_type": "ENVIRONMENT",
         "scope_id": f'{parts["apmid"]}:{parts["environment"]}',
@@ -328,7 +331,7 @@ def actor_matches_entity(
             scope=scope,
             resource=target,
             write=permission not in {"blueprints.read"},
-            subject_user_id=user_id,
+            subject_user_id=simulated_user_id,
         )
         if decision.decision not in {"ALLOW", "REQUIRES_APPROVAL"}:
             return False
