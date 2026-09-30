@@ -16,7 +16,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
     {
         "id": "read-only",
         "label": "Read-only",
-        "description": "Tylko odczyt Blueprintu i jego metadanych.",
+        "description": "Tylko odczyt zasobów i konfiguracji w danym APMID/Environment.",
         "rank": 10,
         "anchors": ("blueprints.read",),
         "actions": ("blueprints.read",),
@@ -29,7 +29,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
     {
         "id": "operator",
         "label": "Operator",
-        "description": "Odczyt i uruchamianie Blueprintu bez zarządzania jego definicją.",
+        "description": "Operacje runtime i podstawowy Day-2 bez edycji konfiguracji oraz bez usuwania.",
         "rank": 20,
         "anchors": ("blueprints.execute",),
         "actions": ("blueprints.read", "blueprints.execute"),
@@ -47,7 +47,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
     {
         "id": "deployer",
         "label": "Deployer",
-        "description": "Uruchamianie i klonowanie Blueprintów oraz tworzenie deploymentów.",
+        "description": "Tworzenie i wdrażanie zasobów oraz uruchamianie automatyzacji w Entity.",
         "rank": 30,
         "anchors": ("blueprints.execute", "deployments.create"),
         "actions": ("blueprints.read", "blueprints.execute", "blueprints.clone"),
@@ -68,7 +68,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
     {
         "id": "maintainer",
         "label": "Maintainer",
-        "description": "Eksploatacja oraz edycja Blueprintu, bez usuwania i zarządzania ACL.",
+        "description": "Pełna eksploatacja i modyfikacja zasobów, bez administracji IAM oraz destrukcyjnego admina.",
         "rank": 40,
         "anchors": ("blueprints.execute", "blueprints.update"),
         "actions": (
@@ -101,7 +101,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
     {
         "id": "admin",
         "label": "Admin",
-        "description": "Pełny dostęp do Blueprintu w danym APMID i Environment.",
+        "description": "Pełny dostęp aplikacyjny w danym APMID i Environment, nadal ograniczony bazowym RBAC/IAM.",
         "rank": 50,
         "anchors": (
             "blueprints.execute", "blueprints.update",
