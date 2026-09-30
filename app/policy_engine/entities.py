@@ -20,6 +20,11 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
         "rank": 10,
         "anchors": ("blueprints.read",),
         "actions": ("blueprints.read",),
+        "permission_patterns": (
+            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "projects.select", "projects.use", "credentials.read_metadata",
+            "authorization.explain", "policies.audit",
+        ),
     },
     {
         "id": "operator",
@@ -28,6 +33,16 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
         "rank": 20,
         "anchors": ("blueprints.execute",),
         "actions": ("blueprints.read", "blueprints.execute"),
+        "permission_patterns": (
+            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "projects.select", "projects.use", "credentials.read_metadata",
+            "credentials.use", "authorization.explain", "policies.audit",
+            "blueprints.execute", "jobs.execute", "jobs.cancel", "jobs.retry",
+            "terraform.execute", "ansible.execute", "awx.execute",
+            "day2.power", "day2.snapshot.*", "day2.cancel", "day2.retry",
+            "machines.power.*", "machines.snapshot.*", "machines.console.open",
+            "hostnames.reserve", "hostnames.release", "resource_pools.use",
+        ),
     },
     {
         "id": "deployer",
@@ -36,6 +51,19 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
         "rank": 30,
         "anchors": ("blueprints.execute", "deployments.create"),
         "actions": ("blueprints.read", "blueprints.execute", "blueprints.clone"),
+        "permission_patterns": (
+            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "projects.select", "projects.use", "credentials.read_metadata",
+            "credentials.use", "authorization.explain", "policies.audit",
+            "blueprints.execute", "blueprints.clone", "deployments.create",
+            "deployments.retry", "jobs.execute", "jobs.cancel", "jobs.retry",
+            "terraform.execute", "ansible.execute", "awx.execute",
+            "ipam.allocate", "ipam.release", "hostnames.reserve", "hostnames.release",
+            "resource_pools.use", "availability.assign",
+            "day2.power", "day2.snapshot.*", "day2.cancel", "day2.retry",
+            "machines.create", "machines.power.*", "machines.snapshot.*",
+            "machines.console.open",
+        ),
     },
     {
         "id": "maintainer",
@@ -46,6 +74,28 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
         "actions": (
             "blueprints.read", "blueprints.execute", "blueprints.clone",
             "blueprints.update", "blueprints.publish", "blueprints.approve",
+        ),
+        "permission_patterns": (
+            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "projects.select", "projects.use", "credentials.read_metadata",
+            "credentials.use", "authorization.explain", "policies.audit",
+            "blueprints.execute", "blueprints.clone", "blueprints.update",
+            "blueprints.publish", "blueprints.approve",
+            "deployments.create", "deployments.retry", "jobs.execute",
+            "jobs.cancel", "jobs.retry", "terraform.execute", "ansible.execute",
+            "awx.execute", "ipam.allocate", "ipam.release", "hostnames.reserve",
+            "hostnames.release", "resource_pools.use", "availability.assign",
+            "day2.power", "day2.snapshot.*", "day2.compute.resize",
+            "day2.disk.*", "day2.network.manage", "day2.cloudinit.update",
+            "day2.credentials.manage", "day2.ansible.run", "day2.package.manage",
+            "day2.tags.manage", "day2.metadata.manage", "day2.migrate",
+            "day2.clone", "day2.rebuild", "day2.cancel", "day2.retry",
+            "machines.update", "machines.power.*", "machines.snapshot.*",
+            "machines.compute.*", "machines.disk.*", "machines.network.*",
+            "machines.console.*", "machines.cloud_init.*", "machines.credentials.*",
+            "machines.packages.*", "machines.tags.*", "machines.metadata.*",
+            "machines.rebuild", "machines.clone", "machines.migrate",
+            "machines.actions.*",
         ),
     },
     {
@@ -58,6 +108,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
             "blueprints.delete", "blueprints.manage_access",
         ),
         "actions": ("blueprints.*",),
+        "permission_patterns": ("*",),
     },
 )
 _ROLE_BY_ID = {row["id"]: row for row in ENTITY_ROLES}
@@ -113,6 +164,7 @@ def entity_role_catalog() -> list[dict[str, Any]]:
             "description": row["description"],
             "rank": row["rank"],
             "actions": list(row["actions"]),
+            "permission_patterns": list(row["permission_patterns"]),
         }
         for row in ENTITY_ROLES
     ]
@@ -154,6 +206,25 @@ def _action_allowed(role: str, action: str) -> bool:
     if profile is None:
         return False
     return any(fnmatchcase(str(action), pattern) for pattern in profile["actions"])
+
+
+def entity_role_allows_permission(role: Any, permission: Any) -> bool:
+    profile = _ROLE_BY_ID.get(_role(role))
+    if profile is None:
+        return False
+    value = str(permission or "").strip()
+    return bool(value) and any(
+        fnmatchcase(value, pattern)
+        for pattern in profile.get("permission_patterns", ())
+    )
+
+
+def filter_permissions_for_entity_role(role: Any, permissions) -> set[str]:
+    return {
+        str(permission)
+        for permission in set(permissions or ())
+        if entity_role_allows_permission(role, permission)
+    }
 
 
 def entity_keys_for_permissions(
