@@ -132,18 +132,22 @@ def _ensure_group_binding(bind, group_id, system_key, role_names, scope_type,
         else None
     )
     instant = datetime.utcnow()
-    bind.execute(sa.text(
+    statement = sa.text(
         'INSERT INTO iam_role_assignments '
         '(id,subject_type,subject_id,role_id,effect,scope_type,scope_id,tenant_id,project_id,apmid,environment,'
         'conditions,permission_ceiling,inherit,approval_required,valid_from,valid_until,enabled,source,source_ref,'
         'created_by,created_at,updated_at) '
         'VALUES (:id,:subject_type,:subject_id,:role_id,:effect,:scope_type,:scope_id,:tenant_id,:project_id,:apmid,NULL,'
         ':conditions,:ceiling,:inherit,:approval,NULL,NULL,:enabled,:source,:source_ref,NULL,:created,:updated)'
-    ), {
+    ).bindparams(
+        sa.bindparam('conditions', type_=sa.JSON()),
+        sa.bindparam('ceiling', type_=sa.JSON()),
+    )
+    bind.execute(statement, {
         'id': _uuid('binding', system_key), 'subject_type': 'GROUP', 'subject_id': group_id,
         'role_id': role_id, 'effect': 'ALLOW', 'scope_type': scope_type, 'scope_id': scope_id,
         'tenant_id': organization_id, 'project_id': project_id, 'apmid': apmid,
-        'conditions': json.dumps({}), 'ceiling': json.dumps(_role_ceiling(bind, role_id)),
+        'conditions': {}, 'ceiling': _role_ceiling(bind, role_id),
         'inherit': True, 'approval': False, 'enabled': True, 'source': 'SYSTEM',
         'source_ref': source_ref, 'created': instant, 'updated': instant,
     })
@@ -224,18 +228,22 @@ def _insert_legacy_binding(bind, *, source_ref, user_id, role_id, scope_type,
         return
     instant = datetime.utcnow()
     scope_id = organization_id if scope_type == 'ORGANIZATION' else project_id if scope_type == 'PROJECT' else None
-    bind.execute(sa.text(
+    statement = sa.text(
         'INSERT INTO iam_role_assignments '
         '(id,subject_type,subject_id,role_id,effect,scope_type,scope_id,tenant_id,project_id,apmid,environment,'
         'conditions,permission_ceiling,inherit,approval_required,valid_from,valid_until,enabled,source,source_ref,'
         'created_by,created_at,updated_at) '
         'VALUES (:id,:subject_type,:subject_id,:role_id,:effect,:scope_type,:scope_id,:tenant_id,:project_id,NULL,NULL,'
         ':conditions,:ceiling,:inherit,:approval,NULL,NULL,:enabled,:source,:source_ref,:created_by,:created,:updated)'
-    ), {
+    ).bindparams(
+        sa.bindparam('conditions', type_=sa.JSON()),
+        sa.bindparam('ceiling', type_=sa.JSON()),
+    )
+    bind.execute(statement, {
         'id': _uuid('legacy-binding', source_ref), 'subject_type': 'USER', 'subject_id': str(user_id),
         'role_id': role_id, 'effect': 'ALLOW', 'scope_type': scope_type, 'scope_id': scope_id,
         'tenant_id': organization_id, 'project_id': project_id,
-        'conditions': json.dumps({}), 'ceiling': None if ceiling is None else json.dumps(ceiling),
+        'conditions': {}, 'ceiling': ceiling,
         'inherit': True, 'approval': False, 'enabled': True, 'source': 'MIGRATION',
         'source_ref': source_ref, 'created_by': created_by, 'created': instant, 'updated': instant,
     })
