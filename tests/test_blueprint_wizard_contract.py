@@ -731,7 +731,7 @@ def test_blueprint_vm_step_separates_metadata_and_cloud_init_access():
     assert "field('Hasło SSH', 'cloud_init_ssh_password'" in cloud_init
     assert "type: 'password'" in cloud_init
     assert "field('Klucz publiczny SSH', 'cloud_init_ssh_public_key'" in cloud_init
-    assert "Pola użytkownika SSH i klucza publicznego są ukryte" in cloud_init
+    assert "Pola użytkownika SSH, hasła i klucza publicznego są ukryte" in cloud_init
     assert "klucz publiczny: automatycznie z klucza prywatnego" in cloud_init
 
 
