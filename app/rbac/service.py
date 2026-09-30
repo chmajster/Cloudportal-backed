@@ -15,6 +15,7 @@ PERMISSIONS = {
         'users': 'read create update delete assign_roles impersonate',
         'roles': 'read create update delete assign delegate',
         'groups': 'read create update delete manage_members map_identity',
+        'iam': 'assign subject.read roles.read binding.read binding.create binding.update binding.delete',
         'service_accounts': 'read create update delete tokens.manage',
         'rbac': 'assignments.read assignments.manage access_review.read impact.read',
         'authorization': 'check explain simulate',
@@ -173,6 +174,8 @@ def seed(db):
         },
         'Security Administrator': {
             'users.read', 'roles.read', 'groups.read', 'groups.map_identity',
+            'iam.assign', 'iam.subject.read', 'iam.roles.read', 'iam.binding.read',
+            'iam.binding.create', 'iam.binding.update', 'iam.binding.delete',
             'rbac.assignments.read', 'rbac.assignments.manage', 'rbac.access_review.read',
             'authorization.check', 'authorization.explain', 'authorization.simulate',
             'audit.read', 'policies.read', 'policies.manage', 'policies.simulate', 'policies.audit',
