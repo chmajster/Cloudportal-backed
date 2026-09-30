@@ -10,7 +10,10 @@ def test_iam_role_field_uses_existing_searchable_select_contract():
     shared = Path('app/web/shared/searchable-select.js').read_text()
     styles = Path('app/web/styles/features/identity.css').read_text()
 
-    assert "api('/rbac/roles?limit=200')" in iam
+    assert "assignable: 'true'" in iam
+    assert "api('/rbac/roles?' + query.toString())" in iam
+    assert "scope_type: kind" in iam
+    assert "while (offset < total)" in iam
     assert "searchableSelectField('Rola', 'role_id'" in iam
     assert "placeholder: 'Wyszukaj rolę…'" in iam
     assert "emptyText: 'Brak pasujących ról'" in iam
@@ -166,6 +169,15 @@ input.dispatch('focus');
 assert.equal(listbox.hidden, false);
 assert.equal(listbox.querySelectorAll('.searchable-select-option').length, 3);
 
+input.value = 'admin';
+input.dispatch('input');
+assert.equal(listbox.querySelectorAll('.searchable-select-option').length, 2);
+
+input.value = 'blueprint';
+input.dispatch('input');
+assert.equal(listbox.querySelectorAll('.searchable-select-option').length, 1);
+assert.equal(listbox.querySelectorAll('.searchable-select-option')[0]._searchableChoice.value, '16');
+
 input.value = '  SYSTEM  ';
 input.dispatch('input');
 assert.equal(listbox.querySelectorAll('.searchable-select-option').length, 2);
@@ -277,6 +289,21 @@ def test_assignment_role_id_cannot_bypass_backend_delegation_boundary(client, he
 
     roles = client.get('/api/v1/rbac/roles?limit=200', headers=operator_headers)
     assert roles.status_code == 200, roles.text
+    assert privileged.json()['id'] in {item['id'] for item in roles.json()['items']}
+
+    assignable = client.get(
+        '/api/v1/rbac/roles?limit=200&assignable=true&scope_type=GLOBAL',
+        headers=operator_headers,
+    )
+    assert assignable.status_code == 200, assignable.text
+    assert privileged.json()['id'] not in {item['id'] for item in assignable.json()['items']}
+
+    admin_assignable = client.get(
+        '/api/v1/rbac/roles?limit=200&assignable=true&scope_type=GLOBAL',
+        headers=headers,
+    )
+    assert admin_assignable.status_code == 200, admin_assignable.text
+    assert privileged.json()['id'] in {item['id'] for item in admin_assignable.json()['items']}
 
     forged = client.post('/api/v1/rbac/assignments', headers=operator_headers, json={
         'subject_type': 'USER',
