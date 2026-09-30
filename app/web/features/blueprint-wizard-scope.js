@@ -213,8 +213,10 @@
       data.vmClassification = vmClassification || data.vmClassification;
       data.entities = Array.isArray(entityCatalog?.items) ? entityCatalog.items : [];
       data.entityRoles = Array.isArray(entityCatalog?.roles) ? entityCatalog.roles : [];
-      const validEntities = new Set(data.entities.map(value => String(value.key)));
-      state.allowedEntities = (state.allowedEntities || []).filter(value => validEntities.has(String(value)));
+      if (!options.item) {
+        const validEntities = new Set(data.entities.map(value => String(value.key)));
+        state.allowedEntities = (state.allowedEntities || []).filter(value => validEntities.has(String(value)));
+      }
       if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
       if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 
