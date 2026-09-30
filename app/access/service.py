@@ -77,7 +77,7 @@ def ensure_apmid(db, organization: Tenant, code: str, *, created_by=None, is_sys
     return row
 
 
-def ensure_organization_access(db, organization: Tenant, *, created_by=None, seed_global_apmids=True) -> None:
+def ensure_organization_access(db, organization: Tenant, *, created_by=None, seed_global_apmids=False) -> None:
     ensure_global_groups(db, created_by=created_by)
     ensure_organization_groups(db, organization, created_by=created_by)
     codes = _global_apmid_seed(db) if seed_global_apmids else [LEO]
