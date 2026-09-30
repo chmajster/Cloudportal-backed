@@ -20,6 +20,7 @@ from app.automation.service import (available_to, blueprint_public, blueprint_ro
 from app.automation.yaml_codec import dump_blueprint_yaml, parse_blueprint_yaml
 from app.blueprint_avatars import blueprint_avatar, list_blueprint_avatars
 from app.database import get_db
+from app.credentials.service import save_secret
 from app.models import (Blueprint, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
 from app.providers.registry import provider_for
@@ -575,6 +576,77 @@ def blueprint_yaml(id: int, request: Request,
     return {'yaml': dump_blueprint_yaml(payload, version=row.version)}
 
 
+def materialize_managed_guest_credential(db, data: BlueprintInput, request: Request, existing: Blueprint | None = None):
+    """Turn a transient manual password into an encrypted SSH Credential.
+
+    The cleartext password exists only in the write request model. Blueprint JSON
+    stores the managed credential id and never serializes the password.
+    """
+    deployment = data.deployment
+    if not deployment.guest_credential_managed:
+        return data
+
+    username = str((deployment.variables or {}).get('ssh_username') or '').strip()
+    if not username:
+        raise HTTPException(422, 'Manual Cloud-init password requires an SSH username')
+
+    password = deployment.guest_password
+    credential = None
+
+    if deployment.guest_credential_id is not None:
+        previous = (existing.deployment or {}) if existing is not None else {}
+        previous_id = previous.get('guest_credential_id')
+        previous_managed = bool(previous.get('guest_credential_managed'))
+        if (
+            existing is None
+            or not previous_managed
+            or str(previous_id or '') != str(deployment.guest_credential_id)
+        ):
+            raise HTTPException(
+                422,
+                'Managed guest credential id can be reused only by the Blueprint that created it',
+            )
+        credential = db.scalar(
+            select(Credential)
+            .where(Credential.id == int(deployment.guest_credential_id))
+            .with_for_update()
+        )
+        if credential is None or credential.type != 'ssh':
+            raise HTTPException(422, 'Managed guest credential is missing or is not an SSH credential')
+
+        changed = credential.username != username
+        credential.username = username
+        if password is not None:
+            save_secret(db, credential, {'password': password})
+            changed = True
+        if changed:
+            audit(db, request, 'credential.blueprint_guest_updated', 'credentials', credential.id)
+    else:
+        if password is None:
+            raise HTTPException(422, 'Enter a password for the new managed Cloud-init guest credential')
+        credential = Credential(
+            name=(f'Blueprint {data.slug} · Cloud-init')[:100],
+            type='ssh',
+            endpoint='',
+            username=username,
+            verify_ssl=True,
+            expires_at=None,
+            rotation_due_at=None,
+            encrypted_secret=b'',
+        )
+        db.add(credential)
+        db.flush()
+        save_secret(db, credential, {'password': password})
+        audit(db, request, 'credential.blueprint_guest_created', 'credentials', credential.id)
+
+    prepared = deployment.model_copy(update={
+        'guest_credential_id': credential.id,
+        'guest_credential_managed': True,
+        'guest_password': None,
+    })
+    return data.model_copy(update={'deployment': prepared})
+
+
 def blueprint_with_inline_hostname_scheme(db, data: BlueprintInput, hostname_scheme: HostnameSchemeInput | None,
                                           request: Request, actor):
     if hostname_scheme is None:
@@ -593,9 +665,10 @@ def blueprint_with_inline_hostname_scheme(db, data: BlueprintInput, hostname_sch
 def create_blueprint(data: BlueprintInput, request: Request, actor=Depends(require('blueprints.create')), db=Depends(get_db, scope='function')):
     validate_blueprint_role_scope(db, data, request, actor)
     validate_blueprint_user_scope(db, data, request, actor)
-    manager_roles = validate_blueprint_references(db, data)
     def create():
-        values = data.model_dump(mode='json', exclude={'manager_role_ids'})
+        prepared = materialize_managed_guest_credential(db, data, request)
+        manager_roles = validate_blueprint_references(db, prepared)
+        values = prepared.model_dump(mode='json', exclude={'manager_role_ids'})
         row = Blueprint(**values, created_by=actor.user_id)
         row.manager_roles = manager_roles
         db.add(row)
@@ -612,6 +685,7 @@ def create_blueprint_bundle(bundle: BlueprintBundleInput, request: Request,
         data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
         validate_blueprint_role_scope(db, data, request, actor)
         validate_blueprint_user_scope(db, data, request, actor)
+        data = materialize_managed_guest_credential(db, data, request)
         manager_roles = validate_blueprint_references(db, data)
         values = data.model_dump(mode='json', exclude={'manager_role_ids'})
         row = Blueprint(**values, created_by=actor.user_id)
@@ -639,6 +713,7 @@ def update_blueprint(
     require_blueprint_version(row, if_match)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
     validate_blueprint_user_scope(db, data, request, actor, blueprint_id=id)
+    data = materialize_managed_guest_credential(db, data, request, existing=row)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)
@@ -666,6 +741,7 @@ def update_blueprint_bundle(
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
     validate_blueprint_user_scope(db, data, request, actor, blueprint_id=id)
+    data = materialize_managed_guest_credential(db, data, request, existing=row)
     manager_roles = validate_blueprint_references(db, data, blueprint_id=id)
     for key, value in data.model_dump(mode='json', exclude={'manager_role_ids'}).items():
         setattr(row, key, value)

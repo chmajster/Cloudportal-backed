@@ -244,6 +244,8 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     guest_credential_id = deployment.pop('guest_credential_id', None)
     template_guest_credential_id = deployment.pop('template_guest_credential_id', None)
     guest_account_mode = deployment.pop('guest_account_mode', 'cloud_init_managed')
+    deployment.pop('guest_credential_managed', False)
+    deployment.pop('guest_password', None)
     ansible_runs_raw = deployment.pop('ansible_runs', []) or []
     awx_raw = deployment.pop('awx', None)
     prompt_awx_on_execute = bool(deployment.pop('prompt_awx_on_execute', False))
@@ -274,8 +276,8 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         deployment_variables['ssh_username'] = guest_credential['username']
         if guest_credential['public_key']:
             deployment_variables['ssh_public_key'] = guest_credential['public_key']
-        else:
-            deployment_variables['ssh_public_key'] = None
+        # Password-only credentials may be combined with a Blueprint-provided
+        # public key. Keep that public key instead of clearing it here.
 
     tags = [str(tag).strip().lower() for tag in (deployment_variables.get('tags') or []) if str(tag).strip()]
 

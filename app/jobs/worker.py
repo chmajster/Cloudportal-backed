@@ -1314,10 +1314,11 @@ def _guest_target_credential(context):
             raise ExecutionFailed('Guest SSH credential expired before bootstrap')
         secret = decrypt_secret(credential)
         private_key = secret.get('private_key')
+        manual_public_key = str(variables.get('ssh_public_key') or '').strip() or None
         return {
             'credential_id': credential.id,
             'username': str(credential.username or '').strip(),
-            'public_key': public_key_from_private_key(private_key) if private_key else None,
+            'public_key': public_key_from_private_key(private_key) if private_key else manual_public_key,
             'private_key': private_key,
             'password': secret.get('password'),
         }

@@ -810,10 +810,30 @@ class BlueprintDeployment(Input):
     guest_credential_id: int | None = Field(default=None, gt=0)
     template_guest_credential_id: int | None = Field(default=None, gt=0)
     guest_account_mode: Literal['cloud_init_managed', 'existing_template'] = 'cloud_init_managed'
+    guest_credential_managed: bool = False
+    guest_password: str | None = Field(
+        default=None,
+        min_length=12,
+        max_length=256,
+        exclude=True,
+        json_schema_extra={'writeOnly': True},
+    )
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
     environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
     select_apmid_on_execute: bool = False
     select_environment_on_execute: bool = False
+
+    @model_validator(mode='after')
+    def manual_guest_password_contract(self):
+        if self.guest_password is not None and self.guest_account_mode != 'cloud_init_managed':
+            raise ValueError('Manual guest password is available only for cloud_init_managed account mode')
+        if self.guest_password is not None and not self.guest_credential_managed:
+            raise ValueError('Manual guest password requires guest_credential_managed=true')
+        if self.guest_credential_managed and self.guest_account_mode != 'cloud_init_managed':
+            raise ValueError('Managed guest credential is available only for cloud_init_managed account mode')
+        if self.guest_credential_managed and self.guest_credential_id is None and self.guest_password is None:
+            raise ValueError('Managed guest credential requires an existing credential id or a new password')
+        return self
 
 
 class BlueprintInput(Input):

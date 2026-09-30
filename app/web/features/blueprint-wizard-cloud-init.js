@@ -47,6 +47,11 @@
         && !state.templateGuestCredentialId) {
       errors.guest_credential_id = 'Wybierz dane dostępowe SSH dla konta istniejącego w template.';
     }
+    if (state.guestAccountMode === 'cloud_init_managed'
+        && state.sshPassword
+        && state.sshPassword.length < 12) {
+      errors.cloud_init_ssh_password = 'Hasło SSH musi mieć co najmniej 12 znaków.';
+    }
     if (!state.advancedWorkflow) return errors;
     const seeds = state.workflow.filter(step => step.type === 'cloud_init');
     if (seeds.length !== 1 || Object.keys(seeds[0].conditions || {}).length || seeds[0].retry || seeds[0].rollback) {
@@ -97,7 +102,14 @@
             : (state.sshPublicKey
                 ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)]
                 : [])),
-        ] : (state.sshPublicKey ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)] : [])),
+        ] : [
+          ...(state.sshPassword || state.managedGuestCredentialId
+            ? ['    # Hasło z ustawień ręcznych zostanie użyte wyłącznie jako solony hash.']
+            : []),
+          ...(state.sshPublicKey
+            ? ['    ssh_authorized_keys:', '      - ' + JSON.stringify(state.sshPublicKey)]
+            : []),
+        ]),
         'chpasswd:',
         '  expire: false',
       ]),
@@ -141,7 +153,7 @@
     if (!active) {
       panel.append(node('div', { class: 'blueprint-wizard-info wide' },
         node('strong', { text: 'Cloud-init wyłączony' }),
-        node('span', { text: 'Pola użytkownika SSH i klucza publicznego są ukryte, ponieważ bez kroku Cloud-init nie zostałyby zastosowane do systemu gościa.' })));
+        node('span', { text: 'Pola użytkownika SSH, hasła i klucza publicznego są ukryte, ponieważ bez kroku Cloud-init nie zostałyby zastosowane do systemu gościa.' })));
       return panel;
     }
 
@@ -159,6 +171,11 @@
         state.guestCredentialId = '';
       } else {
         state.templateGuestCredentialId = '';
+      }
+      if (state.guestAccountMode === 'existing_template') {
+        state.managedGuestCredentialId = '';
+        state.guestCredentialManaged = false;
+        state.sshPassword = '';
       }
       rerender();
     });
@@ -183,8 +200,18 @@
           state.templateGuestCredentialId = value;
           state.guestCredentialId = '';
         } else {
-          state.guestCredentialId = value;
           state.templateGuestCredentialId = '';
+          if (value) {
+            state.guestCredentialId = value;
+            state.managedGuestCredentialId = '';
+            state.guestCredentialManaged = false;
+            state.sshPassword = '';
+          } else {
+            state.guestCredentialId = '';
+            state.guestCredentialManaged = Boolean(
+              state.managedGuestCredentialId || state.sshPassword
+            );
+          }
         }
         rerender();
       },
@@ -194,7 +221,7 @@
           : 'Użyj ustawień ręcznych',
         noneDescription: state.guestAccountMode === 'existing_template'
           ? 'Wybierz zapisany Dostęp SSH do konta już obecnego w template.'
-          : 'Cloud-init użyje użytkownika i klucza publicznego z ustawień ręcznych.',
+          : 'Cloud-init użyje użytkownika, hasła i/lub klucza publicznego z ustawień ręcznych.',
         description: state.guestAccountMode === 'existing_template'
           ? 'Sekret pozostaje w backendzie. Cloud-init zachowa konto z template bez zmiany jego hasła, kluczy i sudo.'
           : 'Dostęp używany przez Cloud-init jest zapisywany w Blueprintcie wyłącznie jako ID; sekret nie trafia do przeglądarki.',
@@ -232,6 +259,30 @@
         if (!event.currentTarget.disabled) state.sshUsername = event.currentTarget.value;
       });
 
+      const passwordField = field('Hasło SSH', 'cloud_init_ssh_password', {
+        type: 'password',
+        value: state.sshPassword || '',
+        wide: true,
+        minlength: 12,
+        maxlength: 256,
+        autocomplete: 'new-password',
+        placeholder: state.managedGuestCredentialId ? '•••••••••••• (zapisane)' : 'Minimum 12 znaków',
+        help: selectedCredential
+          ? 'Hasło jest pobierane z wybranego Dostępu. Ręczna wartość nie jest używana.'
+          : (state.managedGuestCredentialId
+              ? 'Pozostaw puste, aby zachować zapisane hasło. Nowa wartość zastąpi sekret w zaszyfrowanym Dostępie SSH.'
+              : 'Opcjonalne. Hasło zostanie zapisane jako zaszyfrowany Dostęp SSH; Blueprint zachowa wyłącznie jego ID.'),
+      });
+      const passwordInput = passwordField.querySelector('input');
+      passwordInput.disabled = Boolean(selectedCredential);
+      passwordInput.addEventListener('input', event => {
+        if (event.currentTarget.disabled) return;
+        state.sshPassword = event.currentTarget.value;
+        state.guestCredentialManaged = Boolean(
+          state.sshPassword || state.managedGuestCredentialId
+        );
+      });
+
       const credentialOwnsKey = selectedCredential?.supports_cloud_init_ssh_key === true;
       const publicKeyField = field('Klucz publiczny SSH', 'cloud_init_ssh_public_key', {
         tag: 'textarea',
@@ -253,6 +304,7 @@
         node('summary', { text: selectedCredential ? 'Nadpisanie ręczne / fallback' : 'Ustawienia ręczne SSH' }),
         node('div', { class: 'advanced-options-body form-grid' },
           usernameField,
+          passwordField,
           publicKeyField));
     }
 
@@ -264,15 +316,14 @@
           ? 'Adres, brama i DNS zostaną pobrane z IPAM. Szczegóły konfigurujesz w kroku „Sieć”.'
           : 'Statyczny adres i DNS zostaną zapisane do network-config. Szczegóły konfigurujesz w kroku „Sieć”.' }));
 
+    panel.append(accountMode, credentialField);
+    if (credentialSummary) panel.append(credentialSummary);
+    if (manualAccess) panel.append(manualAccess);
     panel.append(
-      accountMode,
-      credentialField,
-      credentialSummary,
-      manualAccess,
       networkSummary,
       node('p', { class: 'muted wide', text: state.guestAccountMode === 'existing_template'
         ? 'Cloud-init wykona konfigurację systemu, sieci i opcjonalnie QEMU Guest Agent, ale zachowa istniejące konto z template. Wybrany Dostęp będzie używany później przez etapy wymagające dostępu do systemu gościa.'
-        : 'Konfiguracja trafi na nośnik NoCloud ISO (CIDATA) przez API Proxmoxa przed uruchomieniem VM. Hasła i klucze prywatne nie są wysyłane do przeglądarki ani zapisywane w zmiennych Terraform.' }),
+        : 'Konfiguracja trafi na nośnik NoCloud ISO (CIDATA) przez API Proxmoxa przed uruchomieniem VM. Ręcznie wpisane hasło jest przesyłane wyłącznie podczas zapisu Blueprintu, szyfrowane w backendzie i dalej przechowywane jako ID Dostępu; jawne hasło nie trafia do zmiennych Terraform.' }),
       node('p', { class: 'muted wide', text: 'Opcja „Instaluj QEMU Guest Agent automatycznie” dodaje pakiet oraz uruchomienie usługi do Cloud-init. Nie instaluje agenta przez SSH.' }),
       node('details', { class: 'advanced-options wide' },
         node('summary', { text: 'Podgląd Cloud-init bez sekretów' }),

@@ -87,3 +87,41 @@ def test_direct_proxmox_requires_cloud_init_before_start():
             {'id': 'start', 'type': 'start_vm', 'depends_on': ['clone']},
             {'id': 'cloud', 'type': 'cloud_init', 'depends_on': ['clone']},
         ])
+
+
+
+def test_manual_guest_password_is_write_only_and_requires_managed_credential_mode():
+    password = 'Manual-Password-1234'
+    deployment = BlueprintDeployment(
+        name='vm-test',
+        provider_id=1,
+        credentials_id=1,
+        variables={'ssh_username': 'clouduser'},
+        guest_credential_managed=True,
+        guest_password=password,
+    )
+
+    assert deployment.guest_password == password
+    dumped = deployment.model_dump(mode='json')
+    assert 'guest_password' not in dumped
+    assert password not in str(dumped)
+
+    with pytest.raises(ValidationError, match='guest_credential_managed'):
+        BlueprintDeployment(
+            name='vm-test',
+            provider_id=1,
+            credentials_id=1,
+            variables={'ssh_username': 'clouduser'},
+            guest_password=password,
+        )
+
+    with pytest.raises(ValidationError, match='cloud_init_managed'):
+        BlueprintDeployment(
+            name='vm-test',
+            provider_id=1,
+            credentials_id=1,
+            variables={'ssh_username': 'clouduser'},
+            guest_account_mode='existing_template',
+            guest_credential_managed=True,
+            guest_password=password,
+        )

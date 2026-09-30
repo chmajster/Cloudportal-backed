@@ -715,7 +715,7 @@ def test_blueprint_vm_step_separates_metadata_and_cloud_init_access():
     wizard = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard.js').read_text()
     cloud_init = (ROOT / 'app' / 'web' / 'features' / 'blueprint-wizard-cloud-init.js').read_text()
 
-    assert "node('strong', { text: 'Parametry VM' })" in wizard
+    assert "node('strong', { text: 'Domyślne parametry VM' })" in wizard
     assert "node('strong', { text: 'Klasyfikacja VM' })" in wizard
     assert "node('strong', { text: 'Metadata / Tagi' })" in wizard
     assert "field('Dodatkowe tagi Proxmox', 'tags'" in wizard
@@ -728,10 +728,51 @@ def test_blueprint_vm_step_separates_metadata_and_cloud_init_access():
     assert "node('strong', { text: 'Cloud-init i dostęp SSH' })" in cloud_init
     assert "'cloud_init_access_credential_id'" in cloud_init
     assert "field('Użytkownik SSH', 'cloud_init_ssh_username'" in cloud_init
+    assert "field('Hasło SSH', 'cloud_init_ssh_password'" in cloud_init
+    assert "type: 'password'" in cloud_init
     assert "field('Klucz publiczny SSH', 'cloud_init_ssh_public_key'" in cloud_init
-    assert "Pola użytkownika SSH i klucza publicznego są ukryte" in cloud_init
+    assert "Pola użytkownika SSH, hasła i klucza publicznego są ukryte" in cloud_init
     assert "klucz publiczny: automatycznie z klucza prywatnego" in cloud_init
 
+
+
+def test_wizard_manual_guest_password_is_transient_and_never_enters_vm_variables():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'Manual password';
+state.slug = 'manual-password';
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = false;
+state.manualVmName = 'manual-password';
+state.sshUsername = 'clouduser';
+state.sshPassword = 'Manual-Password-1234';
+state.guestCredentialManaged = true;
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+console.log(JSON.stringify(core.buildDeployment(state, data)));
+""")
+
+    assert result['guest_credential_managed'] is True
+    assert result['guest_password'] == 'Manual-Password-1234'
+    assert result['variables']['ssh_username'] == 'clouduser'
+    assert 'ssh_password' not in result['variables']
+    assert 'guest_password' not in result['variables']
 
 
 def test_blueprint_delete_returns_to_blueprint_list_route():
