@@ -86,7 +86,7 @@
 - Refresh i repair to różne operacje. Nie zamieniaj ich nazw ani zachowania w UI/testach.
 - Po udanym apply synchronizacja ManagedResource/ManagedVM oraz deployment status musi być atomowa lub spójna transakcyjnie.
 - UI po równoległym fetchu deployment/job/inventory musi rozwiązywać race condition i nie pozostawiać stale `W toku`.
-- Widok `Moje zasoby` dla VM powiązanej z deploymentem w aktywnym scope projektu nie może wracać do surowych endpointów `/providers/.../vms/...`. Odczyt stanu, konsola, power i snapshoty przechodzą przez resource-scoped Day-2, a lifecycle Terraform pozostaje w deployment workflow. Guard `GOVERNED_DAY2_REQUIRED` jest celową granicą bezpieczeństwa i nie wolno go obchodzić przez osłabienie backendu. Operacje bez zarządzanego kontraktu (np. raw backup/monitor) nie są eksponowane w tym scope.
+- Widok `Moje zasoby` dla VM powiązanej z deploymentem w aktywnym scope projektu nie może wracać do surowych endpointów `/providers/.../vms/...`. Odczyt stanu, konsola, power i snapshoty przechodzą przez resource-scoped Day-2, a lifecycle Terraform pozostaje w deployment workflow. Resource-addressed Day-2 (`/resources/{id}/...`) może działać wieloprojektowo wyłącznie po weryfikacji trwałego `tenant_id/project_id` celu w HTTP i ponownie w workerze; legacy kolekcje/historia Day-2 bez jawnego celu nadal pozostają za `GOVERNED_DAY2_REQUIRED`. Operacje bez zarządzanego kontraktu (np. raw backup/monitor) nie są eksponowane w tym scope.
 
 ## 1.6. QEMU Guest Agent, Cloud-init i dostęp do gościa
 
