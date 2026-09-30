@@ -27,3 +27,9 @@ def test_https_healthcheck_keeps_verification_enabled():
     assert "--insecure" not in INSTALLER
     assert "-k " not in INSTALLER
     assert "Dla prywatnego CA zainstaluj certyfikat CA w systemowym trust store" in INSTALLER
+
+
+def test_installer_clears_ui_letsencrypt_state_when_it_replaces_tls():
+    assert 'rm -f "$config/tls/cloudportal-source.json"' in INSTALLER
+    assert 'rm -f "$docker_tls/cloudportal-source.json"' in INSTALLER
+    assert INSTALLER.count('rm -f /etc/letsencrypt/renewal-hooks/deploy/cloudportal-backed') >= 2
