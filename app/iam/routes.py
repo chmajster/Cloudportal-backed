@@ -544,7 +544,7 @@ def iam_organizations(
         db, actor, ('organizations.read', 'tenants.read', 'iam.assign'),
         _iam_catalog_scope(), request,
     )
-    filters = (Tenant.deleted_at.is_(None), Tenant.status != 'disabled')
+    filters = (Tenant.deleted_at.is_(None),)
     total = db.scalar(select(func.count()).select_from(Tenant).where(*filters)) or 0
     rows = db.scalars(
         select(Tenant).where(*filters)
@@ -574,7 +574,7 @@ def iam_projects(
         db, actor, ('projects.read', 'iam.assign'),
         _iam_catalog_scope(), request,
     )
-    filters = [Project.deleted_at.is_(None), Project.status != 'disabled']
+    filters = [Project.deleted_at.is_(None)]
     if organization_id:
         filters.append(Project.tenant_id == organization_id)
     total = db.scalar(select(func.count()).select_from(Project).where(*filters)) or 0
