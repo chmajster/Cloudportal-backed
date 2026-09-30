@@ -1554,12 +1554,23 @@ def _certificate_details(cert: Path, hostname: str | None = None) -> dict:
                 values[key] = line[len(prefix):].strip()
     dns_names = re.findall(r"DNS:([^,\s]+)", raw)
     ip_addresses = re.findall(r"IP Address:([^,\s]+)", raw)
-    valid_now = subprocess.run(
-        [openssl, "x509", "-in", str(cert), "-noout", "-checkend", "0"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    ).returncode == 0
+    valid_from_now = False
+    try:
+        valid_from_now = datetime.strptime(
+            values.get("not_before", ""),
+            "%b %d %H:%M:%S %Y %Z",
+        ).replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc)
+    except ValueError:
+        valid_from_now = False
+    valid_now = (
+        valid_from_now
+        and subprocess.run(
+            [openssl, "x509", "-in", str(cert), "-noout", "-checkend", "0"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode == 0
+    )
     expires_soon = subprocess.run(
         [openssl, "x509", "-in", str(cert), "-noout", "-checkend", str(30 * 86400)],
         stdout=subprocess.DEVNULL,
