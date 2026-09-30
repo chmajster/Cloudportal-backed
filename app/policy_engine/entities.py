@@ -170,7 +170,10 @@ def entity_keys_for_permissions(
     result = []
     for role in ENTITY_ROLES:
         if set(role["anchors"]) <= granted:
-            result.append(build_entity_key(normalized_apmid, normalized_environment, role["id"]))
+            try:
+                result.append(build_entity_key(normalized_apmid, normalized_environment, role["id"]))
+            except ValueError:
+                return []
     return result
 
 
