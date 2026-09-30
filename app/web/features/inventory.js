@@ -136,9 +136,8 @@ async function adoptInventoryVm(item) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
-function vmBase(item) {
-  return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
-}
+function vmBase(item) { return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`; }
+const vmGovernance = globalThis.InventoryGovernance;
 
 async function offerMissingVmCleanup(item, returnView = 'inventory') {
   let refreshed;
@@ -226,9 +225,11 @@ function recreateVm(item) {
   );
 }
 
-function vmDetailActions(item, status = {}, snapshotCapability = null) {
+function vmDetailActions(item, status = {}, snapshotCapability = null, actionCatalog = null) {
   const base = vmBase(item);
   const runtime = vmRuntimeState(status, item);
+  const governed = vmGovernance.applies(item);
+  const supports = actionId => vmGovernance.supported(item, actionCatalog, actionId);
   const groups = {
     power: [],
     tools: [],
@@ -238,49 +239,45 @@ function vmDetailActions(item, status = {}, snapshotCapability = null) {
 
   if (allowed('vms.power')) {
     if (runtime === 'running') {
-      groups.power.push(
-        button('Wyłącz', () => vmPower(item, 'shutdown'), 'primary'),
-        button('Restart', () => vmPower(item, 'reboot'), 'ghost'),
-        button('Wstrzymaj', () => vmPower(item, 'suspend'), 'ghost'),
-      );
-      groups.danger.push(
-        button('Twardy reset', () => vmPower(item, 'reset'), 'danger'),
-        button('Wymuś stop', () => vmPower(item, 'stop'), 'danger'),
-      );
+      if (supports('shutdown')) groups.power.push(button('Wyłącz', () => vmPower(item, 'shutdown'), 'primary'));
+      if (supports('reboot')) groups.power.push(button('Restart', () => vmPower(item, 'reboot'), 'ghost'));
+      if (supports('suspend')) groups.power.push(button('Wstrzymaj', () => vmPower(item, 'suspend'), 'ghost'));
+      if (supports('reset')) groups.danger.push(button('Twardy reset', () => vmPower(item, 'reset'), 'danger'));
+      if (supports('power_off')) groups.danger.push(button('Wymuś stop', () => vmPower(item, 'stop'), 'danger'));
     } else if (runtime === 'paused' || runtime === 'suspended') {
-      groups.power.push(button('Wznów', () => vmPower(item, 'resume'), 'primary'));
-      groups.danger.push(button('Wymuś stop', () => vmPower(item, 'stop'), 'danger'));
-    } else {
+      if (supports('resume')) groups.power.push(button('Wznów', () => vmPower(item, 'resume'), 'primary'));
+      if (supports('power_off')) groups.danger.push(button('Wymuś stop', () => vmPower(item, 'stop'), 'danger'));
+    } else if (supports('power_on')) {
       groups.power.push(button('Uruchom', () => vmPower(item, 'start'), 'primary'));
     }
   }
 
-  if (allowed('vms.console')) {
+  if (allowed('vms.console') && (!governed || actionCatalog?.capabilities?.console === true)) {
     groups.tools.push(button('Konsola', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/console'), 'primary'));
   }
-  if (allowed('snapshots.create') && snapshotCapability?.supported !== false) {
+  if (allowed('snapshots.create') && snapshotCapability?.supported !== false && supports('create_snapshot')) {
     groups.tools.push(button('Snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new')));
   }
-  if (allowed('backups.create') && snapshotCapability?.supported === false) {
+  if (!governed && allowed('backups.create') && snapshotCapability?.supported === false) {
     groups.tools.push(button('Backup zamiast snapshotu', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
   }
-  if (allowed('backups.create')) {
+  if (!governed && allowed('backups.create')) {
     groups.tools.push(button('Backup', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new')));
   }
 
-  if (allowed('vms.update')) {
-    groups.infrastructure.push(
-      button('CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute')),
-      button('Powiększ dysk', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/disk')),
-    );
+  if (allowed('vms.update') && supports('resize_compute')) {
+    groups.infrastructure.push(button('CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute')));
   }
-  if (allowed('vms.migrate')) {
+  if (allowed('vms.update') && supports('resize_disk')) {
+    groups.infrastructure.push(button('Powiększ dysk', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/disk')));
+  }
+  if (allowed('vms.migrate') && supports('migrate_vm')) {
     groups.infrastructure.push(button('Migracja', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/migrate')));
   }
-  if (allowed('vms.clone')) {
+  if (allowed('vms.clone') && supports('clone_vm')) {
     groups.infrastructure.push(button('Klonuj', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/clone')));
   }
-  if (allowed('vms.template')) {
+  if (!governed && allowed('vms.template')) {
     groups.infrastructure.push(button('→ Szablon', () => confirmAction(
       'Konwertuj do szablonu',
       'Operacja zmieni VM w szablon.',
@@ -447,7 +444,7 @@ function vmOverviewContent(item, status) {
         vmTagChips(status.tags)));
 }
 
-function vmHardwareContent(item, status) {
+function vmHardwareContent(item, status, actionCatalog = null) {
   const rows = [
     ['CPU', status.cpus ?? status.cpu],
     ['CPU usage', Number.isFinite(Number(status.cpu)) ? `${Math.round(Number(status.cpu) * 100)}%` : null],
@@ -465,17 +462,20 @@ function vmHardwareContent(item, status) {
   ].filter(([, value]) => value !== undefined && value !== null && value !== '');
   return node('section', { class: 'panel' },
     node('div', { class: 'panel-header' }, node('h2', { text: 'Hardware i telemetria' }),
-      allowed('vms.update') ? button('Edytuj CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute')) : ''),
+      allowed('vms.update') && vmGovernance.supported(item, actionCatalog, 'resize_compute')
+        ? button('Edytuj CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute'))
+        : ''),
     table([
       { label: 'Parametr', value: row => node('strong', { text: row[0] }) },
       { label: 'Wartość', value: row => row[1] },
     ], rows));
 }
 
-async function vmSnapshotsContent(item) {
+async function vmSnapshotsContent(item, actionCatalog = null) {
   if (!allowed('snapshots.read')) return node('div', { class: 'empty', text: 'Brak uprawnienia snapshots.read.' });
   const base = vmBase(item);
-  const snapshotResult = await api(`${base}/snapshots`);
+  const governed = vmGovernance.applies(item);
+  const snapshotResult = await vmGovernance.snapshotInfo(item, vmBase(item), actionCatalog);
   const snapshots = snapshotResult.items || [];
   const capability = snapshotResult.capability || {};
   const snapshotSupported = capability.supported !== false;
@@ -483,7 +483,7 @@ async function vmSnapshotsContent(item) {
   if (allowed('snapshots.create') && snapshotSupported) {
     headerActions.push(button('Nowy snapshot', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/snapshots/new'), 'primary'));
   }
-  if (!snapshotSupported && allowed('backups.create')) {
+  if (!governed && !snapshotSupported && allowed('backups.create')) {
     headerActions.push(button('Utwórz backup zamiast snapshotu', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/backups/new'), 'primary'));
   }
   const unavailableNotice = !snapshotSupported
@@ -505,8 +505,12 @@ async function vmSnapshotsContent(item) {
         'Przywróć snapshot',
         `VM zostanie przywrócona do snapshotu ${snap.name}.`,
         async () => {
-          const operation = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
-          await showProxmoxTask(item, operation, 'Przywracanie snapshotu');
+          if (governed) {
+            await vmGovernance.restoreSnapshot(item, snap.name);
+          } else {
+            const operation = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
+            await showProxmoxTask(item, operation, 'Przywracanie snapshotu');
+          }
           return false;
         },
       ), 'danger'));
@@ -514,8 +518,12 @@ async function vmSnapshotsContent(item) {
         'Usuń snapshot',
         snap.name,
         async () => {
-          const operation = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
-          await showProxmoxTask(item, operation, 'Usuwanie snapshotu');
+          if (governed) {
+            await vmGovernance.deleteSnapshot(item, snap.name);
+          } else {
+            const operation = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
+            await showProxmoxTask(item, operation, 'Usuwanie snapshotu');
+          }
           return false;
         },
       ), 'danger'));
@@ -671,6 +679,9 @@ async function vmMonitorContent(item) {
   const load = async () => {
     content.replaceChildren(node('div', { class: 'loading compact' }, node('div', { class: 'spinner' })));
     try {
+      if (vmGovernance.applies(item)) {
+        throw new Error('Monitoring RRD nie jest dostępny przez zarządzany workflow projektu.');
+      }
       const data = await api(`${vmBase(item)}/monitor?timeframe=${encodeURIComponent(timeframe.value)}`);
       const current = data.current || {};
       const rows = data.series || [];
@@ -769,16 +780,18 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
   const routedDetails = state.view === 'routed-form'
     && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
-    const [status, snapshotInfo, availabilityVisible] = await Promise.all([
-      api(`${vmBase(item)}/status`),
-      allowed('snapshots.read')
-        ? api(`${vmBase(item)}/snapshots`).catch(() => null)
-        : Promise.resolve(null),
-      window.AvailabilityPlans?.canReadResource
-        ? window.AvailabilityPlans.canReadResource(item)
-        : Promise.resolve(false),
+    const governed = vmGovernance.applies(item);
+    const actionCatalogPromise = governed ? vmGovernance.catalog(item).catch(() => null) : Promise.resolve(null);
+    const snapshotInfoPromise = !governed && allowed('snapshots.read')
+      ? api(`${vmBase(item)}/snapshots`).catch(() => null)
+      : Promise.resolve(null);
+    const availabilityPromise = window.AvailabilityPlans?.canReadResource
+      ? window.AvailabilityPlans.canReadResource(item)
+      : Promise.resolve(false);
+    const [status, actionCatalog, snapshotInfo, availabilityVisible] = await Promise.all([
+      vmGovernance.status(item, vmBase(item)), actionCatalogPromise, snapshotInfoPromise, availabilityPromise,
     ]);
-    const snapshotCapability = snapshotInfo?.capability || null;
+    const snapshotCapability = governed ? actionCatalog?.capabilities?.snapshot_capability || null : snapshotInfo?.capability || null;
     if (!routedDetails) {
       state.view = returnView;
       location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(returnView) : returnView;
@@ -789,13 +802,9 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
 
     const tabContent = node('div', { class: 'vm-tab-content' });
     const tabs = [
-      ['overview', 'Przegląd'],
-      ['monitor', 'Monitor'],
-      ['hardware', 'Hardware'],
-      availabilityVisible ? ['availability', 'Dostępność'] : null,
-      ['snapshots', 'Snapshoty', 'snapshots.read'],
-      ['backups', 'Backupy', 'backups.read'],
-      ['audit', 'Historia'],
+      ['overview', 'Przegląd'], !governed ? ['monitor', 'Monitor'] : null, ['hardware', 'Hardware'],
+      availabilityVisible ? ['availability', 'Dostępność'] : null, ['snapshots', 'Snapshoty', 'snapshots.read'],
+      !governed ? ['backups', 'Backupy', 'backups.read'] : null, ['audit', 'Historia'],
     ].filter(row => row && allowed(row[2]));
 
     let activeTab = tabs.some(([id]) => id === initialTab) ? initialTab : 'overview';
@@ -818,9 +827,9 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
         let result;
         if (id === 'overview') result = vmOverviewContent(item, status);
         else if (id === 'monitor') result = await vmMonitorContent(item);
-        else if (id === 'hardware') result = vmHardwareContent(item, status);
+        else if (id === 'hardware') result = vmHardwareContent(item, status, actionCatalog);
         else if (id === 'availability' && window.AvailabilityPlans?.vmContent) result = await window.AvailabilityPlans.vmContent(item);
-        else if (id === 'snapshots') result = await vmSnapshotsContent(item);
+        else if (id === 'snapshots') result = await vmSnapshotsContent(item, actionCatalog);
         else if (id === 'backups') result = await vmBackupsContent(item);
         else if (id === 'audit') result = await vmAuditContent(item);
         else result = vmOverviewContent(item, status);
@@ -842,7 +851,7 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
 
     const runtimeState = vmRuntimeState(status, item);
     const primaryIp = status.primary_ip || item.primary_ip || '—';
-    const actionGroups = vmDetailActions(item, status, snapshotCapability);
+    const actionGroups = vmDetailActions(item, status, snapshotCapability, actionCatalog);
     const header = node('section', { class: 'vm-detail-header' },
       node('div', { class: 'vm-breadcrumbs' },
         node('button', { type: 'button', class: 'button link', onClick: () => navigate(returnView) }, returnLabel),
@@ -887,13 +896,15 @@ async function openVmManager(item, initialTab = 'overview', parentView = null) {
 }
 
 async function vmPower(item, action) {
-  const labels = {
-    start: 'Uruchamianie VM', shutdown: 'Bezpieczne wyłączanie VM', reboot: 'Restart VM',
-    suspend: 'Wstrzymywanie VM', resume: 'Wznawianie VM', reset: 'Twardy reset VM', stop: 'Zatrzymywanie VM',
-  };
+  const labels = { start: 'Uruchamianie VM', shutdown: 'Bezpieczne wyłączanie VM', reboot: 'Restart VM',
+    suspend: 'Wstrzymywanie VM', resume: 'Wznawianie VM', reset: 'Twardy reset VM', stop: 'Zatrzymywanie VM' };
   try {
-    const result = await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
-    await showProxmoxTask(item, result, labels[action] || 'Operacja zasilania');
+    const request = await vmGovernance.powerRequest(item, vmBase(item), action);
+    if (request.mode === 'day2') {
+      vmGovernance.submitted(labels[action] || 'Operacja zasilania', request.result);
+      return;
+    }
+    await showProxmoxTask(item, request.result, labels[action] || 'Operacja zasilania');
   } catch (error) {
     await handleVmProviderFailure(item, error, viewIs('my-resources') ? 'my-resources' : 'inventory');
   }
@@ -921,7 +932,7 @@ function deleteVm(item) {
 
 async function createVmSnapshot(item) {
   if (allowed('snapshots.read')) {
-    const snapshotResult = await api(`${vmBase(item)}/snapshots`);
+    const snapshotResult = await vmGovernance.snapshotInfo(item, vmBase(item));
     const capability = snapshotResult.capability || {};
     if (capability.supported === false) {
       const message = capability.message || 'Snapshot nie jest obsługiwany przez tę VM.';
@@ -937,10 +948,14 @@ async function createVmSnapshot(item) {
     field('Opis', 'description', { wide: true }),
     checkboxField('Dołącz stan RAM', 'include_ram'));
   openModal({ title: 'Nowy snapshot', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    const result = await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
-      snapname: data.get('snapname'), description: data.get('description'), include_ram: data.has('include_ram'),
-    } });
-    await showProxmoxTask(item, result, 'Tworzenie snapshotu');
+    if (vmGovernance.applies(item)) {
+      await vmGovernance.createSnapshot(item, data);
+    } else {
+      const result = await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
+        snapname: data.get('snapname'), description: data.get('description'), include_ram: data.has('include_ram'),
+      } });
+      await showProxmoxTask(item, result, 'Tworzenie snapshotu');
+    }
     return false;
   }});
 }
@@ -1026,7 +1041,8 @@ function restoreVmFromBackup(item, backup) {
 
 async function showVmConsole(item) {
   try {
-    const result = await api(`${vmBase(item)}/console`, { method: 'POST' });
+    const consolePath = vmGovernance.consolePath(item, vmBase(item));
+    const result = await api(consolePath, { method: 'POST' });
     const rfbModule = result.local_rfb_module || result.rfb_module;
     const modulePathValid = result.local_rfb_module
       ? result.local_rfb_module === '/ui/vendor/novnc/core/rfb.js'
@@ -1047,8 +1063,9 @@ async function showVmConsole(item) {
     const consolePower = async (action, label, trigger) => {
       trigger.disabled = true;
       try {
-        await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } });
-        toast(`${label}: polecenie zostało wysłane.`);
+        const request = await vmGovernance.powerRequest(item, vmBase(item), action, 'Sterowanie VM z konsoli noVNC');
+        if (request.mode === 'day2') vmGovernance.submitted(label, request.result);
+        else toast(`${label}: polecenie zostało wysłane.`);
       } catch (error) {
         toast(error.message, 'error');
       } finally {
@@ -1119,7 +1136,12 @@ async function showVmConsole(item) {
 
 async function configureVm(item) {
   try {
-    const status = await api(`${vmBase(item)}/status`);
+    const governed = vmGovernance.applies(item);
+    const status = await vmGovernance.status(item, vmBase(item));
+    if (governed) {
+      await vmGovernance.configureCompute(item, status);
+      return;
+    }
     const fields = node('div', { class: 'form-grid' },
       field('Nazwa VM', 'name', { value: status.name || item.name || '' }),
       field('Rdzenie CPU', 'cores', { type: 'number', min: 1, value: status.cpus ?? '' }),
@@ -1153,8 +1175,14 @@ function resizeVmDisk(item) {
     field('Dysk', 'disk', { value: 'scsi0', required: true }),
     field('Powiększ o GiB', 'grow_gib', { type: 'number', min: 1, required: true }));
   openModal({ title: 'Powiększ dysk', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    const result = await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk: data.get('disk'), grow_gib: Number(data.get('grow_gib')) } });
-    await showProxmoxTask(item, result, 'Powiększanie dysku');
+    const disk = String(data.get('disk') || '');
+    const growGib = Number(data.get('grow_gib'));
+    if (vmGovernance.applies(item)) {
+      await vmGovernance.resizeDisk(item, disk, growGib);
+    } else {
+      const result = await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk, grow_gib: growGib } });
+      await showProxmoxTask(item, result, 'Powiększanie dysku');
+    }
     return false;
   }});
 }
@@ -1173,10 +1201,14 @@ async function migrateVm(item) {
       checkboxField('Migracja online', 'online'),
       checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
     openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom migrację', onSubmit: async data => {
-      const result = await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
-        target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
-      } });
-      await showProxmoxTask(item, result, 'Migracja VM');
+      if (vmGovernance.applies(item)) {
+        await vmGovernance.migrate(item, data);
+      } else {
+        const result = await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
+          target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
+        } });
+        await showProxmoxTask(item, result, 'Migracja VM');
+      }
       return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
@@ -1184,9 +1216,10 @@ async function migrateVm(item) {
 
 async function cloneVm(item) {
   try {
+    const governed = vmGovernance.applies(item);
     const [nodes, pools] = await Promise.all([
       discoverVmOptions(item, 'nodes'),
-      discoverVmOptions(item, 'pools'),
+      governed ? Promise.resolve([]) : discoverVmOptions(item, 'pools'),
     ]);
     const targetField = nodes.length
       ? selectField('Docelowy węzeł', 'target', [{ value: '', label: `Bez zmiany — ${item.node}` }].concat(nodes.map(node => ({
@@ -1194,18 +1227,20 @@ async function cloneVm(item) {
       }))), '')
       : field('Docelowy węzeł (opcjonalnie)', 'target');
     const storageHolder = node('div', { class: 'wide' });
-    const poolField = pools.length
-      ? selectField('Pula (opcjonalnie)', 'pool', [{ value: '', label: 'Bez puli' }].concat(pools.map(pool => ({
-        value: pool.poolid, label: pool.comment ? `${pool.poolid} · ${pool.comment}` : pool.poolid,
-      }))), '')
-      : field('Pula (opcjonalnie)', 'pool');
+    const poolField = governed
+      ? null
+      : (pools.length
+          ? selectField('Pula (opcjonalnie)', 'pool', [{ value: '', label: 'Bez puli' }].concat(pools.map(pool => ({
+            value: pool.poolid, label: pool.comment ? `${pool.poolid} · ${pool.comment}` : pool.poolid,
+          }))), '')
+          : field('Pula (opcjonalnie)', 'pool'));
 
     const fields = node('div', { class: 'form-grid' },
       field('Nowy VMID', 'new_vm_id', { type: 'number', min: 100, required: true }),
       field('Nazwa nowej VM', 'name', { required: true, value: item.name ? item.name + '-clone' : '' }),
       targetField,
       storageHolder,
-      poolField,
+      ...(poolField ? [poolField] : []),
       checkboxField('Pełny klon', 'full', true));
 
     const targetControl = targetField.querySelector('select,input');
@@ -1225,15 +1260,19 @@ async function cloneVm(item) {
     await refreshStorages();
 
     openModal({ title: 'Klonuj VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom klonowanie', onSubmit: async data => {
-      const result = await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
-        new_vm_id: Number(data.get('new_vm_id')),
-        name: data.get('name'),
-        target: data.get('target') || null,
-        storage: data.get('storage') || null,
-        pool: data.get('pool') || null,
-        full: data.has('full'),
-      } });
-      await showProxmoxTask(item, result, 'Klonowanie VM');
+      if (governed) {
+        await vmGovernance.clone(item, data);
+      } else {
+        const result = await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
+          new_vm_id: Number(data.get('new_vm_id')),
+          name: data.get('name'),
+          target: data.get('target') || null,
+          storage: data.get('storage') || null,
+          pool: data.get('pool') || null,
+          full: data.has('full'),
+        } });
+        await showProxmoxTask(item, result, 'Klonowanie VM');
+      }
       return false;
     }});
   } catch (error) { toast(error.message, 'error'); }
