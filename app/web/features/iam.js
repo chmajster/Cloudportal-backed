@@ -317,7 +317,7 @@ async function accessAssignmentForm(forcedUserId = null) {
   const apmid = searchableSelectField('APMID', 'apmid', [], '', {
     wide: true,
     selectFirst: false,
-    placeholder: 'Najpierw wybierz Project',
+    placeholder: 'Najpierw wybierz Organizację',
   });
   const apmidStatus = node('span', { class: 'field-help', text: '' });
   apmid.append(apmidStatus);
@@ -440,14 +440,14 @@ async function accessAssignmentForm(forcedUserId = null) {
     const generation = ++classificationGeneration;
     apmid.searchableSelect.setChoices([], '');
     environment.searchableSelect.setChoices([], '');
-    if (!organizationId || !projectId) {
-      apmidStatus.textContent = 'Najpierw wybierz Project';
+    if (!organizationId) {
+      apmidStatus.textContent = 'Najpierw wybierz Organizację';
       environmentStatus.textContent = '';
       updateSubmitState();
       return;
     }
     const path = '/iam/apmids?organization_id=' + encodeURIComponent(organizationId)
-      + '&project_id=' + encodeURIComponent(projectId);
+      + (projectId ? '&project_id=' + encodeURIComponent(projectId) : '');
     apmidStatus.textContent = 'Ładowanie APMID...';
     updateSubmitState();
     try {
@@ -646,6 +646,7 @@ async function accessAssignmentForm(forcedUserId = null) {
   });
   organization.searchableSelect.onChange(organizationId => {
     loadProjects(organizationId).catch(error => toast(error.message, 'error'));
+    loadClassification().catch(error => toast(error.message, 'error'));
     loadAssignableRoles().catch(error => toast(error.message, 'error'));
     updateSubmitState();
   });
