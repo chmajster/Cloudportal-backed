@@ -40,9 +40,10 @@ def policy_approval_stages_from_effects(effects):
 
 
 def policy_approval_stages(job, deployment=None):
-    return policy_approval_stages_from_effects(
-        blueprint_snapshot(job, deployment).get('policy_approvals') or []
-    )
+    payload = dict(job.payload or {})
+    effects = list(dict(payload.get('_policy') or {}).get('approvals') or [])
+    effects.extend(blueprint_snapshot(job, deployment).get('policy_approvals') or [])
+    return policy_approval_stages_from_effects(effects)
 
 
 def policy_approval_signature(effects):
@@ -201,7 +202,12 @@ def approval_policy_for_job(db, job, deployment=None):
 def gate_job_for_approval(db, job, deployment=None):
     """Apply the effective Global -> Project -> Blueprint policy to Blueprint applies."""
     blueprint = blueprint_snapshot(job, deployment)
-    if job.operation not in {'terraform.apply', 'proxmox.provision'} or not blueprint.get('requires_approval'):
+    policy_stages = policy_approval_stages(job, deployment)
+    blueprint_approval = (
+        job.operation in {'terraform.apply', 'proxmox.provision'}
+        and bool(blueprint.get('requires_approval'))
+    )
+    if not policy_stages and not blueprint_approval:
         return False
 
     config = effective_blueprint_execution_settings(
@@ -216,7 +222,6 @@ def gate_job_for_approval(db, job, deployment=None):
             message='workflow.approval.resume_skipped: provider mutation already checkpointed',
         ))
         return False
-    policy_stages = policy_approval_stages(job, deployment)
     if policy_stages:
         # Policy approval is an explicit governance decision and cannot be
         # bypassed by the legacy auto-approve convenience setting.

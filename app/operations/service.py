@@ -150,6 +150,46 @@ def materialize_scheduled_jobs():
                 schedule.last_error = 'Schedule owner no longer has required execution permissions'
                 continue
 
+            from app.models import User
+            from app.policy_engine.integration import evaluate_scheduled_operation
+            schedule_user = db.get(User, schedule.created_by)
+            policy_result = evaluate_scheduled_operation(
+                db, schedule, deployment, schedule_user, scoped
+            )
+            if policy_result.get('decision') == 'deny':
+                reasons = [
+                    str(item.get('message') or item.get('type') or 'policy violation')
+                    for item in (policy_result.get('violations') or [])
+                ]
+                schedule.last_error = (
+                    'Policy Engine denied scheduled execution'
+                    + (': ' + '; '.join(reasons[:3]) if reasons else '')
+                )[:500]
+                schedule.last_run_at = current_time
+                if schedule.interval_seconds:
+                    next_run = schedule.next_run_at
+                    while next_run <= current_time:
+                        next_run += timedelta(seconds=schedule.interval_seconds)
+                    schedule.next_run_at = next_run
+                else:
+                    schedule.is_active = False
+                db.add(Audit(
+                    user_id=schedule.created_by,
+                    token_id=None,
+                    ip='',
+                    source='Scheduler',
+                    action='schedule.policy_denied',
+                    resource='schedules',
+                    resource_id=schedule.id,
+                    request_id=str(uuid.uuid4()),
+                    result='denied',
+                    details={
+                        'matched_policy_ids': policy_result.get('matched_policy_ids') or [],
+                        'violations': policy_result.get('violations') or [],
+                    },
+                ))
+                continue
+
             payload = dict(deployment.workflow if schedule.operation == 'terraform.apply' else {})
             try:
                 payload = snapshot_ansible_payload(db, payload)
@@ -158,6 +198,13 @@ def materialize_scheduled_jobs():
                 schedule.last_error = ('Scheduled Ansible playbook is unavailable: ' + str(error.detail))[:500]
                 continue
 
+            payload['_policy'] = {
+                'decision_id': policy_result.get('decision_id'),
+                'matched_policy_ids': policy_result.get('matched_policy_ids') or [],
+                'approvals': policy_result.get('approvals') or [],
+                'obligations': policy_result.get('obligations') or [],
+                'warnings': policy_result.get('warnings') or [],
+            }
             job = Job(
                 id=str(uuid.uuid4()),
                 operation=schedule.operation,
@@ -358,6 +405,24 @@ def deliver_webhooks_once():
             if endpoint is None or not endpoint.is_active:
                 delivery.status = 'failed'
                 delivery.last_error = 'Webhook endpoint is unavailable'
+                continue
+            owner_permissions = scheduler_user_permissions(db, endpoint.created_by)
+            if owner_permissions is None:
+                delivery.status = 'failed'
+                delivery.last_error = 'Webhook owner is disabled or locked'
+                continue
+            from app.models import User
+            from app.policy_engine.integration import evaluate_webhook_delivery
+            owner = db.get(User, endpoint.created_by)
+            policy_result = evaluate_webhook_delivery(
+                db, endpoint, delivery, owner, owner_permissions
+            )
+            if policy_result.get('decision') != 'allow':
+                delivery.next_attempt_at = now() + timedelta(hours=1)
+                delivery.last_error = (
+                    'Webhook blocked by Policy Engine: '
+                    + str(policy_result.get('decision'))
+                )[:500]
                 continue
             try:
                 validate_webhook_url(endpoint.url)

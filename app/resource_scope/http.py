@@ -22,19 +22,49 @@ def resolve_http_scope(
 
 
 def require(permission):
+    return require_any(permission)
+
+
+def require_any(*permissions):
+    """Authorize any one permission while preserving resource-scope binding.
+
+    This is intentionally an OR check. It allows domains to introduce
+    granular permissions while keeping an older aggregate permission as a
+    backwards-compatible alias during migration.
+    """
+    required = tuple(dict.fromkeys(str(value) for value in permissions if value))
+    if not required:
+        raise ValueError("At least one permission is required")
+
     def dependency(request: Request, actor=Depends(authenticate), db=Depends(get_db, scope='function'),
                    scope=Depends(resolve_http_scope)):
         from app.iam.service import authorize, request_context, scope_from_resource_scope
-        decision = authorize(
-            db,
-            actor,
-            permission,
-            scope=scope_from_resource_scope(scope),
-            context=request_context(request),
-            write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
-        )
-        if decision.decision != 'ALLOW':
+        decisions = []
+        granted_permission = None
+        granted_decision = None
+        for permission in required:
+            decision = authorize(
+                db,
+                actor,
+                permission,
+                scope=scope_from_resource_scope(scope),
+                context=request_context(request),
+                write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
+            )
+            decisions.append((permission, decision))
+            if decision.decision == 'ALLOW':
+                granted_permission = permission
+                granted_decision = decision
+                break
+
+        if granted_permission is None:
             from app.security.core import audit
+            approval = next(
+                ((permission, decision) for permission, decision in decisions
+                 if decision.decision == 'REQUIRES_APPROVAL'),
+                None,
+            )
+            permission, decision = approval or decisions[0]
             audit(
                 db,
                 request,
@@ -43,20 +73,21 @@ def require(permission):
                 result='denied',
                 scope=scope_from_resource_scope(scope),
                 details={
-                    'required_permission': permission,
+                    'required_permissions_any': list(required),
                     'decision': decision.decision,
                     'reason': decision.reason,
                 },
             )
             db.commit()
-            status = 409 if decision.decision == 'REQUIRES_APPROVAL' else 403
+            status = 409 if approval else 403
             error = 'approval_required' if status == 409 else 'permission_denied'
             raise HTTPException(status, {
                 'error': error,
-                'required_permission': permission,
+                'required_permissions_any': list(required),
                 'reason': decision.reason,
                 'request_id': request.state.request_id,
             })
+
         current_identity = load_identity(db, Principal.from_token(actor))
         from app.resource_scope.permissions import RESOURCE_PERMISSIONS
         try:
@@ -71,11 +102,11 @@ def require(permission):
         request.state.permissions = (
             (set(current_identity.global_permissions) - RESOURCE_PERMISSIONS)
             | set(legacy_effective)
-            | {permission}
+            | {granted_permission}
         )
-        if decision.break_glass:
+        if granted_decision.break_glass:
             request.state.break_glass_id = next(
-                (item.get('id') for item in decision.assignments
+                (item.get('id') for item in granted_decision.assignments
                  if item.get('source') == 'break_glass'),
                 None,
             )
@@ -83,12 +114,11 @@ def require(permission):
         bind_scope(db, scope)
         from app.resource_scope.permissions import EXECUTION_PERMISSIONS
         from app.resource_scope.authorization import ensure_execution_ready
-        if permission in EXECUTION_PERMISSIONS and request.method not in {'GET', 'HEAD', 'OPTIONS'}:
+        if granted_permission in EXECUTION_PERMISSIONS and request.method not in {'GET', 'HEAD', 'OPTIONS'}:
             ensure_execution_ready(db, current_identity, scope)
         raw_provider_guard(db, request, scope)
         return actor
     return dependency
-
 
 def raw_provider_guard(db, request, scope):
     """Provider responses and synchronous actions need more than ORM filtering."""

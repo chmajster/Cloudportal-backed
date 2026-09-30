@@ -1,18 +1,19 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.api.common import Limit, Offset
 from app.database import get_db
 from app.policy_engine import service
 from app.policy_engine.schemas import (
-    EvaluationInput, PolicyExceptionInput, PolicyInput, PolicyRollback,
+    EvaluationInput, PolicyConflictInput, PolicyExceptionInput, PolicyImpactInput,
+    PolicyInput, PolicyRollback, PolicyStatusChange, PolicyTestInput,
     PolicyUpdate, PreviewInput,
 )
 from app.projects.authorization import visible_projects
 from app.projects.models import Project
-from app.resource_scope.http import require
+from app.resource_scope.http import require, require_any
 from app.security.core import audit, authenticate
 from app.tenancy.authorization import Principal, identity as scoped_identity, visible_tenants
 from app.tenancy.models import Tenant
@@ -62,7 +63,11 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
     tenants = db.scalars(
         select(Tenant)
         .where(
-            visible_tenants(identity, permission="policies.manage"),
+            or_(
+                visible_tenants(identity, permission="policies.manage"),
+                visible_tenants(identity, permission="policies.create"),
+                visible_tenants(identity, permission="policies.update"),
+            ),
             Tenant.status == "active",
             Tenant.deleted_at.is_(None),
         )
@@ -73,7 +78,11 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
         select(Project, Tenant)
         .join(Tenant, Tenant.id == Project.tenant_id)
         .where(
-            visible_projects(identity, permission="policies.manage"),
+            or_(
+                visible_projects(identity, permission="policies.manage"),
+                visible_projects(identity, permission="policies.create"),
+                visible_projects(identity, permission="policies.update"),
+            ),
             Project.status == "active",
             Tenant.status == "active",
             Project.deleted_at.is_(None),
@@ -110,6 +119,58 @@ def policy_scopes(actor=Depends(authenticate), db=Depends(get_db, scope="functio
             for project, tenant in projects
         ],
     }
+
+
+@router.get("/policies/templates")
+def policy_templates(actor=Depends(require("policies.read"))):
+    return service.templates()
+
+
+@router.post("/policies/test")
+def test_policy_definition(data: PolicyTestInput, request: Request,
+                           actor=Depends(require_any("policies.test", "policies.simulate")),
+                           db=Depends(get_db, scope="function")):
+    context = _context_from_input(request, data.evaluation)
+    return service.test_definition(
+        db,
+        request.state.resource_scope,
+        data.policy,
+        context,
+        exclude_policy_id=data.exclude_policy_id,
+        include_existing=data.include_existing,
+    )
+
+
+@router.post("/policies/conflicts")
+def policy_conflicts(data: PolicyConflictInput, request: Request,
+                     actor=Depends(require_any("policies.test", "policies.simulate")),
+                     db=Depends(get_db, scope="function")):
+    return service.detect_conflicts(
+        db,
+        request.state.resource_scope,
+        data.policy,
+        exclude_policy_id=data.exclude_policy_id,
+    )
+
+
+@router.post("/policies/simulate-impact")
+def policy_impact(data: PolicyImpactInput, request: Request,
+                  actor=Depends(require("policies.simulate")),
+                  db=Depends(get_db, scope="function")):
+    return service.simulate_impact(
+        db,
+        request.state.resource_scope,
+        data.policy,
+        exclude_policy_id=data.exclude_policy_id,
+        limit=data.limit,
+    )
+
+
+@router.get("/policies/compliance")
+def policy_compliance(request: Request, limit: Limit = 200,
+                      actor=Depends(require("policies.compliance")),
+                      db=Depends(get_db, scope="function")):
+    return service.compliance(db, request.state.resource_scope, limit=limit)
 
 
 @router.post("/policies/evaluate")
@@ -162,7 +223,7 @@ def policies(request: Request, include_archived: bool = False,
 
 @router.post("/policies", status_code=201)
 def create_policy(data: PolicyInput, request: Request,
-                  actor=Depends(require("policies.manage")),
+                  actor=Depends(require_any("policies.create", "policies.manage")),
                   db=Depends(get_db, scope="function")):
     row = service.create_policy(
         db, actor, request.state.resource_scope, request.state.permissions, data
@@ -182,7 +243,7 @@ def policy(policy_id: str, request: Request,
 
 @router.put("/policies/{policy_id}")
 def update_policy(policy_id: str, data: PolicyUpdate, request: Request,
-                  actor=Depends(require("policies.manage")),
+                  actor=Depends(require_any("policies.update", "policies.manage")),
                   db=Depends(get_db, scope="function")):
     row = service.update_policy(
         db, actor, request.state.resource_scope, request.state.permissions, policy_id, data
@@ -191,9 +252,33 @@ def update_policy(policy_id: str, data: PolicyUpdate, request: Request,
     return service.policy_public(row)
 
 
+@router.post("/policies/{policy_id}/enable")
+def enable_policy(policy_id: str, data: PolicyStatusChange, request: Request,
+                  actor=Depends(require_any("policies.enable", "policies.manage")),
+                  db=Depends(get_db, scope="function")):
+    row = service.set_policy_status(
+        db, actor, request.state.resource_scope, request.state.permissions,
+        policy_id, status="enforced", expected_version=data.expected_version,
+    )
+    audit(db, request, "policy.enabled", "policy_definitions", row.id)
+    return service.policy_public(row)
+
+
+@router.post("/policies/{policy_id}/disable")
+def disable_policy(policy_id: str, data: PolicyStatusChange, request: Request,
+                   actor=Depends(require_any("policies.enable", "policies.manage")),
+                   db=Depends(get_db, scope="function")):
+    row = service.set_policy_status(
+        db, actor, request.state.resource_scope, request.state.permissions,
+        policy_id, status="disabled", expected_version=data.expected_version,
+    )
+    audit(db, request, "policy.disabled", "policy_definitions", row.id)
+    return service.policy_public(row)
+
+
 @router.delete("/policies/{policy_id}")
 def archive_policy(policy_id: str, request: Request,
-                   actor=Depends(require("policies.manage")),
+                   actor=Depends(require_any("policies.delete", "policies.manage")),
                    db=Depends(get_db, scope="function")):
     row = service.archive_policy(
         db, actor, request.state.resource_scope, request.state.permissions, policy_id
@@ -214,7 +299,7 @@ def versions(policy_id: str, request: Request,
 
 @router.post("/policies/{policy_id}/rollback")
 def rollback(policy_id: str, data: PolicyRollback, request: Request,
-             actor=Depends(require("policies.manage")),
+             actor=Depends(require_any("policies.update", "policies.manage")),
              db=Depends(get_db, scope="function")):
     row = service.rollback_policy(
         db, actor, request.state.resource_scope, request.state.permissions,
@@ -236,7 +321,7 @@ def exceptions(policy_id: str, request: Request,
 
 @router.post("/policies/{policy_id}/exceptions", status_code=201)
 def create_exception(policy_id: str, data: PolicyExceptionInput, request: Request,
-                     actor=Depends(require("policies.exception.manage")),
+                     actor=Depends(require_any("policies.exceptions", "policies.exception.manage")),
                      db=Depends(get_db, scope="function")):
     row = service.create_exception(
         db, actor, request.state.resource_scope, request.state.permissions, policy_id, data
@@ -247,7 +332,7 @@ def create_exception(policy_id: str, data: PolicyExceptionInput, request: Reques
 
 @router.post("/policies/{policy_id}/exceptions/{exception_id}/approve")
 def approve_exception(policy_id: str, exception_id: str, request: Request,
-                      actor=Depends(require("policies.exception.manage")),
+                      actor=Depends(require_any("policies.exceptions", "policies.exception.manage")),
                       db=Depends(get_db, scope="function")):
     row = service.approve_exception(
         db, actor, request.state.resource_scope, request.state.permissions, policy_id, exception_id
@@ -258,7 +343,7 @@ def approve_exception(policy_id: str, exception_id: str, request: Request,
 
 @router.delete("/policies/{policy_id}/exceptions/{exception_id}")
 def revoke_exception(policy_id: str, exception_id: str, request: Request,
-                     actor=Depends(require("policies.exception.manage")),
+                     actor=Depends(require_any("policies.exceptions", "policies.exception.manage")),
                      db=Depends(get_db, scope="function")):
     row = service.revoke_exception(
         db, actor, request.state.resource_scope, request.state.permissions, policy_id, exception_id

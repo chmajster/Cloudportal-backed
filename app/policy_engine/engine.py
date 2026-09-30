@@ -458,6 +458,12 @@ def _apply_effect(effect: Mapping[str, Any], context: dict, *, policy_id: str, a
                   obligations: list[dict], applied: list[dict], locked_fields: set[str]):
     kind = str(effect.get("type") or "")
     item = {"policy_id": policy_id, **copy.deepcopy(dict(effect))}
+    when = effect.get("when")
+    if when and not evaluate_condition(when, context):
+        item["matched"] = False
+        item["ignored"] = "effect_condition_not_matched"
+        applied.append(item)
+        return
     if kind == "allow":
         applied.append(item)
         return
@@ -821,6 +827,10 @@ def validate_effects(effects: Any):
         kind = str(effect.get("type") or "")
         if kind not in EFFECT_TYPES:
             raise ValueError(f"Unsupported effect type: {kind}")
+        if effect.get("when"):
+            if kind == "allow":
+                raise ValueError("allow effect cannot use per-effect when; use policy condition or scope")
+            validate_condition_tree(effect["when"])
         if kind in {"set_default", "force_value", "limit_value"} and not effect.get("field"):
             raise ValueError(f"{kind} requires field")
         if kind == "require_approval":
