@@ -810,7 +810,324 @@ class BlueprintDeployment(Input):
     guest_credential_id: int | None = Field(default=None, gt=0)
     template_guest_credential_id: int | None = Field(default=None, gt=0)
     guest_account_mode: Literal['cloud_init_managed', 'existing_template'] = 'cloud_init_managed'
+    guest_credential_managed: bool = False
+    guest_password: str | None = Field(
+        default=None,
+        min_length=12,
+        max_length=256,
+        exclude=True,
+        json_schema_extra={'writeOnly': True},
+    )
+    apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}
+    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
+    select_apmid_on_execute: bool = False
+    select_environment_on_execute: bool = False
+
+
+class BlueprintInput(Input):
+    slug: Slug
+    name: Name
+    description: Annotated[str, Field(max_length=4000)] = ''
+    avatar_id: Slug | None = None
+    is_active: bool = True
+    visibility: BlueprintVisibility = Field(default_factory=BlueprintVisibility)
+    allowed_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
+    allowed_user_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
+    manager_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
+    variables_schema: Annotated[dict[Slug, BlueprintVariable], Field(max_length=100)] = Field(default_factory=dict)
+    deployment: BlueprintDeployment
+    workflow: Annotated[list[BlueprintStep], Field(min_length=1, max_length=100)]
+    requires_approval: bool = False
+    auto_approve_for_executors: bool | None = None
+    approval_timeout_hours: int | None = Field(default=None, ge=1, le=720)
+    recovery_policy: Literal['preserve', 'destroy_on_failure'] = 'preserve'
+
+    @model_validator(mode='after')
+    def dag(self):
+        reserved = {'hostname', 'ip_address', 'ip_address_cidr', 'ip_gateway', 'ip_prefix_length'}
+        if set(self.variables_schema) & reserved:
+            raise ValueError('Blueprint variables use names reserved for generated infrastructure values')
+
+        ids = [step.id for step in self.workflow]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Workflow step IDs must be unique')
+        known = set(ids)
+        graph = {step.id: step.depends_on for step in self.workflow}
+        by_id = {step.id: step for step in self.workflow}
+
+        for step in self.workflow:
+            if step.id in step.depends_on:
+                raise ValueError(f'Workflow step "{step.id}" cannot depend on itself')
+            missing = sorted(set(step.depends_on) - known)
+            if missing:
+                raise ValueError(
+                    f'Workflow step "{step.id}" depends on missing step(s) (dependency): {", ".join(missing)}'
+                )
+
+        condition_keys = {'provider', 'executor', 'has_ansible', 'hostname', 'environment', 'apmid'}
+        for step in self.workflow:
+            allowed = set(condition_keys)
+            if step.type == 'delay':
+                allowed.add('seconds')
+            if step.type == 'notification':
+                allowed.add('message')
+            unknown_conditions = sorted(set(step.conditions) - allowed)
+            if unknown_conditions:
+                raise ValueError(
+                    f'Workflow step "{step.id}" uses unsupported condition key(s): '
+                    + ', '.join(unknown_conditions)
+                )
+            for key, value in step.conditions.items():
+                if key == 'has_ansible' and not isinstance(value, bool):
+                    raise ValueError(f'Workflow step "{step.id}" condition has_ansible must be boolean')
+                if key in {'provider', 'executor', 'hostname', 'environment', 'apmid'}:
+                    valid = isinstance(value, str) or (
+                        isinstance(value, list)
+                        and bool(value)
+                        and all(isinstance(item, str) and bool(item) for item in value)
+                    )
+                    if not valid:
+                        raise ValueError(
+                            f'Workflow step "{step.id}" condition {key} must be a string or non-empty string list'
+                        )
+            if step.type == 'delay':
+                seconds = step.conditions.get('seconds', 1)
+                if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+                    raise ValueError(f'Workflow step "{step.id}" delay seconds must be numeric')
+                if seconds < 0 or seconds > step.timeout:
+                    raise ValueError(
+                        f'Workflow step "{step.id}" delay seconds must be between 0 and timeout'
+                    )
+            if step.type == 'notification':
+                message = step.conditions.get('message', step.id)
+                if not isinstance(message, str) or len(message) > 1000:
+                    raise ValueError(
+                        f'Workflow step "{step.id}" notification message must be a string up to 1000 characters'
+                    )
+
+        visiting, visited = set(), set()
+
+        def visit(node):
+            if node in visiting:
+                raise ValueError('Workflow must be an acyclic graph')
+            if node in visited:
+                return
+            visiting.add(node)
+            for parent in graph[node]:
+                visit(parent)
+            visiting.remove(node)
+            visited.add(node)
+
+        for node in graph:
+            visit(node)
+
+        def ancestors(step_id):
+            result = set()
+            pending = list(graph[step_id])
+            while pending:
+                parent = pending.pop()
+                if parent in result:
+                    continue
+                result.add(parent)
+                pending.extend(graph[parent])
+            return result
+
+        rollback_targets = {step.rollback for step in self.workflow if step.rollback}
+        if any(target not in known for target in rollback_targets):
+            raise ValueError('Workflow rollback references a missing step')
+        if any(step.rollback == step.id for step in self.workflow if step.rollback):
+            raise ValueError('Workflow step cannot rollback to itself')
+        safe_rollback_types = {'terraform_destroy', 'notification', 'delay'}
+        for target in rollback_targets:
+            rollback_step = by_id[target]
+            if rollback_step.type not in safe_rollback_types:
+                raise ValueError('Rollback step must use terraform_destroy, notification or delay')
+            if rollback_step.depends_on:
+                raise ValueError('Rollback-only step cannot depend on normal workflow steps')
+            if any(target in step.depends_on for step in self.workflow):
+                raise ValueError('Rollback-only step cannot be a dependency of the normal workflow')
+        if any(step.type == 'terraform_destroy' and step.id not in rollback_targets for step in self.workflow):
+            raise ValueError('terraform_destroy is allowed only as a rollback target')
+        from app.automation.cloud_init import validate_cloud_init_workflow
+        validate_cloud_init_workflow([step.model_dump() for step in self.workflow])
+
+        approval_steps = [step for step in self.workflow if step.type == 'approval']
+        if approval_steps and not self.requires_approval:
+            raise ValueError('Workflow approval step requires requires_approval=true')
+        if len(approval_steps) > 1:
+            raise ValueError('Workflow can contain at most one approval step')
+        if approval_steps:
+            approval_step = approval_steps[0]
+            if approval_step.conditions or approval_step.retry or approval_step.rollback:
+                raise ValueError('Workflow approval step cannot use conditions, retry or rollback')
+
+        apply_steps = [step for step in self.workflow if step.type == 'terraform_apply']
+        plan_steps = [step for step in self.workflow if step.type == 'terraform_plan']
+        if len(plan_steps) > 1:
+            raise ValueError('Workflow can contain at most one terraform_plan step')
+
+        direct_proxmox = self.deployment.executor == 'proxmox'
+        direct_only = {'clone_vm', 'configure_vm', 'start_vm'}
+
+        if direct_proxmox:
+            if self.deployment.template != 'proxmox-vm':
+                raise ValueError('Direct Proxmox provisioning requires the proxmox-vm template')
+            if apply_steps or plan_steps:
+                raise ValueError('Direct Proxmox provisioning cannot contain Terraform plan/apply steps')
+            clone_steps = [step for step in self.workflow if step.type == 'clone_vm']
+            if len(clone_steps) != 1:
+                raise ValueError('Direct Proxmox provisioning requires exactly one clone_vm step')
+            if approval_steps:
+                raise ValueError(
+                    'Direct Proxmox provisioning uses job-level approval; an explicit approval workflow step is not supported'
+                )
+            clone_id = clone_steps[0].id
+            after_clone_types = {
+                'configure_vm', 'cloud_init', 'start_vm',
+                'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+                'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+            }
+            for step in self.workflow:
+                if step.type in after_clone_types and clone_id not in ancestors(step.id):
+                    raise ValueError(f'{step.type} must depend on the direct Proxmox clone_vm step')
+            cloud_steps = [step for step in self.workflow if step.type == 'cloud_init']
+            for start_step in [step for step in self.workflow if step.type == 'start_vm']:
+                if cloud_steps and cloud_steps[0].id not in ancestors(start_step.id):
+                    raise ValueError('Direct Proxmox start_vm must depend on cloud_init')
+        else:
+            if len(apply_steps) != 1:
+                raise ValueError('Terraform/OpenTofu workflow requires exactly one explicit terraform_apply step')
+            invalid_direct = sorted({step.type for step in self.workflow if step.type in direct_only})
+            if invalid_direct:
+                raise ValueError(
+                    'Terraform/OpenTofu workflow cannot contain Direct Proxmox steps: '
+                    + ', '.join(invalid_direct)
+                )
+            for step in self.workflow:
+                if step.type == 'cloud_init' and (step.conditions or step.retry or step.rollback):
+                    raise ValueError(
+                        'Terraform/OpenTofu cloud_init is declarative and cannot use conditions, retry or rollback'
+                    )
+            apply_id = apply_steps[0].id
+            if plan_steps and plan_steps[0].id not in ancestors(apply_id):
+                raise ValueError('terraform_plan must be an ancestor of terraform_apply')
+            if approval_steps:
+                approval_id = approval_steps[0].id
+                if approval_id not in ancestors(apply_id):
+                    raise ValueError('approval must be an ancestor of terraform_apply')
+                if plan_steps and plan_steps[0].id not in ancestors(approval_id):
+                    raise ValueError('terraform_plan must be an ancestor of approval')
+            vm_runtime_types = {
+                'wait_for_vm', 'wait_for_agent', 'wait_for_ip', 'wait_for_ssh',
+                'run_ansible_playbook', 'register_awx', 'create_snapshot', 'health_check',
+            }
+            for step in self.workflow:
+                if step.type in vm_runtime_types and apply_id not in ancestors(step.id):
+                    raise ValueError(f'{step.type} must depend on terraform_apply')
+
+        ansible_steps = [step for step in self.workflow if step.type == 'run_ansible_playbook']
+        configured_ansible = bool(self.deployment.ansible_runs)
+        if configured_ansible and len(ansible_steps) != 1:
+            raise ValueError(
+                'Configured Ansible requires exactly one explicit run_ansible_playbook workflow step'
+            )
+        if not configured_ansible and ansible_steps:
+            raise ValueError('run_ansible_playbook requires Ansible configuration')
+
+        awx_steps = [step for step in self.workflow if step.type == 'register_awx']
+        if self.deployment.prompt_awx_on_execute and not self.deployment.awx:
+            raise ValueError('Runtime AWX prompt requires AWX onboarding configuration')
+        if self.deployment.awx and len(awx_steps) != 1:
+            raise ValueError('AWX onboarding requires exactly one explicit register_awx workflow step')
+        if not self.deployment.awx and awx_steps:
+            raise ValueError('register_awx requires AWX onboarding configuration')
+
+        return self
+
+
+class BlueprintExecuteInput(Input):
+    variables: Annotated[dict[str, Any], Field(max_length=100)] = Field(default_factory=dict)
+    availability_plan_id: Annotated[str | None, Field(min_length=36, max_length=36, pattern=r'^[0-9a-fA-F-]{36}$')] = None
+    hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
+    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
+    awx_onboarding: bool | None = None
+
+
+class ScheduledOperationInput(Input):
+    name: Name
+    deployment_id: Annotated[str, Field(min_length=36, max_length=36)]
+    operation: Literal['terraform.plan', 'terraform.apply', 'terraform.destroy']
+    next_run_at: datetime
+    interval_seconds: int | None = Field(default=None, ge=60, le=31536000)
+
+    @field_validator('next_run_at')
+    @classmethod
+    def future_run(cls, value):
+        from datetime import timezone
+        current = datetime.now(timezone.utc)
+        candidate = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if candidate <= current:
+            raise ValueError('next_run_at must be in the future')
+        return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+class WebhookEndpointInput(Input):
+    name: Name
+    url: Annotated[str, Field(min_length=9, max_length=2048)]
+    events: Annotated[list[str], Field(min_length=1, max_length=64)]
+
+    @field_validator('events')
+    @classmethod
+    def event_patterns(cls, value):
+        import re
+        result = []
+        for item in value:
+            normalized = str(item).strip().lower()
+            valid = (
+                normalized == '*'
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+',
+                        normalized,
+                    )
+                )
+                or (
+                    len(normalized) <= 128
+                    and re.fullmatch(
+                        r'[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*\.\*',
+                        normalized,
+                    )
+                )
+            )
+            if not valid:
+                raise ValueError('Webhook event must be an event name, prefix wildcard such as job.* or *')
+            if normalized not in result:
+                result.append(normalized)
+        return result
+    is_active: bool = True
+
+    @field_validator('url')
+    @classmethod
+    def https_webhook(cls, value):
+        parsed = urlsplit(value)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise ValueError('Webhook URL must be HTTPS without embedded credentials or fragment')
+        return value
+)] = None
+
+    @model_validator(mode='after')
+    def manual_guest_password_contract(self):
+        if self.guest_password is not None and self.guest_account_mode != 'cloud_init_managed':
+            raise ValueError('Manual guest password is available only for cloud_init_managed account mode')
+        if self.guest_password is not None and not self.guest_credential_managed:
+            raise ValueError('Manual guest password requires guest_credential_managed=true')
+        if self.guest_credential_managed and self.guest_account_mode != 'cloud_init_managed':
+            raise ValueError('Managed guest credential is available only for cloud_init_managed account mode')
+        if self.guest_credential_managed and self.guest_credential_id is None and self.guest_password is None:
+            raise ValueError('Managed guest credential requires an existing credential id or a new password')
+        return self
     environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
     select_apmid_on_execute: bool = False
     select_environment_on_execute: bool = False
