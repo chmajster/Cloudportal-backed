@@ -329,6 +329,13 @@
           if (cloudPublicKey && !cloudPublicKey.disabled) {
             state.sshPublicKey = cloudPublicKey.value.trim();
           }
+          const cloudPassword = root.querySelector('[name="cloud_init_ssh_password"]');
+          if (cloudPassword && !cloudPassword.disabled) {
+            state.sshPassword = cloudPassword.value;
+            state.guestCredentialManaged = Boolean(
+              state.sshPassword || state.managedGuestCredentialId
+            );
+          }
           state.installQemuGuestAgent = root.querySelector('[name="install_qemu_guest_agent"]')?.checked ?? state.installQemuGuestAgent;
           state.waitAgent = root.querySelector('[name="wait_agent"]')?.checked ?? state.waitAgent;
           state.advancedWorkflow = root.querySelector('[name="advanced_workflow"]')?.checked ?? state.advancedWorkflow;
