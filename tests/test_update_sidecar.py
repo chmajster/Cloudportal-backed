@@ -843,3 +843,31 @@ def test_tls_activation_is_blocked_during_active_update(tmp_path, monkeypatch):
         assert 'aktywnej aktualizacji' in str(exc)
     else:
         raise AssertionError('TLS mutation must be blocked while updater is active')
+
+
+def test_tls_validation_rejects_certificate_before_not_before(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).strftime('%b %d %H:%M:%S %Y GMT')
+
+    def fake_tls_command(command, **kwargs):
+        if '-startdate' in command:
+            return ('notBefore=' + future + '\n').encode()
+        return b''
+
+    monkeypatch.setattr(updater, '_run_tls_command', fake_tls_command)
+    monkeypatch.setattr(updater, '_certificate_key_matches', lambda cert, key: True)
+    monkeypatch.setattr(updater, '_certificate_matches_hostname', lambda cert, hostname: True)
+
+    cert = tmp_path / 'server.crt'
+    key = tmp_path / 'server.key'
+    cert.write_text('CERT', encoding='utf-8')
+    key.write_text('KEY', encoding='utf-8')
+
+    try:
+        updater._validate_tls_pair(cert, key, 'kynlab.ddnsfree.com')
+    except ValueError as exc:
+        assert 'nie jest jeszcze ważny' in str(exc)
+    else:
+        raise AssertionError('Future notBefore certificate must be rejected')
