@@ -201,6 +201,21 @@ def protect_writes(db, _context, _instances):
                         'role': scope.entity_role,
                     }
                     row.workflow = workflow
+                if isinstance(row, m.ManagedResource) and getattr(scope, 'entity_key', None):
+                    metadata = dict(row.metadata_json or {})
+                    existing_apmid = str(metadata.get('apmid') or '').strip().upper()
+                    existing_environment = str(metadata.get('environment') or '').strip().lower()
+                    if existing_apmid and existing_apmid != str(scope.apmid or '').upper():
+                        fail(409, 'ENTITY_SCOPE_MISMATCH', 'Managed resource APMID does not match selected Entity')
+                    if existing_environment and existing_environment != str(scope.environment or '').lower():
+                        fail(409, 'ENTITY_SCOPE_MISMATCH', 'Managed resource Environment does not match selected Entity')
+                    metadata.update({
+                        'entity': scope.entity_key,
+                        'entity_role': scope.entity_role,
+                        'apmid': scope.apmid,
+                        'environment': scope.environment,
+                    })
+                    row.metadata_json = metadata
                 if row.tenant_id is None:
                     row.tenant_id = expected.tenant_id
                 if row.project_id is None:
