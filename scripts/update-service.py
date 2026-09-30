@@ -1583,6 +1583,22 @@ def _validate_tls_pair(cert: Path, key: Path, hostname: str) -> dict:
     _run_tls_command([openssl, "pkey", "-in", str(key), "-noout"])
     if not _certificate_key_matches(cert, key):
         raise ValueError("Certyfikat TLS i klucz prywatny nie pasują do siebie")
+    not_before_raw = _run_tls_command(
+        [openssl, "x509", "-in", str(cert), "-noout", "-startdate"]
+    ).decode("utf-8", "replace").strip()
+    try:
+        not_before_text = not_before_raw.split("=", 1)[1].strip()
+        not_before = datetime.strptime(
+            not_before_text,
+            "%b %d %H:%M:%S %Y %Z",
+        ).replace(tzinfo=timezone.utc)
+    except (IndexError, ValueError) as exc:
+        raise ValueError("Nie można odczytać daty notBefore certyfikatu TLS") from exc
+    if not_before > datetime.now(timezone.utc):
+        raise ValueError(
+            "Certyfikat TLS nie jest jeszcze ważny; notBefore: "
+            + not_before.isoformat()
+        )
     if subprocess.run(
         [openssl, "x509", "-in", str(cert), "-noout", "-checkend", "300"],
         stdout=subprocess.DEVNULL,
