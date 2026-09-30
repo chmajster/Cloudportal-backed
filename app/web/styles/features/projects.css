@@ -352,12 +352,11 @@
 }
 .searchable-select-options {
   position: absolute;
-  z-index: 130;
+  z-index: 90;
   top: calc(100% + 6px);
   left: 0;
   right: 0;
-  max-width: 100%;
-  max-height: min(240px, calc(100dvh - 96px));
+  max-height: 240px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 5px;
@@ -387,16 +386,6 @@
 .searchable-select-option[aria-selected="true"] {
   font-weight: 800;
   background: var(--accent-soft);
-}
-.searchable-select-option > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.searchable-select-status {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 .searchable-select-empty {
   padding: 10px;
