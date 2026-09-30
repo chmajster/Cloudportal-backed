@@ -578,6 +578,100 @@ def test_blueprint_guest_credential_accepts_password_only_ssh_without_persisting
     assert runtime_password == password
 
 
+def test_blueprint_manual_guest_password_is_encrypted_and_only_credential_id_is_persisted(client, headers):
+    from app.database import session
+    from app.models import Blueprint, Credential
+    from app.security.core import decrypt_secret
+
+    provider_credential, provider, deployment_payload = resources(client, headers)
+    password = 'Manual-Password-1234'
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'manual-cloud-init-password',
+        'name': 'Manual Cloud-init password',
+        'deployment': {
+            'name': 'manual-cloud-init-password',
+            'provider_id': provider['id'],
+            'credentials_id': provider_credential['id'],
+            'guest_account_mode': 'cloud_init_managed',
+            'guest_credential_managed': True,
+            'guest_password': password,
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'manual-cloud-init-password',
+                'ssh_username': 'clouduser',
+            },
+        },
+        'workflow': [
+            {'id': 'cloud_init', 'type': 'cloud_init'},
+            {'id': 'apply', 'type': 'terraform_apply', 'depends_on': ['cloud_init']},
+        ],
+    })
+    assert created.status_code == 201, created.text
+    blueprint = created.json()
+    managed_id = blueprint['deployment']['guest_credential_id']
+    assert blueprint['deployment']['guest_credential_managed'] is True
+    assert 'guest_password' not in blueprint['deployment']
+    assert password not in created.text
+
+    with session() as db:
+        row = db.get(Blueprint, blueprint['id'])
+        assert password not in str(row.deployment)
+        assert row.deployment['guest_credential_id'] == managed_id
+        credential = db.get(Credential, managed_id)
+        assert credential is not None
+        assert credential.type == 'ssh'
+        assert credential.endpoint == ''
+        assert credential.username == 'clouduser'
+        assert decrypt_secret(credential)['password'] == password
+
+    execution = client.post(
+        f"/api/v1/blueprints/{blueprint['id']}/execute",
+        headers=key(headers),
+        json={},
+    )
+    assert execution.status_code == 202, execution.text
+    assert execution.json()['workflow']['blueprint']['guest_credential_id'] == managed_id
+    assert password not in execution.text
+
+    update_payload = {
+        'slug': blueprint['slug'],
+        'name': blueprint['name'],
+        'description': blueprint['description'],
+        'avatar_id': blueprint['avatar_id'],
+        'is_active': blueprint['is_active'],
+        'visibility': blueprint['visibility'],
+        'allowed_role_ids': blueprint['allowed_role_ids'],
+        'allowed_user_ids': blueprint['allowed_user_ids'],
+        'manager_role_ids': blueprint['manager_role_ids'],
+        'variables_schema': blueprint['variables_schema'],
+        'deployment': {
+            **blueprint['deployment'],
+            'variables': {
+                **blueprint['deployment']['variables'],
+                'ssh_username': 'cloudadmin',
+            },
+        },
+        'workflow': blueprint['workflow'],
+        'requires_approval': blueprint['requires_approval'],
+        'auto_approve_for_executors': blueprint['auto_approve_for_executors'],
+        'approval_timeout_hours': blueprint['approval_timeout_hours'],
+        'recovery_policy': blueprint['recovery_policy'],
+    }
+    updated = client.put(
+        f"/api/v1/blueprints/{blueprint['id']}",
+        headers={**headers, 'If-Match': str(blueprint['version'])},
+        json=update_payload,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['deployment']['guest_credential_id'] == managed_id
+    assert 'guest_password' not in updated.json()['deployment']
+
+    with session() as db:
+        credential = db.get(Credential, managed_id)
+        assert credential.username == 'cloudadmin'
+        assert decrypt_secret(credential)['password'] == password
+
+
 def test_blueprint_runtime_apmid_is_required_by_ui_and_applied_by_backend(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     saved = client.put('/api/v1/settings/vm-classification', headers=headers, json={
