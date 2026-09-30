@@ -708,3 +708,81 @@ def test_update_status_compact_omits_large_history(tmp_path, monkeypatch):
     assert 'output' not in compact
     assert compact['status'] in {'failed', 'running'}
     assert len(json.dumps(compact).encode('utf-8')) < 65536
+
+
+def test_tls_letsencrypt_detection_and_activation_updates_public_host(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    monkeypatch.setattr(updater, 'INSTALL_MODE', 'docker')
+
+    config = updater.CONFIG_DIR / 'docker.env'
+    config.write_text(
+        'CP_PUBLIC_HOST=100.118.132.40\n'
+        'CP_HTTPS_PORT=8443\n'
+        'CP_WORKER_COUNT=1\n',
+        encoding='utf-8',
+    )
+
+    live = tmp_path / 'letsencrypt' / 'live'
+    lineage = live / 'kynlab.ddnsfree.com'
+    lineage.mkdir(parents=True)
+    cert = lineage / 'fullchain.pem'
+    key = lineage / 'privkey.pem'
+    cert.write_text('CERT', encoding='utf-8')
+    key.write_text('KEY', encoding='utf-8')
+
+    monkeypatch.setattr(updater, 'LETSENCRYPT_LIVE_DIR', live)
+    monkeypatch.setattr(updater, 'CERTBOT_DEPLOY_HOOK', tmp_path / 'renewal-hooks' / 'cloudportal-backed')
+    monkeypatch.setattr(
+        updater,
+        '_certificate_details',
+        lambda path, hostname=None: {
+            'present': True,
+            'valid': True,
+            'matches_hostname': hostname == 'kynlab.ddnsfree.com',
+            'dns_names': ['kynlab.ddnsfree.com'],
+            'ip_addresses': [],
+            'not_after': 'Dec 31 23:59:59 2026 GMT',
+        },
+    )
+
+    captured = {}
+
+    def activate(cert_bytes, key_bytes, **kwargs):
+        captured.update(kwargs)
+        return {'hostname': kwargs['hostname'], 'source': kwargs['source_type']}
+
+    monkeypatch.setattr(updater, '_activate_tls_material', activate)
+
+    discovered = updater.letsencrypt_candidates()
+    assert [item['lineage'] for item in discovered['items']] == ['kynlab.ddnsfree.com']
+    assert discovered['items'][0]['path'].endswith('/etc/letsencrypt/live/kynlab.ddnsfree.com') is False
+    assert discovered['items'][0]['certificate']['dns_names'] == ['kynlab.ddnsfree.com']
+
+    result = updater.apply_letsencrypt_tls({'lineage': 'kynlab.ddnsfree.com'})
+    assert result['hostname'] == 'kynlab.ddnsfree.com'
+    assert captured['source_type'] == 'letsencrypt'
+    assert captured['source_path'] == str(lineage)
+    assert captured['configure_renewal_hook'] is True
+
+
+def test_tls_status_does_not_expose_private_key_content(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    monkeypatch.setattr(updater, 'INSTALL_MODE', 'systemd')
+    (updater.CONFIG_DIR / 'public.conf').write_text('host=portal.example.test\nport=8443\n', encoding='utf-8')
+    tls = updater.CONFIG_DIR / 'tls'
+    tls.mkdir()
+    (tls / 'server.crt').write_text('CERTIFICATE', encoding='utf-8')
+    (tls / 'server.key').write_text('TOP-SECRET-PRIVATE-KEY', encoding='utf-8')
+    (tls / 'certificate-source').write_text('custom\n', encoding='utf-8')
+    monkeypatch.setattr(
+        updater,
+        '_certificate_details',
+        lambda path, hostname=None: {'present': True, 'valid': True, 'matches_hostname': True},
+    )
+    monkeypatch.setattr(updater, 'CERTBOT_DEPLOY_HOOK', tmp_path / 'missing-hook')
+
+    payload = updater._tls_status_payload()
+
+    assert payload['hostname'] == 'portal.example.test'
+    assert payload['key_present'] is True
+    assert 'TOP-SECRET-PRIVATE-KEY' not in str(payload)
