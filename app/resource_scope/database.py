@@ -29,8 +29,11 @@ def row_scope(row):
 
 def bind_scope(db, scope):
     previous = db.info.get('resource_scope')
-    if previous is not None and previous != scope:
-        fail(409, 'SCOPE_IMMUTABLE', 'A database transaction cannot change project scope')
+    if previous is not None and (
+        previous != scope
+        or getattr(previous, 'entity_key', None) != getattr(scope, 'entity_key', None)
+    ):
+        fail(409, 'SCOPE_IMMUTABLE', 'A database transaction cannot change project or Entity scope')
     for row in tuple(db.identity_map.values()):
         if isinstance(row, ResourceScope) and row_scope(row) != scope:
             fail(409, 'SCOPE_SESSION_REUSE', 'Resource session contains a different project')
