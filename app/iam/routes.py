@@ -114,6 +114,7 @@ def _assignment_public(db, row: RoleAssignment) -> dict:
         'scope_type': row.scope_type,
         'scope_id': row.scope_id,
         'tenant_id': row.tenant_id,
+        'organization_id': row.tenant_id,
         'project_id': row.project_id,
         'apmid': row.apmid,
         'environment': row.environment,
@@ -126,6 +127,7 @@ def _assignment_public(db, row: RoleAssignment) -> dict:
         'enabled': row.enabled,
         'source': row.source,
         'source_ref': row.source_ref,
+        'source_group': db.get(Group, row.subject_id).name if row.subject_type == 'GROUP' and db.get(Group, row.subject_id) else None,
         'status': assignment_status(row),
         'created_by': row.created_by,
         'created_at': row.created_at,
@@ -143,6 +145,8 @@ def _group_public(db, row: Group) -> dict:
         'description': row.description,
         'external_source': row.external_source,
         'external_id': row.external_id,
+        'system_key': row.system_key,
+        'managed_type': row.managed_type,
         'enabled': row.enabled,
         'member_count': int(count),
         'created_at': row.created_at,
@@ -1168,6 +1172,8 @@ def delete_group(
         db, actor, 'groups.delete', scope={'scope_type': 'GLOBAL'},
         context=request_context(request), write=True,
     )
+    if row.system_key:
+        raise HTTPException(409, {'error': 'managed_group_protected'})
     db.delete(row)
     db.flush()
     ensure_admin_remains(db)
@@ -1337,7 +1343,6 @@ def user_effective_access(
     permissions = effective_permissions(db, actor, scope=scope, subject_user_id=user_id)
     assignments = _assignments_for_user(db, user_id)
     role_ids = {row.role_id for row in assignments}
-    role_ids.update(db.scalars(select(UserRole.role_id).where(UserRole.user_id == user_id)))
     roles = [
         {'id': role.id, 'name': role.name}
         for role in db.scalars(select(Role).where(Role.id.in_(role_ids)).order_by(Role.name))
