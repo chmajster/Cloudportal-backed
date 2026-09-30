@@ -419,6 +419,9 @@
       await Promise.all([readCurrent(), loadDirectory()]);
       if (generation !== shellGeneration) return;
       renderShell();
+      if (typeof emitUiEvent === 'function') {
+        emitUiEvent('scope-changed', { scope: scopeSnapshot() });
+      }
     } catch (error) {
       if (generation !== shellGeneration) return;
       currentScope = null;
