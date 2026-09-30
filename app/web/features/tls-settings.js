@@ -70,7 +70,7 @@ function openCustomTlsForm(status) {
       const key = data.get('private_key');
       if (!(cert instanceof File) || !cert.size) throw new Error('Wybierz plik certyfikatu PEM.');
       if (!(key instanceof File) || !key.size) throw new Error('Wybierz plik klucza prywatnego PEM.');
-      await api('/settings/tls/custom', {
+      const result = await api('/settings/tls/custom', {
         method: 'POST',
         body: {
           hostname: String(data.get('hostname') || '').trim(),
@@ -79,6 +79,10 @@ function openCustomTlsForm(status) {
         },
       });
       toast('Certyfikat TLS został zastosowany.');
+      if (result.hostname && result.hostname !== location.hostname && result.url) {
+        location.assign(result.url);
+        return false;
+      }
       navigate('/admin/settings/tls');
     },
   });
@@ -141,6 +145,10 @@ function openLetsEncryptForm(candidate, status) {
         },
       });
       toast('Let’s Encrypt został ustawiony dla ' + result.hostname + '.');
+      if (result.hostname && result.hostname !== location.hostname && result.url) {
+        location.assign(result.url);
+        return false;
+      }
       navigate('/admin/settings/tls');
     },
   });
