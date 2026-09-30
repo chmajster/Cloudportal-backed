@@ -45,6 +45,8 @@
 - Efektywne role obejmują role globalne oraz aktywne przypisania tenant/project. Nie wolno sprawdzać tylko globalnych ról.
 - Cofnięcie membershipu tenant/project ma natychmiast odbierać wynikające z niego uprawnienia.
 - Payload API nie może wstrzykiwać principal IDs niewidocznych w wybranym scope. Backend musi ponownie walidować role/użytkowników wybrane w UI.
+- W formularzach IAM pole roli przechowuje wyłącznie istniejące `role_id`; tekst comboboxa służy tylko do wyszukiwania. Zmiana roli istniejącego RoleAssignment musi ponownie przejść delegation boundary, kontrolę scope i separation-of-duties oraz odświeżyć `permission_ceiling` z nowej roli.
+- Tworzenie RoleAssignment musi przekazywać jawnie zweryfikowany obiekt `Role` do kodu budującego assignment; nie wolno polegać na zmiennej z zewnętrznego scope przy wyliczaniu `permission_ceiling`.
 - Blueprint ACL jest **dodatkowym ograniczeniem**, a nie mechanizmem rozszerzającym resource-scope RBAC.
 - `can_manage` i podobne decyzje powinny być obliczane na backendzie i konsumowane przez UI.
 - Wbudowany Administrator musi być synchronizowany z nowymi permissionami również na istniejących instalacjach. Regresje tego typu blokowały m.in. LDAP/settings.
@@ -530,6 +532,7 @@ Legenda:
 - **#295 [OPEN] Restore frontend module boundary after searchable select merge** — #291 przeniósł współdzielony helper `searchableSelectField` do `app/web/core.js`, zwiększając plik do 1380 linii i łamiąc twardy limit 1200. Helper został przeniesiony do automatycznie ładowanego `app/web/shared/searchable-select.js`; feature Projects i globalny Project Context zachowują wspólny kontrakt bez rozbudowy hot-spotu `core.js`.
 
 - **#326 [OPEN] feat(updater): harden automatic update execution** — Cron wywołuje updater jako prawdziwą operację automatyczną, czeka na końcowy wynik zamiast kończyć po HTTP 202 i zapisuje rezultat w logu. Polling używa kompaktowego `/status?compact=1`, więc rosnąca historia eventów/logu technicznego nie może przekroczyć limitu odpowiedzi klienta cron. Nieudany automatyczny update zapamiętuje wadliwy SHA i stosuje 180-minutowy cooldown tylko dla tego samego kandydata; ręczne ponowienie oraz nowy SHA nie są blokowane. Stan `deferred/cooldown`, licznik kolejnych błędów i termin ponowienia są widoczne w statusie/UI. Reguła regresyjna: zewnętrzny scheduler nie może omijać preflightu `automatic=True`, polling schedulerów nie powinien pobierać pełnej historii operacji, a cykliczny updater nie może bez końca próbować tego samego znanego wadliwego commita.
+- **#334 [OPEN] feat(iam): searchable role combobox for assignments** — Pole `Rola *` w RoleAssignment korzysta ze współdzielonego searchable select i zapisuje wyłącznie `role_id`. Istniejący `GET /rbac/roles` ma tryb `assignable=true`, który filtruje role według bieżącego scope i tej samej delegation boundary co zapis, z semantyką operacji write. PATCH RoleAssignment ponownie waliduje nową rolę, SoD i odświeża `permission_ceiling`.
 
 ---
 

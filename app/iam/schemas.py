@@ -53,6 +53,7 @@ class AssignmentCreate(ScopeInput):
 
 
 class AssignmentUpdate(IAMModel):
+    role_id: int | None = Field(default=None, gt=0)
     effect: Effect | None = None
     conditions: dict[str, Any] | None = None
     inherit: bool | None = None

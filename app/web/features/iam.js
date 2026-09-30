@@ -144,6 +144,18 @@ function subjectChoiceLabel(item, kind) {
   return display + (item.email ? ' · ' + item.email : '');
 }
 
+function roleChoice(item) {
+  const scopeTerms = Array.isArray(item.scope_types)
+    ? item.scope_types.map(value => String(value || '').trim().toLocaleLowerCase('pl-PL')).filter(Boolean)
+    : [];
+  const scopeLabel = item.system_role ? 'system' : scopeTerms.join(' / ');
+  return {
+    value: item.id,
+    label: item.name + (scopeLabel ? ' · ' + scopeLabel : ''),
+    searchText: [item.name, item.system_role ? 'system' : '', ...scopeTerms].filter(Boolean).join(' '),
+  };
+}
+
 function setIamFieldVisible(wrapper, visible) {
   wrapper.hidden = !visible;
 }
@@ -183,7 +195,10 @@ async function accessAssignmentForm(forcedUserId = null) {
         if (!value(name)) throw new Error('Uzupełnij wymagane pole dla scope: ' + name + '.');
       }
       if (!value('subject_id')) throw new Error('Wybierz Subject.');
-      if (!value('role_id')) throw new Error('Wybierz rolę.');
+      const roleId = Number(value('role_id'));
+      if (!Number.isInteger(roleId) || roleId <= 0 || !availableRoleIds.has(roleId)) {
+        throw new Error('Wybierz rolę z listy.');
+      }
 
       let conditionTree = {};
       const rawConditions = value('conditions');
@@ -198,7 +213,7 @@ async function accessAssignmentForm(forcedUserId = null) {
       const payload = {
         subject_type: forcedUserId ? 'USER' : value('subject_type'),
         subject_id: String(forcedUserId || value('subject_id')),
-        role_id: Number(value('role_id')),
+        role_id: roleId,
         effect: value('effect'),
         scope_type: kind,
         conditions: conditionTree,
@@ -231,16 +246,13 @@ async function accessAssignmentForm(forcedUserId = null) {
   if (submit) submit.disabled = true;
 
   const initialSubjectPath = '/iam/subjects?type=USER';
-  const rolesPath = '/iam/roles';
   const organizationsPath = '/iam/organizations';
 
   let initialSubjects;
-  let rolesResult;
   let organizationsResult;
   try {
-    [initialSubjects, rolesResult, organizationsResult] = await Promise.all([
+    [initialSubjects, organizationsResult] = await Promise.all([
       iamLoadCatalog('użytkowników', initialSubjectPath),
-      iamLoadCatalog('ról', rolesPath),
       iamLoadCatalog('organizacji', organizationsPath),
     ]);
   } catch (error) {
@@ -251,7 +263,6 @@ async function accessAssignmentForm(forcedUserId = null) {
     return;
   }
 
-  const roles = (rolesResult.items || []).filter(item => item.enabled !== false);
   const organizations = organizationsResult.items || [];
   const subjectType = selectField('Subject type', 'subject_type', [
     { value: 'USER', label: 'User' },
@@ -261,16 +272,17 @@ async function accessAssignmentForm(forcedUserId = null) {
   ], 'USER', { required: true });
 
   const subjectHost = node('div', { class: 'wide' });
-  const role = searchableSelectField('Rola', 'role_id', roles.map(item => ({
-    value: item.id,
-    label: item.name + (item.system_role ? ' · system' : ''),
-  })), '', {
+  let availableRoleIds = new Set();
+  const role = searchableSelectField('Rola', 'role_id', [], '', {
     required: true,
     wide: true,
     selectFirst: false,
-    placeholder: roles.length ? 'Wpisz nazwę roli…' : 'Brak ról',
+    placeholder: 'Wyszukaj rolę…',
+    emptyText: 'Brak pasujących ról',
+    disableWhenEmpty: false,
   });
-  if (!roles.length) role.append(node('span', { class: 'field-help', text: 'Brak ról' }));
+  role.classList.add('iam-role-searchable-select');
+  role.searchableSelect.setState('loading', 'Ładowanie ról…');
 
   const effect = selectField('Effect', 'effect', [
     { value: 'ALLOW', label: 'ALLOW' },
@@ -336,6 +348,8 @@ async function accessAssignmentForm(forcedUserId = null) {
 
   const subjectTypeSelect = subjectType.querySelector('select');
   const scopeSelect = scopeType.querySelector('select');
+  const scopeIdInput = scopeId.querySelector('input');
+  let roleLoadGeneration = 0;
   if (forcedUserId) subjectTypeSelect.disabled = true;
 
   let subjectGeneration = 0;
@@ -477,6 +491,66 @@ async function accessAssignmentForm(forcedUserId = null) {
     }
   }
 
+  function roleScopeQuery() {
+    const kind = scopeSelect.value;
+    const organizationId = organization.searchableSelect.value();
+    const projectId = project.searchableSelect.value();
+    const apmidValue = apmid.searchableSelect.value();
+    const environmentValue = environment.searchableSelect.value();
+    const resourceScopeId = String(scopeIdInput?.value || '').trim();
+    const resourceKinds = ['RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'];
+
+    if (kind !== 'GLOBAL' && !organizationId) return null;
+    if (!['GLOBAL', 'ORGANIZATION'].includes(kind) && !projectId) return null;
+    if (kind === 'APMID' && !apmidValue) return null;
+    if (kind === 'ENVIRONMENT' && (!apmidValue || !environmentValue)) return null;
+    if (resourceKinds.includes(kind) && !resourceScopeId) return null;
+
+    const query = new URLSearchParams({
+      assignable: 'true',
+      scope_type: kind,
+    });
+    if (organizationId) query.set('tenant_id', organizationId);
+    if (projectId) query.set('project_id', projectId);
+    if (['APMID', 'ENVIRONMENT'].includes(kind) && apmidValue) query.set('apmid', apmidValue);
+    if (kind === 'ENVIRONMENT' && environmentValue) query.set('environment', environmentValue);
+    if (resourceKinds.includes(kind) && resourceScopeId) query.set('scope_id', resourceScopeId);
+    return query;
+  }
+
+  async function loadAssignableRoles(preferred = '') {
+    const generation = ++roleLoadGeneration;
+    const query = roleScopeQuery();
+    availableRoleIds = new Set();
+    role.searchableSelect.setChoices([], '');
+    if (!query) {
+      role.searchableSelect.setState('ready', 'Uzupełnij wymagany zakres, aby pobrać role.');
+      updateSubmitState();
+      return;
+    }
+
+    role.searchableSelect.setChoices([], '');
+    role.searchableSelect.setState('loading', 'Ładowanie ról…');
+    try {
+      const result = await iamAll('/iam/roles?' + query.toString());
+      if (generation !== roleLoadGeneration) return;
+      const roles = (result.items || []).filter(item => item.enabled !== false);
+      availableRoleIds = new Set(roles.map(item => Number(item.id)));
+      role.searchableSelect.setChoices(roles.map(roleChoice), preferred);
+      if (!roles.length) {
+        role.searchableSelect.setState('ready', 'Brak pasujących ról');
+      }
+    } catch (error) {
+      if (generation !== roleLoadGeneration) return;
+      availableRoleIds = new Set();
+      role.searchableSelect.setChoices([], '');
+      console.error('Nie udało się pobrać listy ról IAM.', error);
+      role.searchableSelect.setState('error', 'Nie udało się pobrać listy ról.');
+      toast(iamLoadErrorMessage('ról', '/iam/roles?' + query.toString(), error), 'error');
+    }
+    updateSubmitState();
+  }
+
   function syncScope() {
     const kind = scopeSelect.value;
     const needsOrganization = kind !== 'GLOBAL';
@@ -522,10 +596,12 @@ async function accessAssignmentForm(forcedUserId = null) {
       MACHINE: ['tenant_id', 'project_id', 'scope_id'],
     };
     const hasRequiredScope = (requirements[kind] || []).every(name => Boolean(value(name)));
+    const selectedRoleId = Number(value('role_id'));
+    const validRole = Number.isInteger(selectedRoleId) && availableRoleIds.has(selectedRoleId);
     submit.disabled = !(
       ready
       && Boolean(forcedUserId || value('subject_id'))
-      && Boolean(value('role_id'))
+      && validRole
       && Boolean(value('effect'))
       && Boolean(kind)
       && hasRequiredScope
@@ -536,17 +612,31 @@ async function accessAssignmentForm(forcedUserId = null) {
   subjectTypeSelect.addEventListener('change', () => {
     loadSubjects(subjectTypeSelect.value).catch(error => toast(error.message, 'error'));
   });
-  scopeSelect.addEventListener('change', syncScope);
+  scopeSelect.addEventListener('change', () => {
+    syncScope();
+    loadAssignableRoles().catch(error => toast(error.message, 'error'));
+  });
   organization.searchableSelect.onChange(organizationId => {
     loadProjects(organizationId).catch(error => toast(error.message, 'error'));
+    loadAssignableRoles().catch(error => toast(error.message, 'error'));
     updateSubmitState();
   });
   project.searchableSelect.onChange(() => {
     loadClassification().catch(error => toast(error.message, 'error'));
+    loadAssignableRoles().catch(error => toast(error.message, 'error'));
     updateSubmitState();
   });
   apmid.searchableSelect.onChange(() => {
     loadEnvironments().catch(error => toast(error.message, 'error'));
+    loadAssignableRoles().catch(error => toast(error.message, 'error'));
+    updateSubmitState();
+  });
+  environment.searchableSelect.onChange(() => {
+    loadAssignableRoles().catch(error => toast(error.message, 'error'));
+    updateSubmitState();
+  });
+  scopeIdInput?.addEventListener('change', () => {
+    loadAssignableRoles().catch(error => toast(error.message, 'error'));
     updateSubmitState();
   });
   role.searchableSelect.onChange(updateSubmitState);
@@ -556,6 +646,7 @@ async function accessAssignmentForm(forcedUserId = null) {
   ready = true;
   await loadSubjects('USER', forcedUserId ? String(forcedUserId) : '');
   syncScope();
+  await loadAssignableRoles();
   updateSubmitState();
 }
 
@@ -567,7 +658,19 @@ function iamDateTimeLocal(value) {
   return local.toISOString().slice(0, 16);
 }
 
-function editAssignmentForm(item) {
+async function editAssignmentForm(item) {
+  let availableRoleIds = new Set();
+  const role = searchableSelectField('Rola', 'role_id', [], item.role_id || '', {
+    required: true,
+    wide: true,
+    selectFirst: false,
+    placeholder: 'Wyszukaj rolę…',
+    emptyText: 'Brak pasujących ról',
+    disableWhenEmpty: false,
+  });
+  role.classList.add('iam-role-searchable-select');
+  role.searchableSelect.setState('loading', 'Ładowanie ról…');
+
   const effect = selectField('Effect', 'effect', [
     { value: 'ALLOW', label: 'ALLOW' },
     { value: 'DENY', label: 'DENY' },
@@ -597,7 +700,7 @@ function editAssignmentForm(item) {
     node('div', { class: 'wide panel' },
       node('strong', { text: item.role_name || 'RoleAssignment' }),
       node('div', { class: 'muted mono', text: assignmentScope(item) })),
-    effect, validFrom, validUntil, inherit, approval, enabled, conditions);
+    role, effect, validFrom, validUntil, inherit, approval, enabled, conditions);
 
   openModal({
     title: 'Edytuj przypisanie',
@@ -606,6 +709,10 @@ function editAssignmentForm(item) {
     wide: true,
     submitLabel: 'Zapisz zmiany',
     onSubmit: async (_data, form) => {
+      const roleId = Number(form.elements.role_id?.value || 0);
+      if (!Number.isInteger(roleId) || roleId <= 0 || !availableRoleIds.has(roleId)) {
+        throw new Error('Wybierz rolę z listy.');
+      }
       const raw = String(form.elements.conditions?.value || '').trim();
       let conditionTree = {};
       if (raw) {
@@ -621,6 +728,7 @@ function editAssignmentForm(item) {
         throw new Error('Valid until musi być późniejsze niż Valid from.');
       }
       const payload = {
+        role_id: roleId,
         effect: form.elements.effect.value,
         conditions: conditionTree,
         inherit: Boolean(form.elements.inherit?.checked),
@@ -637,6 +745,32 @@ function editAssignmentForm(item) {
       await enterpriseIamView();
     },
   });
+
+  const query = new URLSearchParams({
+    assignable: 'true',
+    scope_type: item.scope_type || 'GLOBAL',
+  });
+  if (item.tenant_id) query.set('tenant_id', item.tenant_id);
+  if (item.project_id) query.set('project_id', item.project_id);
+  if (item.apmid) query.set('apmid', item.apmid);
+  if (item.environment) query.set('environment', item.environment);
+  if (item.scope_id && ![item.tenant_id, item.project_id].includes(item.scope_id)) {
+    query.set('scope_id', item.scope_id);
+  }
+
+  try {
+    const result = await iamAll('/iam/roles?' + query.toString());
+    const roles = (result.items || []).filter(value => value.enabled !== false);
+    availableRoleIds = new Set(roles.map(value => Number(value.id)));
+    role.searchableSelect.setChoices(roles.map(roleChoice), item.role_id || '');
+    if (!roles.length) role.searchableSelect.setState('ready', 'Brak pasujących ról');
+  } catch (error) {
+    availableRoleIds = new Set();
+    role.searchableSelect.setChoices([], '');
+    console.error('Nie udało się pobrać listy ról IAM.', error);
+    role.searchableSelect.setState('error', 'Nie udało się pobrać listy ról.');
+    toast(iamLoadErrorMessage('ról', '/iam/roles?' + query.toString(), error), 'error');
+  }
 }
 
 async function assignmentsPanel() {
@@ -688,7 +822,7 @@ async function assignmentsPanel() {
         { label: 'Źródło', value: item => item.source },
       ], assignments, item => [
         ...(canUpdateBinding ? [
-          button('Edytuj', () => editAssignmentForm(item)),
+          button('Edytuj', () => editAssignmentForm(item).catch(error => toast(error.message, 'error'))),
         ] : []),
         ...(canDeleteBinding ? [
           button('Usuń', () => confirmAction(

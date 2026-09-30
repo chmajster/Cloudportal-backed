@@ -15,6 +15,7 @@
     const controlId = 'searchable-select-' + (++searchableSelectSequence);
     const listboxId = controlId + '-listbox';
     const valueInput = node('input', { type: 'hidden', name, value: '' });
+    const defaultPlaceholder = options.placeholder || 'Wpisz, aby filtrować…';
     const searchInput = node('input', {
       id: controlId,
       type: 'search',
@@ -22,7 +23,7 @@
       autocomplete: 'off',
       spellcheck: 'false',
       required: options.required,
-      placeholder: options.placeholder || 'Wpisz, aby filtrować…',
+      placeholder: defaultPlaceholder,
       role: 'combobox',
       'aria-autocomplete': 'list',
       'aria-expanded': 'false',
@@ -34,6 +35,12 @@
       role: 'listbox',
       hidden: true,
     });
+    const status = node('span', {
+      class: 'searchable-select-status field-help',
+      role: 'status',
+      'aria-live': 'polite',
+      hidden: true,
+    });
     const control = node('div', { class: 'searchable-select' },
       searchInput,
       node('span', { class: 'searchable-select-chevron', 'aria-hidden': 'true', text: '⌄' }),
@@ -41,7 +48,8 @@
       listbox);
     const wrapper = node('div', { class: 'searchable-select-field' + (options.wide ? ' wide' : '') },
       node('label', { for: controlId }, formFieldLabel(labelText, Boolean(options.required))),
-      control);
+      control,
+      status);
     if (options.help) wrapper.append(node('span', { class: 'field-help', text: options.help }));
   
     let rows = [];
@@ -69,7 +77,7 @@
     function visibleChoices() {
       const query = editing ? normalizeSearchText(searchInput.value) : '';
       if (!query) return rows;
-      return rows.filter(choice => normalizeSearchText(choice.label).includes(query));
+      return rows.filter(choice => normalizeSearchText(choice.searchText).includes(query));
     }
   
     function optionButtons() {
@@ -97,7 +105,7 @@
         listbox.replaceChildren(node('div', {
           class: 'searchable-select-empty',
           role: 'presentation',
-          text: 'Brak pasujących wyników',
+          text: options.emptyText || 'Brak pasujących wyników',
         }));
         activeIndex = -1;
         return;
@@ -139,17 +147,18 @@
     function clearSelection() {
       valueInput.value = '';
       editing = true;
+      updateValidity();
     }
   
     function setChoices(nextChoices, preferred = '') {
       rows = (nextChoices || []).map(choice => ({
         value: String(choice.value),
         label: String(choice.label ?? choice.value),
+        searchText: String(choice.searchText ?? choice.label ?? choice.value),
       }));
       const preferredChoice = rows.find(choice => String(choice.value) === String(preferred));
       const retainedChoice = rows.find(choice => String(choice.value) === String(selectedValue));
       const next = preferredChoice || retainedChoice || (options.selectFirst === false ? null : rows[0]) || null;
-      searchInput.disabled = rows.length === 0;
       if (next) commit(next, false);
       else {
         selectedValue = '';
@@ -157,7 +166,24 @@
         searchInput.value = '';
         editing = false;
         closeList();
+        updateValidity();
       }
+      setState('ready');
+    }
+
+    function setState(nextState = 'ready', message = '') {
+      const unavailable = nextState === 'loading' || nextState === 'error';
+      searchInput.disabled = unavailable || (rows.length === 0 && options.disableWhenEmpty !== false);
+      searchInput.placeholder = message || defaultPlaceholder;
+      if (nextState === 'loading') searchInput.setAttribute('aria-busy', 'true');
+      else searchInput.removeAttribute('aria-busy');
+      if (nextState === 'error') searchInput.setAttribute('aria-invalid', 'true');
+      else searchInput.removeAttribute('aria-invalid');
+      status.hidden = !message;
+      status.textContent = message;
+      status.classList.toggle('form-error', nextState === 'error');
+      if (unavailable) closeList();
+      updateValidity();
     }
   
     searchInput.addEventListener('focus', () => {
@@ -206,6 +232,7 @@
   
     wrapper.searchableSelect = Object.freeze({
       setChoices,
+      setState,
       value: () => String(valueInput.value || ''),
       onChange: listener => listeners.add(listener),
       focus: () => searchInput.focus(),

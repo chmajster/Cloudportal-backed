@@ -277,16 +277,25 @@ def _scope_management_actions(scope: dict, operation: str = 'create') -> tuple[s
     return (*iam_actions, 'rbac.assignments.manage', 'projects.roles.assign')
 
 
-def _require_any(db, actor, actions: Iterable[str], scope: dict, request: Request):
+def _require_any(
+    db,
+    actor,
+    actions: Iterable[str],
+    scope: dict,
+    request: Request,
+    *,
+    write: bool | None = None,
+):
     if is_system_administrator(db, actor):
         return None
     decisions = []
+    write_operation = request.method not in {'GET', 'HEAD', 'OPTIONS'} if write is None else write
     for action in actions:
         if action not in ALL_PERMISSIONS:
             continue
         decision = authorize(
             db, actor, action, scope=scope, context=request_context(request),
-            write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
+            write=write_operation,
         )
         decisions.append(decision)
         if decision.allowed:
@@ -313,11 +322,10 @@ def _expanded_role_permissions(db, role: Role) -> set[str]:
     return result
 
 
-def _assert_delegatable(
+def _assert_role_delegation_boundary(
     db, actor, role: Role, scope: dict, request: Request, *, operation: str = 'create'
 ):
     system_admin = is_system_administrator(db, actor)
-    _require_any(db, actor, _scope_management_actions(scope, operation), scope, request)
     if system_admin and operation in {'update', 'delete'}:
         return
     profile = _profile(db, role)
@@ -347,6 +355,15 @@ def _assert_delegatable(
         })
 
 
+def _assert_delegatable(
+    db, actor, role: Role, scope: dict, request: Request, *, operation: str = 'create'
+):
+    _require_any(db, actor, _scope_management_actions(scope, operation), scope, request)
+    _assert_role_delegation_boundary(
+        db, actor, role, scope, request, operation=operation,
+    )
+
+
 def _validate_subject(db, subject_type: str, subject_id: str):
     if subject_type in {'USER', 'SERVICE_ACCOUNT'}:
         try:
@@ -370,7 +387,15 @@ def _validate_subject(db, subject_type: str, subject_id: str):
             raise HTTPException(404, {'error': 'token_not_found'})
 
 
-def _assert_no_role_conflict(db, subject_type: str, subject_id: str, role_id: int, scope: dict):
+def _assert_no_role_conflict(
+    db,
+    subject_type: str,
+    subject_id: str,
+    role_id: int,
+    scope: dict,
+    *,
+    exclude_assignment_id: str | None = None,
+):
     conflicts = db.scalars(
         select(RoleConflict).where(
             RoleConflict.enabled.is_(True),
@@ -384,18 +409,18 @@ def _assert_no_role_conflict(db, subject_type: str, subject_id: str, role_id: in
     conflicting_ids = {
         row.role_b_id if row.role_a_id == role_id else row.role_a_id for row in conflicts
     }
-    match = db.scalar(
-        select(RoleAssignment.id).where(
-            RoleAssignment.subject_type == subject_type,
-            RoleAssignment.subject_id == subject_id,
-            RoleAssignment.role_id.in_(conflicting_ids),
-            RoleAssignment.enabled.is_(True),
-            RoleAssignment.scope_type == scope['scope_type'],
-            or_(RoleAssignment.scope_id == scope.get('scope_id'), RoleAssignment.scope_id.is_(None)),
-            or_(RoleAssignment.project_id == scope.get('project_id'), RoleAssignment.project_id.is_(None)),
-        )
+    query = select(RoleAssignment.id).where(
+        RoleAssignment.subject_type == subject_type,
+        RoleAssignment.subject_id == subject_id,
+        RoleAssignment.role_id.in_(conflicting_ids),
+        RoleAssignment.enabled.is_(True),
+        RoleAssignment.scope_type == scope['scope_type'],
+        or_(RoleAssignment.scope_id == scope.get('scope_id'), RoleAssignment.scope_id.is_(None)),
+        or_(RoleAssignment.project_id == scope.get('project_id'), RoleAssignment.project_id.is_(None)),
     )
-    if match:
+    if exclude_assignment_id is not None:
+        query = query.where(RoleAssignment.id != exclude_assignment_id)
+    if db.scalar(query):
         raise HTTPException(409, {'error': 'separation_of_duties_conflict'})
 
 
@@ -676,6 +701,13 @@ def roles(
     request: Request,
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    assignable: bool = Query(False),
+    scope_type: str = Query('GLOBAL'),
+    scope_id: str | None = Query(None),
+    tenant_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    apmid: str | None = Query(None),
+    environment: str | None = Query(None),
     actor=Depends(authenticate),
     db=Depends(get_db, scope='function'),
 ):
@@ -683,11 +715,53 @@ def roles(
         db, actor, ('iam.roles.read', 'roles.read'),
         _iam_catalog_scope(), request,
     )
-    total = db.scalar(select(func.count()).select_from(Role)) or 0
-    rows = db.scalars(select(Role).order_by(Role.name).offset(offset).limit(limit)).all()
+    if not assignable:
+        total = db.scalar(select(func.count()).select_from(Role)) or 0
+        rows = db.scalars(select(Role).order_by(Role.name).offset(offset).limit(limit)).all()
+        return {
+            'items': [_role_public(db, row) for row in rows],
+            'total': int(total),
+            'limit': limit,
+            'offset': offset,
+        }
+
+    try:
+        scope = _hydrate_scope(db, normalize_scope({
+            'scope_type': scope_type,
+            'scope_id': scope_id,
+            'tenant_id': tenant_id,
+            'project_id': project_id,
+            'apmid': apmid,
+            'environment': environment,
+        }))
+    except ValueError as exc:
+        raise HTTPException(422, {'error': 'invalid_scope', 'message': str(exc)}) from exc
+
+    _require_any(
+        db,
+        actor,
+        _scope_management_actions(scope, 'create'),
+        scope,
+        request,
+        write=True,
+    )
+    assignable_rows = []
+    for role in db.scalars(select(Role).order_by(Role.name)).all():
+        try:
+            _assert_role_delegation_boundary(
+                db, actor, role, scope, request, operation='create',
+            )
+        except HTTPException as exc:
+            if exc.status_code in {403, 409, 422}:
+                continue
+            raise
+        assignable_rows.append(role)
+
+    total = len(assignable_rows)
+    rows = assignable_rows[offset:offset + limit]
     return {
         'items': [_role_public(db, row) for row in rows],
-        'total': int(total),
+        'total': total,
         'limit': limit,
         'offset': offset,
     }
@@ -953,6 +1027,22 @@ def update_assignment(
     }))
     _assert_delegatable(db, actor, role, scope, request, operation='update')
     values = data.model_dump(exclude_unset=True)
+    if 'role_id' in values:
+        if values['role_id'] is None:
+            raise HTTPException(422, {'error': 'role_id_required'})
+        next_role = _role(db, values['role_id'])
+        _assert_delegatable(
+            db, actor, next_role, scope, request, operation='update',
+        )
+        _assert_no_role_conflict(
+            db,
+            row.subject_type,
+            row.subject_id,
+            next_role.id,
+            scope,
+            exclude_assignment_id=row.id,
+        )
+        row.permission_ceiling = sorted(_expanded_role_permissions(db, next_role))
     if 'conditions' in values:
         validate_assignment_conditions(values['conditions'])
     if 'valid_from' in values:
