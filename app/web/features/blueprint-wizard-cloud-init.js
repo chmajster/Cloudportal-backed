@@ -316,11 +316,10 @@
           ? 'Adres, brama i DNS zostaną pobrane z IPAM. Szczegóły konfigurujesz w kroku „Sieć”.'
           : 'Statyczny adres i DNS zostaną zapisane do network-config. Szczegóły konfigurujesz w kroku „Sieć”.' }));
 
+    panel.append(accountMode, credentialField);
+    if (credentialSummary) panel.append(credentialSummary);
+    if (manualAccess) panel.append(manualAccess);
     panel.append(
-      accountMode,
-      credentialField,
-      credentialSummary,
-      manualAccess,
       networkSummary,
       node('p', { class: 'muted wide', text: state.guestAccountMode === 'existing_template'
         ? 'Cloud-init wykona konfigurację systemu, sieci i opcjonalnie QEMU Guest Agent, ale zachowa istniejące konto z template. Wybrany Dostęp będzie używany później przez etapy wymagające dostępu do systemu gościa.'
