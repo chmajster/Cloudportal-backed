@@ -123,6 +123,7 @@ def vm_classification_for_tenant(db, tenant_id):
 
 
 def save_tenant_apmids(db, tenant_id, apmids):
+    from app.access.groups import ensure_apmid_groups
     from app.access.service import delete_apmid, ensure_apmid
     from app.tenancy.models import Tenant
 
@@ -139,6 +140,7 @@ def save_tenant_apmids(db, tenant_id, apmids):
     existing_by_code = {row.code: row for row in existing}
     for code in requested:
         ensure_apmid(db, organization, code, is_system=(code in DEFAULT_APMIDS))
+        ensure_apmid_groups(db, organization, code)
     for code, row in existing_by_code.items():
         if code not in requested and not row.is_system:
             delete_apmid(db, organization, code)
