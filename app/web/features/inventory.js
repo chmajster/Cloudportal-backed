@@ -136,10 +136,7 @@ async function adoptInventoryVm(item) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
-function vmBase(item) {
-  return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
-}
-
+function vmBase(item) { return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`; }
 const vmGovernance = globalThis.InventoryGovernance;
 
 async function offerMissingVmCleanup(item, returnView = 'inventory') {
