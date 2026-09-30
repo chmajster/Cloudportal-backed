@@ -219,10 +219,10 @@
     const environments = Object.entries(cls.environments || {})
       .filter(([, enabled]) => enabled !== false)
       .map(([value]) => String(value).trim().toLowerCase())
-      .filter(Boolean);
+      .filter(value => /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value));
     const apmids = unique((cls.apmids || [])
       .map(value => String(value).trim().toUpperCase())
-      .filter(Boolean));
+      .filter(value => /^[A-Z0-9][A-Z0-9_-]{0,62}$/.test(value)));
     const options = [];
     const seen = new Set();
     for (const apmid of apmids) {
