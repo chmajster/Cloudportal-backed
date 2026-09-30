@@ -245,6 +245,7 @@ class Blueprint(ResourceScope, Timestamp, Base):
     visibility: Mapped[dict] = mapped_column(JSON, default=dict)
     allowed_role_ids: Mapped[list] = mapped_column(JSON, default=list)
     allowed_user_ids: Mapped[list] = mapped_column(JSON, default=list)
+    allowed_entities: Mapped[list] = mapped_column(JSON, default=list)
     manager_roles: Mapped[list["Role"]] = relationship(secondary="blueprint_manager_roles", lazy="selectin")
     variables_schema: Mapped[dict] = mapped_column(JSON, default=dict)
     deployment: Mapped[dict] = mapped_column(JSON, default=dict)
