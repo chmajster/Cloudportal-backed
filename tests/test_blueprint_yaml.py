@@ -12,6 +12,7 @@ BASE_BLUEPRINT = {
     'visibility': {'backend': True, 'cloudportal': True, 'api': True},
     'allowed_role_ids': [],
     'allowed_user_ids': [],
+    'allowed_entities': ['entity.LEO.prod.operator'],
     'manager_role_ids': [],
     'variables_schema': {
         'cpu': {'type': 'integer', 'label': 'CPU', 'required': False, 'default': 2, 'min': 1, 'max': 16},
@@ -43,6 +44,8 @@ def test_yaml_round_trip_uses_cloudportal_blueprint_document():
     parsed = parse_blueprint_yaml(text)
     assert parsed.slug == 'web-prod'
     assert parsed.deployment.provider_id == 7
+    assert parsed.allowed_entities == ['entity.LEO.prod.operator']
+    assert 'allowedEntities:' in text
     assert [step.id for step in parsed.workflow] == ['apply', 'ip']
     assert parsed.workflow[1].depends_on == ['apply']
 
@@ -105,3 +108,19 @@ def test_yaml_parser_rejects_unknown_security_sensitive_fields():
     assert exc.value.status_code == 422
     assert 'unsupported fields' in exc.value.detail
     assert 'activ' in exc.value.detail
+
+
+def test_yaml_parser_normalizes_and_validates_entity_acl():
+    payload = {
+        **BASE_BLUEPRINT,
+        'allowed_entities': ['entity.leo.PROD.read-only', 'entity.LEO.prod.read-only'],
+    }
+    parsed = parse_blueprint_yaml(dump_blueprint_yaml(payload))
+    assert parsed.allowed_entities == ['entity.LEO.prod.read-only']
+
+    invalid = {
+        **BASE_BLUEPRINT,
+        'allowed_entities': ['entity.LEO.prod.super-root'],
+    }
+    with pytest.raises((ValueError, HTTPException)):
+        dump_blueprint_yaml(invalid)

@@ -272,7 +272,10 @@ async function apiText(path, canRefresh = true) {
 }
 
 function allowed(permission) {
-  return !permission || Boolean(state.identity?.permissions?.includes(permission));
+  if (!permission) return true;
+  if (!state.identity?.permissions?.includes(permission)) return false;
+  const entityAllows = globalThis.CPProjectContext?.allows;
+  return typeof entityAllows !== 'function' || entityAllows(permission);
 }
 function toast(message, type = '') {
   const text = String(message || '').trim();
@@ -1118,6 +1121,12 @@ function renderNavigation() {
     }, node('span', { class: 'nav-icon', 'aria-hidden': 'true' }, appRouteIcon(route)), node('span', { class: 'nav-label', text: route.label }));
     item.dataset.route = route.id;
     dom.navigation.append(item);
+  });
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('cloudportal:scope-changed', () => {
+    if (state.identity) renderNavigation();
   });
 }
 

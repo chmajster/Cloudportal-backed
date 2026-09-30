@@ -206,7 +206,7 @@
 
   function multiCardGroup(title, name, rows, selectedValues = [], description = '') {
     const selected = new Set((selectedValues || []).map(value => String(value)));
-    const labelFor = row => row.name || row.username || ('#' + row.id);
+    const labelFor = row => row.label || row.name || row.username || ('#' + row.id);
     const wrapper = node('fieldset', {
       class: 'blueprint-wizard-access-multi',
       'data-simple-access-name': name,
@@ -229,12 +229,87 @@
         checkbox,
         node('span', { class: 'blueprint-wizard-access-multi-copy' },
           node('strong', { text: labelFor(row) }),
+          row.description ? node('small', { text: row.description }) : null,
           row.email ? node('small', { text: row.email }) : null,
           row.permissions ? node('small', { text: row.permissions.length + ' uprawnień' }) : null));
       checkbox.addEventListener('change', () => item.classList.toggle('selected', checkbox.checked));
       grid.append(item);
     });
     wrapper.append(grid);
+    return wrapper;
+  }
+
+  function entityPicker(rows, selectedValues = []) {
+    const selected = new Set((selectedValues || []).map(String));
+    const wrapper = node('fieldset', {
+      class: 'blueprint-wizard-access-multi blueprint-wizard-entity-picker',
+      'data-simple-access-name': 'allowed_entities',
+    },
+      node('legend', { text: 'Entity' }),
+      node('p', { class: 'muted', text: 'Format: entity.<APMID>.<env>.<role>. Entity ogranicza dostęp, ale nigdy nie rozszerza RBAC.' })
+    );
+
+    if (!rows.length) {
+      wrapper.append(node('div', { class: 'blueprint-wizard-empty' },
+        node('strong', { text: 'Brak Entity dla tego zakresu' }),
+        node('p', { class: 'muted', text: 'Dodaj APMID lub włącz Environment w klasyfikacji VM.' })));
+      return wrapper;
+    }
+
+    const search = node('input', {
+      type: 'search',
+      class: 'blueprint-wizard-entity-search',
+      placeholder: 'Szukaj po APMID, Environment lub roli…',
+      'aria-label': 'Szukaj Entity',
+    });
+    const counter = node('span', { class: 'muted blueprint-wizard-entity-count' });
+    const toolbar = node('div', { class: 'blueprint-wizard-entity-toolbar' }, search, counter);
+    const grid = node('div', { class: 'blueprint-wizard-access-multi-grid blueprint-wizard-entity-grid' });
+
+    const cards = rows.slice().sort((left, right) =>
+      String(left.key || '').localeCompare(String(right.key || ''), 'pl')
+    ).map(row => {
+      const key = String(row.key || '');
+      const checked = selected.has(key);
+      const checkbox = node('input', { type: 'checkbox', name: 'allowed_entities', value: key, checked });
+      const item = node('label', {
+        class: 'blueprint-wizard-access-multi-card blueprint-wizard-entity-card' + (checked ? ' selected' : ''),
+        'data-entity-search': [
+          key, row.apmid, row.environment, row.role, row.role_label, row.description,
+        ].filter(Boolean).join(' ').toLowerCase(),
+      },
+        checkbox,
+        node('span', { class: 'blueprint-wizard-access-multi-copy' },
+          node('strong', { text: key }),
+          node('small', {
+            text: String(row.apmid || '') + ' · ' + String(row.environment || '').toUpperCase()
+              + ' · ' + String(row.role_label || row.role || ''),
+          }),
+          row.description ? node('small', { text: row.description }) : null
+        )
+      );
+      checkbox.addEventListener('change', () => {
+        item.classList.toggle('selected', checkbox.checked);
+        update();
+      });
+      grid.append(item);
+      return item;
+    });
+
+    function update() {
+      const query = String(search.value || '').trim().toLowerCase();
+      let visible = 0;
+      cards.forEach(card => {
+        const match = !query || String(card.dataset.entitySearch || '').includes(query);
+        card.hidden = !match;
+        if (match) visible++;
+      });
+      const checked = wrapper.querySelectorAll('input[name="allowed_entities"]:checked').length;
+      counter.textContent = checked + ' wybranych · ' + visible + ' widocznych';
+    }
+    search.addEventListener('input', update);
+    wrapper.append(toolbar, grid);
+    update();
     return wrapper;
   }
 
@@ -249,6 +324,6 @@
     return wrapper;
   }
 
-  parts.ui = { errorText, summaryRow, workflowVisual, avatarPicker, dualListGroup, credentialPicker, multiCardGroup, toggleCard };
+  parts.ui = { errorText, summaryRow, workflowVisual, avatarPicker, dualListGroup, credentialPicker, multiCardGroup, entityPicker, toggleCard };
   registerExtension('blueprint-wizard-ui', () => {});
 })();

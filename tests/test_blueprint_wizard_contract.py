@@ -881,3 +881,42 @@ console.log(JSON.stringify(core.buildDeployment(state, data)));
     assert 'Przy uruchomieniu Blueprintu pytaj, czy dodać serwer do AWX' in awx_source
     assert "selectField('Dodać serwer do AWX?'" in execute_source
     assert "payload.awx_onboarding = awxChoice === 'true'" in execute_source
+
+
+def test_wizard_payload_persists_policy_engine_entities():
+    result = run_core("""
+const state = core.stateDefaults();
+state.name = 'Entity Blueprint';
+state.slug = 'entity-blueprint';
+state.allowedEntities = [
+  'entity.LEO-131.prod.read-only',
+  'entity.LEO-131.prod.admin',
+];
+state.providerId = '7';
+state.providerType = 'proxmox';
+state.terraformTemplateId = 'proxmox-vm';
+state.node = 'pve01';
+state.selectedTemplateVmid = '9000';
+state.selectedTemplateNode = 'pve01';
+state.storage = 'local-lvm';
+state.network = 'vmbr0';
+state.hostnameEnabled = false;
+state.manualVmName = 'entity-vm';
+
+const data = {
+  providers: [{ id: 7, type: 'proxmox', credentials_id: 5 }],
+  templates: [{
+    id: 'proxmox-vm',
+    provider: 'proxmox',
+    variables_schema: { properties: { name: { type: 'string' } } },
+  }],
+  playbooks: [],
+  schemes: [],
+};
+console.log(JSON.stringify(core.buildPayload(state, data)));
+""")
+
+    assert result['allowed_entities'] == [
+        'entity.LEO-131.prod.read-only',
+        'entity.LEO-131.prod.admin',
+    ]

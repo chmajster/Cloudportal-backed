@@ -15,6 +15,7 @@ class BlueprintOutput(Output):
     visibility: dict[str, bool]
     allowed_role_ids: list[int]
     allowed_user_ids: list[int]
+    allowed_entities: list[str]
     manager_role_ids: list[int]
     can_manage: bool | None = None
     variables_schema: dict[str, Any]

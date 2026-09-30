@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models import ManagedResource, Provider
+from app.policy_engine.entities import entity_keys_for_permissions
 from app.policy_engine.service import evaluate_context
 from app.projects.models import Project
 from app.tenancy.models import Tenant
@@ -44,13 +45,19 @@ def _role_values(db, user, scope):
 
 def _user_actor(user, permissions, db=None, scope=None):
     role_ids, role_names = _role_values(db, user, scope or {})
+    permission_set = set(permissions or ())
     return {
         "id": getattr(user, "id", None),
         "username": getattr(user, "username", ""),
         "role_ids": role_ids,
         "roles": role_names,
         "groups": [],
-        "permissions": sorted(set(permissions or ())),
+        "entities": entity_keys_for_permissions(
+            permission_set,
+            apmid=(scope or {}).get("apmid"),
+            environment=(scope or {}).get("environment"),
+        ),
+        "permissions": sorted(permission_set),
     }
 
 
@@ -145,10 +152,14 @@ def _scope_from_ids(db, tenant_id, project_id, *, apmid=None, environment=None):
 def _scope(db, request, fallback=None, *, apmid=None, environment=None):
     scope = getattr(request.state, "resource_scope", None)
     if scope is not None:
-        return _scope_from_ids(
+        result = _scope_from_ids(
             db, scope.tenant_id, scope.project_id,
-            apmid=apmid, environment=environment,
+            apmid=apmid or getattr(scope, "apmid", None),
+            environment=environment or getattr(scope, "environment", None),
         )
+        result["entity"] = getattr(scope, "entity_key", None)
+        result["entity_role"] = getattr(scope, "entity_role", None)
+        return result
     if fallback is not None:
         return _scope_from_ids(
             db,

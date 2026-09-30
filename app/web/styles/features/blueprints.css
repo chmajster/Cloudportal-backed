@@ -728,6 +728,36 @@
 .blueprint-wizard-access-multi-card input {
   margin-top: 2px;
 }
+.blueprint-wizard-entity-picker {
+  display: grid;
+  gap: 10px;
+}
+.blueprint-wizard-entity-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.blueprint-wizard-entity-search {
+  width: 100%;
+  min-width: 0;
+}
+.blueprint-wizard-entity-count {
+  white-space: nowrap;
+  font-size: .68rem;
+}
+.blueprint-wizard-entity-grid {
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 3px;
+}
+.blueprint-wizard-entity-card strong {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  overflow-wrap: anywhere;
+}
+.blueprint-wizard-entity-card[hidden] {
+  display: none;
+}
 .blueprint-wizard-access-policy-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -764,6 +794,12 @@
   }
   .blueprint-wizard-access-policy-fields > .wide {
     grid-column: auto;
+  }
+  .blueprint-wizard-entity-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .blueprint-wizard-entity-count {
+    white-space: normal;
   }
 }
 

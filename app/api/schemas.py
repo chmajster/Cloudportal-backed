@@ -845,6 +845,7 @@ class BlueprintInput(Input):
     visibility: BlueprintVisibility = Field(default_factory=BlueprintVisibility)
     allowed_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
     allowed_user_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
+    allowed_entities: Annotated[list[str], Field(max_length=500)] = Field(default_factory=list)
     manager_role_ids: Annotated[list[int], Field(max_length=100)] = Field(default_factory=list)
     variables_schema: Annotated[dict[Slug, BlueprintVariable], Field(max_length=100)] = Field(default_factory=dict)
     deployment: BlueprintDeployment
@@ -853,6 +854,20 @@ class BlueprintInput(Input):
     auto_approve_for_executors: bool | None = None
     approval_timeout_hours: int | None = Field(default=None, ge=1, le=720)
     recovery_policy: Literal['preserve', 'destroy_on_failure'] = 'preserve'
+
+    @field_validator('allowed_entities')
+    @classmethod
+    def entity_acl(cls, value):
+        from app.policy_engine.entities import normalize_entity_key
+        result = []
+        for item in value or []:
+            try:
+                normalized = normalize_entity_key(item)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from None
+            if normalized not in result:
+                result.append(normalized)
+        return result
 
     @model_validator(mode='after')
     def dag(self):

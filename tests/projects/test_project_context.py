@@ -11,8 +11,8 @@ from app.projects.permissions import DEFAULT_PROJECT_ID
 from test_projects_unit import domain, error, setup, project_member
 
 
-def selection(t, p, version=0):
-    return SelectionInput(tenant_id=t['id'], project_id=p['id'], expected_version=version)
+def selection(t, p, version=0, entity_key=None):
+    return SelectionInput(tenant_id=t['id'], project_id=p['id'], entity_key=entity_key, expected_version=version)
 
 
 def test_selection_default_explicit_preference_and_immutable_scope(domain):
@@ -77,3 +77,25 @@ def test_revoked_token_cannot_clear_selection(domain):
     d.tokens[1].revoked_at = now(); d.db.flush()
     error('AUTHENTICATION_REQUIRED', lambda: context.context_clear(d.db, d.alice), 401)
     assert d.db.get(UserProjectContext, d.alice.user_id).project_id == p['id']
+
+
+def test_selection_persists_canonical_entity_context(domain):
+    d = domain; t, p = setup(d); project_member(d, t, p, d.alice)
+    chosen = context.context_set(
+        d.db,
+        d.alice,
+        selection(t, p, entity_key='entity.leo.DEV.read-only'),
+    )
+    assert chosen['entity_key'] == 'entity.LEO.dev.read-only'
+    stored = d.db.get(UserProjectContext, d.alice.user_id)
+    assert stored.entity_key == 'entity.LEO.dev.read-only'
+    current = context.context_get(d.db, d.alice)
+    assert current['entity_key'] == 'entity.LEO.dev.read-only'
+
+    with pytest.raises(Exception) as exc:
+        context.context_set(
+            d.db,
+            d.alice,
+            selection(t, p, version=1, entity_key='entity.UNKNOWN.dev.read-only'),
+        )
+    assert getattr(exc.value, 'status_code', None) == 422

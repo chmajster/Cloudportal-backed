@@ -152,16 +152,24 @@ def _validate_blueprint_authorization(db, job, user, permissions):
     if blueprint is None or not blueprint.is_active:
         raise ExecutionFailed('Blueprint is no longer active or available')
 
-    from app.automation.service import blueprint_role_ids
-    role_ids = blueprint_role_ids(db, blueprint, user)
-    if (
-        blueprint.allowed_role_ids or blueprint.allowed_user_ids
-    ) and user.id not in blueprint.allowed_user_ids and not (role_ids & set(blueprint.allowed_role_ids)):
-        raise ExecutionFailed('Blueprint access has been revoked')
-
+    from app.automation.service import available_to
     source = blueprint_execution_channel(job)
-    if not (blueprint.visibility or {}).get(source, False):
-        raise ExecutionFailed('Blueprint is no longer visible to this execution source')
+    snapshot_variables = dict(blueprint_snapshot.get('variables') or {})
+    runtime_apmid = snapshot_variables.get('apmid') or (blueprint.deployment or {}).get('apmid')
+    runtime_environment = (
+        snapshot_variables.get('environment')
+        or (blueprint.deployment or {}).get('environment')
+    )
+    if not available_to(
+        db,
+        blueprint,
+        user,
+        source,
+        action='blueprints.execute',
+        apmid=runtime_apmid,
+        environment=runtime_environment,
+    ):
+        raise ExecutionFailed('Blueprint entity access or visibility has been revoked')
 
 
 def validate_authorization(db, job):
@@ -228,8 +236,8 @@ def validate_authorization(db, job):
                 ):
                     raise ExecutionFailed('Blueprint delete job scope does not match Blueprint scope')
                 from app.automation.service import can_manage_blueprint
-                if not can_manage_blueprint(db, blueprint, user):
-                    raise ExecutionFailed('Blueprint management access has been revoked')
+                if not can_manage_blueprint(db, blueprint, user, action='blueprints.delete'):
+                    raise ExecutionFailed('Blueprint management or entity access has been revoked')
         if job.operation == PROXMOX_CLONE_TEMPLATE_OPERATION:
             try:
                 provider_id = int((job.payload or {}).get('provider_id'))

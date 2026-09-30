@@ -259,6 +259,7 @@
       visibilityApi: true,
       allowedRoleIds: [],
       allowedUserIds: [],
+      allowedEntities: [],
       managerRoleIds: [],
       requiresApproval: false,
       autoApproveForExecutors: 'inherit',
@@ -393,6 +394,7 @@
     state.visibilityApi = blueprint.visibility?.api ?? true;
     state.allowedRoleIds = [...(blueprint.allowed_role_ids || [])].map(Number);
     state.allowedUserIds = [...(blueprint.allowed_user_ids || [])].map(Number);
+    state.allowedEntities = [...(blueprint.allowed_entities || [])].map(String);
     state.managerRoleIds = [...(blueprint.manager_role_ids || [])].map(Number);
     state.requiresApproval = Boolean(blueprint.requires_approval);
     state.autoApproveForExecutors = blueprint.auto_approve_for_executors == null
@@ -590,6 +592,7 @@
       },
       allowed_role_ids: state.allowedRoleIds.map(Number),
       allowed_user_ids: state.allowedUserIds.map(Number),
+      allowed_entities: [...state.allowedEntities],
       manager_role_ids: state.managerRoleIds.map(Number),
       variables_schema: { ...(state.variablesSchema || {}) },
       deployment: buildDeployment(state, data),
