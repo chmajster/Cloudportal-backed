@@ -100,7 +100,7 @@
       enforcement: 'hard', priority: 500,
       scopeLevel: base.scopeLevel, tenantId: base.tenantId, projectId: base.projectId,
       subjectMode: 'all', userIds: [], roleIds: [],
-      apmids: [], environments: [], providerIds: [], blueprintIds: [],
+      apmids: [], environments: [], entities: [], providerIds: [], blueprintIds: [],
       resourceTypes: ['vm'], actions: [],
       condition: {},
       effect: 'allow',
@@ -166,6 +166,7 @@
       roleIds: (scope.role_ids || []).map(String),
       apmids: (scope.apmids || []).map(String),
       environments: (scope.environments || []).map(String),
+      entities: (scope.entities || []).map(String),
       providerIds: (scope.provider_ids || []).map(String),
       blueprintIds: (scope.blueprint_ids || []).map(String),
       resourceTypes: (scope.resource_types || []).map(String),
@@ -211,6 +212,42 @@
     return cache?.scopes?.classifications?.[String(target.tenantId)] || {
       apmids: [], environments: { dev: true, test: true, nonprod: true, prod: true },
     };
+  }
+  function entityOptions(target = wizard) {
+    const cls = classification(target);
+    const roles = cache?.capabilities?.entity_roles || [];
+    const environments = Object.entries(cls.environments || {})
+      .filter(([, enabled]) => enabled !== false)
+      .map(([value]) => String(value).trim().toLowerCase())
+      .filter(value => /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value));
+    const apmids = unique((cls.apmids || [])
+      .map(value => String(value).trim().toUpperCase())
+      .filter(value => /^[A-Z0-9][A-Z0-9_-]{0,62}$/.test(value)));
+    const options = [];
+    const seen = new Set();
+    for (const apmid of apmids) {
+      for (const environment of environments) {
+        for (const role of roles) {
+          const roleId = String(role.id || '').trim().toLowerCase();
+          if (!roleId) continue;
+          const value = 'entity.' + apmid + '.' + environment + '.' + roleId;
+          if (seen.has(value)) continue;
+          seen.add(value);
+          options.push({
+            value,
+            label: value + (role.label ? ' · ' + role.label : ''),
+          });
+        }
+      }
+    }
+    for (const value of target.entities || []) {
+      const normalized = String(value);
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        options.push({ value: normalized, label: normalized + ' · zapisane' });
+      }
+    }
+    return options;
   }
   function option(value, label, selected = false) {
     return node('option', { value: String(value), text: label, selected });
@@ -525,7 +562,7 @@
         })), wizard.tenantId, value => {
           wizard.tenantId = value;
           wizard.projectId = String(tenantProjects(value)[0]?.id || '');
-          wizard.apmids = []; wizard.environments = [];
+          wizard.apmids = []; wizard.environments = []; wizard.entities = [];
           cache.placement.loaded = false;
           renderWizard();
         }) : null,
@@ -537,6 +574,12 @@
         values => { wizard.apmids = values; renderWizard(); }, { selectAll: true, help: 'Brak zaznaczenia oznacza wszystkie APMID w tym zakresie.' }),
       checklist('Environment', envOptions, wizard.environments,
         values => { wizard.environments = values; renderWizard(); }, { selectAll: true, help: 'Brak zaznaczenia oznacza wszystkie Environment.' }),
+      checklist('Entity', entityOptions(), wizard.entities,
+        values => { wizard.entities = values; renderWizard(); }, {
+          selectAll: true,
+          help: 'Format entity.<APMID>.<env>.<role>. Entity jest wymiarem Policy Engine i nie zastępuje RBAC.',
+          empty: 'Brak Entity. Dodaj APMID lub włącz Environment w klasyfikacji.',
+        }),
       checklist('Platformy', cache.providers.map(row => ({ value: row.id, label: row.name || row.endpoint || String(row.id) })),
         wizard.providerIds, values => { wizard.providerIds = values; cache.placement.loaded = false; renderWizard(); }, { selectAll: true }),
       checklist('Blueprinty', cache.blueprints.map(row => ({ value: row.id, label: row.name || row.slug || String(row.id) })),
@@ -679,6 +722,7 @@
       (wizard.actions.length ? wizard.actions.join(', ') : 'wybrane operacje') + '.');
     if (wizard.environments.length) chunks.push('Environment: ' + wizard.environments.map(value => value.toUpperCase()).join(', ') + '.');
     if (wizard.apmids.length) chunks.push('APMID: ' + wizard.apmids.join(', ') + '.');
+    if (wizard.entities.length) chunks.push('Entity: ' + wizard.entities.join(', ') + '.');
     const limits = [];
     if (wizard.limits.cpuMax !== '') limits.push('CPU ≤ ' + wizard.limits.cpuMax);
     if (wizard.limits.ramMax !== '') limits.push('RAM ≤ ' + wizard.limits.ramMax + ' GB');
@@ -808,6 +852,7 @@
     if (wizard.scopeLevel === 'project' && wizard.projectId) scope.project_ids = [wizard.projectId];
     if (wizard.apmids.length) scope.apmids = [...wizard.apmids];
     if (wizard.environments.length) scope.environments = [...wizard.environments];
+    if (wizard.entities.length) scope.entities = [...wizard.entities];
     if (wizard.providerIds.length) scope.provider_ids = wizard.providerIds.map(value => /^\d+$/.test(value) ? Number(value) : value);
     if (wizard.blueprintIds.length) scope.blueprint_ids = wizard.blueprintIds.map(value => /^\d+$/.test(value) ? Number(value) : value);
     if (wizard.resourceTypes.length) scope.resource_types = [...wizard.resourceTypes];
