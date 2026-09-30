@@ -304,8 +304,7 @@ def _expanded_role_permissions(db, role: Role) -> set[str]:
     return result
 
 
-def _assert_delegatable(db, actor, role: Role, scope: dict, request: Request):
-    _require_any(db, actor, _scope_management_actions(scope), scope, request)
+def _assert_role_delegation_boundary(db, actor, role: Role, scope: dict, request: Request):
     profile = _profile(db, role)
     if profile is not None and not profile.enabled:
         raise HTTPException(409, {'error': 'role_disabled'})
@@ -329,6 +328,11 @@ def _assert_delegatable(db, actor, role: Role, scope: dict, request: Request):
             'missing_permissions': missing,
             'request_id': request.state.request_id,
         })
+
+
+def _assert_delegatable(db, actor, role: Role, scope: dict, request: Request):
+    _require_any(db, actor, _scope_management_actions(scope), scope, request)
+    _assert_role_delegation_boundary(db, actor, role, scope, request)
 
 
 def _validate_subject(db, subject_type: str, subject_id: str):
@@ -461,17 +465,58 @@ def permission_catalog(
 
 @router.get('/rbac/roles', response_model=RolePage)
 def roles(
+    request: Request,
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    assignable: bool = Query(False),
+    scope_type: str = Query('GLOBAL'),
+    scope_id: str | None = Query(None),
+    tenant_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    apmid: str | None = Query(None),
+    environment: str | None = Query(None),
     actor=Depends(authenticate),
     db=Depends(get_db, scope='function'),
 ):
     authorize_or_raise(db, actor, 'roles.read', scope={'scope_type': 'GLOBAL'})
-    total = db.scalar(select(func.count()).select_from(Role)) or 0
-    rows = db.scalars(select(Role).order_by(Role.name).offset(offset).limit(limit)).all()
+    if not assignable:
+        total = db.scalar(select(func.count()).select_from(Role)) or 0
+        rows = db.scalars(select(Role).order_by(Role.name).offset(offset).limit(limit)).all()
+        return {
+            'items': [_role_public(db, row) for row in rows],
+            'total': int(total),
+            'limit': limit,
+            'offset': offset,
+        }
+
+    try:
+        scope = _hydrate_scope(db, normalize_scope({
+            'scope_type': scope_type,
+            'scope_id': scope_id,
+            'tenant_id': tenant_id,
+            'project_id': project_id,
+            'apmid': apmid,
+            'environment': environment,
+        }))
+    except ValueError as exc:
+        raise HTTPException(422, {'error': 'invalid_scope', 'message': str(exc)}) from exc
+
+    _require_any(db, actor, _scope_management_actions(scope), scope, request)
+    assignable_rows = []
+    for role in db.scalars(select(Role).order_by(Role.name)).all():
+        try:
+            _assert_role_delegation_boundary(db, actor, role, scope, request)
+        except HTTPException as exc:
+            if exc.status_code in {403, 409, 422}:
+                continue
+            raise
+        assignable_rows.append(role)
+
+    total = len(assignable_rows)
+    rows = assignable_rows[offset:offset + limit]
     return {
         'items': [_role_public(db, row) for row in rows],
-        'total': int(total),
+        'total': total,
         'limit': limit,
         'offset': offset,
     }
