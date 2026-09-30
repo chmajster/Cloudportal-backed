@@ -71,6 +71,50 @@ def filter_queries(state):
     tenant_id, project_id = scope.tenant_id, scope.project_id
     options = [with_loader_criteria(ResourceScope,
         lambda cls: and_(cls.tenant_id == tenant_id, cls.project_id == project_id), include_aliases=True)]
+
+    if getattr(scope, 'entity_key', None):
+        entity_apmid = str(scope.apmid or '').upper()
+        entity_environment = str(scope.environment or '').lower()
+        deployment_entity = or_(
+            and_(
+                m.Deployment.workflow['entity']['apmid'].as_string() == entity_apmid,
+                m.Deployment.workflow['entity']['environment'].as_string() == entity_environment,
+            ),
+            and_(
+                m.Deployment.workflow['blueprint']['variables']['apmid'].as_string() == entity_apmid,
+                m.Deployment.workflow['blueprint']['variables']['environment'].as_string() == entity_environment,
+            ),
+        )
+        resource_entity = and_(
+            m.ManagedResource.metadata_json['apmid'].as_string() == entity_apmid,
+            m.ManagedResource.metadata_json['environment'].as_string() == entity_environment,
+        )
+        options += [
+            with_loader_criteria(m.Deployment, deployment_entity, include_aliases=True),
+            with_loader_criteria(m.ManagedResource, resource_entity, include_aliases=True),
+            with_loader_criteria(
+                m.Job,
+                exists(select(m.Deployment.id).where(
+                    m.Deployment.id == m.Job.deployment_id,
+                    deployment_entity,
+                )),
+                include_aliases=True,
+            ),
+            with_loader_criteria(
+                m.ManagedVM,
+                or_(
+                    exists(select(m.Deployment.id).where(
+                        m.Deployment.id == m.ManagedVM.deployment_id,
+                        deployment_entity,
+                    )),
+                    exists(select(m.ManagedResource.id).where(
+                        m.ManagedResource.deployment_id == m.ManagedVM.deployment_id,
+                        resource_entity,
+                    )),
+                ),
+                include_aliases=True,
+            ),
+        ]
     for reference in (ProjectProviderAccess, ProjectCredentialAccess):
         options.append(with_loader_criteria(reference, and_(reference.tenant_id == tenant_id,
             reference.project_id == project_id), include_aliases=True))
@@ -132,6 +176,23 @@ def protect_writes(db, _context, _instances):
         if isinstance(row, ResourceScope):
             if row in db.new:
                 expected = _parent_scope(db, row)
+                if isinstance(row, m.Deployment) and getattr(scope, 'entity_key', None):
+                    workflow = dict(row.workflow or {})
+                    blueprint = dict(workflow.get('blueprint') or {})
+                    variables = dict(blueprint.get('variables') or {})
+                    current_apmid = str(variables.get('apmid') or '').strip().upper()
+                    current_environment = str(variables.get('environment') or '').strip().lower()
+                    if current_apmid and current_apmid != str(scope.apmid or '').upper():
+                        fail(409, 'ENTITY_SCOPE_MISMATCH', 'Deployment APMID does not match selected Entity')
+                    if current_environment and current_environment != str(scope.environment or '').lower():
+                        fail(409, 'ENTITY_SCOPE_MISMATCH', 'Deployment Environment does not match selected Entity')
+                    workflow['entity'] = {
+                        'key': scope.entity_key,
+                        'apmid': scope.apmid,
+                        'environment': scope.environment,
+                        'role': scope.entity_role,
+                    }
+                    row.workflow = workflow
                 if row.tenant_id is None:
                     row.tenant_id = expected.tenant_id
                 if row.project_id is None:
