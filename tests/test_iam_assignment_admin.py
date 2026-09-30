@@ -126,7 +126,18 @@ def test_system_admin_can_assign_first_organization_binding_end_to_end(system):
 
     roles = client.get('/api/v1/iam/roles', headers=workspace_headers, params={'limit': 200})
     assert roles.status_code == 200, roles.text
-    operator = next(item for item in roles.json()['items'] if item['name'] == 'Operator')
+    role_by_name = {item['name']: item for item in roles.json()['items']}
+    operator = role_by_name['Operator']
+    assert 'iam.binding.create' in role_by_name['Administrator']['permissions']
+    assert 'iam.binding.create' in role_by_name['Security Administrator']['permissions']
+    assert not any(
+        permission.startswith('iam.')
+        for permission in role_by_name['Viewer']['permissions']
+    )
+    assert not any(
+        permission.startswith('iam.')
+        for permission in role_by_name['Infrastructure Administrator']['permissions']
+    )
 
     created = client.post(
         '/api/v1/rbac/assignments',
