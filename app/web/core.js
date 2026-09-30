@@ -1124,6 +1124,12 @@ function renderNavigation() {
   });
 }
 
+if (typeof document !== 'undefined') {
+  document.addEventListener('cloudportal:scope-changed', () => {
+    if (state.identity) renderNavigation();
+  });
+}
+
 async function navigate(view) {
   const requestedView = typeof window.surfaceBaseView === 'function'
     ? window.surfaceBaseView(view)
