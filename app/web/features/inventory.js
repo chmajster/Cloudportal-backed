@@ -229,7 +229,7 @@ function vmDetailActions(item, status = {}, snapshotCapability = null, actionCat
   const base = vmBase(item);
   const runtime = vmRuntimeState(status, item);
   const governed = vmGovernance.applies(item);
-  const supports = actionId => vmActionSupported(item, actionCatalog, actionId);
+  const supports = actionId => vmGovernance.supported(item, actionCatalog, actionId);
   const groups = {
     power: [],
     tools: [],
