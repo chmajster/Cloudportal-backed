@@ -114,6 +114,14 @@ def filter_queries(state):
                 ),
                 include_aliases=True,
             ),
+            with_loader_criteria(
+                m.ScheduledOperation,
+                exists(select(m.Deployment.id).where(
+                    m.Deployment.id == m.ScheduledOperation.deployment_id,
+                    deployment_entity,
+                )),
+                include_aliases=True,
+            ),
         ]
     for reference in (ProjectProviderAccess, ProjectCredentialAccess):
         options.append(with_loader_criteria(reference, and_(reference.tenant_id == tenant_id,
