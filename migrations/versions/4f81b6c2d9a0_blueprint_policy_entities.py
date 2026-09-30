@@ -23,7 +23,12 @@ def upgrade():
             server_default=sa.text("'[]'"),
         ),
     )
+    op.add_column(
+        'user_project_contexts',
+        sa.Column('entity_key', sa.String(length=160), nullable=True),
+    )
 
 
 def downgrade():
+    op.drop_column('user_project_contexts', 'entity_key')
     op.drop_column('blueprints', 'allowed_entities')
