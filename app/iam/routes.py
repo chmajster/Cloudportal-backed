@@ -354,7 +354,15 @@ def _validate_subject(db, subject_type: str, subject_id: str):
             raise HTTPException(404, {'error': 'token_not_found'})
 
 
-def _assert_no_role_conflict(db, subject_type: str, subject_id: str, role_id: int, scope: dict):
+def _assert_no_role_conflict(
+    db,
+    subject_type: str,
+    subject_id: str,
+    role_id: int,
+    scope: dict,
+    *,
+    exclude_assignment_id: str | None = None,
+):
     conflicts = db.scalars(
         select(RoleConflict).where(
             RoleConflict.enabled.is_(True),
@@ -368,22 +376,22 @@ def _assert_no_role_conflict(db, subject_type: str, subject_id: str, role_id: in
     conflicting_ids = {
         row.role_b_id if row.role_a_id == role_id else row.role_a_id for row in conflicts
     }
-    match = db.scalar(
-        select(RoleAssignment.id).where(
-            RoleAssignment.subject_type == subject_type,
-            RoleAssignment.subject_id == subject_id,
-            RoleAssignment.role_id.in_(conflicting_ids),
-            RoleAssignment.enabled.is_(True),
-            RoleAssignment.scope_type == scope['scope_type'],
-            or_(RoleAssignment.scope_id == scope.get('scope_id'), RoleAssignment.scope_id.is_(None)),
-            or_(RoleAssignment.project_id == scope.get('project_id'), RoleAssignment.project_id.is_(None)),
-        )
+    query = select(RoleAssignment.id).where(
+        RoleAssignment.subject_type == subject_type,
+        RoleAssignment.subject_id == subject_id,
+        RoleAssignment.role_id.in_(conflicting_ids),
+        RoleAssignment.enabled.is_(True),
+        RoleAssignment.scope_type == scope['scope_type'],
+        or_(RoleAssignment.scope_id == scope.get('scope_id'), RoleAssignment.scope_id.is_(None)),
+        or_(RoleAssignment.project_id == scope.get('project_id'), RoleAssignment.project_id.is_(None)),
     )
-    if match:
+    if exclude_assignment_id is not None:
+        query = query.where(RoleAssignment.id != exclude_assignment_id)
+    if db.scalar(query):
         raise HTTPException(409, {'error': 'separation_of_duties_conflict'})
 
 
-def _new_assignment(db, actor, data: AssignmentCreate, scope: dict) -> RoleAssignment:
+def _new_assignment(db, actor, data: AssignmentCreate, scope: dict, role: Role) -> RoleAssignment:
     row = RoleAssignment(
         subject_type=data.subject_type,
         subject_id=data.subject_id,
@@ -678,7 +686,7 @@ def create_assignment(
     scope = _hydrate_scope(db, _scope_dict(data))
     _assert_delegatable(db, actor, role, scope, request)
     _assert_no_role_conflict(db, data.subject_type, data.subject_id, data.role_id, scope)
-    row = _new_assignment(db, actor, data, scope)
+    row = _new_assignment(db, actor, data, scope, role)
     audit(db, request, 'role_assignment.created', 'iam_role_assignments', row.id)
     return _assignment_public(db, row)
 
@@ -698,7 +706,7 @@ def create_assignments_bulk(
         scope = _hydrate_scope(db, _scope_dict(item))
         _assert_delegatable(db, actor, role, scope, request)
         _assert_no_role_conflict(db, item.subject_type, item.subject_id, item.role_id, scope)
-        rows.append(_new_assignment(db, actor, item, scope))
+        rows.append(_new_assignment(db, actor, item, scope, role))
     audit(db, request, 'role_assignment.bulk_created', 'iam_role_assignments', str(len(rows)))
     return {'items': [_assignment_public(db, row) for row in rows], 'created': len(rows)}
 
@@ -725,6 +733,20 @@ def update_assignment(
     }))
     _assert_delegatable(db, actor, role, scope, request)
     values = data.model_dump(exclude_unset=True)
+    if 'role_id' in values:
+        if values['role_id'] is None:
+            raise HTTPException(422, {'error': 'role_id_required'})
+        next_role = _role(db, values['role_id'])
+        _assert_delegatable(db, actor, next_role, scope, request)
+        _assert_no_role_conflict(
+            db,
+            row.subject_type,
+            row.subject_id,
+            next_role.id,
+            scope,
+            exclude_assignment_id=row.id,
+        )
+        row.permission_ceiling = sorted(_expanded_role_permissions(db, next_role))
     if 'conditions' in values:
         validate_assignment_conditions(values['conditions'])
     if 'valid_from' in values:
