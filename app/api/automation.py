@@ -22,6 +22,7 @@ from app.blueprint_avatars import blueprint_avatar, list_blueprint_avatars
 from app.database import get_db
 from app.models import (Blueprint, Credential, Deployment, HostnameReservation, HostnameScheme,
                         IPPool, Provider, Role, User, now)
+from app.policy_engine.entities import entity_catalog, entity_role_catalog
 from app.providers.registry import provider_for
 from app.providers.settings import require_platform_enabled
 from app.projects.authorization import effective_permissions as project_effective_permissions, visible_projects
@@ -61,6 +62,7 @@ def validate_persisted_blueprint_contract(row):
         'visibility': row.visibility,
         'allowed_role_ids': row.allowed_role_ids,
         'allowed_user_ids': row.allowed_user_ids,
+        'allowed_entities': row.allowed_entities,
         'manager_role_ids': [role.id for role in row.manager_roles],
         'variables_schema': row.variables_schema,
         'deployment': row.deployment,
@@ -436,9 +438,12 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     return manager_roles
 
 
-def require_blueprint_manager(db, row, actor):
-    if not can_manage_blueprint(db, row, actor):
-        raise HTTPException(403, 'A manager role assigned to this Blueprint is required')
+def require_blueprint_manager(db, row, actor, *, action='blueprints.update'):
+    if not can_manage_blueprint(db, row, actor, action=action):
+        raise HTTPException(
+            403,
+            'A manager role and matching Policy Engine entity access are required for this Blueprint',
+        )
 
 
 @router.post('/blueprint-designer/yaml/parse')
@@ -476,6 +481,30 @@ def blueprint_vm_classification(
         tenant_id=tenant_id,
     )
     return vm_classification_for_tenant(db, access.tenant.id)
+
+
+@router.get('/blueprints/entities')
+def blueprint_entities(
+    tenant_id: Annotated[str, Query(min_length=36, max_length=36)],
+    project_id: Annotated[str, Query(min_length=36, max_length=36)],
+    permission: BlueprintScopePermission = 'blueprints.create',
+    actor=Depends(authenticate),
+    db=Depends(get_db, scope='function'),
+):
+    from app.projects.authorization import authorize as authorize_project
+
+    access = authorize_project(
+        db,
+        Principal.from_token(actor),
+        project_id,
+        permission,
+        tenant_id=tenant_id,
+    )
+    classification = vm_classification_for_tenant(db, access.tenant.id)
+    return {
+        'items': entity_catalog(classification),
+        'roles': entity_role_catalog(),
+    }
 
 
 @router.get('/blueprints/creation-scopes', response_model=Items[BlueprintCreationScopeOutput])
@@ -525,7 +554,7 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
                db=Depends(get_db, scope='function')):
     rows = paginate(db, Blueprint, offset, limit)
     source = portal_source(source_header)
-    can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
+    has_manage_permission = 'blueprints.update' in request.state.permissions
     role_cache = {}
 
     def roles_for(row):
@@ -534,12 +563,31 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
             role_cache[key] = blueprint_role_ids(db, row, actor)
         return role_cache[key]
 
-    if available or source != 'backend' and not can_manage:
-        rows = [row for row in rows if available_to(db, row, actor, source, roles_for(row))]
+    if available:
+        rows = [
+            row for row in rows
+            if available_to(db, row, actor, source, roles_for(row), action='blueprints.read')
+        ]
+    elif source != 'backend':
+        rows = [
+            row for row in rows
+            if available_to(db, row, actor, source, roles_for(row), action='blueprints.read')
+            or (
+                has_manage_permission
+                and can_manage_blueprint(
+                    db, row, actor, roles_for(row), action='blueprints.update'
+                )
+            )
+        ]
     return {'items': [
         blueprint_public(
             row,
-            can_manage=can_manage_blueprint(db, row, actor, roles_for(row)),
+            can_manage=(
+                has_manage_permission
+                and can_manage_blueprint(
+                    db, row, actor, roles_for(row), action='blueprints.update'
+                )
+            ),
         )
         for row in rows
     ]}
@@ -551,14 +599,23 @@ def blueprint(id: int, request: Request, source_header: Annotated[str | None, He
     row = find(db, Blueprint, id)
     validate_persisted_blueprint_contract(row)
     source = portal_source(source_header)
-    can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
+    has_manage_permission = 'blueprints.update' in request.state.permissions
     role_ids = blueprint_role_ids(db, row, actor)
-    if source != 'backend' and not can_manage and not available_to(db, row, actor, source, role_ids):
-        raise HTTPException(404, 'Blueprint not found')
-    return blueprint_public(
-        row,
-        can_manage=can_manage_blueprint(db, row, actor, role_ids),
+    manager_allowed = (
+        has_manage_permission
+        and can_manage_blueprint(
+            db, row, actor, role_ids, action='blueprints.update'
+        )
     )
+    if (
+        source != 'backend'
+        and not manager_allowed
+        and not available_to(
+            db, row, actor, source, role_ids, action='blueprints.read'
+        )
+    ):
+        raise HTTPException(404, 'Blueprint not found')
+    return blueprint_public(row, can_manage=manager_allowed)
 
 
 @router.get('/blueprints/{id}/yaml')
@@ -708,7 +765,7 @@ def delete_blueprint(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(db, row, actor)
+    require_blueprint_manager(db, row, actor, action='blueprints.delete')
 
     existing = pending_blueprint_delete_job(db, id)
     blocking_jobs = active_blueprint_provisioning_jobs(db, id)
@@ -808,8 +865,15 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             f'Blueprint deletion is queued in job {pending_delete.id}; new executions are blocked',
         )
     source = portal_source(source_header)
-    if not available_to(db, row, actor, source):
-        raise HTTPException(403, 'Blueprint is not available to this identity and portal')
+    effective_apmid = data.apmid or (row.deployment or {}).get('apmid')
+    effective_environment = data.environment or (row.deployment or {}).get('environment')
+    if not available_to(
+        db, row, actor, source,
+        action='blueprints.execute',
+        apmid=effective_apmid,
+        environment=effective_environment,
+    ):
+        raise HTTPException(403, 'Blueprint is not available to this identity, entity and portal')
     validate_persisted_blueprint_contract(row)
     if row.recovery_policy == 'destroy_on_failure' and 'deployments.destroy' not in request.state.permissions:
         raise HTTPException(403, 'deployments.destroy required by blueprint recovery policy')
