@@ -7,6 +7,7 @@ from app.access.groups import (
     ensure_organization_groups, ensure_project_groups,
 )
 from app.access.models import OrganizationAPMID
+from app.iam.models import RoleAssignment
 from app.models import Setting
 from app.projects.models import Project
 from app.tenancy.models import Tenant
@@ -153,6 +154,11 @@ def delete_apmid(db, organization: Tenant, code: str) -> None:
     if row.is_system or row.code == LEO:
         raise HTTPException(409, {'error': 'system_apmid_protected'})
     disable_apmid_groups(db, str(organization.id), row.code)
+    for assignment in db.scalars(select(RoleAssignment).where(
+        RoleAssignment.tenant_id == str(organization.id),
+        RoleAssignment.apmid == row.code,
+    )):
+        assignment.enabled = False
     db.delete(row)
     db.flush()
 
