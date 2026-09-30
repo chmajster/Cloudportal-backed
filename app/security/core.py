@@ -266,12 +266,43 @@ def authenticate(request: Request, auth: HTTPAuthorizationCredentials | None = D
 
 def require(permission):
     def dependency(request: Request, actor=Depends(authenticate), db=Depends(get_db, scope='function')):
-        from app.iam.service import authorize, request_context
+        from app.iam.service import authorize, request_context, scope_from_resource_scope
+
+        entity_scope = None
+        if request.headers.get('X-Entity') or request.query_params.get('entity'):
+            from app.resource_scope.authorization import requested_scope
+            from app.policy_engine.entities import entity_role_allows_permission
+            entity_scope = requested_scope(request)
+            if entity_scope.entity_role and not entity_role_allows_permission(entity_scope.entity_role, permission):
+                audit(
+                    db,
+                    request,
+                    'authorization.denied',
+                    permission,
+                    result='denied',
+                    scope=scope_from_resource_scope(entity_scope),
+                    details={
+                        'required_permission': permission,
+                        'entity': entity_scope.entity_key,
+                        'entity_role': entity_scope.entity_role,
+                        'reason': 'Selected Entity role does not permit this operation',
+                    },
+                )
+                db.commit()
+                raise HTTPException(403, {
+                    'error': 'entity_role_denied',
+                    'entity': entity_scope.entity_key,
+                    'entity_role': entity_scope.entity_role,
+                    'required_permission': permission,
+                    'reason': 'Selected Entity role does not permit this operation',
+                    'request_id': request.state.request_id,
+                })
+
         decision = authorize(
             db,
             actor,
             permission,
-            scope={'scope_type': 'GLOBAL'},
+            scope=scope_from_resource_scope(entity_scope) if entity_scope else {'scope_type': 'GLOBAL'},
             context=request_context(request),
             write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
         )
@@ -297,7 +328,14 @@ def require(permission):
                 'reason': decision.reason,
                 'request_id': request.state.request_id,
             })
-        request.state.permissions = set(request.state.permissions) | {permission}
+        effective_permissions = set(request.state.permissions) | {permission}
+        if entity_scope and entity_scope.entity_role:
+            from app.policy_engine.entities import filter_permissions_for_entity_role
+            effective_permissions = filter_permissions_for_entity_role(
+                entity_scope.entity_role, effective_permissions
+            )
+        request.state.permissions = effective_permissions
+        request.state.entity = entity_scope.entity_key if entity_scope else None
         if decision.break_glass:
             request.state.break_glass_id = next(
                 (item.get('id') for item in decision.assignments
