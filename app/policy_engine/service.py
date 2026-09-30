@@ -11,6 +11,7 @@ from app.policy_engine.catalog import (
     OPERATOR_LABELS, RESOURCE_TYPES, action_catalog, condition_fields,
     human_policy_summary, policy_templates,
 )
+from app.policy_engine.entities import entity_role_catalog
 from app.policy_engine.engine import (
     EFFECT_TYPES, OPERATORS, POLICY_TYPES, SCOPE_DIMENSIONS, evaluate, specificity,
 )
@@ -839,6 +840,7 @@ def capabilities():
         "operator_labels": OPERATOR_LABELS,
         "effects": sorted(EFFECT_TYPES),
         "scope_dimensions": sorted(SCOPE_DIMENSIONS),
+        "entity_roles": entity_role_catalog(),
         "resource_types": list(RESOURCE_TYPES),
         "action_catalog": action_catalog(),
         "condition_fields": condition_fields(),
