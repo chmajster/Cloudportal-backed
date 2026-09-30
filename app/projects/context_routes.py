@@ -24,6 +24,7 @@ class SelectionOutput(BaseModel):
     selected: ProjectOutput | None
     tenant_name: str | None = None
     entity_key: str | None = None
+    entity_permissions: list[str] | None = None
     version: int
 
 
