@@ -627,20 +627,38 @@ def iam_projects(
     }
 
 
-def _classification_scope(db, organization_id: str, project_id: str) -> tuple[dict, dict]:
-    scope = _hydrate_scope(db, normalize_scope({
-        'scope_type': 'PROJECT',
-        'scope_id': project_id,
+def _classification_scope(db, organization_id: str, project_id: str | None) -> tuple[dict, dict]:
+    raw_scope = {
+        'scope_type': 'PROJECT' if project_id else 'ORGANIZATION',
+        'scope_id': project_id or organization_id,
         'tenant_id': organization_id,
-        'project_id': project_id,
-    }))
-    return scope, tenant_vm_classification_settings(db, organization_id)
+    }
+    if project_id:
+        raw_scope['project_id'] = project_id
+    scope = _hydrate_scope(db, normalize_scope(raw_scope))
+    classification = tenant_vm_classification_settings(db, organization_id)
+    if project_id:
+        from app.access.service import effective_project_apmids
+        allowed = set(effective_project_apmids(db, organization_id, project_id))
+        classification = {
+            **classification,
+            'apmids': [value for value in classification.get('apmids', []) if value in allowed],
+            'apmid_environments': {
+                key: value for key, value in classification.get('apmid_environments', {}).items()
+                if key in allowed
+            },
+            'classifications': [
+                value for value in classification.get('classifications', [])
+                if value.split('.', 1)[0] in allowed
+            ],
+        }
+    return scope, classification
 
 
 @router.get('/iam/apmids')
 def iam_apmids(
     organization_id: str,
-    project_id: str,
+    project_id: str | None = None,
     request: Request,
     actor=Depends(authenticate),
     db=Depends(get_db, scope='function'),
@@ -654,8 +672,8 @@ def iam_apmids(
 @router.get('/iam/environments')
 def iam_environments(
     organization_id: str,
-    project_id: str,
     request: Request,
+    project_id: str | None = None,
     apmid: str | None = None,
     actor=Depends(authenticate),
     db=Depends(get_db, scope='function'),
