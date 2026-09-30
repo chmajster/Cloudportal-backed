@@ -156,9 +156,6 @@ function disableFieldControl(wrapper) {
 }
 
 async function accessAssignmentForm(forcedUserId = null, assignment = null) {
-  const roleRequest = api('/rbac/roles?limit=200')
-    .then(result => ({ result, error: null }))
-    .catch(error => ({ result: null, error }));
   const [userResult, groupResult, tenantResult, projectResult] = await Promise.all([
     optionalApi('/users?limit=500', { items: [] }),
     optionalApi('/rbac/groups?limit=500', { items: [] }),
@@ -248,6 +245,13 @@ async function accessAssignmentForm(forcedUserId = null, assignment = null) {
   );
 
   const scopeSelect = scopeType.querySelector('select');
+  const tenantSelect = tenant.querySelector('select');
+  const projectSelect = project.querySelector('select');
+  const apmidInput = apmid.querySelector('input');
+  const environmentInput = environment.querySelector('input');
+  const scopeIdInput = scopeId.querySelector('input');
+  let roleLoadGeneration = 0;
+
   function syncScope() {
     const kind = scopeSelect.value;
     const needsProject = !['GLOBAL', 'ORGANIZATION'].includes(kind);
@@ -257,7 +261,86 @@ async function accessAssignmentForm(forcedUserId = null, assignment = null) {
     environment.hidden = kind !== 'ENVIRONMENT';
     scopeId.hidden = !['RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'].includes(kind);
   }
-  scopeSelect.addEventListener('change', syncScope);
+
+  function roleScopeQuery() {
+    const kind = scopeSelect.value;
+    const tenantId = String(tenantSelect?.value || '');
+    const projectId = String(projectSelect?.value || '');
+    if (kind === 'ORGANIZATION' && !tenantId) return null;
+    if (!['GLOBAL', 'ORGANIZATION'].includes(kind) && !projectId) return null;
+
+    const query = new URLSearchParams({
+      limit: '200',
+      offset: '0',
+      assignable: 'true',
+      scope_type: kind,
+    });
+    if (tenantId) query.set('tenant_id', tenantId);
+    if (projectId) query.set('project_id', projectId);
+    if (['APMID', 'ENVIRONMENT'].includes(kind) && apmidInput?.value.trim()) {
+      query.set('apmid', apmidInput.value.trim());
+    }
+    if (kind === 'ENVIRONMENT' && environmentInput?.value.trim()) {
+      query.set('environment', environmentInput.value.trim());
+    }
+    if (['RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'].includes(kind)
+        && scopeIdInput?.value.trim()) {
+      query.set('scope_id', scopeIdInput.value.trim());
+    }
+    return query;
+  }
+
+  async function loadAssignableRoles(preferred = '') {
+    const query = roleScopeQuery();
+    const generation = ++roleLoadGeneration;
+    if (!query) {
+      availableRoleIds = new Set();
+      role.searchableSelect.setChoices([], '');
+      role.searchableSelect.setState('ready', 'Wybierz wymagany zakres, aby pobrać role.');
+      return;
+    }
+
+    role.searchableSelect.setState('loading', 'Ładowanie ról…');
+    try {
+      const roles = [];
+      let offset = 0;
+      let total = 0;
+      do {
+        query.set('offset', String(offset));
+        const page = await api('/rbac/roles?' + query.toString());
+        if (generation !== roleLoadGeneration) return;
+        const batch = page.items || [];
+        roles.push(...batch);
+        offset += batch.length;
+        total = Number(page.total || 0);
+        if (!batch.length) break;
+      } while (offset < total);
+
+      if (generation !== roleLoadGeneration) return;
+      availableRoleIds = new Set(roles.map(item => Number(item.id)));
+      role.searchableSelect.setChoices(roles.map(roleChoice), preferred);
+    } catch (error) {
+      if (generation !== roleLoadGeneration) return;
+      availableRoleIds = new Set();
+      role.searchableSelect.setChoices([], '');
+      console.error('Nie udało się pobrać listy ról IAM.', error);
+      role.searchableSelect.setState('error', 'Nie udało się pobrać listy ról.');
+    }
+  }
+
+  function refreshRoleScope() {
+    syncScope();
+    loadAssignableRoles().catch(error => {
+      console.error('Nie udało się odświeżyć listy ról IAM.', error);
+    });
+  }
+
+  scopeSelect.addEventListener('change', refreshRoleScope);
+  tenantSelect?.addEventListener('change', refreshRoleScope);
+  projectSelect?.addEventListener('change', refreshRoleScope);
+  apmidInput?.addEventListener('change', refreshRoleScope);
+  environmentInput?.addEventListener('change', refreshRoleScope);
+  scopeIdInput?.addEventListener('change', refreshRoleScope);
   syncScope();
 
   if (assignment) {
@@ -343,15 +426,7 @@ async function accessAssignmentForm(forcedUserId = null, assignment = null) {
     },
   });
 
-  const roleLoad = await roleRequest;
-  if (roleLoad.error) {
-    console.error('Nie udało się pobrać listy ról IAM.', roleLoad.error);
-    role.searchableSelect.setState('error', 'Nie udało się pobrać listy ról.');
-    return;
-  }
-  const roles = roleLoad.result?.items || [];
-  availableRoleIds = new Set(roles.map(item => Number(item.id)));
-  role.searchableSelect.setChoices(roles.map(roleChoice), assignment?.role_id || '');
+  await loadAssignableRoles(assignment?.role_id || '');
 }
 
 async function assignmentsPanel() {
