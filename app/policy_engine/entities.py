@@ -241,10 +241,10 @@ def actor_matches_entity(
         "environment": parts["environment"],
     }
     target = {
+        **dict(resource or {}),
         "type": "blueprint",
         "apmid": parts["apmid"],
         "environment": parts["environment"],
-        **dict(resource or {}),
     }
     required = list(_ROLE_BY_ID[parts["role"]]["anchors"])
     if action not in required:
