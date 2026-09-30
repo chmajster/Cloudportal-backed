@@ -243,4 +243,5 @@ registerRoutedForm({
   permission: 'settings.read',
   label: 'SSL / TLS',
 }, tlsSettingsView);
+registerExtension('tls-settings', () => {});
 })();
