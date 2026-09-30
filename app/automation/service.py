@@ -83,6 +83,23 @@ def blueprint_role_ids(db, blueprint: Blueprint, actor) -> set[int]:
     return role_ids
 
 
+def blueprint_matches_entity_context(blueprint: Blueprint, *, apmid=None, environment=None) -> bool:
+    deployment = dict(getattr(blueprint, 'deployment', {}) or {})
+    selected_apmid = str(apmid or '').strip().upper()
+    selected_environment = str(environment or '').strip().lower()
+    fixed_apmid = '' if deployment.get('select_apmid_on_execute') else str(
+        deployment.get('apmid') or ''
+    ).strip().upper()
+    fixed_environment = '' if deployment.get('select_environment_on_execute') else str(
+        deployment.get('environment') or ''
+    ).strip().lower()
+    if selected_apmid and fixed_apmid and selected_apmid != fixed_apmid:
+        return False
+    if selected_environment and fixed_environment and selected_environment != fixed_environment:
+        return False
+    return True
+
+
 def _entity_access(db, blueprint: Blueprint, actor, *, action: str,
                    apmid=None, environment=None) -> bool:
     entities = list(getattr(blueprint, 'allowed_entities', []) or [])
@@ -106,13 +123,20 @@ def _entity_access(db, blueprint: Blueprint, actor, *, action: str,
 
 
 def can_manage_blueprint(db, blueprint: Blueprint, actor, role_ids: set[int] | None = None,
-                         *, action: str = 'blueprints.update') -> bool:
+                         *, action: str = 'blueprints.update', apmid=None, environment=None) -> bool:
+    if not blueprint_matches_entity_context(
+        blueprint, apmid=apmid, environment=environment
+    ):
+        return False
     required = {role.id for role in blueprint.manager_roles}
     effective_roles = role_ids if role_ids is not None else blueprint_role_ids(db, blueprint, actor)
     if required and not (required & effective_roles):
         return False
     entities = list(getattr(blueprint, 'allowed_entities', []) or [])
-    if entities and not _entity_access(db, blueprint, actor, action=action):
+    if entities and not _entity_access(
+        db, blueprint, actor, action=action,
+        apmid=apmid, environment=environment,
+    ):
         return False
     return True
 
@@ -121,6 +145,10 @@ def available_to(db, blueprint: Blueprint, actor, source: str = 'api',
                  role_ids: set[int] | None = None, *, action: str = 'blueprints.read',
                  apmid=None, environment=None) -> bool:
     if not blueprint.is_active or not blueprint.visibility.get(source, False):
+        return False
+    if not blueprint_matches_entity_context(
+        blueprint, apmid=apmid, environment=environment
+    ):
         return False
     user = getattr(actor, 'user', actor)
     user_id = getattr(actor, 'user_id', None) or getattr(user, 'id', None)
