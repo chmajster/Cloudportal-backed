@@ -142,7 +142,7 @@
 
     async function loadResources(resetManagerSelection = false) {
       const requestOptions = { headers: parts.core.scopeHeaders(state) };
-      const [providers, templates, schemes, pools, credentials, playbooks, roleOptions, userOptions, vmClassification] = await Promise.all([
+      const [providers, templates, schemes, pools, credentials, playbooks, roleOptions, userOptions, vmClassification, entityCatalog] = await Promise.all([
         safeApi('/providers?limit=200', [], requestOptions),
         safeApi('/templates', [], requestOptions),
         scopeAllows('hostnames.read') ? safeApi('/hostname-schemes?limit=200', [], requestOptions) : Promise.resolve([]),
@@ -191,6 +191,14 @@
           data.vmClassification,
           requestOptions
         ),
+        safeApi(
+          '/blueprints/entities'
+          + '?tenant_id=' + encodeURIComponent(state.tenantId)
+          + '&project_id=' + encodeURIComponent(state.projectId)
+          + '&permission=' + encodeURIComponent(options.item ? 'blueprints.update' : 'blueprints.create'),
+          { items: [], roles: [] },
+          requestOptions
+        ),
       ]);
 
       data.providers = providers.filter(value => value.enabled !== false || String(value.id) === String(options.item?.deployment?.provider_id || ''));
@@ -203,6 +211,12 @@
       data.users = userOptions;
       data.playbooks = playbooks.filter(value => value.enabled !== false);
       data.vmClassification = vmClassification || data.vmClassification;
+      data.entities = Array.isArray(entityCatalog?.items) ? entityCatalog.items : [];
+      data.entityRoles = Array.isArray(entityCatalog?.roles) ? entityCatalog.roles : [];
+      if (!options.item) {
+        const validEntities = new Set(data.entities.map(value => String(value.key)));
+        state.allowedEntities = (state.allowedEntities || []).filter(value => validEntities.has(String(value)));
+      }
       if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
       if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 
