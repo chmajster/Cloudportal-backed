@@ -122,6 +122,33 @@ def request_permissions(request):
     return set(getattr(request.state, 'permissions', set()))
 
 
+def entity_deployment_predicate(request):
+    scope = _entity_scope(request)
+    return _deployment_entity_predicate(scope) if scope is not None else None
+
+
+def entity_job_predicate(request):
+    scope = _entity_scope(request)
+    if scope is None:
+        return None
+    return exists(
+        select(Deployment.id).where(
+            Deployment.id == Job.deployment_id,
+            _deployment_entity_predicate(scope),
+        )
+    )
+
+
+def ensure_deployment_entity(request, deployment):
+    _ensure_deployment_entity(request, deployment)
+    return deployment
+
+
+def ensure_job_entity(db, request, job):
+    _ensure_job_entity(db, request, job)
+    return job
+
+
 def deployment_predicate(request, actor):
     predicates = []
     scope = _entity_scope(request)
