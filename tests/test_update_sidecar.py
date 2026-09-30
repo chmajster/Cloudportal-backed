@@ -822,4 +822,7 @@ def test_tls_activation_persists_letsencrypt_as_custom_for_installer(tmp_path, m
     assert metadata['type'] == 'letsencrypt'
     assert metadata['path'] == '/etc/letsencrypt/live/kynlab.ddnsfree.com'
     assert result['hostname'] == 'kynlab.ddnsfree.com'
-    assert (tmp_path / 'certbot-hook').is_file()
+    hook = (tmp_path / 'certbot-hook').read_text(encoding='utf-8')
+    assert 'ACTIVE_LINEAGE="/etc/letsencrypt/live/kynlab.ddnsfree.com"' in hook
+    assert 'RENEWED_LINEAGE' in hook
+    assert '/tls/sync' in hook
