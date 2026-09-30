@@ -266,15 +266,19 @@ def _assignment_scope_matches(row: RoleAssignment, target: dict, context: Mappin
     if kind == 'APMID':
         actual = str(resource.get('apmid') or target.get('apmid') or '').upper()
         matched = bool(row.apmid and row.apmid.upper() == actual)
+        if row.tenant_id:
+            matched = matched and row.tenant_id == target.get('tenant_id')
         if row.project_id:
-            matched = matched and row.project_id == target['project_id']
+            matched = matched and row.project_id == target.get('project_id')
         return matched and (row.inherit or target_kind == 'APMID'), inherited
 
     if kind == 'ENVIRONMENT':
         actual = _normalize_environment(resource.get('environment') or target.get('environment'))
         matched = bool(row.environment and _normalize_environment(row.environment) == actual)
+        if row.tenant_id:
+            matched = matched and row.tenant_id == target.get('tenant_id')
         if row.project_id:
-            matched = matched and row.project_id == target['project_id']
+            matched = matched and row.project_id == target.get('project_id')
         if row.apmid:
             matched = matched and row.apmid.upper() == str(resource.get('apmid') or target.get('apmid') or '').upper()
         return matched and (row.inherit or target_kind == 'ENVIRONMENT'), inherited
@@ -288,6 +292,10 @@ def _assignment_scope_matches(row: RoleAssignment, target: dict, context: Mappin
     }
     actual = lookup.get(kind)
     matched = actual is not None and row.scope_id is not None and str(actual) == str(row.scope_id)
+    if row.tenant_id:
+        matched = matched and row.tenant_id == target.get('tenant_id')
+    if row.project_id:
+        matched = matched and row.project_id == target.get('project_id')
     return matched, False
 
 
@@ -303,101 +311,12 @@ def _role_grants(db, role_id: int) -> tuple[set[str], set[str], str]:
     return exact, patterns, role.name
 
 
-def _legacy_global(db, actor_identity, action: str):
-    # Query live role membership directly. API-token restriction is evaluated
-    # independently before this point so terminal wildcards such as machines.*
-    # remain useful without weakening the user-permission ceiling.
-    roles = db.execute(
-        select(Role.id, Role.name)
-        .join(UserRole, UserRole.role_id == Role.id)
-        .join(RolePermission, RolePermission.role_id == Role.id)
-        .join(Permission, Permission.id == RolePermission.permission_id)
-        .where(UserRole.user_id == actor_identity.user_id, Permission.name == action)
-    ).all()
-    return [{
-        'source': 'legacy_global',
-        'role_id': role_id,
-        'role': name,
-        'effect': 'ALLOW',
-        'scope_type': 'GLOBAL',
-        'scope_id': None,
-    } for role_id, name in roles]
-
-
-def _legacy_scoped(db, actor_identity, action: str, scope: dict):
-    result = []
-    tenant_id = scope.get('tenant_id')
-    project_id = scope.get('project_id')
-    if tenant_id:
-        rows = db.execute(
-            select(TenantRoleAssignment.id, Role.id, Role.name)
-            .join(Role, Role.id == TenantRoleAssignment.role_id)
-            .join(TenantRoleGrant, TenantRoleGrant.assignment_id == TenantRoleAssignment.id)
-            .join(RolePermission, and_(
-                RolePermission.role_id == TenantRoleAssignment.role_id,
-                RolePermission.permission_id == TenantRoleGrant.permission_id,
-            ))
-            .join(Permission, Permission.id == TenantRoleGrant.permission_id)
-            .join(TenantMembership, and_(
-                TenantMembership.tenant_id == TenantRoleAssignment.tenant_id,
-                TenantMembership.user_id == TenantRoleAssignment.user_id,
-            ))
-            .where(
-                TenantRoleAssignment.tenant_id == tenant_id,
-                TenantRoleAssignment.user_id == actor_identity.user_id,
-                TenantMembership.status == 'active',
-                Permission.name == action,
-            )
-        ).all()
-        result.extend({
-            'source': 'tenant_assignment',
-            'assignment_id': assignment_id,
-            'role_id': role_id,
-            'role': name,
-            'effect': 'ALLOW',
-            'scope_type': 'ORGANIZATION',
-            'scope_id': tenant_id,
-            'inherited': scope['scope_type'] != 'ORGANIZATION',
-        } for assignment_id, role_id, name in rows)
-
-    if project_id:
-        rows = db.execute(
-            select(ProjectRoleAssignment.id, Role.id, Role.name)
-            .join(Role, Role.id == ProjectRoleAssignment.role_id)
-            .join(ProjectRoleGrant, ProjectRoleGrant.assignment_id == ProjectRoleAssignment.id)
-            .join(RolePermission, and_(
-                RolePermission.role_id == ProjectRoleAssignment.role_id,
-                RolePermission.permission_id == ProjectRoleGrant.permission_id,
-            ))
-            .join(Permission, Permission.id == ProjectRoleGrant.permission_id)
-            .join(ProjectMembership, and_(
-                ProjectMembership.project_id == ProjectRoleAssignment.project_id,
-                ProjectMembership.user_id == ProjectRoleAssignment.user_id,
-            ))
-            .where(
-                ProjectRoleAssignment.project_id == project_id,
-                ProjectRoleAssignment.user_id == actor_identity.user_id,
-                ProjectMembership.status == 'active',
-                Permission.name == action,
-            )
-        ).all()
-        result.extend({
-            'source': 'project_assignment',
-            'assignment_id': assignment_id,
-            'role_id': role_id,
-            'role': name,
-            'effect': 'ALLOW',
-            'scope_type': 'PROJECT',
-            'scope_id': project_id,
-            'inherited': scope['scope_type'] != 'PROJECT',
-        } for assignment_id, role_id, name in rows)
-    return result
-
-
 def _validate_scope_resource(db, scope: dict, *, write: bool):
     project_id = scope.get('project_id')
     tenant_id = scope.get('tenant_id')
     if not project_id and not tenant_id:
+        if scope.get('apmid'):
+            raise HTTPException(422, {'error': 'organization_required_for_apmid'})
         return
 
     if project_id:
@@ -418,6 +337,9 @@ def _validate_scope_resource(db, scope: dict, *, write: bool):
             raise HTTPException(404, {'error': 'resource_not_found'})
         if write and (project.status != 'active' or tenant.status != 'active'):
             raise HTTPException(409, {'error': 'scope_inactive'})
+        if scope.get('apmid'):
+            from app.access.service import validate_apmid_scope
+            validate_apmid_scope(db, tenant_id, project_id, scope.get('apmid'))
         return
 
     tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.deleted_at.is_(None)))
@@ -425,6 +347,9 @@ def _validate_scope_resource(db, scope: dict, *, write: bool):
         raise HTTPException(404, {'error': 'resource_not_found'})
     if write and tenant.status != 'active':
         raise HTTPException(409, {'error': 'scope_inactive'})
+    if scope.get('apmid'):
+        from app.access.service import validate_apmid_scope
+        validate_apmid_scope(db, tenant_id, None, scope.get('apmid'))
 
 
 def _active_break_glass(db, actor):
@@ -549,9 +474,6 @@ def authorize(
             },), True,
         )
 
-    legacy = _legacy_global(db, actor_identity, action)
-    legacy += _legacy_scoped(db, actor_identity, action, target)
-
     subjects = _subjects(db, evaluated_actor)
     assignments = db.scalars(_active_assignment_query(subjects, _instant())).all()
     matched_allow = []
@@ -610,12 +532,6 @@ def authorize(
                 inherited.append(item)
         trace.append({'assignment_id': row.id, 'matched': True, 'effect': row.effect})
 
-    for item in legacy:
-        role_refs[item['role_id']] = {'id': item['role_id'], 'name': item['role']}
-        matched_allow.append(item)
-        if item.get('inherited'):
-            inherited.append(item)
-
     if matched_deny:
         return AuthorizationDecision(
             'DENY', action, frozenset(), tuple(role_refs.values()),
@@ -626,7 +542,7 @@ def authorize(
 
     # API_TOKEN is a restriction boundary, never an independent privilege
     # source. Token scopes and token-scoped DENY/conditions may narrow access,
-    # but at least one USER/GROUP/SERVICE_ACCOUNT/legacy grant must exist.
+    # but at least one USER/GROUP/SERVICE_ACCOUNT RoleAssignment must exist.
     if subject_user_id is None and getattr(actor, 'kind', None) == 'api':
         base_allow = [
             item for item in matched_allow
