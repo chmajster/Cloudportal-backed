@@ -231,7 +231,8 @@ def guest_credential_cloud_init(db, credential_id):
     }
 
 
-def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None, awx_onboarding=None):
+def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=None, environment=None,
+                      awx_onboarding=None, vm_parameters=None):
     variables = validate_blueprint_variables(blueprint.variables_schema, supplied)
     reservation = None
     ip_allocation = None
@@ -260,6 +261,20 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
     default_hostname_values = deployment.pop('hostname_values', {})
 
     deployment_variables = deployment.setdefault('variables', {})
+    runtime_vm_parameters = dict(vm_parameters or {})
+    if runtime_vm_parameters:
+        editable_vm_parameters = {'cpu', 'memory', 'disk', 'storage', 'network'}
+        unsupported = sorted(set(runtime_vm_parameters) - editable_vm_parameters)
+        if unsupported:
+            raise HTTPException(422, 'Unsupported runtime VM parameters: ' + ', '.join(unsupported))
+        unavailable = sorted(key for key in runtime_vm_parameters if key not in deployment_variables)
+        if unavailable:
+            raise HTTPException(
+                422,
+                'Blueprint does not expose these VM parameters for runtime override: ' + ', '.join(unavailable),
+            )
+        deployment_variables.update(runtime_vm_parameters)
+
     guest_credential = guest_credential_cloud_init(db, guest_credential_id)
     template_guest_credential = guest_credential_cloud_init(db, template_guest_credential_id)
     if guest_account_mode == 'existing_template':
