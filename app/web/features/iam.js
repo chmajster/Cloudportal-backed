@@ -130,51 +130,121 @@ function subjectField(users, groups, forcedUserId = null) {
   return [type, wrap];
 }
 
-async function accessAssignmentForm(forcedUserId = null) {
-  const [roleResult, userResult, groupResult, tenantResult, projectResult] = await Promise.all([
-    api('/rbac/roles?limit=200'),
+function roleChoice(item) {
+  const scopeTerms = Array.isArray(item.scope_types)
+    ? item.scope_types.map(value => String(value || '').trim().toLocaleLowerCase('pl-PL')).filter(Boolean)
+    : [];
+  const scopeLabel = item.system_role ? 'system' : scopeTerms.join(' / ');
+  return {
+    value: item.id,
+    label: item.name + (scopeLabel ? ' · ' + scopeLabel : ''),
+    searchText: [item.name, item.system_role ? 'system' : '', ...scopeTerms].filter(Boolean).join(' '),
+  };
+}
+
+function localDateTimeValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return shifted.toISOString().slice(0, 16);
+}
+
+function disableFieldControl(wrapper) {
+  const control = wrapper?.querySelector('input, select, textarea');
+  if (control) control.disabled = true;
+}
+
+async function accessAssignmentForm(forcedUserId = null, assignment = null) {
+  const roleRequest = api('/rbac/roles?limit=200')
+    .then(result => ({ result, error: null }))
+    .catch(error => ({ result: null, error }));
+  const [userResult, groupResult, tenantResult, projectResult] = await Promise.all([
     optionalApi('/users?limit=500', { items: [] }),
     optionalApi('/rbac/groups?limit=500', { items: [] }),
     optionalApi('/tenants?limit=500', { items: [] }),
     optionalApi('/projects?limit=500', { items: [] }),
   ]);
-  const roles = roleResult.items || [];
   const users = userResult.items || [];
   const groups = groupResult.items || [];
   const tenants = tenantResult.items || [];
   const projects = projectResult.items || [];
+  let availableRoleIds = new Set();
 
-  const [subjectType, subject] = subjectField(users, groups, forcedUserId);
-  const role = selectField('Rola', 'role_id', roles.map(item => ({
-    value: item.id,
-    label: item.name + (item.system_role ? ' · system' : ''),
-  })), '', { required: true, placeholder: 'Wybierz rolę' });
+  let subjectType;
+  let subject;
+  if (assignment) {
+    subjectType = field('Subject type', 'subject_type_display', {
+      value: assignment.subject_type,
+      readonly: true,
+    });
+    subject = field('Subject', 'subject_display', {
+      value: subjectLabel(assignment, users, groups),
+      readonly: true,
+    });
+  } else {
+    [subjectType, subject] = subjectField(users, groups, forcedUserId);
+  }
+
+  const role = searchableSelectField('Rola', 'role_id', [], assignment?.role_id || '', {
+    required: true,
+    placeholder: 'Wyszukaj rolę…',
+    emptyText: 'Brak pasujących ról',
+    selectFirst: false,
+    disableWhenEmpty: false,
+  });
+  role.searchableSelect.setState('loading', 'Ładowanie ról…');
+
   const effect = selectField('Effect', 'effect', [
     { value: 'ALLOW', label: 'ALLOW' },
     { value: 'DENY', label: 'DENY' },
-  ], 'ALLOW', { required: true });
-  const scopeType = selectField('Scope', 'scope_type', SCOPE_TYPES.map(([value, label]) => ({ value, label })), 'GLOBAL', { required: true });
+  ], assignment?.effect || 'ALLOW', { required: true });
+  const scopeType = selectField(
+    'Scope',
+    'scope_type',
+    SCOPE_TYPES.map(([value, label]) => ({ value, label })),
+    assignment?.scope_type || 'GLOBAL',
+    { required: true }
+  );
   const tenant = selectField('Organization', 'tenant_id', tenants.map(item => ({
     value: item.id,
     label: item.name + (item.slug ? ' · ' + item.slug : ''),
-  })), '', { placeholder: '—' });
+  })), assignment?.tenant_id || '', { placeholder: '—' });
   const project = selectField('Project', 'project_id', projects.map(item => ({
     value: item.id,
     label: item.name + (item.slug ? ' · ' + item.slug : ''),
-  })), '', { placeholder: '—' });
-  const apmid = field('APMID', 'apmid', { maxlength: 63 });
-  const environment = field('ENV', 'environment', { maxlength: 32, placeholder: 'DEV / TEST / PROD' });
-  const scopeId = field('Resource / scope ID', 'scope_id', { maxlength: 160, wide: true });
+  })), assignment?.project_id || '', { placeholder: '—' });
+  const apmid = field('APMID', 'apmid', { maxlength: 63, value: assignment?.apmid || '' });
+  const environment = field('ENV', 'environment', {
+    maxlength: 32,
+    placeholder: 'DEV / TEST / PROD',
+    value: assignment?.environment || '',
+  });
+  const scopeId = field('Resource / scope ID', 'scope_id', {
+    maxlength: 160,
+    wide: true,
+    value: assignment?.scope_id || '',
+  });
   const conditions = field('Conditions JSON', 'conditions', {
     tag: 'textarea',
-    value: '{}',
+    value: JSON.stringify(assignment?.conditions || {}, null, assignment ? 2 : 0),
     wide: true,
     help: 'Bez eval(). Obsługiwany jest bezpieczny condition tree Policy Engine.',
   });
-  const validFrom = field('Valid from', 'valid_from', { type: 'datetime-local' });
-  const validUntil = field('Valid until', 'valid_until', { type: 'datetime-local' });
-  const inherit = checkboxField('Dziedzicz do scope potomnych', 'inherit', true);
-  const approval = checkboxField('Wymagaj approval przed operacją', 'approval_required', false);
+  const validFrom = field('Valid from', 'valid_from', {
+    type: 'datetime-local',
+    value: localDateTimeValue(assignment?.valid_from),
+  });
+  const validUntil = field('Valid until', 'valid_until', {
+    type: 'datetime-local',
+    value: localDateTimeValue(assignment?.valid_until),
+  });
+  const inherit = checkboxField('Dziedzicz do scope potomnych', 'inherit', assignment?.inherit ?? true);
+  const approval = checkboxField(
+    'Wymagaj approval przed operacją',
+    'approval_required',
+    assignment?.approval_required ?? false
+  );
 
   const scopeSelect = scopeType.querySelector('select');
   function syncScope() {
@@ -189,16 +259,22 @@ async function accessAssignmentForm(forcedUserId = null) {
   scopeSelect.addEventListener('change', syncScope);
   syncScope();
 
+  if (assignment) {
+    [scopeType, tenant, project, apmid, environment, scopeId].forEach(disableFieldControl);
+  }
+
   const body = node('div', { class: 'form-grid' },
     subjectType, subject, role, effect, scopeType, tenant, project, apmid,
     environment, scopeId, validFrom, validUntil, inherit, approval, conditions);
 
   openModal({
-    title: forcedUserId ? 'Przypisz dostęp użytkownikowi' : 'Nowy RoleAssignment',
+    title: assignment
+      ? 'Edytuj przypisanie'
+      : forcedUserId ? 'Przypisz dostęp użytkownikowi' : 'Nowy RoleAssignment',
     eyebrow: 'Enterprise IAM',
     body,
     wide: true,
-    submitLabel: 'Przypisz dostęp',
+    submitLabel: assignment ? 'Zapisz przypisanie' : 'Przypisz dostęp',
     onSubmit: async (_data, form) => {
       let conditionTree = {};
       const rawConditions = form.elements.conditions.value.trim();
@@ -206,11 +282,41 @@ async function accessAssignmentForm(forcedUserId = null) {
         try { conditionTree = JSON.parse(rawConditions); }
         catch { throw new Error('Conditions JSON nie jest poprawnym JSON-em.'); }
       }
+
+      const roleId = Number(form.elements.role_id?.value || 0);
+      if (!Number.isInteger(roleId) || roleId <= 0 || !availableRoleIds.has(roleId)) {
+        throw new Error('Wybierz rolę z listy.');
+      }
+
+      if (assignment) {
+        const payload = {
+          role_id: roleId,
+          effect: form.elements.effect.value,
+          conditions: conditionTree,
+          inherit: Boolean(form.elements.inherit?.checked),
+          approval_required: Boolean(form.elements.approval_required?.checked),
+          enabled: assignment.enabled !== false,
+          valid_from: form.elements.valid_from?.value
+            ? new Date(form.elements.valid_from.value).toISOString()
+            : null,
+          valid_until: form.elements.valid_until?.value
+            ? new Date(form.elements.valid_until.value).toISOString()
+            : null,
+        };
+        await api('/rbac/assignments/' + encodeURIComponent(assignment.id), {
+          method: 'PATCH',
+          body: payload,
+        });
+        toast('Przypisanie zaktualizowane.');
+        await enterpriseIamView();
+        return;
+      }
+
       const kind = form.elements.scope_type.value;
       const payload = {
         subject_type: forcedUserId ? 'USER' : form.elements.subject_type.value,
         subject_id: String(forcedUserId || form.elements.subject_id.value),
-        role_id: Number(form.elements.role_id.value),
+        role_id: roleId,
         effect: form.elements.effect.value,
         scope_type: kind,
         conditions: conditionTree,
@@ -235,6 +341,16 @@ async function accessAssignmentForm(forcedUserId = null) {
       await enterpriseIamView();
     },
   });
+
+  const roleLoad = await roleRequest;
+  if (roleLoad.error) {
+    console.error('Nie udało się pobrać listy ról IAM.', roleLoad.error);
+    role.searchableSelect.setState('error', 'Nie udało się pobrać listy ról.');
+    return;
+  }
+  const roles = roleLoad.result?.items || [];
+  availableRoleIds = new Set(roles.map(item => Number(item.id)));
+  role.searchableSelect.setChoices(roles.map(roleChoice), assignment?.role_id || '');
 }
 
 async function assignmentsPanel() {
@@ -280,6 +396,7 @@ async function assignmentsPanel() {
         { label: 'Źródło', value: item => item.source },
       ], assignments, item => [
         ...(allowed('rbac.assignments.manage') || allowed('roles.assign') ? [
+          button('Edytuj', () => accessAssignmentForm(null, item).catch(error => toast(error.message, 'error'))),
           button('Usuń', () => confirmAction(
             'Usuń przypisanie',
             'Usunięcie natychmiast zmieni efektywny dostęp. Wpis pozostanie w Audit Log.',
