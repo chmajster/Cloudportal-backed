@@ -1,6 +1,6 @@
 import uuid
 
-from app.api.schemas import BlueprintVisibility
+from app.api.schemas import BlueprintExecuteInput, BlueprintVisibility
 
 
 def test_blueprint_visibility_defaults_include_cloudportal():
@@ -10,6 +10,21 @@ def test_blueprint_visibility_defaults_include_cloudportal():
         'cloudportal': True,
         'api': True,
     }
+
+
+def test_blueprint_vm_parameter_input_defers_template_specific_constraints():
+    data = BlueprintExecuteInput.model_validate({
+        'vm_parameters': {
+            'cpu': 2,
+            'memory': 256,
+            'disk': 40,
+            'storage': 'Datastore 01',
+            'network': 'VM Network',
+        },
+    })
+    assert data.vm_parameters.memory == 256
+    assert data.vm_parameters.storage == 'Datastore 01'
+    assert data.vm_parameters.network == 'VM Network'
 
 
 def resources(client, headers):
@@ -248,8 +263,11 @@ def test_blueprint_execution_options_return_defaults_and_live_choices(client, he
                 ]
             if resource == 'networks':
                 return [
-                    {'iface': 'vmbr20'},
-                    {'iface': 'vmbr30'},
+                    {'iface': 'eno1', 'type': 'eth'},
+                    {'iface': 'bond0', 'type': 'bond'},
+                    {'iface': 'vmbr20', 'type': 'bridge'},
+                    {'iface': 'vmbr30', 'type': 'bridge'},
+                    {'iface': 'ovsbr0', 'type': 'OVSBridge'},
                 ]
             raise AssertionError(resource)
 
@@ -269,9 +287,10 @@ def test_blueprint_execution_options_return_defaults_and_live_choices(client, he
         'network': 'vmbr20',
     }
     assert vm['storages'] == ['ceph-vm', 'local-lvm']
-    assert vm['networks'] == ['vmbr20', 'vmbr30']
+    assert vm['networks'] == ['ovsbr0', 'vmbr20', 'vmbr30']
     assert vm['inventory_available'] is True
     assert vm['limits']['cpu'] == {'min': 1, 'max': 128}
+    assert vm['limits']['memory'] == {'min': 512, 'max': 1048576}
 
 
 def test_blueprint_bundle_creates_hostname_scheme_atomically(client, headers):

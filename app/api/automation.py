@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from pydantic import ValidationError
 from sqlalchemy import select
 from app.api.common import Limit, Offset, find, idempotent, paginate
-from app.catalog import template_definition, validate_template_variables
+from app.catalog import template_definition, template_model, validate_template_variables
 from app.catalog_control import require_catalog_item_enabled
 from app.api.outputs import (BlueprintAvatarOutput, BlueprintCreationScopeOutput, BlueprintOutput,
                              CreatedDeploymentOutput, DeletedOutput, GeneratedHostnameOutput,
@@ -578,7 +578,17 @@ def blueprint_execution_options(
 
     deployment = row.deployment if isinstance(row.deployment, dict) else {}
     variables = deployment.get('variables') if isinstance(deployment.get('variables'), dict) else {}
-    editable = ('cpu', 'memory', 'disk', 'storage', 'network')
+    template_id = str(deployment.get('template') or 'proxmox-vm')
+    try:
+        template_properties = template_model(template_id).model_json_schema().get('properties', {})
+    except (HTTPException, RuntimeError):
+        template_properties = {}
+
+    editable_names = ('cpu', 'memory', 'disk', 'storage', 'network')
+    editable = tuple(
+        name for name in editable_names
+        if not template_properties or name in template_properties
+    )
     defaults = {}
     for name in editable:
         value = variables.get(name)
@@ -594,15 +604,26 @@ def blueprint_execution_options(
         elif str(value).strip():
             defaults[name] = str(value).strip()
 
+    limits = {}
+    for name in ('cpu', 'memory', 'disk'):
+        definition = template_properties.get(name) if isinstance(template_properties, dict) else None
+        if not isinstance(definition, dict):
+            continue
+        constraint = {}
+        minimum = definition.get('minimum')
+        maximum = definition.get('maximum')
+        if isinstance(minimum, (int, float)) and not isinstance(minimum, bool):
+            constraint['min'] = minimum
+        if isinstance(maximum, (int, float)) and not isinstance(maximum, bool):
+            constraint['max'] = maximum
+        if constraint:
+            limits[name] = constraint
+
     result = {
         'vm_parameters': {
             'enabled': bool(defaults),
             'defaults': defaults,
-            'limits': {
-                'cpu': {'min': 1, 'max': 128},
-                'memory': {'min': 512, 'max': 1048576},
-                'disk': {'min': 1, 'max': 65536},
-            },
+            'limits': limits,
             'storages': [],
             'networks': [],
             'inventory_available': False,
@@ -642,6 +663,9 @@ def blueprint_execution_options(
     networks = []
     for value in network_rows or []:
         if not isinstance(value, dict):
+            continue
+        network_type = str(value.get('type') or '').strip().lower()
+        if network_type not in {'bridge', 'ovsbridge'}:
             continue
         iface = str(value.get('iface') or '').strip()
         if iface and iface not in networks:

@@ -415,6 +415,9 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "/execution-options" in script
     assert "Parametry VM" in script
     assert "Domyślnie z Blueprintu:" in script
+    assert "hydrateBlueprintRuntimeVmParameterSection" in script
+    assert ".then(executionOptions =>" in script
+    assert "const executionOptions = await api(`/blueprints/${item.id}/execution-options`" not in script
     assert "payload.vm_parameters = vmParameters" in script
     assert '.product-grid' in stylesheet
     assert '.product-card' in stylesheet
