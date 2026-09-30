@@ -144,7 +144,7 @@
       const result = {};
       for (const key of [
         'slug', 'name', 'description', 'avatar_id', 'is_active', 'visibility',
-        'allowed_role_ids', 'allowed_user_ids', 'manager_role_ids',
+        'allowed_role_ids', 'allowed_user_ids', 'allowed_entities', 'manager_role_ids',
         'variables_schema', 'deployment', 'workflow',
         'requires_approval', 'auto_approve_for_executors', 'approval_timeout_hours', 'recovery_policy',
       ]) result[key] = deepClone(item[key]);
@@ -169,6 +169,7 @@
       visibility: { backend: true, cloudportal: false, api: true },
       allowed_role_ids: [],
       allowed_user_ids: [],
+      allowed_entities: [],
       manager_role_ids: [],
       variables_schema: {},
       deployment: {
