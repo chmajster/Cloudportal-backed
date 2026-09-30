@@ -8,6 +8,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
     assert names == [
         'web-ui',
         'auth',
+        'enterprise-iam',
         'administration',
         'tenancy',
         'projects',
@@ -30,6 +31,7 @@ def test_backend_feature_modules_are_discovered_and_ordered():
         'health',
         'instance-backups',
         'updates',
+        'tls-settings',
     ]
     assert len(names) == len(set(names))
     assert [module.order for module in modules] == sorted(module.order for module in modules)
@@ -65,4 +67,5 @@ def test_feature_registry_exposes_expected_router_contracts():
     assert '/health' in paths('health')
     assert '/instance-backups' in paths('instance-backups')
     assert '/updates/status' in paths('updates')
+    assert '/settings/tls' in paths('tls-settings')
     assert '/manifest.json' in paths('web-ui')

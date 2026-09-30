@@ -153,6 +153,8 @@
 - Healthcheck aplikacji nie może tworzyć cyklicznej zależności od workerów/dispatchera.
 - Backup/restore wykonywany jako użytkownik usługi musi mieć dostęp do katalogu docelowego; nie twórz root-only katalogu 0700, do którego `pg_dump` jako cloudportal nie może pisać.
 - TLS cert musi być regenerowany/walidowany po zmianie hosta i przy expiry.
+- Certyfikat ustawiony z panelu może być własnym PEM, zarządzanym self-signed albo kopią aktywnego lineage Let’s Encrypt. Let’s Encrypt jest utrwalany w standardowych ścieżkach TLS z markerem `custom`, aby reinstall/update nie zastąpił go automatycznie self-signedem; osobne metadane zachowują źródło lineage do synchronizacji po `certbot renew`.
+- Zmiana właściciela materiału TLS przez instalator (`--cert-file/--cert-key` lub regenerację zarządzanego self-signed) musi usunąć stare metadane Let’s Encrypt i deploy hook. Aktywacja TLS ma być transakcyjna, serializowana, walidować key-pair, hostname, `notBefore` i `notAfter`, a przy błędzie przywracać poprzedni certyfikat, konfigurację hosta i hook.
 - Recovery administratora nie może przekazywać hasła w argv ani logach.
 - Deinstalacja domyślnie zachowuje bazę/dane; purge jest osobną, jawną operacją.
 - Kubernetes musi mieć trwałe PVC dla danych i spójny bootstrap/migration/rollout order.
