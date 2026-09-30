@@ -200,7 +200,7 @@
       ? 'Wyczyść zapisany wybór i ustaw ponownie organizację oraz projekt.'
       : selected
         ? `Tenant: ${selected.tenant_id} · Entity: ${current.entity_key ? entityLabel(current.entity_key) : 'brak'}`
-        : 'Wybierz organizację i projekt, aby ustawić domyślny zakres pracy w panelu.';
+        : 'Wybierz organizację, projekt i Entity, aby ustawić główny zakres pracy w panelu.';
 
     const clearPanel = async () => {
       const query = revoked ? '' : `?expected_version=${current.version}`;
@@ -346,7 +346,7 @@
       const summary = node('div', { class: 'global-context-summary' },
         node('strong', { text: 'Globalny zakres pracy' }),
         node('p', { class: 'muted', text:
-          'Wybór jest zapisywany na koncie użytkownika. Backend nadal weryfikuje RBAC dla każdej operacji; ten przełącznik nie nadaje dodatkowych uprawnień.' }));
+          'Wybór Entity jest zapisywany na koncie użytkownika. Backend weryfikuje RBAC i Policy Engine dla każdej operacji; rola Entity wyłącznie ogranicza uprawnienia.' }));
 
       openModal({
         title: 'Zmień kontekst pracy',
@@ -416,6 +416,7 @@
     } catch (error) {
       if (generation !== shellGeneration) return;
       currentScope = null;
+      currentEntityKey = null;
       revokedSelection = false;
       renderTopbarContext(null);
       renderShell();
