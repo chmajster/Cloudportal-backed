@@ -781,3 +781,24 @@
 .login-separator span {
   flex: 0 0 auto;
 }
+
+
+/* IAM assignment role combobox */
+.iam-role-searchable-select {
+  min-width: 0;
+}
+.iam-role-searchable-select .searchable-select-options {
+  z-index: 130;
+  max-width: 100%;
+  max-height: min(240px, calc(100dvh - 96px));
+}
+.iam-role-searchable-select .searchable-select-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iam-role-searchable-select .searchable-select-status {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
