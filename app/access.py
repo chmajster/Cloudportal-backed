@@ -12,9 +12,16 @@ def _entity_scope(request):
 
 
 def _deployment_entity_predicate(scope):
-    apmid = Deployment.workflow['blueprint']['variables']['apmid'].as_string()
-    environment = Deployment.workflow['blueprint']['variables']['environment'].as_string()
-    return and_(apmid == scope.apmid, environment == scope.environment)
+    return or_(
+        and_(
+            Deployment.workflow['entity']['apmid'].as_string() == scope.apmid,
+            Deployment.workflow['entity']['environment'].as_string() == scope.environment,
+        ),
+        and_(
+            Deployment.workflow['blueprint']['variables']['apmid'].as_string() == scope.apmid,
+            Deployment.workflow['blueprint']['variables']['environment'].as_string() == scope.environment,
+        ),
+    )
 
 
 def _resource_entity_predicate(scope):
@@ -40,11 +47,13 @@ def _vm_entity_predicate(scope):
 
 
 def _deployment_classification(row):
-    blueprint = dict((getattr(row, 'workflow', {}) or {}).get('blueprint') or {})
+    workflow = dict(getattr(row, 'workflow', {}) or {})
+    entity = dict(workflow.get('entity') or {})
+    blueprint = dict(workflow.get('blueprint') or {})
     variables = dict(blueprint.get('variables') or {})
     return (
-        str(variables.get('apmid') or '').strip().upper(),
-        str(variables.get('environment') or '').strip().lower(),
+        str(entity.get('apmid') or variables.get('apmid') or '').strip().upper(),
+        str(entity.get('environment') or variables.get('environment') or '').strip().lower(),
     )
 
 
