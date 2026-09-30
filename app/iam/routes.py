@@ -270,14 +270,23 @@ def _scope_management_actions(scope: dict) -> tuple[str, ...]:
     return ('rbac.assignments.manage', 'projects.roles.assign')
 
 
-def _require_any(db, actor, actions: Iterable[str], scope: dict, request: Request):
+def _require_any(
+    db,
+    actor,
+    actions: Iterable[str],
+    scope: dict,
+    request: Request,
+    *,
+    write: bool | None = None,
+):
     decisions = []
+    write_operation = request.method not in {'GET', 'HEAD', 'OPTIONS'} if write is None else write
     for action in actions:
         if action not in ALL_PERMISSIONS:
             continue
         decision = authorize(
             db, actor, action, scope=scope, context=request_context(request),
-            write=request.method not in {'GET', 'HEAD', 'OPTIONS'},
+            write=write_operation,
         )
         decisions.append(decision)
         if decision.allowed:
@@ -501,7 +510,7 @@ def roles(
     except ValueError as exc:
         raise HTTPException(422, {'error': 'invalid_scope', 'message': str(exc)}) from exc
 
-    _require_any(db, actor, _scope_management_actions(scope), scope, request)
+    _require_any(db, actor, _scope_management_actions(scope), scope, request, write=True)
     assignable_rows = []
     for role in db.scalars(select(Role).order_by(Role.name)).all():
         try:
