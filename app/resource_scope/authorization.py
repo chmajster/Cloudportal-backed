@@ -10,17 +10,33 @@ from app.resource_scope.columns import DEFAULT_TENANT_ID, DEFAULT_PROJECT_ID
 from app.resource_scope.permissions import RESOURCE_PERMISSIONS
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class Scope:
     tenant_id: str
     project_id: str
+    entity_key: str | None = None
+    apmid: str | None = None
+    environment: str | None = None
+    entity_role: str | None = None
+
+    def __eq__(self, other):
+        if not isinstance(other, Scope):
+            return NotImplemented
+        return (
+            str(self.tenant_id), str(self.project_id)
+        ) == (
+            str(other.tenant_id), str(other.project_id)
+        )
+
+    def __hash__(self):
+        return hash((str(self.tenant_id), str(self.project_id)))
 
 
 DEFAULT_SCOPE = Scope(DEFAULT_TENANT_ID, DEFAULT_PROJECT_ID)
 
 
 def requested_scope(request):
-    """Headers/query must agree. Never silently fall back from an invalid scope."""
+    """Headers/query must agree. Entity is a role ceiling inside the selected project."""
     values = []
     for field in ('tenant_id', 'project_id'):
         header_name = 'X-' + field.replace('_', '-')
@@ -31,14 +47,44 @@ def requested_scope(request):
         if header and query and header != query:
             fail(422, 'SCOPE_CONFLICT', 'Scope header and query parameter disagree')
         values.append(header if header is not None else query)
+
+    if len(request.headers.getlist('X-Entity')) > 1 or len(request.query_params.getlist('entity')) > 1:
+        fail(422, 'ENTITY_CONFLICT', 'Repeated Entity context fields are not allowed')
+    entity_header = request.headers.get('X-Entity')
+    entity_query = request.query_params.get('entity')
+    if entity_header and entity_query and entity_header != entity_query:
+        fail(422, 'ENTITY_CONFLICT', 'Entity header and query parameter disagree')
+    raw_entity = entity_header if entity_header is not None else entity_query
+
     if values == [None, None]:
+        if raw_entity:
+            fail(422, 'SCOPE_PAIR_REQUIRED', 'Entity requires tenant_id and project_id')
         return DEFAULT_SCOPE
     if any(value is None for value in values):
         fail(422, 'SCOPE_PAIR_REQUIRED', 'Supply both tenant_id and project_id')
+
     try:
-        return Scope(*(str(UUID(value)) for value in values))
+        tenant_id, project_id = (str(UUID(value)) for value in values)
     except (ValueError, TypeError, AttributeError):
         fail(422, 'INVALID_SCOPE', 'Tenant and project must be valid UUIDs')
+
+    if not raw_entity:
+        return Scope(tenant_id, project_id)
+
+    from app.policy_engine.entities import normalize_entity_key, parse_entity_key
+    try:
+        entity_key = normalize_entity_key(raw_entity)
+        parts = parse_entity_key(entity_key)
+    except ValueError as exc:
+        fail(422, 'INVALID_ENTITY', str(exc))
+    return Scope(
+        tenant_id,
+        project_id,
+        entity_key=entity_key,
+        apmid=parts['apmid'],
+        environment=parts['environment'],
+        entity_role=parts['role'],
+    )
 
 
 def permissions_for_identity(db, actor, scope, *, write=False):
