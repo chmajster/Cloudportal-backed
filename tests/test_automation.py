@@ -579,11 +579,14 @@ def test_blueprint_guest_credential_accepts_password_only_ssh_without_persisting
 
 
 def test_blueprint_manual_guest_password_is_encrypted_and_only_credential_id_is_persisted(client, headers):
+    from app.credentials.ssh import generate_ed25519_key_pair
     from app.database import session
     from app.models import Blueprint, Credential
     from app.security.core import decrypt_secret
 
     provider_credential, provider, deployment_payload = resources(client, headers)
+    _, public_key = generate_ed25519_key_pair()
+    public_key = ' '.join(public_key.split()[:2])
     password = 'Manual-Password-1234'
     created = client.post('/api/v1/blueprints', headers=headers, json={
         'slug': 'manual-cloud-init-password',
@@ -599,6 +602,7 @@ def test_blueprint_manual_guest_password_is_encrypted_and_only_credential_id_is_
                 **deployment_payload['variables'],
                 'name': 'manual-cloud-init-password',
                 'ssh_username': 'clouduser',
+                'ssh_public_key': public_key,
             },
         },
         'workflow': [
@@ -631,6 +635,7 @@ def test_blueprint_manual_guest_password_is_encrypted_and_only_credential_id_is_
     )
     assert execution.status_code == 202, execution.text
     assert execution.json()['workflow']['blueprint']['guest_credential_id'] == managed_id
+    assert execution.json()['variables']['ssh_public_key'] == public_key
     assert password not in execution.text
 
     update_payload = {
