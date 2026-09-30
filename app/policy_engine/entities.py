@@ -131,8 +131,14 @@ def entity_catalog(classification: Mapping[str, Any] | None) -> list[dict[str, A
     for apmid in apmids:
         for environment in environments:
             for role in ENTITY_ROLES:
+                try:
+                    key = build_entity_key(apmid, environment, role["id"])
+                except ValueError:
+                    # Legacy/free-form classification values that cannot be
+                    # represented safely in a dotted entity key are omitted.
+                    continue
                 items.append({
-                    "key": build_entity_key(apmid, environment, role["id"]),
+                    "key": key,
                     "apmid": apmid,
                     "environment": environment,
                     "role": role["id"],
