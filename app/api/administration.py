@@ -26,6 +26,7 @@ from app.providers.settings import platform_states, save_platform_enabled
 from app.database import get_db
 from app.models import Audit, PasswordReset, Role, Token, User, UserRole, now
 from app.rbac.service import ALL_PERMISSIONS, SYSTEM_ROLE_NAMES, ensure_admin_remains, governance_lock, permissions_from_names
+from app.access.legacy import sync_global_user_bindings
 from app.security.core import audit, digest, effective_permissions, issue_token, password_hasher, require, revoke_user
 from app.updates.service import UpdaterError, updater_request
 
@@ -436,6 +437,8 @@ def assign_roles(id: int, data: AssignRoles, request: Request, actor=Depends(req
     roles = [find(db, Role, rid) for rid in set(data.role_ids)]
     can_grant(db, request, actor, {p.name for r in [*roles, *u.roles] for p in r.permissions})
     u.roles = roles
+    db.flush()
+    sync_global_user_bindings(db, u.id, created_by=actor.user_id)
     ensure_admin_remains(db)
     audit(db, request, 'role.assigned', 'users', id)
     return {'items': [role_public(r) for r in roles]}
