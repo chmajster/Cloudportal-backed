@@ -8,7 +8,7 @@ from conftest import new_user
 def test_iam_role_field_uses_existing_searchable_select_contract():
     iam = Path('app/web/features/iam.js').read_text()
     shared = Path('app/web/shared/searchable-select.js').read_text()
-    styles = Path('app/web/styles/features/projects.css').read_text()
+    styles = Path('app/web/styles/features/identity.css').read_text()
 
     assert "api('/rbac/roles?limit=200')" in iam
     assert "searchableSelectField('Rola', 'role_id'" in iam
@@ -39,9 +39,11 @@ def test_iam_role_field_uses_existing_searchable_select_contract():
     assert "normalizeSearchText(choice.searchText).includes(query)" in shared
     assert "updateValidity();" in shared[shared.index("function clearSelection()"):shared.index("function setChoices(")]
 
+    assert "role.classList.add('iam-role-searchable-select')" in iam
+    assert ".iam-role-searchable-select .searchable-select-options" in styles
     assert "z-index: 130" in styles
     assert "max-height: min(240px, calc(100dvh - 96px))" in styles
-    assert ".searchable-select-option > span" in styles
+    assert ".iam-role-searchable-select .searchable-select-option > span" in styles
     assert "text-overflow: ellipsis" in styles
 
 
