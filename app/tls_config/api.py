@@ -11,7 +11,7 @@ router = APIRouter(prefix='/settings/tls', tags=['tls-settings'])
 
 class TLSCustomInput(BaseModel):
     certificate_pem: str = Field(min_length=64, max_length=65536)
-    private_key_pem: str = Field(min_length=64, max_length=32768)
+    private_key_pem: str = Field(min_length=64, max_length=32768, json_schema_extra={'writeOnly': True})
     hostname: str | None = Field(default=None, min_length=1, max_length=253)
 
 
