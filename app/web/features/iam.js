@@ -193,6 +193,7 @@ async function accessAssignmentForm(forcedUserId = null, assignment = null) {
     selectFirst: false,
     disableWhenEmpty: false,
   });
+  role.classList.add('iam-role-searchable-select');
   role.searchableSelect.setState('loading', 'Ładowanie ról…');
 
   const effect = selectField('Effect', 'effect', [
