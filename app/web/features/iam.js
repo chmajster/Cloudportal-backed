@@ -304,6 +304,8 @@ async function accessAssignmentForm(forcedUserId = null, assignment = null) {
       return;
     }
 
+    availableRoleIds = new Set();
+    role.searchableSelect.setChoices([], '');
     role.searchableSelect.setState('loading', 'Ładowanie ról…');
     try {
       const roles = [];
