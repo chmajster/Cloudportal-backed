@@ -18,6 +18,7 @@ def test_iam_role_field_uses_existing_searchable_select_contract():
     assert "placeholder: 'Wyszukaj rolę…'" in iam
     assert "emptyText: 'Brak pasujących ról'" in iam
     assert "role.searchableSelect.setState('loading', 'Ładowanie ról…')" in iam
+    assert "role.searchableSelect.setChoices([], '');\n    role.searchableSelect.setState('loading', 'Ładowanie ról…')" in iam
     assert "role.searchableSelect.setState('error', 'Nie udało się pobrać listy ról.')" in iam
     assert "console.error('Nie udało się pobrać listy ról IAM.'" in iam
     assert "value: item.id" in iam
