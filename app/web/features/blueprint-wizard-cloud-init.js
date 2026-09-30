@@ -47,6 +47,11 @@
         && !state.templateGuestCredentialId) {
       errors.guest_credential_id = 'Wybierz dane dostępowe SSH dla konta istniejącego w template.';
     }
+    if (state.guestAccountMode === 'cloud_init_managed'
+        && state.sshPassword
+        && state.sshPassword.length < 12) {
+      errors.cloud_init_ssh_password = 'Hasło SSH musi mieć co najmniej 12 znaków.';
+    }
     if (!state.advancedWorkflow) return errors;
     const seeds = state.workflow.filter(step => step.type === 'cloud_init');
     if (seeds.length !== 1 || Object.keys(seeds[0].conditions || {}).length || seeds[0].retry || seeds[0].rollback) {
