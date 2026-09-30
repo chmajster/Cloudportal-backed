@@ -333,6 +333,7 @@ _SCOPE_FIELDS = {
     "role_ids": "actor.role_ids",
     "roles": "actor.roles",
     "groups": "actor.groups",
+    "entities": "actor.entities",
     "actions": "request.action",
     "resource_types": "resource.type",
     "organization_ids": "scope.tenant_id",
@@ -372,7 +373,7 @@ def scope_matches(policy: Any, context: Mapping[str, Any], *, identity_only: boo
 
     scope = _policy_value(policy, "scope", {}) or {}
     identity_dimensions = {
-        "user_ids", "users", "role_ids", "roles", "groups", "actions", "resource_types",
+        "user_ids", "users", "role_ids", "roles", "groups", "entities", "actions", "resource_types",
         "organization_ids", "project_ids", "organizations", "organization_slugs",
         "projects", "project_slugs",
     }
