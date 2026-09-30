@@ -96,7 +96,7 @@
 }
 
 .tls-settings-warning {
-  border-color: var(--warning-border);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
   background: var(--warning-soft);
 }
 
