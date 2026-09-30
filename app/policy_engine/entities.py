@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from fnmatch import fnmatchcase
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 
@@ -181,6 +182,21 @@ def _actor_user_id(actor: Any) -> int | None:
     return None
 
 
+def _authorization_actor(actor: Any):
+    if getattr(actor, "user_id", None) is not None and getattr(actor, "user", None) is not None:
+        return actor
+    user_id = getattr(actor, "id", None)
+    if user_id is None:
+        return actor
+    return SimpleNamespace(
+        user_id=int(user_id),
+        user=actor,
+        id=None,
+        kind="simulation",
+        scopes=(),
+    )
+
+
 def actor_matches_entity(
     db,
     actor: Any,
@@ -206,6 +222,7 @@ def actor_matches_entity(
 
     from app.iam.service import authorize
 
+    authorization_actor = _authorization_actor(actor)
     scope = {
         "scope_type": "ENVIRONMENT",
         "scope_id": f'{parts["apmid"]}:{parts["environment"]}',
@@ -226,7 +243,7 @@ def actor_matches_entity(
     for permission in required:
         decision = authorize(
             db,
-            actor,
+            authorization_actor,
             permission,
             scope=scope,
             resource=target,
