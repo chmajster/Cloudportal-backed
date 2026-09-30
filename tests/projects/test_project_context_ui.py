@@ -57,7 +57,8 @@ def test_global_context_picker_uses_filterable_combobox():
     assert 'function searchableSelectField' in shared_source
     assert "type: 'search'" in shared_source
     assert "'aria-autocomplete': 'list'" in shared_source
-    assert 'normalizeSearchText(choice.label).includes(query)' in shared_source
+    assert 'normalizeSearchText(choice.searchText).includes(query)' in shared_source
+    assert 'searchText: String(choice.searchText ?? choice.label ?? choice.value)' in shared_source
     assert 'window.searchableSelectField = searchableSelectField' in shared_source
     assert 'function searchableSelectField' not in context_source
     assert 'function searchableSelectField' not in core_source
