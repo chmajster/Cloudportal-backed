@@ -819,6 +819,9 @@ class BlueprintDeployment(Input):
         json_schema_extra={'writeOnly': True},
     )
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None
+    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
+    select_apmid_on_execute: bool = False
+    select_environment_on_execute: bool = False
 
     @model_validator(mode='after')
     def manual_guest_password_contract(self):
@@ -831,9 +834,6 @@ class BlueprintDeployment(Input):
         if self.guest_credential_managed and self.guest_credential_id is None and self.guest_password is None:
             raise ValueError('Managed guest credential requires an existing credential id or a new password')
         return self
-    environment: Literal['test', 'dev', 'nonprod', 'prod'] | None = None
-    select_apmid_on_execute: bool = False
-    select_environment_on_execute: bool = False
 
 
 class BlueprintInput(Input):
