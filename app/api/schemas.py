@@ -1057,8 +1057,17 @@ class BlueprintInput(Input):
         return self
 
 
+class BlueprintVMParametersInput(Input):
+    cpu: int | None = Field(default=None, ge=1, le=128)
+    memory: int | None = Field(default=None, ge=512, le=1048576)
+    disk: int | None = Field(default=None, ge=1, le=65536)
+    storage: Slug | None = None
+    network: Slug | None = None
+
+
 class BlueprintExecuteInput(Input):
     variables: Annotated[dict[str, Any], Field(max_length=100)] = Field(default_factory=dict)
+    vm_parameters: BlueprintVMParametersInput | None = None
     availability_plan_id: Annotated[str | None, Field(min_length=36, max_length=36, pattern=r'^[0-9a-fA-F-]{36}$')] = None
     hostname_values: dict[str, Annotated[str, Field(min_length=1, max_length=63)]] = Field(default_factory=dict)
     apmid: Annotated[str | None, Field(max_length=63, pattern=r'^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$')] = None

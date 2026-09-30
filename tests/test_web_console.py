@@ -412,6 +412,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "item.lifecycle_status !== 'destroyed'" in script
     assert "Wdrożenia i operacje" in script
     assert 'Brak gotowych Blueprintów.' in script
+    assert "/execution-options" in script
+    assert "Parametry VM" in script
+    assert "Domyślnie z Blueprintu:" in script
+    assert "payload.vm_parameters = vmParameters" in script
     assert '.product-grid' in stylesheet
     assert '.product-card' in stylesheet
     assert '.product-card-icon img' in stylesheet

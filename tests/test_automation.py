@@ -156,6 +156,124 @@ def test_direct_proxmox_blueprint_execute_queues_provider_job_without_terraform(
     ]
 
 
+def test_blueprint_execute_allows_one_off_vm_parameter_overrides(client, headers):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'runtime-vm-parameters',
+        'name': 'Runtime VM parameters',
+        'deployment': {
+            'name': 'runtime-vm-parameters',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'runtime-vm-parameters',
+                'cpu': 2,
+                'memory': 4096,
+                'disk': 40,
+                'storage': 'local-lvm',
+                'network': 'vmbr0',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+    blueprint_id = created.json()['id']
+
+    execution = client.post(
+        f'/api/v1/blueprints/{blueprint_id}/execute',
+        headers=key(headers),
+        json={
+            'vm_parameters': {
+                'cpu': 6,
+                'memory': 12288,
+                'disk': 120,
+                'storage': 'ceph-vm',
+                'network': 'vmbr30',
+            },
+        },
+    )
+    assert execution.status_code == 202, execution.text
+    variables = execution.json()['variables']
+    assert variables['cpu'] == 6
+    assert variables['memory'] == 12288
+    assert variables['disk'] == 120
+    assert variables['storage'] == 'ceph-vm'
+    assert variables['network'] == 'vmbr30'
+
+    persisted = client.get(f'/api/v1/blueprints/{blueprint_id}', headers=headers)
+    assert persisted.status_code == 200, persisted.text
+    defaults = persisted.json()['deployment']['variables']
+    assert defaults['cpu'] == 2
+    assert defaults['memory'] == 4096
+    assert defaults['disk'] == 40
+    assert defaults['storage'] == 'local-lvm'
+    assert defaults['network'] == 'vmbr0'
+
+
+def test_blueprint_execution_options_return_defaults_and_live_choices(client, headers, monkeypatch):
+    credential, provider, deployment_payload = resources(client, headers)
+    created = client.post('/api/v1/blueprints', headers=headers, json={
+        'slug': 'runtime-vm-options',
+        'name': 'Runtime VM options',
+        'deployment': {
+            'name': 'runtime-vm-options',
+            'provider_id': provider['id'],
+            'credentials_id': credential['id'],
+            'template': 'proxmox-vm',
+            'variables': {
+                **deployment_payload['variables'],
+                'name': 'runtime-vm-options',
+                'cpu': 4,
+                'memory': 8192,
+                'disk': 80,
+                'storage': 'local-lvm',
+                'network': 'vmbr20',
+            },
+        },
+        'workflow': [{'id': 'apply', 'type': 'terraform_apply'}],
+    })
+    assert created.status_code == 201, created.text
+
+    class Adapter:
+        def discover(self, resource, node=None):
+            assert node == 'pve'
+            if resource == 'storages':
+                return [
+                    {'storage': 'local-lvm', 'content': 'images,rootdir', 'disable': 0},
+                    {'storage': 'ceph-vm', 'content': ['images'], 'disable': 0},
+                    {'storage': 'iso-only', 'content': 'iso', 'disable': 0},
+                    {'storage': 'disabled-vm', 'content': 'images', 'disable': 1},
+                ]
+            if resource == 'networks':
+                return [
+                    {'iface': 'vmbr20'},
+                    {'iface': 'vmbr30'},
+                ]
+            raise AssertionError(resource)
+
+    monkeypatch.setattr('app.api.automation.provider_for', lambda credential: Adapter())
+    response = client.get(
+        f"/api/v1/blueprints/{created.json()['id']}/execution-options",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    vm = response.json()['vm_parameters']
+    assert vm['enabled'] is True
+    assert vm['defaults'] == {
+        'cpu': 4,
+        'memory': 8192,
+        'disk': 80,
+        'storage': 'local-lvm',
+        'network': 'vmbr20',
+    }
+    assert vm['storages'] == ['ceph-vm', 'local-lvm']
+    assert vm['networks'] == ['vmbr20', 'vmbr30']
+    assert vm['inventory_available'] is True
+    assert vm['limits']['cpu'] == {'min': 1, 'max': 128}
+
+
 def test_blueprint_bundle_creates_hostname_scheme_atomically(client, headers):
     credential, provider, deployment_payload = resources(client, headers)
     blueprint = {
