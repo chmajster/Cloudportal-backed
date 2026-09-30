@@ -21,7 +21,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
         "anchors": ("blueprints.read",),
         "actions": ("blueprints.read",),
         "permission_patterns": (
-            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "*.read", "*.read.*", "*.read_all", "*.view", "audit.read", "metrics.read",
             "projects.select", "projects.use", "credentials.read_metadata",
             "authorization.explain", "policies.audit",
         ),
@@ -34,7 +34,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
         "anchors": ("blueprints.execute",),
         "actions": ("blueprints.read", "blueprints.execute"),
         "permission_patterns": (
-            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "*.read", "*.read.*", "*.read_all", "*.view", "audit.read", "metrics.read",
             "projects.select", "projects.use", "credentials.read_metadata",
             "credentials.use", "authorization.explain", "policies.audit",
             "blueprints.execute", "jobs.execute", "jobs.cancel", "jobs.retry",
@@ -52,7 +52,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
         "anchors": ("blueprints.execute", "deployments.create"),
         "actions": ("blueprints.read", "blueprints.execute", "blueprints.clone"),
         "permission_patterns": (
-            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "*.read", "*.read.*", "*.read_all", "*.view", "audit.read", "metrics.read",
             "projects.select", "projects.use", "credentials.read_metadata",
             "credentials.use", "authorization.explain", "policies.audit",
             "blueprints.execute", "blueprints.clone", "deployments.create",
@@ -76,7 +76,7 @@ ENTITY_ROLES: tuple[dict[str, Any], ...] = (
             "blueprints.update", "blueprints.publish", "blueprints.approve",
         ),
         "permission_patterns": (
-            "*.read", "*.read.*", "*.view", "audit.read", "metrics.read",
+            "*.read", "*.read.*", "*.read_all", "*.view", "audit.read", "metrics.read",
             "projects.select", "projects.use", "credentials.read_metadata",
             "credentials.use", "authorization.explain", "policies.audit",
             "blueprints.execute", "blueprints.clone", "blueprints.update",
