@@ -196,16 +196,15 @@ def access_subjects(
     if kind == 'GROUP':
         query = select(Group).where(Group.enabled.is_(True))
         if organization_id and not admin:
-            project_ids = select(Project.id).where(Project.tenant_id == str(organization_id))
-            query = query.where(or_(
+            project_ids = list(db.scalars(
+                select(Project.id).where(Project.tenant_id == str(organization_id))
+            ))
+            clauses = [
                 Group.system_key.like(f'org:{organization_id}:%'),
                 Group.system_key.like(f'apmid:{organization_id}:%'),
-                Group.system_key.in_(
-                    select(Group.system_key).where(or_(
-                        *[Group.system_key.like(f'project:{pid}:%') for pid in db.scalars(project_ids).all()]
-                    )) if list(db.scalars(project_ids).all()) else select(Group.system_key).where(False)
-                ),
-            ))
+            ]
+            clauses.extend(Group.system_key.like(f'project:{project_id}:%') for project_id in project_ids)
+            query = query.where(or_(*clauses))
         elif not organization_id and not admin:
             query = query.where(False)
         total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
