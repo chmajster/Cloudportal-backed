@@ -4,6 +4,7 @@
 (() => {
   let currentScope = null;
   let currentEntityKey = null;
+  let currentEntityPermissions = null;
   let currentVersion = 0;
   let revokedSelection = false;
   let directory = { tenants: [], projects: [] };
@@ -114,6 +115,7 @@
       const current = await api('/project-context');
       currentScope = current.selected || null;
       currentEntityKey = current.entity_key || null;
+      currentEntityPermissions = Array.isArray(current.entity_permissions) ? new Set(current.entity_permissions) : null;
       currentVersion = Number(current.version || 0);
       revokedSelection = false;
       renderTopbarContext(current);
@@ -122,6 +124,7 @@
       if (error.status !== 404) throw error;
       currentScope = null;
       currentEntityKey = null;
+      currentEntityPermissions = null;
       currentVersion = 0;
       revokedSelection = true;
       renderTopbarContext(null, true);
@@ -149,6 +152,7 @@
     if (!valid()) return null;
     currentScope = result.selected || null;
     currentEntityKey = result.entity_key || null;
+    currentEntityPermissions = Array.isArray(result.entity_permissions) ? new Set(result.entity_permissions) : null;
     currentVersion = Number(result.version || 0);
     revokedSelection = false;
     renderTopbarContext(result);
@@ -172,6 +176,7 @@
     if (!valid()) return null;
     currentScope = null;
     currentEntityKey = null;
+    currentEntityPermissions = null;
     currentVersion = Number(result.version || 0);
     revokedSelection = false;
     renderTopbarContext(result);
@@ -208,6 +213,7 @@
       if (valid()) {
         currentScope = null;
         currentEntityKey = null;
+        currentEntityPermissions = null;
         currentVersion = revoked ? 0 : Number(current.version || 0) + 1;
         revokedSelection = false;
         renderTopbarContext(cleared);
@@ -417,6 +423,7 @@
       if (generation !== shellGeneration) return;
       currentScope = null;
       currentEntityKey = null;
+      currentEntityPermissions = null;
       revokedSelection = false;
       renderTopbarContext(null);
       renderShell();
@@ -431,6 +438,7 @@
       panel,
       headers: scopeHeaders,
       current: scopeSnapshot,
+      allows: permission => !currentEntityPermissions || currentEntityPermissions.has(String(permission)),
       refresh: initializeShell,
       open: openPicker,
     });
@@ -440,6 +448,7 @@
         shellGeneration++;
         currentScope = null;
         currentEntityKey = null;
+        currentEntityPermissions = null;
         currentVersion = 0;
         revokedSelection = false;
         renderTopbarContext(null);
