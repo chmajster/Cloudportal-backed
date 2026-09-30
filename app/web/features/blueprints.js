@@ -253,6 +253,99 @@ async function blueprintsView() {
   );
 }
 
+function blueprintRuntimeVmDefaults(item) {
+  const variables = item?.deployment?.variables || {};
+  const defaults = {};
+  for (const name of ['cpu', 'memory', 'disk']) {
+    const value = variables[name];
+    if (typeof value === 'string' && /{{\s*[^}]+\s*}}/.test(value)) continue;
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) defaults[name] = number;
+  }
+  for (const name of ['storage', 'network']) {
+    const value = variables[name];
+    if (typeof value !== 'string' || /{{\s*[^}]+\s*}}/.test(value)) continue;
+    if (value.trim()) defaults[name] = value.trim();
+  }
+  return defaults;
+}
+
+function blueprintRuntimeVmParameterSection(item, options = {}) {
+  const defaults = {
+    ...blueprintRuntimeVmDefaults(item),
+    ...(options.defaults || {}),
+  };
+  if (!Object.keys(defaults).length) return null;
+
+  const limits = options.limits || {};
+  const controls = [];
+  const numberField = (label, name, key, fallbackMin, fallbackMax) => {
+    if (defaults[key] === undefined) return;
+    controls.push(field(label, name, {
+      type: 'number',
+      value: defaults[key],
+      min: limits[key]?.min ?? fallbackMin,
+      max: limits[key]?.max ?? fallbackMax,
+      required: true,
+      help: 'Domyślnie z Blueprintu: ' + defaults[key] + '.',
+    }));
+  };
+  numberField('CPU (vCPU)', 'vm_parameter_cpu', 'cpu', 1, 128);
+  numberField('RAM (MiB)', 'vm_parameter_memory', 'memory', 512, 1048576);
+  numberField('Dysk (GiB)', 'vm_parameter_disk', 'disk', 1, 65536);
+
+  const selectable = (label, name, key, values) => {
+    if (defaults[key] === undefined) return;
+    const choices = [...new Set([defaults[key], ...(values || [])].filter(Boolean))];
+    if (choices.length > 1 || options.inventory_available) {
+      controls.push(selectField(label, name, choices.map(value => ({
+        value,
+        label: value,
+      })), defaults[key], {
+        required: true,
+        help: 'Domyślnie z Blueprintu: ' + defaults[key] + '.',
+      }));
+      return;
+    }
+    controls.push(field(label, name, {
+      value: defaults[key],
+      required: true,
+      help: 'Domyślnie z Blueprintu: ' + defaults[key] + '.',
+    }));
+  };
+  selectable('Storage', 'vm_parameter_storage', 'storage', options.storages);
+  selectable('Sieć / bridge', 'vm_parameter_network', 'network', options.networks);
+
+  if (!controls.length) return null;
+  return formSection(
+    'Parametry VM',
+    'To są domyślne parametry zapisane w Blueprintcie. Możesz zmienić je dla tej jednej VM; Blueprint nie zostanie zmodyfikowany.',
+    ...controls,
+  );
+}
+
+function readBlueprintRuntimeVmParameters(form) {
+  const result = {};
+  const numeric = {
+    cpu: 'vm_parameter_cpu',
+    memory: 'vm_parameter_memory',
+    disk: 'vm_parameter_disk',
+  };
+  for (const [key, name] of Object.entries(numeric)) {
+    const control = form.elements[name];
+    if (control && control.value !== '') result[key] = Number(control.value);
+  }
+  const strings = {
+    storage: 'vm_parameter_storage',
+    network: 'vm_parameter_network',
+  };
+  for (const [key, name] of Object.entries(strings)) {
+    const value = String(form.elements[name]?.value || '').trim();
+    if (value) result[key] = value;
+  }
+  return result;
+}
+
 async function executeBlueprint(item, scope = null) {
   const scopeHeaders = scope ? {
     'X-Tenant-ID': String(scope.tenant_id),
@@ -262,6 +355,15 @@ async function executeBlueprint(item, scope = null) {
     allowed(permission) || (scope?.permissions || []).includes(permission);
   try {
     const fields = node('div', { class: 'form-grid' });
+    const executionOptions = await api(`/blueprints/${item.id}/execution-options`, {
+      headers: scopeHeaders,
+    }).catch(() => ({ vm_parameters: { defaults: blueprintRuntimeVmDefaults(item) } }));
+    const vmParameterSection = blueprintRuntimeVmParameterSection(
+      item,
+      executionOptions?.vm_parameters || {}
+    );
+    if (vmParameterSection) fields.append(vmParameterSection);
+
     const apmidContext = await window.BlueprintRuntimeApmid.prepare(item, fields, scopeHeaders);
 
     for (const [name, definition] of Object.entries(item.variables_schema || {})) {
@@ -352,6 +454,8 @@ async function executeBlueprint(item, scope = null) {
           variables,
           hostname_values: window.BlueprintRuntimeApmid.readHostnameValues(form),
         };
+        const vmParameters = readBlueprintRuntimeVmParameters(form);
+        if (Object.keys(vmParameters).length) payload.vm_parameters = vmParameters;
         const runtimeClassification = window.BlueprintRuntimeApmid.read(form, apmidContext);
         if (apmidContext?.apmidSelectable && !runtimeClassification.apmid) {
           throw new Error('Wybierz APMID przed utworzeniem VM.');
