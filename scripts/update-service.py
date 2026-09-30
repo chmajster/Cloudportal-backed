@@ -53,7 +53,7 @@ PROGRESS_RE = re.compile(r"^::cloudportal-progress::(\d{1,3})::([^:]+)::(.*)$")
 SECRET_RE = re.compile(
     r"(?i)(authorization|token|password|secret|master[_ -]?key)(\s*[:=]\s*)(\S+)"
 )
-MAX_BODY = 16 * 1024
+MAX_BODY = 128 * 1024
 MAX_OUTPUT = 160
 MAX_EVENTS = 120
 MAX_CANDIDATE_ARCHIVE = 128 * 1024 * 1024
@@ -1401,6 +1401,609 @@ def parse_kv(path: Path) -> dict:
     return result
 
 
+
+LETSENCRYPT_LIVE_DIR = Path(os.environ.get("CP_LETSENCRYPT_LIVE_DIR", "/etc/letsencrypt/live"))
+CERTBOT_DEPLOY_HOOK = Path(
+    os.environ.get(
+        "CP_CERTBOT_DEPLOY_HOOK",
+        "/etc/letsencrypt/renewal-hooks/deploy/cloudportal-backed",
+    )
+)
+NGINX_SYSTEMD_CONF = Path(
+    os.environ.get("CP_NGINX_CONFIG_FILE", "/etc/nginx/conf.d/cloudportal-backed.conf")
+)
+
+
+def _tls_directory() -> Path:
+    return CONFIG_DIR / "tls"
+
+
+def _tls_source_marker() -> Path:
+    name = "source" if INSTALL_MODE == "docker" else "certificate-source"
+    return _tls_directory() / name
+
+
+def _tls_metadata_path() -> Path:
+    return _tls_directory() / "cloudportal-source.json"
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _public_endpoint() -> tuple[str, str]:
+    if INSTALL_MODE == "docker":
+        values = parse_kv(CONFIG_DIR / "docker.env")
+        host = str(values.get("CP_PUBLIC_HOST") or "").strip()
+        port = str(values.get("CP_HTTPS_PORT") or "").strip()
+    else:
+        values = parse_kv(CONFIG_DIR / "public.conf")
+        host = str(values.get("host") or "").strip()
+        port = str(values.get("port") or "").strip()
+    if not host or not port:
+        raise RuntimeError("Brak zapisanej konfiguracji publicznego hosta/portu")
+    return host, port
+
+
+def _valid_tls_hostname(value: str) -> str:
+    value = str(value or "").strip().rstrip(".")
+    if (
+        not value
+        or len(value) > 253
+        or "/" in value
+        or "\\" in value
+        or ".." in value
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,251}[A-Za-z0-9]|[A-Za-z0-9]", value)
+    ):
+        raise ValueError("Nieprawidłowy publiczny hostname TLS")
+    return value
+
+
+def _run_tls_command(
+    command: list[str],
+    *,
+    input_data: bytes | None = None,
+    timeout: int = 20,
+) -> bytes:
+    try:
+        result = subprocess.run(
+            command,
+            input=input_data,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Walidacja TLS przekroczyła limit czasu") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise ValueError(detail or "Walidacja TLS nie powiodła się")
+    return result.stdout
+
+
+def _certificate_matches_hostname(cert: Path, hostname: str) -> bool:
+    openssl = shutil.which("openssl") or "openssl"
+    option = "-checkip" if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", hostname) else "-checkhost"
+    result = subprocess.run(
+        [openssl, "x509", "-in", str(cert), "-noout", option, hostname],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=15,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _certificate_key_matches(cert: Path, key: Path) -> bool:
+    openssl = shutil.which("openssl") or "openssl"
+    try:
+        cert_pem = _run_tls_command(
+            [openssl, "x509", "-in", str(cert), "-pubkey", "-noout"],
+        )
+        cert_der = _run_tls_command(
+            [openssl, "pkey", "-pubin", "-outform", "DER"],
+            input_data=cert_pem,
+        )
+        key_der = _run_tls_command(
+            [openssl, "pkey", "-in", str(key), "-pubout", "-outform", "DER"],
+        )
+    except (ValueError, RuntimeError):
+        return False
+    return bool(cert_der and cert_der == key_der)
+
+
+def _certificate_details(cert: Path, hostname: str | None = None) -> dict:
+    if not cert.is_file():
+        return {"present": False}
+    openssl = shutil.which("openssl") or "openssl"
+    try:
+        raw = _run_tls_command(
+            [
+                openssl,
+                "x509",
+                "-in",
+                str(cert),
+                "-noout",
+                "-subject",
+                "-issuer",
+                "-serial",
+                "-startdate",
+                "-enddate",
+                "-ext",
+                "subjectAltName",
+            ]
+        ).decode("utf-8", "replace")
+    except (ValueError, RuntimeError) as exc:
+        return {"present": True, "valid": False, "error": str(exc)}
+
+    values = {}
+    for line in raw.splitlines():
+        for key, prefix in (
+            ("subject", "subject="),
+            ("issuer", "issuer="),
+            ("serial", "serial="),
+            ("not_before", "notBefore="),
+            ("not_after", "notAfter="),
+        ):
+            if line.startswith(prefix):
+                values[key] = line[len(prefix):].strip()
+    dns_names = re.findall(r"DNS:([^,\s]+)", raw)
+    ip_addresses = re.findall(r"IP Address:([^,\s]+)", raw)
+    valid_now = subprocess.run(
+        [openssl, "x509", "-in", str(cert), "-noout", "-checkend", "0"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+    expires_soon = subprocess.run(
+        [openssl, "x509", "-in", str(cert), "-noout", "-checkend", str(30 * 86400)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode != 0
+    return {
+        "present": True,
+        "valid": valid_now,
+        "expires_within_30_days": expires_soon,
+        "matches_hostname": _certificate_matches_hostname(cert, hostname) if hostname else None,
+        "dns_names": dns_names,
+        "ip_addresses": ip_addresses,
+        **values,
+    }
+
+
+def _validate_tls_pair(cert: Path, key: Path, hostname: str) -> dict:
+    openssl = shutil.which("openssl") or "openssl"
+    _run_tls_command([openssl, "x509", "-in", str(cert), "-noout"])
+    _run_tls_command([openssl, "pkey", "-in", str(key), "-noout"])
+    if not _certificate_key_matches(cert, key):
+        raise ValueError("Certyfikat TLS i klucz prywatny nie pasują do siebie")
+    if subprocess.run(
+        [openssl, "x509", "-in", str(cert), "-noout", "-checkend", "300"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode != 0:
+        raise ValueError("Certyfikat TLS jest nieważny albo wygasa w ciągu 5 minut")
+    if not _certificate_matches_hostname(cert, hostname):
+        raise ValueError(f"Certyfikat TLS nie obejmuje hosta {hostname}")
+    return _certificate_details(cert, hostname)
+
+
+def _atomic_bytes(path: Path, value: bytes, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    try:
+        tmp.write_bytes(value)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _atomic_text(path: Path, value: str, mode: int = 0o600) -> None:
+    _atomic_bytes(path, value.encode("utf-8"), mode)
+
+
+def _snapshot_paths(paths: list[Path]) -> dict[Path, tuple[bytes | None, int]]:
+    snapshot = {}
+    for path in paths:
+        try:
+            snapshot[path] = (path.read_bytes(), path.stat().st_mode & 0o777)
+        except FileNotFoundError:
+            snapshot[path] = (None, 0o600)
+    return snapshot
+
+
+def _restore_paths(snapshot: dict[Path, tuple[bytes | None, int]]) -> None:
+    for path, (content, mode) in snapshot.items():
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            _atomic_bytes(path, content, mode)
+
+
+def _set_kv_value(path: Path, key: str, value: str) -> None:
+    original = path.read_text(encoding="utf-8")
+    mode = path.stat().st_mode & 0o777
+    prefix = key + "="
+    lines = []
+    replaced = False
+    for line in original.splitlines():
+        if line.startswith(prefix):
+            if not replaced:
+                lines.append(prefix + value)
+                replaced = True
+            continue
+        lines.append(line)
+    if not replaced:
+        lines.append(prefix + value)
+    _atomic_text(path, "\n".join(lines) + "\n", mode)
+
+
+def _set_public_hostname(hostname: str) -> None:
+    hostname = _valid_tls_hostname(hostname)
+    if INSTALL_MODE == "docker":
+        path = CONFIG_DIR / "docker.env"
+        if not path.is_file():
+            raise RuntimeError("Brak docker.env")
+        _set_kv_value(path, "CP_PUBLIC_HOST", hostname)
+        return
+
+    public = CONFIG_DIR / "public.conf"
+    backend = CONFIG_DIR / "backend.env"
+    if not public.is_file() or not backend.is_file():
+        raise RuntimeError("Brak konfiguracji public.conf/backend.env")
+    _set_kv_value(public, "host", hostname)
+    _set_kv_value(backend, "CP_PUBLIC_HOST", hostname)
+    if NGINX_SYSTEMD_CONF.is_file():
+        original = NGINX_SYSTEMD_CONF.read_text(encoding="utf-8")
+        updated, count = re.subn(
+            r"(?m)^(\s*server_name\s+)[^;]+;",
+            lambda match: match.group(1) + hostname + ";",
+            original,
+            count=1,
+        )
+        if count:
+            _atomic_text(
+                NGINX_SYSTEMD_CONF,
+                updated,
+                NGINX_SYSTEMD_CONF.stat().st_mode & 0o777,
+            )
+
+
+def _validate_proxy_tls() -> None:
+    if INSTALL_MODE == "docker":
+        _run_worker_command(
+            _docker_compose_base() + ["exec", "-T", "proxy", "nginx", "-t"],
+            "walidacja konfiguracji Nginx Docker",
+            timeout=60,
+        )
+        return
+    nginx = shutil.which("nginx") or "nginx"
+    _run_worker_command([nginx, "-t"], "walidacja konfiguracji Nginx", timeout=60)
+
+
+def _reload_proxy_tls() -> None:
+    if INSTALL_MODE == "docker":
+        _run_worker_command(
+            _docker_compose_base() + ["kill", "-s", "HUP", "proxy"],
+            "przeładowanie TLS Nginx Docker",
+            timeout=60,
+        )
+        return
+    systemctl = shutil.which("systemctl") or "systemctl"
+    _run_worker_command(
+        [systemctl, "reload", "nginx"],
+        "przeładowanie TLS Nginx",
+        timeout=60,
+    )
+
+
+def _write_certbot_hook(enabled: bool) -> None:
+    if not enabled:
+        CERTBOT_DEPLOY_HOOK.unlink(missing_ok=True)
+        return
+    token_file = CONFIG_DIR / "updater.token"
+    if SOCKET_PATH:
+        curl_target = (
+            f'curl --fail --silent --show-error --unix-socket "{SOCKET_PATH}" '
+            '-H "X-Updater-Token: $TOKEN" -H "Content-Type: application/json" '
+            "-d '{}' http://localhost/tls/sync >/dev/null"
+        )
+    else:
+        curl_target = (
+            f'curl --fail --silent --show-error '
+            '-H "X-Updater-Token: $TOKEN" -H "Content-Type: application/json" '
+            f"-d '{{}}' http://127.0.0.1:{PORT}/tls/sync >/dev/null"
+        )
+    script = (
+        "#!/bin/sh\n"
+        "set -eu\n"
+        f'TOKEN_FILE="{token_file}"\n'
+        'TOKEN=$(cat "$TOKEN_FILE")\n'
+        + curl_target
+        + "\n"
+    )
+    CERTBOT_DEPLOY_HOOK.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_text(CERTBOT_DEPLOY_HOOK, script, 0o700)
+
+
+def _tls_status_payload() -> dict:
+    host, port = _public_endpoint()
+    tls_dir = _tls_directory()
+    cert = tls_dir / "server.crt"
+    key = tls_dir / "server.key"
+    metadata = _read_json(_tls_metadata_path())
+    source = ""
+    try:
+        source = _tls_source_marker().read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    details = _certificate_details(cert, host)
+    return {
+        "install_mode": INSTALL_MODE,
+        "hostname": host,
+        "port": int(port),
+        "url": f"https://{host}:{port}/ui/",
+        "source": metadata.get("type") or source or "unknown",
+        "source_path": metadata.get("path"),
+        "certificate": details,
+        "key_present": key.is_file(),
+        "renewal_hook_installed": CERTBOT_DEPLOY_HOOK.is_file(),
+        "letsencrypt_live_dir": str(LETSENCRYPT_LIVE_DIR),
+    }
+
+
+def _letsencrypt_lineage_path(lineage: str) -> Path:
+    lineage = str(lineage or "").strip()
+    if (
+        not lineage
+        or len(lineage) > 253
+        or lineage in {".", ".."}
+        or "/" in lineage
+        or "\\" in lineage
+        or not re.fullmatch(r"[A-Za-z0-9*_.-]+", lineage)
+    ):
+        raise ValueError("Nieprawidłowa nazwa certyfikatu Let's Encrypt")
+    return LETSENCRYPT_LIVE_DIR / lineage
+
+
+def letsencrypt_candidates() -> dict:
+    host, _ = _public_endpoint()
+    items = []
+    try:
+        entries = sorted(LETSENCRYPT_LIVE_DIR.iterdir(), key=lambda path: path.name.lower())
+    except OSError:
+        entries = []
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        cert = entry / "fullchain.pem"
+        key = entry / "privkey.pem"
+        if not cert.is_file() or not key.is_file():
+            continue
+        details = _certificate_details(cert, host)
+        items.append({
+            "lineage": entry.name,
+            "path": str(entry),
+            "certificate_path": str(cert),
+            "private_key_path": str(key),
+            "certificate": details,
+            "usable": bool(details.get("valid")),
+        })
+    return {
+        "live_dir": str(LETSENCRYPT_LIVE_DIR),
+        "hostname": host,
+        "items": items,
+    }
+
+
+def _activate_tls_material(
+    cert_bytes: bytes,
+    key_bytes: bytes,
+    *,
+    hostname: str,
+    source_type: str,
+    source_path: str | None = None,
+    configure_renewal_hook: bool = False,
+) -> dict:
+    hostname = _valid_tls_hostname(hostname)
+    tls_dir = _tls_directory()
+    tls_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(tls_dir, 0o700)
+    except OSError:
+        pass
+
+    stage = Path(tempfile.mkdtemp(prefix=".tls-stage-", dir=str(tls_dir)))
+    stage_cert = stage / "server.crt"
+    stage_key = stage / "server.key"
+    try:
+        stage_cert.write_bytes(cert_bytes)
+        stage_key.write_bytes(key_bytes)
+        os.chmod(stage_cert, 0o600)
+        os.chmod(stage_key, 0o600)
+        _validate_tls_pair(stage_cert, stage_key, hostname)
+
+        config_paths = [
+            tls_dir / "server.crt",
+            tls_dir / "server.key",
+            _tls_source_marker(),
+            tls_dir / "host",
+            _tls_metadata_path(),
+        ]
+        if INSTALL_MODE == "docker":
+            config_paths.append(CONFIG_DIR / "docker.env")
+        else:
+            config_paths.extend(
+                [CONFIG_DIR / "public.conf", CONFIG_DIR / "backend.env", NGINX_SYSTEMD_CONF]
+            )
+        snapshot = _snapshot_paths(config_paths)
+
+        try:
+            _atomic_bytes(tls_dir / "server.crt", stage_cert.read_bytes(), 0o600)
+            _atomic_bytes(tls_dir / "server.key", stage_key.read_bytes(), 0o600)
+            marker_value = "managed-self-signed" if source_type == "managed-self-signed" else "custom"
+            _atomic_text(_tls_source_marker(), marker_value + "\n", 0o600)
+            _atomic_text(tls_dir / "host", hostname + "\n", 0o600)
+            atomic_json(
+                _tls_metadata_path(),
+                {
+                    "type": source_type,
+                    "path": source_path,
+                    "hostname": hostname,
+                    "updated_at": utcnow(),
+                },
+            )
+            _set_public_hostname(hostname)
+            _validate_proxy_tls()
+            _reload_proxy_tls()
+        except Exception:
+            _restore_paths(snapshot)
+            try:
+                _validate_proxy_tls()
+                _reload_proxy_tls()
+            except Exception:
+                pass
+            raise
+
+        _write_certbot_hook(configure_renewal_hook)
+        result = _tls_status_payload()
+        result["changed"] = True
+        return result
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def apply_custom_tls(payload: dict) -> dict:
+    certificate = payload.get("certificate_pem")
+    private_key = payload.get("private_key_pem")
+    if not isinstance(certificate, str) or "BEGIN CERTIFICATE" not in certificate:
+        raise ValueError("certificate_pem musi zawierać certyfikat PEM")
+    if not isinstance(private_key, str) or "PRIVATE KEY" not in private_key:
+        raise ValueError("private_key_pem musi zawierać klucz prywatny PEM")
+    current_host, _ = _public_endpoint()
+    hostname = _valid_tls_hostname(payload.get("hostname") or current_host)
+    return _activate_tls_material(
+        certificate.encode("utf-8"),
+        private_key.encode("utf-8"),
+        hostname=hostname,
+        source_type="custom",
+    )
+
+
+def apply_letsencrypt_tls(payload: dict) -> dict:
+    lineage = str(payload.get("lineage") or "").strip()
+    source = _letsencrypt_lineage_path(lineage)
+    cert = source / "fullchain.pem"
+    key = source / "privkey.pem"
+    if not cert.is_file() or not key.is_file():
+        raise ValueError(f"Brak fullchain.pem/privkey.pem w {source}")
+
+    current_host, _ = _public_endpoint()
+    details = _certificate_details(cert, current_host)
+    requested_hostname = payload.get("hostname")
+    if requested_hostname:
+        hostname = _valid_tls_hostname(requested_hostname)
+    elif details.get("matches_hostname"):
+        hostname = current_host
+    else:
+        dns_names = [
+            value for value in (details.get("dns_names") or [])
+            if value and not value.startswith("*.")
+        ]
+        if not dns_names:
+            raise ValueError(
+                "Certyfikat nie obejmuje bieżącego hosta; podaj hostname objęty certyfikatem"
+            )
+        hostname = _valid_tls_hostname(dns_names[0])
+
+    return _activate_tls_material(
+        cert.read_bytes(),
+        key.read_bytes(),
+        hostname=hostname,
+        source_type="letsencrypt",
+        source_path=str(source),
+        configure_renewal_hook=True,
+    )
+
+
+def apply_self_signed_tls(payload: dict) -> dict:
+    current_host, _ = _public_endpoint()
+    hostname = _valid_tls_hostname(payload.get("hostname") or current_host)
+    tls_dir = _tls_directory()
+    tls_dir.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".self-signed-", dir=str(tls_dir)))
+    cert = stage / "server.crt"
+    key = stage / "server.key"
+    openssl = shutil.which("openssl") or "openssl"
+    san = f"IP:{hostname}" if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", hostname) else f"DNS:{hostname}"
+    try:
+        _run_tls_command(
+            [
+                openssl,
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:3072",
+                "-sha256",
+                "-nodes",
+                "-days",
+                "365",
+                "-keyout",
+                str(key),
+                "-out",
+                str(cert),
+                "-subj",
+                f"/CN={hostname}",
+                "-addext",
+                f"subjectAltName={san}",
+            ],
+            timeout=30,
+        )
+        return _activate_tls_material(
+            cert.read_bytes(),
+            key.read_bytes(),
+            hostname=hostname,
+            source_type="managed-self-signed",
+        )
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def sync_letsencrypt_tls() -> dict:
+    metadata = _read_json(_tls_metadata_path())
+    if metadata.get("type") != "letsencrypt":
+        raise ValueError("Aktywny TLS nie korzysta z Let's Encrypt")
+    source_value = str(metadata.get("path") or "")
+    source = Path(source_value)
+    try:
+        relative = source.relative_to(LETSENCRYPT_LIVE_DIR)
+    except ValueError as exc:
+        raise ValueError("Zapisane źródło Let's Encrypt jest poza katalogiem live") from exc
+    if len(relative.parts) != 1:
+        raise ValueError("Nieprawidłowe zapisane źródło Let's Encrypt")
+    cert = source / "fullchain.pem"
+    key = source / "privkey.pem"
+    if not cert.is_file() or not key.is_file():
+        raise ValueError("Źródło Let's Encrypt nie zawiera fullchain.pem/privkey.pem")
+    hostname = _valid_tls_hostname(str(metadata.get("hostname") or _public_endpoint()[0]))
+    return _activate_tls_material(
+        cert.read_bytes(),
+        key.read_bytes(),
+        hostname=hostname,
+        source_type="letsencrypt",
+        source_path=str(source),
+        configure_renewal_hook=True,
+    )
+
+
 def installer_args(ref: str) -> list[str]:
     settings = load_settings()
     if INSTALL_MODE == "docker":
@@ -2094,6 +2697,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(HTTPStatus.OK, public_settings())
             return
+        if path == "/tls/status":
+            if not control_authorized(self.headers):
+                self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "Unauthorized"})
+                return
+            self.send_json(HTTPStatus.OK, _tls_status_payload())
+            return
+        if path == "/tls/letsencrypt":
+            if not control_authorized(self.headers):
+                self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "Unauthorized"})
+                return
+            self.send_json(HTTPStatus.OK, letsencrypt_candidates())
+            return
         self.send_json(HTTPStatus.NOT_FOUND, {"detail": "Not found"})
 
     def do_POST(self):
@@ -2141,6 +2756,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/settings":
                 self.send_json(HTTPStatus.OK, update_settings(payload))
+                return
+            if path == "/tls/custom":
+                self.send_json(HTTPStatus.OK, apply_custom_tls(payload))
+                return
+            if path == "/tls/letsencrypt":
+                self.send_json(HTTPStatus.OK, apply_letsencrypt_tls(payload))
+                return
+            if path == "/tls/self-signed":
+                self.send_json(HTTPStatus.OK, apply_self_signed_tls(payload))
+                return
+            if path == "/tls/sync":
+                self.send_json(HTTPStatus.OK, sync_letsencrypt_tls())
                 return
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"detail": str(exc)})
