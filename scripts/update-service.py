@@ -1799,7 +1799,6 @@ def letsencrypt_candidates() -> dict:
             "lineage": entry.name,
             "path": str(entry),
             "certificate_path": str(cert),
-            "private_key_path": str(key),
             "certificate": details,
             "usable": bool(details.get("valid")),
         })
@@ -1819,6 +1818,8 @@ def _activate_tls_material(
     source_path: str | None = None,
     configure_renewal_hook: bool = False,
 ) -> dict:
+    if update_operation_active():
+        raise RuntimeError("Nie można zmieniać TLS podczas aktywnej aktualizacji Cloudportal")
     hostname = _valid_tls_hostname(hostname)
     tls_dir = _tls_directory()
     tls_dir.mkdir(parents=True, exist_ok=True)
@@ -1844,6 +1845,7 @@ def _activate_tls_material(
                 _tls_source_marker(),
                 tls_dir / "host",
                 _tls_metadata_path(),
+                CERTBOT_DEPLOY_HOOK,
             ]
             if INSTALL_MODE == "docker":
                 config_paths.append(CONFIG_DIR / "docker.env")
@@ -1869,6 +1871,7 @@ def _activate_tls_material(
                     },
                 )
                 _set_public_hostname(hostname)
+                _write_certbot_hook(configure_renewal_hook)
                 _validate_proxy_tls()
                 _reload_proxy_tls()
             except Exception:
@@ -1880,7 +1883,6 @@ def _activate_tls_material(
                     pass
                 raise
 
-            _write_certbot_hook(configure_renewal_hook)
             result = _tls_status_payload()
             result["changed"] = True
             return result
