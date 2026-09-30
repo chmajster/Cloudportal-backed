@@ -1083,6 +1083,17 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "/monitor?timeframe=" in script
     assert "/inventory/vms/${encodeURIComponent(item.id)}/history?limit=500" in script
     assert 'Lifecycle, provisioning, joby, operacje Day-2' in script
+    assert "registerExtension('inventory-governed-day2'" in script
+    assert "const vmGovernance = globalThis.InventoryGovernance;" in script
+    assert "scope?.tenant_id" in script
+    assert "scope?.project_id" in script
+    assert "`/resources/${encodeURIComponent(item.id)}/day2-state`" in script
+    assert "`/resources/${encodeURIComponent(item.id)}/actions`" in script
+    assert "`/resources/${encodeURIComponent(item.id)}/console`" in script
+    assert "vmGovernance.powerRequest(item, vmBase(item), action)" in script
+    assert "vmGovernance.snapshotInfo(item, vmBase(item), actionCatalog)" in script
+    assert "!governed ? ['monitor', 'Monitor'] : null" in script
+    assert "!governed ? ['backups', 'Backupy', 'backups.read'] : null" in script
     assert "selectField('Powtarzanie', 'interval_preset'" in script
     assert "class: 'advanced-options wide'" in script
     assert 'function stopTaskPolling(' in script
