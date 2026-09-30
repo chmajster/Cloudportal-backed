@@ -146,9 +146,6 @@ function subjectChoiceLabel(item, kind) {
 
 function setIamFieldVisible(wrapper, visible) {
   wrapper.hidden = !visible;
-  wrapper.querySelectorAll('input,select,textarea,button').forEach(control => {
-    control.disabled = !visible;
-  });
 }
 
 async function accessAssignmentForm(forcedUserId = null) {
