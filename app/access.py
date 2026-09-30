@@ -1,7 +1,101 @@
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import and_, exists, or_, select
 
 from app.models import Deployment, Job, ManagedResource, ManagedVM
+
+
+def _entity_scope(request):
+    scope = getattr(request.state, 'resource_scope', None)
+    if scope is None or not getattr(scope, 'entity_key', None):
+        return None
+    return scope
+
+
+def _deployment_entity_predicate(scope):
+    apmid = Deployment.workflow['blueprint']['variables']['apmid'].as_string()
+    environment = Deployment.workflow['blueprint']['variables']['environment'].as_string()
+    return and_(apmid == scope.apmid, environment == scope.environment)
+
+
+def _resource_entity_predicate(scope):
+    apmid = ManagedResource.metadata_json['apmid'].as_string()
+    environment = ManagedResource.metadata_json['environment'].as_string()
+    return and_(apmid == scope.apmid, environment == scope.environment)
+
+
+def _vm_entity_predicate(scope):
+    deployment_match = exists(
+        select(Deployment.id).where(
+            Deployment.id == ManagedVM.deployment_id,
+            _deployment_entity_predicate(scope),
+        )
+    )
+    resource_match = exists(
+        select(ManagedResource.id).where(
+            ManagedResource.deployment_id == ManagedVM.deployment_id,
+            _resource_entity_predicate(scope),
+        )
+    )
+    return or_(deployment_match, resource_match)
+
+
+def _deployment_classification(row):
+    blueprint = dict((getattr(row, 'workflow', {}) or {}).get('blueprint') or {})
+    variables = dict(blueprint.get('variables') or {})
+    return (
+        str(variables.get('apmid') or '').strip().upper(),
+        str(variables.get('environment') or '').strip().lower(),
+    )
+
+
+def _resource_classification(row):
+    metadata = dict(getattr(row, 'metadata_json', {}) or {})
+    return (
+        str(metadata.get('apmid') or '').strip().upper(),
+        str(metadata.get('environment') or '').strip().lower(),
+    )
+
+
+def _matches_entity(scope, apmid, environment):
+    if scope is None:
+        return True
+    return (
+        str(apmid or '').strip().upper() == str(scope.apmid or '').strip().upper()
+        and str(environment or '').strip().lower() == str(scope.environment or '').strip().lower()
+    )
+
+
+def _ensure_deployment_entity(request, deployment):
+    scope = _entity_scope(request)
+    if deployment is not None and not _matches_entity(scope, *_deployment_classification(deployment)):
+        raise HTTPException(404, 'Resource not found')
+
+
+def _ensure_resource_entity(request, row):
+    scope = _entity_scope(request)
+    if row is not None and not _matches_entity(scope, *_resource_classification(row)):
+        raise HTTPException(404, 'Resource not found')
+
+
+def _ensure_vm_entity(db, request, row):
+    scope = _entity_scope(request)
+    if scope is None or row is None:
+        return
+    resource = None
+    deployment = None
+    if row.deployment_id:
+        resource = db.scalar(select(ManagedResource).where(
+            ManagedResource.deployment_id == row.deployment_id
+        ))
+        deployment = db.get(Deployment, row.deployment_id)
+    resource_match = resource is not None and _matches_entity(
+        scope, *_resource_classification(resource)
+    )
+    deployment_match = deployment is not None and _matches_entity(
+        scope, *_deployment_classification(deployment)
+    )
+    if not (resource_match or deployment_match):
+        raise HTTPException(404, 'Resource not found')
 
 
 def ensure_request_scope(request, row):
@@ -16,31 +110,61 @@ def request_permissions(request):
 
 
 def deployment_predicate(request, actor):
-    if 'deployments.read_all' in request_permissions(request):
+    predicates = []
+    scope = _entity_scope(request)
+    if scope is not None:
+        predicates.append(_deployment_entity_predicate(scope))
+    if 'deployments.read_all' not in request_permissions(request):
+        predicates.append(Deployment.created_by == actor.user_id)
+    if not predicates:
         return None
-    return Deployment.created_by == actor.user_id
+    return and_(*predicates)
 
 
 def job_predicate(request, actor):
-    if 'jobs.read_all' in request_permissions(request):
+    predicates = []
+    scope = _entity_scope(request)
+    if scope is not None:
+        predicates.append(exists(
+            select(Deployment.id).where(
+                Deployment.id == Job.deployment_id,
+                _deployment_entity_predicate(scope),
+            )
+        ))
+    if 'jobs.read_all' not in request_permissions(request):
+        predicates.append(Job.created_by == actor.user_id)
+    if not predicates:
         return None
-    return Job.created_by == actor.user_id
+    return and_(*predicates)
 
 
 def inventory_vm_predicate(request, actor):
-    if 'inventory.read_all' in request_permissions(request):
+    predicates = []
+    scope = _entity_scope(request)
+    if scope is not None:
+        predicates.append(_vm_entity_predicate(scope))
+    if 'inventory.read_all' not in request_permissions(request):
+        predicates.append(ManagedVM.created_by == actor.user_id)
+    if not predicates:
         return None
-    return ManagedVM.created_by == actor.user_id
+    return and_(*predicates)
 
 
 def inventory_resource_predicate(request, actor):
-    if 'inventory.read_all' in request_permissions(request):
+    predicates = []
+    scope = _entity_scope(request)
+    if scope is not None:
+        predicates.append(_resource_entity_predicate(scope))
+    if 'inventory.read_all' not in request_permissions(request):
+        predicates.append(ManagedResource.created_by == actor.user_id)
+    if not predicates:
         return None
-    return ManagedResource.created_by == actor.user_id
+    return and_(*predicates)
 
 
 def ensure_deployment_access(request, actor, deployment):
     ensure_request_scope(request, deployment)
+    _ensure_deployment_entity(request, deployment)
     if deployment is None:
         raise HTTPException(404, 'Deployment not found')
     if 'deployments.read_all' in request_permissions(request) or deployment.created_by == actor.user_id:
@@ -63,6 +187,7 @@ def managed_vm_for_access(db, request, actor, provider_id, vm_id, *, node=None, 
         ManagedVM.vm_id == int(vm_id),
     ))
     ensure_request_scope(request, row)
+    _ensure_vm_entity(db, request, row)
     permission = 'vms.manage_all' if manage else 'vms.read_all'
     if permission in request_permissions(request):
         return row
@@ -89,6 +214,7 @@ def ensure_not_terraform_managed(row, action):
 
 def ensure_inventory_vm_access(db, request, actor, row):
     ensure_request_scope(request, row)
+    _ensure_vm_entity(db, request, row)
     if row is None:
         raise HTTPException(404, 'Resource not found')
     if 'inventory.read_all' in request_permissions(request) or row.created_by == actor.user_id:
@@ -102,6 +228,7 @@ def ensure_inventory_vm_access(db, request, actor, row):
 
 def ensure_inventory_resource_access(db, request, actor, row):
     ensure_request_scope(request, row)
+    _ensure_resource_entity(request, row)
     if row is None:
         raise HTTPException(404, 'Resource not found')
     if 'inventory.read_all' in request_permissions(request) or row.created_by == actor.user_id:
