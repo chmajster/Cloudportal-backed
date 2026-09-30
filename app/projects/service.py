@@ -2,6 +2,8 @@
 from collections import defaultdict
 from datetime import timezone
 from sqlalchemy import and_, delete, exists, func, or_, select, union_all
+from app.access.legacy import sync_project_user_bindings
+from app.access.service import ensure_project_access, effective_project_apmids
 from app.models import Audit, Permission, Role, RolePermission, User, UserRole, now
 from app.projects.authorization import (authorize, authorize_creation, effective_permissions, identity,
                                         project_grants, visible_projects)
@@ -16,6 +18,7 @@ def project_output(project):
     return tenant_output(project) | {
         'tenant_id': project.tenant_id,
         'default_environment': project.default_environment,
+        'allowed_apmids': project.allowed_apmids,
         'blueprint_auto_approve_for_executors': project.blueprint_auto_approve_for_executors,
         'blueprint_approval_timeout_hours': project.blueprint_approval_timeout_hours,
     }
@@ -59,6 +62,12 @@ def project_create(db, principal, data):
     project = Project(tenant_id=tenant.id, created_by=actor.user_id, **values)
     db.add(project)
     db.flush()
+    if project.allowed_apmids:
+        active_apmids = set(effective_project_apmids(db, tenant.id))
+        invalid = sorted(set(project.allowed_apmids) - active_apmids)
+        if invalid:
+            fail(422, 'APMID_NOT_AVAILABLE', 'Project APMID restriction contains unavailable APMID')
+    ensure_project_access(db, project, created_by=actor.user_id)
     # Creation never manufactures new permissions. Tenant-wide authority is inherited;
     # an explicit, bounded assignment is needed for project-local administration.
     return project_output(project)
@@ -74,6 +83,11 @@ def project_update(db, principal, project_id, data):
         fail(403, 'TENANT_PERMISSION_REQUIRED', 'Disabling a project requires tenant-wide project administration')
     values = data.model_dump(exclude={'expected_version'})
     values['metadata_json'] = values.pop('metadata')
+    if values.get('allowed_apmids'):
+        active_apmids = set(effective_project_apmids(db, access.tenant.id))
+        invalid = sorted(set(values['allowed_apmids']) - active_apmids)
+        if invalid:
+            fail(422, 'APMID_NOT_AVAILABLE', 'Project APMID restriction contains unavailable APMID')
     for key, value in values.items():
         setattr(row, key, value)
     row.version += 1
@@ -219,6 +233,10 @@ def _replace_roles(db, access, member, role_ids):
         db.flush()
         db.add_all(ProjectRoleGrant(assignment_id=assignment.id, permission_id=p) for p in sorted(grouped[role_id]))
     db.flush()
+    sync_project_user_bindings(
+        db, member.tenant_id, member.project_id, member.user_id,
+        created_by=access.identity.user_id,
+    )
 
 
 def _member(db, access, user_id, expected_version):
@@ -303,6 +321,10 @@ def member_update(db, principal, project_id, user_id, data):
     row.status = data.status
     row.version += 1
     db.flush()
+    sync_project_user_bindings(
+        db, row.tenant_id, row.project_id, row.user_id,
+        created_by=access.identity.user_id,
+    )
     _ensure_manager_remains(db, access)
     return _member_output(db, row)
 
@@ -320,8 +342,13 @@ def member_roles(db, principal, project_id, user_id, data):
 def member_delete(db, principal, project_id, user_id, expected_version):
     access = authorize(db, principal, project_id, 'projects.members.manage', write=True, lock=True)
     row = _member(db, access, user_id, expected_version)
+    organization_id, target_project_id, target_user_id = row.tenant_id, row.project_id, row.user_id
     db.delete(row)
     db.flush()
+    sync_project_user_bindings(
+        db, organization_id, target_project_id, target_user_id,
+        created_by=access.identity.user_id,
+    )
     _ensure_manager_remains(db, access)
     return {'deleted': True}
 
