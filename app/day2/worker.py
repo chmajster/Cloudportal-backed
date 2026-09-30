@@ -121,7 +121,7 @@ def _execution_permissions(db, job, request):
     from app.tenancy.authorization import Identity
     scope = row_scope(job)
     try:
-        ensure_legacy_day2_scope(db, scope)
+        ensure_legacy_day2_scope(db, scope, resource_id=request.resource_id)
         principal = Identity(user.id, token.id, frozenset(permissions),
                              frozenset(token.scopes or []) if token.kind == 'api' else None)
         permissions_for_identity(db, principal, scope, write=True)
