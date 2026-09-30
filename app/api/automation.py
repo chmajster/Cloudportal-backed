@@ -624,8 +624,20 @@ def blueprint_yaml(id: int, request: Request,
                    actor=Depends(require('blueprints.read')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
     source = portal_source(source_header)
-    can_manage = bool({'blueprints.create', 'blueprints.update'} & request.state.permissions)
-    if source != 'backend' and not can_manage and not available_to(db, row, actor, source):
+    role_ids = blueprint_role_ids(db, row, actor)
+    manager_allowed = (
+        'blueprints.update' in request.state.permissions
+        and can_manage_blueprint(
+            db, row, actor, role_ids, action='blueprints.update'
+        )
+    )
+    if (
+        source != 'backend'
+        and not manager_allowed
+        and not available_to(
+            db, row, actor, source, role_ids, action='blueprints.read'
+        )
+    ):
         raise HTTPException(404, 'Blueprint not found')
     public = blueprint_public(row)
     payload = {name: public[name] for name in BlueprintInput.model_fields}
