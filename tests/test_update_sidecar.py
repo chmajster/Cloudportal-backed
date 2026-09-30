@@ -826,3 +826,20 @@ def test_tls_activation_persists_letsencrypt_as_custom_for_installer(tmp_path, m
     assert 'ACTIVE_LINEAGE="/etc/letsencrypt/live/kynlab.ddnsfree.com"' in hook
     assert 'RENEWED_LINEAGE' in hook
     assert '/tls/sync' in hook
+
+
+def test_tls_activation_is_blocked_during_active_update(tmp_path, monkeypatch):
+    updater = load_update_service_module(tmp_path, monkeypatch)
+    monkeypatch.setattr(updater, 'update_operation_active', lambda: True)
+
+    try:
+        updater._activate_tls_material(
+            b'CERT',
+            b'KEY',
+            hostname='kynlab.ddnsfree.com',
+            source_type='custom',
+        )
+    except RuntimeError as exc:
+        assert 'aktywnej aktualizacji' in str(exc)
+    else:
+        raise AssertionError('TLS mutation must be blocked while updater is active')
