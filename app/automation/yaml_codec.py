@@ -48,7 +48,7 @@ def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
         {'active', 'visibility', 'access', 'variables', 'deployment', 'workflow', 'governance'},
         'spec',
     )
-    _reject_unknown_keys(access, {'allowedRoleIds', 'allowedUserIds', 'managerRoleIds'}, 'spec.access')
+    _reject_unknown_keys(access, {'allowedRoleIds', 'allowedUserIds', 'allowedEntities', 'managerRoleIds'}, 'spec.access')
     _reject_unknown_keys(
         governance,
         {'requiresApproval', 'autoApproveForExecutors', 'approvalTimeoutHours', 'recoveryPolicy'},
@@ -64,6 +64,7 @@ def _native_payload(document: dict[str, Any]) -> dict[str, Any]:
         'visibility': spec.get('visibility', {}),
         'allowed_role_ids': access.get('allowedRoleIds', []),
         'allowed_user_ids': access.get('allowedUserIds', []),
+        'allowed_entities': access.get('allowedEntities', []),
         'manager_role_ids': access.get('managerRoleIds', []),
         'variables_schema': spec.get('variables', {}),
         'deployment': spec.get('deployment', {}),
@@ -126,6 +127,7 @@ def blueprint_yaml_document(blueprint: BlueprintInput | dict[str, Any], *, versi
             'access': {
                 'allowedRoleIds': data['allowed_role_ids'],
                 'allowedUserIds': data['allowed_user_ids'],
+                'allowedEntities': data['allowed_entities'],
                 'managerRoleIds': data['manager_role_ids'],
             },
             'variables': data['variables_schema'],
