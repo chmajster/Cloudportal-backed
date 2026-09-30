@@ -1058,11 +1058,13 @@ class BlueprintInput(Input):
 
 
 class BlueprintVMParametersInput(Input):
-    cpu: int | None = Field(default=None, ge=1, le=128)
-    memory: int | None = Field(default=None, ge=512, le=1048576)
-    disk: int | None = Field(default=None, ge=1, le=65536)
-    storage: Slug | None = None
-    network: Slug | None = None
+    # Template-specific constraints are intentionally applied later by
+    # validate_template_variables() after the Blueprint has been rendered.
+    cpu: int | None = None
+    memory: int | None = None
+    disk: int | None = None
+    storage: Annotated[str | None, Field(min_length=1, max_length=255)] = None
+    network: Annotated[str | None, Field(min_length=1, max_length=255)] = None
 
 
 class BlueprintExecuteInput(Input):

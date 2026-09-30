@@ -279,42 +279,43 @@ function blueprintRuntimeVmParameterSection(item, options = {}) {
 
   const limits = options.limits || {};
   const controls = [];
-  const numberField = (label, name, key, fallbackMin, fallbackMax) => {
+  const numberField = (label, name, key) => {
     if (defaults[key] === undefined) return;
     controls.push(field(label, name, {
       type: 'number',
       value: defaults[key],
-      min: limits[key]?.min ?? fallbackMin,
-      max: limits[key]?.max ?? fallbackMax,
+      min: limits[key]?.min,
+      max: limits[key]?.max,
       required: true,
       help: 'Domyślnie z Blueprintu: ' + defaults[key] + '.',
     }));
   };
-  numberField('CPU (vCPU)', 'vm_parameter_cpu', 'cpu', 1, 128);
-  numberField('RAM (MiB)', 'vm_parameter_memory', 'memory', 512, 1048576);
-  numberField('Dysk (GiB)', 'vm_parameter_disk', 'disk', 1, 65536);
+  numberField('CPU (vCPU)', 'vm_parameter_cpu', 'cpu');
+  numberField('RAM (MiB)', 'vm_parameter_memory', 'memory');
+  numberField('Dysk (GiB)', 'vm_parameter_disk', 'disk');
 
-  const selectable = (label, name, key, values) => {
+  const providerBackedChoices = ['proxmox-vm', 'proxmox-appliance']
+    .includes(String(item?.deployment?.template || ''));
+  const selectable = (label, name, key) => {
     if (defaults[key] === undefined) return;
-    const choices = [...new Set([defaults[key], ...(values || [])].filter(Boolean))];
-    if (choices.length > 1 || options.inventory_available) {
-      controls.push(selectField(label, name, choices.map(value => ({
-        value,
-        label: value,
-      })), defaults[key], {
-        required: true,
-        help: 'Domyślnie z Blueprintu: ' + defaults[key] + '.',
-      }));
+    const helpText = 'Domyślnie z Blueprintu: ' + defaults[key] + '.';
+    if (providerBackedChoices) {
+      const wrapper = selectField(label, name, [{
+        value: defaults[key],
+        label: defaults[key],
+      }], defaults[key], { required: true });
+      wrapper.append(node('span', { class: 'field-help', text: helpText }));
+      controls.push(wrapper);
       return;
     }
     controls.push(field(label, name, {
       value: defaults[key],
       required: true,
-      help: 'Domyślnie z Blueprintu: ' + defaults[key] + '.',
+      help: helpText,
     }));
   };
-  selectable('Storage', 'vm_parameter_storage', 'storage', options.storages);
-  selectable('Sieć / bridge', 'vm_parameter_network', 'network', options.networks);
+  selectable('Storage', 'vm_parameter_storage', 'storage');
+  selectable('Sieć / bridge', 'vm_parameter_network', 'network');
 
   if (!controls.length) return null;
   return formSection(
@@ -322,6 +323,63 @@ function blueprintRuntimeVmParameterSection(item, options = {}) {
     'To są domyślne parametry zapisane w Blueprintcie. Możesz zmienić je dla tej jednej VM; Blueprint nie zostanie zmodyfikowany.',
     ...controls,
   );
+}
+
+function hydrateBlueprintRuntimeVmParameterSection(container, item, options = {}) {
+  const defaults = {
+    ...blueprintRuntimeVmDefaults(item),
+    ...(options.defaults || {}),
+  };
+  const limits = options.limits || {};
+  const numeric = {
+    cpu: 'vm_parameter_cpu',
+    memory: 'vm_parameter_memory',
+    disk: 'vm_parameter_disk',
+  };
+  for (const [key, name] of Object.entries(numeric)) {
+    const control = container.querySelector(`[name="${name}"]`);
+    if (!control) continue;
+    const minimum = limits[key]?.min;
+    const maximum = limits[key]?.max;
+    if (minimum === undefined) control.removeAttribute('min');
+    else control.setAttribute('min', String(minimum));
+    if (maximum === undefined) control.removeAttribute('max');
+    else control.setAttribute('max', String(maximum));
+  }
+
+  const replaceChoice = (label, name, key, values) => {
+    const control = container.querySelector(`[name="${name}"]`);
+    if (!control || !options.inventory_available) return;
+    const choices = [...new Set((values || [])
+      .map(value => String(value || '').trim())
+      .filter(Boolean))];
+    if (!choices.length) return;
+
+    const current = String(control.value || '').trim();
+    const blueprintDefault = String(defaults[key] || '').trim();
+    const selected = choices.includes(current)
+      ? current
+      : (choices.includes(blueprintDefault) ? blueprintDefault : '');
+    const wrapper = selectField(
+      label,
+      name,
+      choices.map(value => ({ value, label: value })),
+      selected,
+      {
+        required: true,
+        placeholder: selected ? null : 'Wybierz aktualną wartość',
+      },
+    );
+    const helpText = selected
+      ? 'Domyślnie z Blueprintu: ' + blueprintDefault + '.'
+      : 'Domyślna wartość z Blueprintu (' + blueprintDefault
+        + ') nie jest obecnie dostępna. Wybierz wartość z aktualnego inventory.';
+    wrapper.append(node('span', { class: 'field-help', text: helpText }));
+    control.closest('label')?.replaceWith(wrapper);
+  };
+
+  replaceChoice('Storage', 'vm_parameter_storage', 'storage', options.storages);
+  replaceChoice('Sieć / bridge', 'vm_parameter_network', 'network', options.networks);
 }
 
 function readBlueprintRuntimeVmParameters(form) {
@@ -355,13 +413,7 @@ async function executeBlueprint(item, scope = null) {
     allowed(permission) || (scope?.permissions || []).includes(permission);
   try {
     const fields = node('div', { class: 'form-grid' });
-    const executionOptions = await api(`/blueprints/${item.id}/execution-options`, {
-      headers: scopeHeaders,
-    }).catch(() => ({ vm_parameters: { defaults: blueprintRuntimeVmDefaults(item) } }));
-    const vmParameterSection = blueprintRuntimeVmParameterSection(
-      item,
-      executionOptions?.vm_parameters || {}
-    );
+    const vmParameterSection = blueprintRuntimeVmParameterSection(item);
     if (vmParameterSection) fields.append(vmParameterSection);
 
     const apmidContext = await window.BlueprintRuntimeApmid.prepare(item, fields, scopeHeaders);
@@ -484,6 +536,16 @@ async function executeBlueprint(item, scope = null) {
         navigate('my-resources');
       },
     });
+
+    api(`/blueprints/${item.id}/execution-options`, {
+      headers: scopeHeaders,
+    }).then(executionOptions => {
+      hydrateBlueprintRuntimeVmParameterSection(
+        fields,
+        item,
+        executionOptions?.vm_parameters || {},
+      );
+    }).catch(() => {});
   } catch (error) {
     toast(error.message, 'error');
   }
