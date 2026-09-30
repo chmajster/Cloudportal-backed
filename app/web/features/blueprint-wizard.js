@@ -699,8 +699,8 @@
 
         const vmParameters = node('section', { class: 'blueprint-wizard-inline-panel wide' },
           node('div', { class: 'blueprint-wizard-section-heading wide' },
-            node('strong', { text: 'Parametry VM' }),
-            node('span', { class: 'muted', text: 'Zasoby obliczeniowe, dysk, storage i podłączenie sieciowe maszyny.' })),
+            node('strong', { text: 'Domyślne parametry VM' }),
+            node('span', { class: 'muted', text: 'Te wartości są zapisywane w Blueprincie jako domyślne parametry nowej VM: CPU, RAM, dysk, storage i podłączenie sieciowe.' })),
           fields
         );
 
@@ -1213,7 +1213,7 @@
         const descriptions = [
           'Wybierz organizację i projekt, a następnie nadaj Blueprintowi nazwę i opis. Lista zakresów wynika z RBAC.',
           'Wybierz provider, node i bazowy obraz VM. Credentials są pobierane z providera.',
-          'Ustaw wielkość VM. Presety aktualizują CPU, RAM i dysk jednym kliknięciem.',
+          'Ustaw domyślne parametry VM dla tego Blueprintu. Presety aktualizują CPU, RAM i dysk jednym kliknięciem.',
           'Wybierz sposób automatycznego nadawania nazw hostów.',
           'Wybierz DHCP, IPAM lub statyczny adres IP.',
           'Opcjonalnie uruchom jeden lub wiele zatwierdzonych runbooków Ansible po utworzeniu VM.',
