@@ -251,7 +251,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     return;
   }
 
-  const roles = rolesResult.items || [];
+  const roles = (rolesResult.items || []).filter(item => item.enabled !== false);
   const organizations = organizationsResult.items || [];
   const subjectType = selectField('Subject type', 'subject_type', [
     { value: 'USER', label: 'User' },
