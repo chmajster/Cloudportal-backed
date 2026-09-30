@@ -232,4 +232,8 @@ def test_docker_bind_ip_is_detected_selected_persisted_and_used_by_compose():
     assert selector.index('if ((update_in_progress)); then') < selector.index('if [[ "$backend_host" == localhost')
     assert 'Auto-update zachowuje adres publikacji Docker' in selector
     assert 'Istniejąca konfiguracja nie zawiera CP_BIND_IP; domyślnie zachowuję publikację na wszystkich interfejsach.' in selector
+    assert 'local timeout_seconds=5' in selector
+    assert 'read -r -s -n 1 -t 1 char' in selector
+    assert 'automatyczne zachowanie za %d s' in selector
+    assert 'Brak wyboru przez ${timeout_seconds} s; zachowuję adres publikacji Docker' in selector
     assert 'docker_detect_bind_ips | grep' not in INSTALLER
