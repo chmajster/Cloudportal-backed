@@ -561,6 +561,97 @@ def blueprint(id: int, request: Request, source_header: Annotated[str | None, He
     )
 
 
+@router.get('/blueprints/{id}/execution-options')
+def blueprint_execution_options(
+    id: int,
+    request: Request,
+    source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
+    actor=Depends(require('blueprints.execute')),
+    db=Depends(get_db, scope='function'),
+):
+    row = find(db, Blueprint, id)
+    validate_persisted_blueprint_contract(row)
+    source = portal_source(source_header)
+    if not available_to(db, row, actor, source):
+        raise HTTPException(404, 'Blueprint not found')
+
+    deployment = row.deployment if isinstance(row.deployment, dict) else {}
+    variables = deployment.get('variables') if isinstance(deployment.get('variables'), dict) else {}
+    editable = ('cpu', 'memory', 'disk', 'storage', 'network')
+    defaults = {}
+    for name in editable:
+        value = variables.get(name)
+        if value is None or isinstance(value, bool):
+            continue
+        if isinstance(value, str) and re.search(r'{{\s*[^}]+\s*}}', value):
+            continue
+        if name in {'cpu', 'memory', 'disk'}:
+            try:
+                defaults[name] = int(value)
+            except (TypeError, ValueError):
+                continue
+        elif str(value).strip():
+            defaults[name] = str(value).strip()
+
+    result = {
+        'vm_parameters': {
+            'enabled': bool(defaults),
+            'defaults': defaults,
+            'limits': {
+                'cpu': {'min': 1, 'max': 128},
+                'memory': {'min': 512, 'max': 1048576},
+                'disk': {'min': 1, 'max': 65536},
+            },
+            'storages': [],
+            'networks': [],
+            'inventory_available': False,
+        }
+    }
+    provider_id = deployment.get('provider_id')
+    node_name = variables.get('node')
+    if not defaults or not provider_id or not node_name:
+        return result
+
+    provider = db.get(Provider, int(provider_id))
+    if provider is None or provider.type != 'proxmox':
+        return result
+    try:
+        require_platform_enabled(db, provider.type)
+        adapter = provider_for(find(db, Credential, provider.credentials_id))
+        storage_rows = adapter.discover('storages', str(node_name))
+        network_rows = adapter.discover('networks', str(node_name))
+    except Exception:
+        return result
+
+    storages = []
+    for value in storage_rows or []:
+        if not isinstance(value, dict) or value.get('disable'):
+            continue
+        content = value.get('content')
+        if isinstance(content, list):
+            content_text = ','.join(str(item) for item in content)
+        else:
+            content_text = str(content or '')
+        if content_text and 'images' not in content_text:
+            continue
+        storage = str(value.get('storage') or '').strip()
+        if storage and storage not in storages:
+            storages.append(storage)
+
+    networks = []
+    for value in network_rows or []:
+        if not isinstance(value, dict):
+            continue
+        iface = str(value.get('iface') or '').strip()
+        if iface and iface not in networks:
+            networks.append(iface)
+
+    result['vm_parameters']['storages'] = sorted(storages)
+    result['vm_parameters']['networks'] = sorted(networks)
+    result['vm_parameters']['inventory_available'] = True
+    return result
+
+
 @router.get('/blueprints/{id}/yaml')
 def blueprint_yaml(id: int, request: Request,
                    source_header: Annotated[str | None, Header(alias='X-Portal-Source')] = None,
@@ -830,7 +921,8 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
     def create():
         rendered, reservation, ip_allocation, guest_credential_id, template_guest_credential_id, ansible_runs, awx = compile_blueprint(
             db, row, data.variables, data.hostname_values, actor.user_id,
-            data.apmid, data.environment, data.awx_onboarding
+            data.apmid, data.environment, data.awx_onboarding,
+            data.vm_parameters.model_dump(exclude_none=True) if data.vm_parameters else None,
         )
         from app.policy_engine.integration import enforce_blueprint_execution
         rendered, policy_result = enforce_blueprint_execution(
