@@ -275,8 +275,12 @@ async function accessAssignmentForm(forcedUserId = null, assignment = null) {
       assignable: 'true',
       scope_type: kind,
     });
-    if (tenantId) query.set('tenant_id', tenantId);
-    if (projectId) query.set('project_id', projectId);
+    if (kind === 'ORGANIZATION') {
+      query.set('tenant_id', tenantId);
+    } else if (kind !== 'GLOBAL') {
+      if (tenantId) query.set('tenant_id', tenantId);
+      query.set('project_id', projectId);
+    }
     if (['APMID', 'ENVIRONMENT'].includes(kind) && apmidInput?.value.trim()) {
       query.set('apmid', apmidInput.value.trim());
     }
