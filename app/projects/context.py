@@ -9,7 +9,7 @@ from app.projects.authorization import authorize
 from app.projects.context_models import UserProjectContext
 from app.projects.permissions import DEFAULT_PROJECT_ID
 from app.projects.service import project_output
-from app.policy_engine.entities import normalize_entity_key, parse_entity_key
+from app.policy_engine.entities import filter_permissions_for_entity_role, normalize_entity_key, parse_entity_key
 from app.tenancy.authorization import assert_version, fail, identity, lock_authorization
 from app.tenancy.permissions import DEFAULT_TENANT_ID
 from app.vm_classification import vm_classification_for_tenant
@@ -74,6 +74,14 @@ def _validated_entity(db, tenant_id, entity_key):
     return normalized
 
 
+def _entity_permissions(access, entity_key):
+    if not entity_key:
+        return None
+    parts = parse_entity_key(entity_key)
+    base = set(access.identity.global_permissions) | set(access.permissions)
+    return sorted(filter_permissions_for_entity_role(parts['role'], base))
+
+
 def context_get(db, principal):
     actor = identity(db, principal)
     row = _selection(db, actor.user_id)
@@ -84,6 +92,7 @@ def context_get(db, principal):
         'selected': project_output(access.project),
         'tenant_name': access.tenant.name,
         'entity_key': row.entity_key,
+        'entity_permissions': _entity_permissions(access, row.entity_key),
         'version': row.version,
     }
 
@@ -114,6 +123,7 @@ def context_set(db, principal, data):
         'selected': project_output(access.project),
         'tenant_name': access.tenant.name,
         'entity_key': row.entity_key,
+        'entity_permissions': _entity_permissions(access, row.entity_key),
         'version': row.version,
     }
 
