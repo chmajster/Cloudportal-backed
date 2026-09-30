@@ -49,6 +49,7 @@ Tryby:
   --gui, -gui                 Interaktywny interfejs dialog.
   --non-interactive           Tryb bez pytań; przy --uninstall wymaga także --yes.
   --docker                    Zainstaluj/obsłuż Cloudportal jako stack Docker Compose zamiast usług systemd.
+  --docker-config             Otwórz kreator trwałej konfiguracji istniejącej instalacji Docker.
   --k8s                       Zainstaluj/obsłuż Cloudportal w bieżącym klastrze Kubernetes.
   --recovery-admin            Recovery lokalnego administratora; alias: --recovery-password.
   --recovery-password         Utwórz lub odzyskaj lokalne konto Administrator bez reinstalacji.
@@ -166,6 +167,7 @@ recovery_password_file=''
 recovery_password=''
 assume_yes=0
 docker_mode=0
+docker_config_mode=0
 k8s_mode=0
 k8s_image=''
 k8s_namespace='cloudportal'
@@ -210,6 +212,7 @@ while (($#)); do
     --gui|-gui) gui=1; shift;;
     --non-interactive) non_interactive=1; shift;;
     --docker) docker_mode=1; shift;;
+    --docker-config) docker_mode=1; docker_config_mode=1; shift;;
     --k8s) k8s_mode=1; shift;;
     --recovery-admin|--recovery-password) recovery_mode=1; shift;;
     --check-platform) check_platform=1; shift;;
@@ -254,145 +257,75 @@ EOF
   [1] Instalacja / aktualizacja — systemd
   [2] Instalacja / aktualizacja — Docker
   [3] Instalacja / aktualizacja — Kubernetes
-  [4] Status — systemd
-  [5] Status / auto-naprawa — Docker
-  [6] Status — Kubernetes
-  [7] Recovery password / konto Administrator — systemd
-  [8] Recovery password / konto Administrator — Docker
-  [9] Włącz automatyczne aktualizacje cron — systemd
-  [10] Włącz automatyczne aktualizacje cron — Docker
-  [11] Wyłącz automatyczne aktualizacje cron
-  [12] Status automatycznych aktualizacji cron
-  [13] Odinstaluj — zachowaj bazę i dane
-  [14] Odinstaluj całkowicie — usuń bazę i dane
-  [15] Odinstaluj Docker — zachowaj wolumeny i konfigurację
-  [16] Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację
-  [17] Odinstaluj Kubernetes — zachowaj PVC i sekrety
-  [18] Odinstaluj Kubernetes całkowicie — usuń PVC i sekrety
+  [4] Konfiguracja Docker
+  [5] Status — systemd
+  [6] Status / auto-naprawa — Docker
+  [7] Status — Kubernetes
+  [8] Recovery password / konto Administrator — systemd
+  [9] Recovery password / konto Administrator — Docker
+  [10] Włącz automatyczne aktualizacje cron — systemd
+  [11] Włącz automatyczne aktualizacje cron — Docker
+  [12] Wyłącz automatyczne aktualizacje cron
+  [13] Status automatycznych aktualizacji cron
+  [14] Odinstaluj — zachowaj bazę i dane
+  [15] Odinstaluj całkowicie — usuń bazę i dane
+  [16] Odinstaluj Docker — zachowaj wolumeny i konfigurację
+  [17] Odinstaluj Docker całkowicie — usuń wolumeny i konfigurację
+  [18] Odinstaluj Kubernetes — zachowaj PVC i sekrety
+  [19] Odinstaluj Kubernetes całkowicie — usuń PVC i sekrety
   [0] Wyjście
 EOF
 
   local choice=''
   while :; do
-    printf 'Wybierz operację [0-18]: ' >&3
+    printf 'Wybierz operację [0-19]: ' >&3
     if ! IFS= read -r choice <&3; then
       exec 3>&-
       ui_fail 'Nie udało się odczytać wyboru z terminala.'
       exit 2
     fi
     case "$choice" in
-      1)
-        gui=1
-        exec 3>&-
-        return 0
-        ;;
-      2)
-        docker_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      3)
-        k8s_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      4)
-        status_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      5)
-        docker_mode=1
-        status_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      6)
-        k8s_mode=1
-        status_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      7)
-        recovery_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      8)
-        docker_mode=1
-        recovery_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      9|10)
+      1) gui=1; exec 3>&-; return 0;;
+      2) docker_mode=1; exec 3>&-; return 0;;
+      3) k8s_mode=1; exec 3>&-; return 0;;
+      4) docker_mode=1; docker_config_mode=1; exec 3>&-; return 0;;
+      5) status_mode=1; exec 3>&-; return 0;;
+      6) docker_mode=1; status_mode=1; exec 3>&-; return 0;;
+      7) k8s_mode=1; status_mode=1; exec 3>&-; return 0;;
+      8) recovery_mode=1; exec 3>&-; return 0;;
+      9) docker_mode=1; recovery_mode=1; exec 3>&-; return 0;;
+      10|11)
         auto_update_mode=1
         auto_update_action=enable
-        [[ "$choice" != 10 ]] || docker_mode=1
+        [[ "$choice" != 11 ]] || docker_mode=1
         printf 'Interwał w godzinach [12] (1,2,3,4,6,8,12,24): ' >&3
         IFS= read -r auto_update_interval <&3 || { exec 3>&-; exit 2; }
         auto_update_interval=${auto_update_interval:-12}
         exec 3>&-
         return 0
         ;;
-      11|12)
+      12|13)
         auto_update_mode=1
-        if [[ "$choice" == 11 ]]; then auto_update_action=disable; else auto_update_action=status; fi
+        if [[ "$choice" == 12 ]]; then auto_update_action=disable; else auto_update_action=status; fi
         exec 3>&-
         return 0
         ;;
-      13)
-        uninstall_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      14)
-        uninstall_mode=1
-        purge_data=1
-        exec 3>&-
-        return 0
-        ;;
-      15)
-        docker_mode=1
-        uninstall_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      16)
-        docker_mode=1
-        uninstall_mode=1
-        purge_data=1
-        exec 3>&-
-        return 0
-        ;;
-      17)
-        k8s_mode=1
-        uninstall_mode=1
-        exec 3>&-
-        return 0
-        ;;
-      18)
-        k8s_mode=1
-        uninstall_mode=1
-        purge_data=1
-        exec 3>&-
-        return 0
-        ;;
-      0)
-        exec 3>&-
-        ui_info 'Nie wykonano żadnych zmian.'
-        exit 0
-        ;;
-      *)
-        ui_warn 'Nieprawidłowy wybór. Wpisz numer od 0 do 18.'
-        ;;
+      14) uninstall_mode=1; exec 3>&-; return 0;;
+      15) uninstall_mode=1; purge_data=1; exec 3>&-; return 0;;
+      16) docker_mode=1; uninstall_mode=1; exec 3>&-; return 0;;
+      17) docker_mode=1; uninstall_mode=1; purge_data=1; exec 3>&-; return 0;;
+      18) k8s_mode=1; uninstall_mode=1; exec 3>&-; return 0;;
+      19) k8s_mode=1; uninstall_mode=1; purge_data=1; exec 3>&-; return 0;;
+      0) exec 3>&-; ui_info 'Nie wykonano żadnych zmian.'; exit 0;;
+      *) ui_warn 'Nieprawidłowy wybór. Wpisz numer od 0 do 19.';;
     esac
   done
 }
 
 interactive_action_menu
 
-mode_count=$((status_mode + uninstall_mode + check_platform + recovery_mode + auto_update_mode))
-((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall, --check-platform albo operację --recovery-admin/auto-update.'; exit 2; }
+mode_count=$((status_mode + uninstall_mode + check_platform + recovery_mode + auto_update_mode + docker_config_mode))
+((mode_count <= 1)) || { ui_fail 'Wybierz tylko jeden tryb: --status, --uninstall, --check-platform, --docker-config albo operację --recovery-admin/auto-update.'; exit 2; }
 ((purge_data == 0 || uninstall_mode == 1)) || { ui_fail '--purge-data wymaga --uninstall.'; exit 2; }
 ((assume_yes == 0 || uninstall_mode == 1)) || { ui_fail '--yes/-y ma zastosowanie tylko z --uninstall.'; exit 2; }
 ((gui == 0 || uninstall_mode == 0)) || { ui_fail '--gui/-gui nie może być użyte razem z --uninstall.'; exit 2; }
@@ -1317,6 +1250,100 @@ docker_compose() {
     return 1
   }
   docker_compose_for "$release" "$docker_env" "$@"
+}
+
+docker_configure_existing() {
+  CURRENT_STAGE='konfiguracja Docker'
+  [[ $EUID -eq 0 ]] || { ui_fail 'Konfiguracja Docker wymaga roota. Uruchom instalator przez sudo.'; return 1; }
+  [[ -r "$docker_env" ]] || { ui_fail "Brak istniejącej konfiguracji Docker: $docker_env"; ui_info 'Najpierw wykonaj instalację w trybie Docker.'; return 1; }
+  [[ -n "$(docker_current_release)" ]] || { ui_fail "Brak aktywnego release Docker w $docker_root/current."; return 1; }
+  docker_compose_detect || { ui_fail 'Docker Compose nie jest dostępny.'; return 1; }
+  docker info >/dev/null 2>&1 || { ui_fail 'Docker Engine nie odpowiada.'; return 1; }
+
+  local current_bind current_port current_workers current_host choice answer apply_mode=1
+  local new_bind new_port new_workers
+  local -a ips=()
+
+  current_bind=$(sed -n 's/^CP_BIND_IP=//p' "$docker_env" | tail -n 1)
+  current_port=$(sed -n 's/^CP_HTTPS_PORT=//p' "$docker_env" | tail -n 1)
+  current_workers=$(sed -n 's/^CP_WORKER_COUNT=//p' "$docker_env" | tail -n 1)
+  current_host=$(sed -n 's/^CP_PUBLIC_HOST=//p' "$docker_env" | tail -n 1)
+  current_bind=${current_bind:-0.0.0.0}
+  current_port=${current_port:-8443}
+  current_workers=${current_workers:-$default_workers}
+
+  [[ -r /dev/tty && -w /dev/tty ]] || { ui_fail '--docker-config wymaga interaktywnego terminala.'; return 2; }
+
+  ui_header 'Cloudportal-backed — konfiguracja Docker'
+  ui_info "Aktualnie: bind=$current_bind · HTTPS=$current_port · workery=$current_workers"
+  mapfile -t ips < <(docker_detect_bind_ips)
+  printf '\nDostępne adresy publikacji:\n' >/dev/tty
+  printf '  [0] 0.0.0.0           wszystkie interfejsy\n' >/dev/tty
+  local i
+  for ((i=0; i<${#ips[@]}; i++)); do
+    printf '  [%d] %-15s lokalny IPv4\n' "$((i+1))" "${ips[$i]}" >/dev/tty
+  done
+  printf 'Wybierz adres [Enter = %s]: ' "$current_bind" >/dev/tty
+  IFS= read -r choice </dev/tty || return 2
+  if [[ -z "$choice" ]]; then
+    new_bind=$current_bind
+  elif [[ "$choice" == 0 ]]; then
+    new_bind=0.0.0.0
+  elif [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#ips[@]})); then
+    new_bind=${ips[$((choice-1))]}
+  else
+    ui_fail 'Nieprawidłowy wybór adresu IPv4.'
+    return 2
+  fi
+
+  printf 'Port HTTPS [%s]: ' "$current_port" >/dev/tty
+  IFS= read -r new_port </dev/tty || return 2
+  new_port=${new_port:-$current_port}
+  docker_valid_port "$new_port" || { ui_fail 'Nieprawidłowy port HTTPS.'; return 2; }
+
+  printf 'Liczba workerów [%s]: ' "$current_workers" >/dev/tty
+  IFS= read -r new_workers </dev/tty || return 2
+  new_workers=${new_workers:-$current_workers}
+  docker_valid_workers "$new_workers" || { ui_fail 'Liczba workerów musi być w zakresie 1-64.'; return 2; }
+
+  ui_header 'Podsumowanie konfiguracji Docker'
+  printf '  Bind IP:   %s\n  HTTPS:     %s:%s\n  Workery:   %s\n' "$new_bind" "$new_bind" "$new_port" "$new_workers" >/dev/tty
+  printf '\n  [1] Zapisz i zastosuj\n  [2] Zapisz bez restartu\n  [3] Anuluj\nWybór [1]: ' >/dev/tty
+  IFS= read -r answer </dev/tty || return 2
+  answer=${answer:-1}
+  case "$answer" in
+    1) apply_mode=1;;
+    2) apply_mode=0;;
+    3) ui_info 'Anulowano konfigurację Docker.'; return 0;;
+    *) ui_fail 'Nieprawidłowy wybór.'; return 2;;
+  esac
+
+  cp -a "$docker_env" "$docker_env.bak"
+  sed -i \
+    -e "s/^CP_BIND_IP=.*/CP_BIND_IP=$new_bind/" \
+    -e "s/^CP_HTTPS_PORT=.*/CP_HTTPS_PORT=$new_port/" \
+    -e "s/^CP_WORKER_COUNT=.*/CP_WORKER_COUNT=$new_workers/" \
+    "$docker_env"
+  grep -q '^CP_BIND_IP=' "$docker_env" || printf 'CP_BIND_IP=%s\n' "$new_bind" >>"$docker_env"
+  grep -q '^CP_HTTPS_PORT=' "$docker_env" || printf 'CP_HTTPS_PORT=%s\n' "$new_port" >>"$docker_env"
+  grep -q '^CP_WORKER_COUNT=' "$docker_env" || printf 'CP_WORKER_COUNT=%s\n' "$new_workers" >>"$docker_env"
+  chmod 0600 "$docker_env"
+  ui_ok "Zapisano trwałą konfigurację: $docker_env"
+
+  if ((apply_mode)); then
+    ui_info 'Odtwarzam kontenery zależne od konfiguracji publikacji i ustawiam skalę workerów.'
+    if ! docker_compose up -d --remove-orphans --force-recreate --scale "worker=$new_workers" api worker dispatcher proxy; then
+      ui_fail 'Nie udało się zastosować konfiguracji. Przywracam poprzedni docker.env.'
+      mv -f "$docker_env.bak" "$docker_env"
+      docker_compose up -d --remove-orphans --force-recreate --scale "worker=$current_workers" api worker dispatcher proxy || true
+      return 1
+    fi
+    rm -f "$docker_env.bak"
+    ui_ok "Konfiguracja aktywna: https://$new_bind:$new_port · workery=$new_workers"
+  else
+    rm -f "$docker_env.bak"
+    ui_warn 'Konfiguracja została zapisana, ale nie zastosowana. Zacznie obowiązywać przy następnym odtworzeniu stacka.'
+  fi
 }
 
 docker_prepare_updater_config() {
@@ -3381,6 +3408,11 @@ if ((k8s_mode)); then
 fi
 
 if ((docker_mode)); then
+  if ((docker_config_mode)); then
+    docker_acquire_install_lock
+    docker_configure_existing
+    exit $?
+  fi
   if ((recovery_mode)); then
     docker_acquire_install_lock
     docker_recovery_admin
