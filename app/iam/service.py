@@ -697,6 +697,15 @@ def authorize_or_raise(db, actor, action: str, **kwargs) -> AuthorizationDecisio
 
 
 def scope_from_resource_scope(scope) -> dict:
+    if getattr(scope, 'entity_key', None):
+        return {
+            'scope_type': 'ENVIRONMENT',
+            'scope_id': scope.entity_key,
+            'tenant_id': scope.tenant_id,
+            'project_id': scope.project_id,
+            'apmid': scope.apmid,
+            'environment': scope.environment,
+        }
     return {
         'scope_type': 'PROJECT',
         'scope_id': scope.project_id,
