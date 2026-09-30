@@ -28,6 +28,22 @@ async function iamApi(path, options = {}, canRefresh = true) {
   return api(path, { ...options, scope: false }, canRefresh);
 }
 
+async function iamAll(path) {
+  const items = [];
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+  while (offset < total) {
+    const separator = path.includes('?') ? '&' : '?';
+    const page = await iamApi(path + separator + 'limit=200&offset=' + offset);
+    const chunk = page.items || [];
+    items.push(...chunk);
+    total = Number.isFinite(Number(page.total)) ? Number(page.total) : items.length;
+    if (!chunk.length) break;
+    offset += chunk.length;
+  }
+  return { items, total: Number.isFinite(total) ? total : items.length };
+}
+
 async function optionalApi(path, fallback) {
   try { return await iamApi(path); }
   catch { return fallback; }
@@ -207,22 +223,22 @@ async function accessAssignmentForm(forcedUserId = null) {
     || dom.modalActions.querySelector('button[type="submit"]');
   if (submit) submit.disabled = true;
 
-  const initialSubjectPath = '/iam/subjects?type=USER&limit=200';
-  const rolesPath = '/iam/roles?limit=200';
-  const organizationsPath = '/iam/organizations?limit=200';
+  const initialSubjectPath = '/iam/subjects?type=USER';
+  const rolesPath = '/iam/roles';
+  const organizationsPath = '/iam/organizations';
 
   let initialSubjects;
   let rolesResult;
   let organizationsResult;
   try {
     [initialSubjects, rolesResult, organizationsResult] = await Promise.all([
-      iamApi(initialSubjectPath),
-      iamApi(rolesPath),
-      iamApi(organizationsPath),
+      iamAll(initialSubjectPath),
+      iamAll(rolesPath),
+      iamAll(organizationsPath),
     ]);
   } catch (error) {
     let label = 'danych IAM';
-    let path = '/iam/subjects?type=USER&limit=200';
+    let path = '/iam/subjects?type=USER';
     if (error?.data?.detail?.required_permission === 'roles.read'
         || error?.data?.detail?.required_permission === 'iam.roles.read') {
       label = 'ról'; path = rolesPath;
@@ -331,13 +347,13 @@ async function accessAssignmentForm(forcedUserId = null) {
       API_TOKEN: 'tokenów API',
     };
     const label = labelMap[kind] || 'Subject';
-    const path = '/iam/subjects?type=' + encodeURIComponent(kind) + '&limit=200';
+    const path = '/iam/subjects?type=' + encodeURIComponent(kind);
     subjectHost.replaceChildren(node('div', { class: 'field-help', text: 'Ładowanie ' + label + '...' }));
     updateSubmitState();
     try {
       const result = kind === 'USER' && generation === 1
         ? initialSubjects
-        : await iamApi(path);
+        : await iamAll(path);
       if (generation !== subjectGeneration) return;
       const choices = (result.items || []).map(item => ({
         value: item.id,
@@ -375,11 +391,11 @@ async function accessAssignmentForm(forcedUserId = null) {
       updateSubmitState();
       return;
     }
-    const path = '/iam/projects?organization_id=' + encodeURIComponent(organizationId) + '&limit=200';
+    const path = '/iam/projects?organization_id=' + encodeURIComponent(organizationId);
     projectStatus.textContent = 'Ładowanie projektów...';
     updateSubmitState();
     try {
-      const result = await iamApi(path);
+      const result = await iamAll(path);
       if (generation !== projectGeneration) return;
       const choices = (result.items || []).map(item => ({
         value: item.id,
@@ -542,14 +558,94 @@ async function accessAssignmentForm(forcedUserId = null) {
   updateSubmitState();
 }
 
+function iamDateTimeLocal(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function editAssignmentForm(item) {
+  const effect = selectField('Effect', 'effect', [
+    { value: 'ALLOW', label: 'ALLOW' },
+    { value: 'DENY', label: 'DENY' },
+  ], item.effect || 'ALLOW', { required: true });
+  const validFrom = field('Valid from', 'valid_from', {
+    type: 'datetime-local',
+    value: iamDateTimeLocal(item.valid_from),
+  });
+  const validUntil = field('Valid until', 'valid_until', {
+    type: 'datetime-local',
+    value: iamDateTimeLocal(item.valid_until),
+  });
+  const inherit = checkboxField('Dziedzicz do scope potomnych', 'inherit', Boolean(item.inherit));
+  const approval = checkboxField(
+    'Wymagaj approval przed operacją',
+    'approval_required',
+    Boolean(item.approval_required),
+  );
+  const enabled = checkboxField('Binding aktywny', 'enabled', item.enabled !== false);
+  const conditions = field('Conditions JSON', 'conditions', {
+    tag: 'textarea',
+    value: JSON.stringify(item.conditions || {}, null, 2),
+    wide: true,
+    help: 'Zmiana jest zapisywana natychmiast w RoleAssignment i Policy Engine korzysta z niej przy następnym evaluation.',
+  });
+  const body = node('div', { class: 'form-grid' },
+    node('div', { class: 'wide panel' },
+      node('strong', { text: item.role_name || 'RoleAssignment' }),
+      node('div', { class: 'muted mono', text: assignmentScope(item) })),
+    effect, validFrom, validUntil, inherit, approval, enabled, conditions);
+
+  openModal({
+    title: 'Edytuj przypisanie',
+    eyebrow: 'Enterprise IAM · ' + item.id,
+    body,
+    wide: true,
+    submitLabel: 'Zapisz zmiany',
+    onSubmit: async (_data, form) => {
+      const raw = String(form.elements.conditions?.value || '').trim();
+      let conditionTree = {};
+      if (raw) {
+        try { conditionTree = JSON.parse(raw); }
+        catch { throw new Error('Conditions JSON nie jest poprawnym JSON-em.'); }
+        if (!conditionTree || Array.isArray(conditionTree) || typeof conditionTree !== 'object') {
+          throw new Error('Conditions JSON musi być obiektem JSON.');
+        }
+      }
+      const from = String(form.elements.valid_from?.value || '').trim();
+      const until = String(form.elements.valid_until?.value || '').trim();
+      if (from && until && new Date(until) <= new Date(from)) {
+        throw new Error('Valid until musi być późniejsze niż Valid from.');
+      }
+      const payload = {
+        effect: form.elements.effect.value,
+        conditions: conditionTree,
+        inherit: Boolean(form.elements.inherit?.checked),
+        approval_required: Boolean(form.elements.approval_required?.checked),
+        enabled: Boolean(form.elements.enabled?.checked),
+        valid_from: from ? new Date(from).toISOString() : null,
+        valid_until: until ? new Date(until).toISOString() : null,
+      };
+      await iamApi('/rbac/assignments/' + encodeURIComponent(item.id), {
+        method: 'PATCH',
+        body: payload,
+      });
+      toast('Przypisanie zaktualizowane.');
+      await enterpriseIamView();
+    },
+  });
+}
+
 async function assignmentsPanel() {
   const query = selectedUserId
     ? '?limit=200&subject_type=USER&subject_id=' + encodeURIComponent(selectedUserId)
     : '?limit=200';
   const [assignmentResult, userResult, groupResult] = await Promise.all([
     iamApi('/rbac/assignments' + query),
-    optionalApi('/users?limit=200', { items: [] }),
-    optionalApi('/rbac/groups?limit=200', { items: [] }),
+    iamAll('/iam/subjects?type=USER'),
+    iamAll('/iam/subjects?type=GROUP'),
   ]);
   const assignments = assignmentResult.items || [];
   const users = userResult.items || [];
@@ -557,7 +653,13 @@ async function assignmentsPanel() {
   const selected = users.find(item => Number(item.id) === Number(selectedUserId));
 
   const actions = [];
-  if (allowed('rbac.assignments.manage') || allowed('roles.assign')) {
+  const canCreateBinding = allowed('iam.assign') || allowed('iam.binding.create')
+    || allowed('rbac.assignments.manage') || allowed('roles.assign');
+  const canUpdateBinding = allowed('iam.binding.update')
+    || allowed('rbac.assignments.manage') || allowed('roles.assign');
+  const canDeleteBinding = allowed('iam.binding.delete')
+    || allowed('rbac.assignments.manage') || allowed('roles.assign');
+  if (canCreateBinding) {
     actions.push(button(selected ? 'Przypisz dostęp: ' + selected.username : 'Nowe przypisanie',
       () => accessAssignmentForm(selectedUserId).catch(error => toast(error.message, 'error')), 'primary'));
   }
@@ -584,7 +686,10 @@ async function assignmentsPanel() {
         { label: 'Status', value: item => statusBadge(item.status) },
         { label: 'Źródło', value: item => item.source },
       ], assignments, item => [
-        ...(allowed('rbac.assignments.manage') || allowed('roles.assign') ? [
+        ...(canUpdateBinding ? [
+          button('Edytuj', () => editAssignmentForm(item)),
+        ] : []),
+        ...(canDeleteBinding ? [
           button('Usuń', () => confirmAction(
             'Usuń przypisanie',
             'Usunięcie natychmiast zmieni efektywny dostęp. Wpis pozostanie w Audit Log.',
