@@ -438,8 +438,16 @@ def validate_blueprint_references(db, data, blueprint_id=None):
     return manager_roles
 
 
-def require_blueprint_manager(db, row, actor, *, action='blueprints.update'):
-    if not can_manage_blueprint(db, row, actor, action=action):
+def require_blueprint_manager(db, row, actor, request=None, *, action='blueprints.update'):
+    scope = getattr(getattr(request, 'state', None), 'resource_scope', None)
+    if not can_manage_blueprint(
+        db,
+        row,
+        actor,
+        action=action,
+        apmid=getattr(scope, 'apmid', None),
+        environment=getattr(scope, 'environment', None),
+    ):
         raise HTTPException(
             403,
             'A manager role and matching Policy Engine entity access are required for this Blueprint',
@@ -555,6 +563,9 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
     rows = paginate(db, Blueprint, offset, limit)
     source = portal_source(source_header)
     has_manage_permission = 'blueprints.update' in request.state.permissions
+    selected_scope = getattr(request.state, 'resource_scope', None)
+    entity_apmid = getattr(selected_scope, 'apmid', None)
+    entity_environment = getattr(selected_scope, 'environment', None)
     role_cache = {}
 
     def roles_for(row):
@@ -566,7 +577,7 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
     if available:
         rows = [
             row for row in rows
-            if available_to(db, row, actor, source, roles_for(row), action='blueprints.read')
+            if available_to(db, row, actor, source, roles_for(row), action='blueprints.read', apmid=entity_apmid, environment=entity_environment)
         ]
     elif source != 'backend':
         rows = [
@@ -575,7 +586,8 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
             or (
                 has_manage_permission
                 and can_manage_blueprint(
-                    db, row, actor, roles_for(row), action='blueprints.update'
+                    db, row, actor, roles_for(row), action='blueprints.update',
+                    apmid=entity_apmid, environment=entity_environment,
                 )
             )
         ]
@@ -585,7 +597,8 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
             can_manage=(
                 has_manage_permission
                 and can_manage_blueprint(
-                    db, row, actor, roles_for(row), action='blueprints.update'
+                    db, row, actor, roles_for(row), action='blueprints.update',
+                    apmid=entity_apmid, environment=entity_environment,
                 )
             ),
         )
@@ -600,18 +613,23 @@ def blueprint(id: int, request: Request, source_header: Annotated[str | None, He
     validate_persisted_blueprint_contract(row)
     source = portal_source(source_header)
     has_manage_permission = 'blueprints.update' in request.state.permissions
+    selected_scope = getattr(request.state, 'resource_scope', None)
+    entity_apmid = getattr(selected_scope, 'apmid', None)
+    entity_environment = getattr(selected_scope, 'environment', None)
     role_ids = blueprint_role_ids(db, row, actor)
     manager_allowed = (
         has_manage_permission
         and can_manage_blueprint(
-            db, row, actor, role_ids, action='blueprints.update'
+            db, row, actor, role_ids, action='blueprints.update',
+            apmid=entity_apmid, environment=entity_environment,
         )
     )
     if (
         source != 'backend'
         and not manager_allowed
         and not available_to(
-            db, row, actor, source, role_ids, action='blueprints.read'
+            db, row, actor, source, role_ids, action='blueprints.read',
+            apmid=entity_apmid, environment=entity_environment,
         )
     ):
         raise HTTPException(404, 'Blueprint not found')
@@ -624,18 +642,23 @@ def blueprint_yaml(id: int, request: Request,
                    actor=Depends(require('blueprints.read')), db=Depends(get_db, scope='function')):
     row = find(db, Blueprint, id)
     source = portal_source(source_header)
+    selected_scope = getattr(request.state, 'resource_scope', None)
+    entity_apmid = getattr(selected_scope, 'apmid', None)
+    entity_environment = getattr(selected_scope, 'environment', None)
     role_ids = blueprint_role_ids(db, row, actor)
     manager_allowed = (
         'blueprints.update' in request.state.permissions
         and can_manage_blueprint(
-            db, row, actor, role_ids, action='blueprints.update'
+            db, row, actor, role_ids, action='blueprints.update',
+            apmid=entity_apmid, environment=entity_environment,
         )
     )
     if (
         source != 'backend'
         and not manager_allowed
         and not available_to(
-            db, row, actor, source, role_ids, action='blueprints.read'
+            db, row, actor, source, role_ids, action='blueprints.read',
+            apmid=entity_apmid, environment=entity_environment,
         )
     ):
         raise HTTPException(404, 'Blueprint not found')
@@ -704,7 +727,7 @@ def update_blueprint(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(db, row, actor)
+    require_blueprint_manager(db, row, actor, request)
     require_blueprint_version(row, if_match)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
     validate_blueprint_user_scope(db, data, request, actor, blueprint_id=id)
@@ -730,7 +753,7 @@ def update_blueprint_bundle(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(db, row, actor)
+    require_blueprint_manager(db, row, actor, request)
     require_blueprint_version(row, if_match)
     data = blueprint_with_inline_hostname_scheme(db, bundle.blueprint, bundle.hostname_scheme, request, actor)
     validate_blueprint_role_scope(db, data, request, actor, blueprint_id=id)
@@ -757,7 +780,7 @@ def set_blueprint_enabled(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(db, row, actor)
+    require_blueprint_manager(db, row, actor, request)
     require_blueprint_version(row, if_match)
     row.is_active = data.enabled
     row.version += 1
@@ -777,7 +800,7 @@ def delete_blueprint(
     row = db.scalar(select(Blueprint).where(Blueprint.id == id).with_for_update())
     if row is None:
         raise HTTPException(404, 'Blueprint not found')
-    require_blueprint_manager(db, row, actor, action='blueprints.delete')
+    require_blueprint_manager(db, row, actor, request, action='blueprints.delete')
 
     existing = pending_blueprint_delete_job(db, id)
     blocking_jobs = active_blueprint_provisioning_jobs(db, id)
