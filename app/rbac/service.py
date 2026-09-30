@@ -115,9 +115,11 @@ def seed(db):
     }
     viewer = {
         p for p in ALL_PERMISSIONS
-        if p.endswith('.read') or '.read.' in p or p in {
-            'projects.select', 'projects.use', 'credentials.read_metadata',
-        }
+        if not p.startswith('iam.') and (
+            p.endswith('.read') or '.read.' in p or p in {
+                'projects.select', 'projects.use', 'credentials.read_metadata',
+            }
+        )
     }
     developer = {
         'projects.read', 'projects.use', 'projects.select',
@@ -137,7 +139,7 @@ def seed(db):
             if p.split('.')[0] not in {
                 'users', 'roles', 'groups', 'service_accounts', 'tokens', 'settings',
                 'updates', 'tenants', 'organizations', 'projects', 'governance',
-                'rbac', 'authorization', 'break_glass', 'instance_backups',
+                'iam', 'rbac', 'authorization', 'break_glass', 'instance_backups',
             } and p != 'quotas.tenant.manage'
         } | {'updates.read'}),
         'Operator': {
