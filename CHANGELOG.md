@@ -45,6 +45,8 @@
 - Efektywne role obejmują role globalne oraz aktywne przypisania tenant/project. Nie wolno sprawdzać tylko globalnych ról.
 - Cofnięcie membershipu tenant/project ma natychmiast odbierać wynikające z niego uprawnienia.
 - Payload API nie może wstrzykiwać principal IDs niewidocznych w wybranym scope. Backend musi ponownie walidować role/użytkowników wybrane w UI.
+- W formularzach IAM pole roli przechowuje wyłącznie istniejące `role_id`; tekst comboboxa służy tylko do wyszukiwania. Zmiana roli istniejącego RoleAssignment musi ponownie przejść delegation boundary, kontrolę scope i separation-of-duties oraz odświeżyć `permission_ceiling` z nowej roli.
+- Tworzenie RoleAssignment musi przekazywać jawnie zweryfikowany obiekt `Role` do kodu budującego assignment; nie wolno polegać na zmiennej z zewnętrznego scope przy wyliczaniu `permission_ceiling`.
 - Blueprint ACL jest **dodatkowym ograniczeniem**, a nie mechanizmem rozszerzającym resource-scope RBAC.
 - `can_manage` i podobne decyzje powinny być obliczane na backendzie i konsumowane przez UI.
 - Wbudowany Administrator musi być synchronizowany z nowymi permissionami również na istniejących instalacjach. Regresje tego typu blokowały m.in. LDAP/settings.
