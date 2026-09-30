@@ -276,8 +276,8 @@ def compile_blueprint(db, blueprint, supplied, hostname_values, actor_id, apmid=
         deployment_variables['ssh_username'] = guest_credential['username']
         if guest_credential['public_key']:
             deployment_variables['ssh_public_key'] = guest_credential['public_key']
-        else:
-            deployment_variables['ssh_public_key'] = None
+        # Password-only credentials may be combined with a Blueprint-provided
+        # public key. Keep that public key instead of clearing it here.
 
     tags = [str(tag).strip().lower() for tag in (deployment_variables.get('tags') or []) if str(tag).strip()]
 
