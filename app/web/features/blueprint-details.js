@@ -252,6 +252,7 @@
           node('div', { class: 'blueprint-details-facts' },
             fact('Widoczność', '', { node: visibilityBadges(item.visibility) }),
             fact('Role zarządzające', '', { node: chipList(roleLabels(item.manager_role_ids, roleNames), 'Bez dedykowanej roli') }),
+            fact('Policy Engine Entity', '', { node: chipList((item.allowed_entities || []).map(String), 'Bez ograniczenia Entity') }),
             fact('Dozwolone role', '', { node: chipList(roleLabels(item.allowed_role_ids, roleNames), 'Wszystkie role w dozwolonym scope') }),
             fact('Dozwoleni użytkownicy', '', { node: chipList((item.allowed_user_ids || []).map(value => 'Użytkownik #' + value), 'Bez ograniczenia do użytkowników') }))),
 
