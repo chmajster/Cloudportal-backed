@@ -153,7 +153,7 @@
     if (!active) {
       panel.append(node('div', { class: 'blueprint-wizard-info wide' },
         node('strong', { text: 'Cloud-init wyłączony' }),
-        node('span', { text: 'Pola użytkownika SSH i klucza publicznego są ukryte, ponieważ bez kroku Cloud-init nie zostałyby zastosowane do systemu gościa.' })));
+        node('span', { text: 'Pola użytkownika SSH, hasła i klucza publicznego są ukryte, ponieważ bez kroku Cloud-init nie zostałyby zastosowane do systemu gościa.' })));
       return panel;
     }
 
