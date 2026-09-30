@@ -1710,6 +1710,10 @@ def _write_certbot_hook(enabled: bool) -> None:
         CERTBOT_DEPLOY_HOOK.unlink(missing_ok=True)
         return
     token_file = CONFIG_DIR / "updater.token"
+    metadata = _read_json(_tls_metadata_path())
+    active_lineage = str(metadata.get("path") or "")
+    if not active_lineage:
+        raise RuntimeError("Brak źródła Let's Encrypt dla hooka odnowienia")
     if SOCKET_PATH:
         curl_target = (
             f'curl --fail --silent --show-error --unix-socket "{SOCKET_PATH}" '
@@ -1726,6 +1730,8 @@ def _write_certbot_hook(enabled: bool) -> None:
         "#!/bin/sh\n"
         "set -eu\n"
         f'TOKEN_FILE="{token_file}"\n'
+        f'ACTIVE_LINEAGE="{active_lineage}"\n'
+        'if [ -n "${RENEWED_LINEAGE:-}" ] && [ "$RENEWED_LINEAGE" != "$ACTIVE_LINEAGE" ]; then exit 0; fi\n'
         'TOKEN=$(cat "$TOKEN_FILE")\n'
         + curl_target
         + "\n"
@@ -1831,52 +1837,53 @@ def _activate_tls_material(
         os.chmod(stage_key, 0o600)
         _validate_tls_pair(stage_cert, stage_key, hostname)
 
-        config_paths = [
-            tls_dir / "server.crt",
-            tls_dir / "server.key",
-            _tls_source_marker(),
-            tls_dir / "host",
-            _tls_metadata_path(),
-        ]
-        if INSTALL_MODE == "docker":
-            config_paths.append(CONFIG_DIR / "docker.env")
-        else:
-            config_paths.extend(
-                [CONFIG_DIR / "public.conf", CONFIG_DIR / "backend.env", NGINX_SYSTEMD_CONF]
-            )
-        snapshot = _snapshot_paths(config_paths)
-
-        try:
-            _atomic_bytes(tls_dir / "server.crt", stage_cert.read_bytes(), 0o600)
-            _atomic_bytes(tls_dir / "server.key", stage_key.read_bytes(), 0o600)
-            marker_value = "managed-self-signed" if source_type == "managed-self-signed" else "custom"
-            _atomic_text(_tls_source_marker(), marker_value + "\n", 0o600)
-            _atomic_text(tls_dir / "host", hostname + "\n", 0o600)
-            atomic_json(
+        with lock:
+            config_paths = [
+                tls_dir / "server.crt",
+                tls_dir / "server.key",
+                _tls_source_marker(),
+                tls_dir / "host",
                 _tls_metadata_path(),
-                {
-                    "type": source_type,
-                    "path": source_path,
-                    "hostname": hostname,
-                    "updated_at": utcnow(),
-                },
-            )
-            _set_public_hostname(hostname)
-            _validate_proxy_tls()
-            _reload_proxy_tls()
-        except Exception:
-            _restore_paths(snapshot)
+            ]
+            if INSTALL_MODE == "docker":
+                config_paths.append(CONFIG_DIR / "docker.env")
+            else:
+                config_paths.extend(
+                    [CONFIG_DIR / "public.conf", CONFIG_DIR / "backend.env", NGINX_SYSTEMD_CONF]
+                )
+            snapshot = _snapshot_paths(config_paths)
+
             try:
+                _atomic_bytes(tls_dir / "server.crt", stage_cert.read_bytes(), 0o600)
+                _atomic_bytes(tls_dir / "server.key", stage_key.read_bytes(), 0o600)
+                marker_value = "managed-self-signed" if source_type == "managed-self-signed" else "custom"
+                _atomic_text(_tls_source_marker(), marker_value + "\n", 0o600)
+                _atomic_text(tls_dir / "host", hostname + "\n", 0o600)
+                atomic_json(
+                    _tls_metadata_path(),
+                    {
+                        "type": source_type,
+                        "path": source_path,
+                        "hostname": hostname,
+                        "updated_at": utcnow(),
+                    },
+                )
+                _set_public_hostname(hostname)
                 _validate_proxy_tls()
                 _reload_proxy_tls()
             except Exception:
-                pass
-            raise
+                _restore_paths(snapshot)
+                try:
+                    _validate_proxy_tls()
+                    _reload_proxy_tls()
+                except Exception:
+                    pass
+                raise
 
-        _write_certbot_hook(configure_renewal_hook)
-        result = _tls_status_payload()
-        result["changed"] = True
-        return result
+            _write_certbot_hook(configure_renewal_hook)
+            result = _tls_status_payload()
+            result["changed"] = True
+            return result
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
