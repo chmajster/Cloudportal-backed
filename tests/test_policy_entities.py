@@ -4,6 +4,8 @@ from app.policy_engine.engine import evaluate
 from app.policy_engine.entities import (
     build_entity_key,
     entity_keys_for_permissions,
+    entity_role_allows_permission,
+    filter_permissions_for_entity_role,
     entity_role_catalog,
     normalize_entity_key,
     parse_entity_key,
@@ -105,3 +107,15 @@ def test_policy_engine_matches_entity_as_identity_dimension():
 
     assert evaluate([rule], _context([entity])).decision == 'allow'
     assert evaluate([rule], _context(['entity.LEO-131.dev.operator'])).decision == 'deny'
+
+
+def test_entity_role_is_a_permission_ceiling_not_a_grant():
+    permissions = {
+        'blueprints.read', 'blueprints.execute', 'blueprints.update',
+        'machines.read', 'machines.delete', 'audit.read',
+    }
+    read_only = filter_permissions_for_entity_role('read-only', permissions)
+    assert read_only == {'blueprints.read', 'machines.read', 'audit.read'}
+    assert entity_role_allows_permission('operator', 'blueprints.execute')
+    assert not entity_role_allows_permission('operator', 'blueprints.update')
+    assert entity_role_allows_permission('admin', 'machines.delete')
