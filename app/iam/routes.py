@@ -658,8 +658,8 @@ def _classification_scope(db, organization_id: str, project_id: str | None) -> t
 @router.get('/iam/apmids')
 def iam_apmids(
     organization_id: str,
-    project_id: str | None = None,
     request: Request,
+    project_id: str | None = None,
     actor=Depends(authenticate),
     db=Depends(get_db, scope='function'),
 ):
