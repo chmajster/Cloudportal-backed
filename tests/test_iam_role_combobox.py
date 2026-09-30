@@ -25,7 +25,8 @@ def test_iam_role_field_uses_existing_searchable_select_contract():
     assert "...scopeTerms" in iam
     assert "availableRoleIds.has(roleId)" in iam
     assert "role_id: roleId" in iam
-    assert "role.searchableSelect.setChoices(roles.map(roleChoice), assignment?.role_id || '')" in iam
+    assert "role.searchableSelect.setChoices(roles.map(roleChoice), preferred)" in iam
+    assert "await loadAssignableRoles(assignment?.role_id || '')" in iam
     assert "button('Edytuj', () => accessAssignmentForm(null, item)" in iam
     assert "method: 'PATCH'" in iam
 
