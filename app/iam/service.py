@@ -183,6 +183,69 @@ def _active_assignment_query(subjects, instant):
     )
 
 
+SYSTEM_ADMIN_BASE_PERMISSIONS = frozenset({
+    'users.read',
+    'roles.read',
+    'groups.read',
+    'rbac.assignments.read',
+    'rbac.assignments.manage',
+    'tenants.admin',
+    'projects.admin',
+    'organizations.read',
+})
+
+
+def is_system_administrator(db, actor) -> bool:
+    """Detect platform administrators from live grants without trusting a role label alone.
+
+    Legacy UserRole grants and Enterprise IAM GLOBAL assignments are both accepted.
+    Conditional assignments are deliberately excluded because administrator bypass
+    must be an unconditional platform-level capability. API-token ceilings still apply.
+    """
+    try:
+        actor_identity = identity(db, Principal.from_token(actor))
+    except (AttributeError, HTTPException):
+        return False
+
+    if SYSTEM_ADMIN_BASE_PERMISSIONS <= actor_identity.global_permissions:
+        return True
+
+    subjects = _subjects(db, actor)
+    rows = db.scalars(
+        _active_assignment_query(subjects, _instant()).where(
+            RoleAssignment.scope_type == 'GLOBAL',
+        )
+    ).all()
+    granted: set[str] = set()
+    denied: set[str] = set()
+    token_ceiling = tuple(actor.scopes or ()) if getattr(actor, 'kind', None) == 'api' else None
+
+    for row in rows:
+        if row.conditions:
+            continue
+        exact, patterns, _role_name = _role_grants(db, row.role_id)
+        expanded = set(exact)
+        for permission in ALL_PERMISSIONS:
+            if PermissionMatcher.any_matches(patterns, permission):
+                expanded.add(permission)
+        if row.permission_ceiling is not None:
+            expanded = {
+                permission for permission in expanded
+                if PermissionMatcher.any_matches(row.permission_ceiling, permission)
+            }
+        if token_ceiling is not None:
+            expanded = {
+                permission for permission in expanded
+                if PermissionMatcher.any_matches(token_ceiling, permission)
+            }
+        if row.effect == 'DENY':
+            denied.update(expanded)
+        else:
+            granted.update(expanded)
+
+    return SYSTEM_ADMIN_BASE_PERMISSIONS <= (granted - denied)
+
+
 def _assignment_scope_matches(row: RoleAssignment, target: dict, context: Mapping[str, Any]) -> tuple[bool, bool]:
     kind = row.scope_type
     target_kind = target['scope_type']
