@@ -2671,6 +2671,10 @@ EOF
 
   mv -f "$candidate_env" "$docker_env"
   ln -sfn "$release" "$docker_root/current"
+  if ((docker_tls_changed)); then
+    rm -f "$docker_tls/cloudportal-source.json"
+    rm -f /etc/letsencrypt/renewal-hooks/deploy/cloudportal-backed
+  fi
   ui_ok 'Kandydat został aktywowany jako bieżący release Docker.'
 
   docker_activate_updater "$release"
@@ -4618,6 +4622,10 @@ else
       exit 1
     }
   fi
+fi
+if ((tls_certificate_changed)); then
+  rm -f "$config/tls/cloudportal-source.json"
+  rm -f /etc/letsencrypt/renewal-hooks/deploy/cloudportal-backed
 fi
 if [[ "$os_family" == rhel ]] && command -v selinuxenabled >/dev/null && selinuxenabled; then
   restorecon -R "$config/tls"
