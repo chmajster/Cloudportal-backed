@@ -183,8 +183,8 @@ async function accessAssignmentForm(forcedUserId = null) {
       const requiredByScope = {
         ORGANIZATION: ['tenant_id'],
         PROJECT: ['tenant_id', 'project_id'],
-        APMID: ['tenant_id', 'project_id', 'apmid'],
-        ENVIRONMENT: ['tenant_id', 'project_id', 'apmid', 'environment'],
+        APMID: ['tenant_id', 'apmid'],
+        ENVIRONMENT: ['tenant_id', 'apmid', 'environment'],
         RESOURCE_POOL: ['tenant_id', 'project_id', 'scope_id'],
         BLUEPRINT: ['tenant_id', 'project_id', 'scope_id'],
         DEPLOYMENT: ['tenant_id', 'project_id', 'scope_id'],
@@ -290,7 +290,7 @@ async function accessAssignmentForm(forcedUserId = null) {
   ], 'ALLOW', { required: true });
   const scopeType = selectField('Zakres', 'scope_type',
     SCOPE_TYPES.map(([scopeValue, label]) => ({ value: scopeValue, label })),
-    'GLOBAL', { required: true });
+    'ORGANIZATION', { required: true });
 
   const organization = searchableSelectField('Organizacja', 'tenant_id', organizations.map(item => ({
     value: item.id,
@@ -472,13 +472,13 @@ async function accessAssignmentForm(forcedUserId = null) {
     const apmidValue = apmid.searchableSelect.value();
     const generation = ++environmentGeneration;
     environment.searchableSelect.setChoices([], '');
-    if (!organizationId || !projectId || !apmidValue) {
+    if (!organizationId || !apmidValue) {
       environmentStatus.textContent = 'Najpierw wybierz APMID';
       updateSubmitState();
       return;
     }
     const path = '/iam/environments?organization_id=' + encodeURIComponent(organizationId)
-      + '&project_id=' + encodeURIComponent(projectId)
+      + (projectId ? '&project_id=' + encodeURIComponent(projectId) : '')
       + '&apmid=' + encodeURIComponent(apmidValue);
     environmentStatus.textContent = 'Ładowanie ENV...';
     updateSubmitState();
@@ -507,7 +507,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     const resourceKinds = ['RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'];
 
     if (kind !== 'GLOBAL' && !organizationId) return null;
-    if (!['GLOBAL', 'ORGANIZATION'].includes(kind) && !projectId) return null;
+    if (['RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'].includes(kind) && !projectId) return null;
     if (kind === 'APMID' && !apmidValue) return null;
     if (kind === 'ENVIRONMENT' && (!apmidValue || !environmentValue)) return null;
     if (resourceKinds.includes(kind) && !resourceScopeId) return null;
@@ -561,6 +561,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     const kind = scopeSelect.value;
     const needsOrganization = kind !== 'GLOBAL';
     const needsProject = !['GLOBAL', 'ORGANIZATION'].includes(kind);
+    const projectRequired = ['PROJECT', 'RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'].includes(kind);
     setIamFieldVisible(organization, needsOrganization);
     setIamFieldVisible(project, needsProject);
     setIamFieldVisible(apmid, ['APMID', 'ENVIRONMENT'].includes(kind));
@@ -569,6 +570,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     if (needsProject && organization.searchableSelect.value() && !project.searchableSelect.value()) {
       loadProjects(organization.searchableSelect.value()).catch(error => toast(error.message, 'error'));
     }
+    projectStatus.textContent = needsProject && !projectRequired ? 'Projekt opcjonalny' : projectStatus.textContent;
     updateSubmitState();
   }
 
@@ -593,8 +595,8 @@ async function accessAssignmentForm(forcedUserId = null) {
       GLOBAL: [],
       ORGANIZATION: ['tenant_id'],
       PROJECT: ['tenant_id', 'project_id'],
-      APMID: ['tenant_id', 'project_id', 'apmid'],
-      ENVIRONMENT: ['tenant_id', 'project_id', 'apmid', 'environment'],
+      APMID: ['tenant_id', 'apmid'],
+      ENVIRONMENT: ['tenant_id', 'apmid', 'environment'],
       RESOURCE_POOL: ['tenant_id', 'project_id', 'scope_id'],
       BLUEPRINT: ['tenant_id', 'project_id', 'scope_id'],
       DEPLOYMENT: ['tenant_id', 'project_id', 'scope_id'],
@@ -604,6 +606,26 @@ async function accessAssignmentForm(forcedUserId = null) {
     const hasRequiredScope = (requirements[kind] || []).every(name => Boolean(value(name)));
     const selectedRoleId = Number(value('role_id'));
     const validRole = Number.isInteger(selectedRoleId) && availableRoleIds.has(selectedRoleId);
+    const subjectControl = form.elements.subject_id;
+    const roleControl = form.elements.role_id;
+    const subjectText = subjectControl?.selectedOptions?.[0]?.textContent
+      || subjectControl?.closest?.('.searchable-select')?.querySelector?.('input')?.value
+      || (forcedUserId ? 'Użytkownik #' + forcedUserId : '—');
+    const roleText = roleControl?.selectedOptions?.[0]?.textContent
+      || roleControl?.closest?.('.searchable-select')?.querySelector?.('input')?.value
+      || '—';
+    const scopeParts = [];
+    if (value('tenant_id')) scopeParts.push('Organizacja ' + value('tenant_id'));
+    if (value('project_id')) scopeParts.push('Projekt ' + value('project_id'));
+    if (value('apmid')) scopeParts.push('APMID ' + value('apmid'));
+    if (value('environment')) scopeParts.push('ENV ' + value('environment'));
+    if (value('scope_id') && !['ORGANIZATION', 'PROJECT'].includes(kind)) scopeParts.push(value('scope_id'));
+    const summaryLine = summary.querySelector('.muted');
+    if (summaryLine) {
+      summaryLine.textContent = subjectText + ' → ' + roleText + ' → '
+        + (scopeParts.join(' → ') || 'Cała platforma')
+        + ' · Dziedziczenie: ' + (form.elements.inherit?.checked ? 'TAK' : 'NIE');
+    }
     submit.disabled = !(
       ready
       && Boolean(forcedUserId || value('subject_id'))
