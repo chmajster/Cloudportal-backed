@@ -784,22 +784,17 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
     && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
     const governed = vmGovernance.applies(item);
-    const actionCatalogPromise = governed
-      ? vmGovernance.catalog(item).catch(() => null)
+    const actionCatalogPromise = governed ? vmGovernance.catalog(item).catch(() => null) : Promise.resolve(null);
+    const snapshotInfoPromise = !governed && allowed('snapshots.read')
+      ? api(`${vmBase(item)}/snapshots`).catch(() => null)
       : Promise.resolve(null);
+    const availabilityPromise = window.AvailabilityPlans?.canReadResource
+      ? window.AvailabilityPlans.canReadResource(item)
+      : Promise.resolve(false);
     const [status, actionCatalog, snapshotInfo, availabilityVisible] = await Promise.all([
-      vmGovernance.status(item, vmBase(item)),
-      actionCatalogPromise,
-      !governed && allowed('snapshots.read')
-        ? api(`${vmBase(item)}/snapshots`).catch(() => null)
-        : Promise.resolve(null),
-      window.AvailabilityPlans?.canReadResource
-        ? window.AvailabilityPlans.canReadResource(item)
-        : Promise.resolve(false),
+      vmGovernance.status(item, vmBase(item)), actionCatalogPromise, snapshotInfoPromise, availabilityPromise,
     ]);
-    const snapshotCapability = governed
-      ? (actionCatalog?.capabilities?.snapshot_capability || null)
-      : (snapshotInfo?.capability || null);
+    const snapshotCapability = governed ? actionCatalog?.capabilities?.snapshot_capability || null : snapshotInfo?.capability || null;
     if (!routedDetails) {
       state.view = returnView;
       location.hash = typeof window.uiRoutePath === 'function' ? window.uiRoutePath(returnView) : returnView;
@@ -810,13 +805,9 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
 
     const tabContent = node('div', { class: 'vm-tab-content' });
     const tabs = [
-      ['overview', 'Przegląd'],
-      !governed ? ['monitor', 'Monitor'] : null,
-      ['hardware', 'Hardware'],
-      availabilityVisible ? ['availability', 'Dostępność'] : null,
-      ['snapshots', 'Snapshoty', 'snapshots.read'],
-      !governed ? ['backups', 'Backupy', 'backups.read'] : null,
-      ['audit', 'Historia'],
+      ['overview', 'Przegląd'], !governed ? ['monitor', 'Monitor'] : null, ['hardware', 'Hardware'],
+      availabilityVisible ? ['availability', 'Dostępność'] : null, ['snapshots', 'Snapshoty', 'snapshots.read'],
+      !governed ? ['backups', 'Backupy', 'backups.read'] : null, ['audit', 'Historia'],
     ].filter(row => row && allowed(row[2]));
 
     let activeTab = tabs.some(([id]) => id === initialTab) ? initialTab : 'overview';
@@ -908,10 +899,8 @@ async function openVmManager(item, initialTab = 'overview', parentView = null) {
 }
 
 async function vmPower(item, action) {
-  const labels = {
-    start: 'Uruchamianie VM', shutdown: 'Bezpieczne wyłączanie VM', reboot: 'Restart VM',
-    suspend: 'Wstrzymywanie VM', resume: 'Wznawianie VM', reset: 'Twardy reset VM', stop: 'Zatrzymywanie VM',
-  };
+  const labels = { start: 'Uruchamianie VM', shutdown: 'Bezpieczne wyłączanie VM', reboot: 'Restart VM',
+    suspend: 'Wstrzymywanie VM', resume: 'Wznawianie VM', reset: 'Twardy reset VM', stop: 'Zatrzymywanie VM' };
   try {
     const request = await vmGovernance.powerRequest(item, vmBase(item), action);
     if (request.mode === 'day2') {
