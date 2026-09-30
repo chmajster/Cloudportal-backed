@@ -318,6 +318,8 @@ def _assert_delegatable(
 ):
     system_admin = is_system_administrator(db, actor)
     _require_any(db, actor, _scope_management_actions(scope, operation), scope, request)
+    if system_admin and operation in {'update', 'delete'}:
+        return
     profile = _profile(db, role)
     if profile is not None and not profile.enabled:
         raise HTTPException(409, {'error': 'role_disabled'})
