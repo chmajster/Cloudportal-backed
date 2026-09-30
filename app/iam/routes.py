@@ -32,9 +32,11 @@ from app.iam.schemas import (
 )
 from app.iam.service import (
     PermissionMatcher, assignment_status, authorize, authorize_or_raise,
-    effective_permissions, normalize_scope, permission_patterns_for_role,
-    request_context, validate_assignment_conditions, validate_permission_patterns,
+    effective_permissions, is_system_administrator, normalize_scope,
+    permission_patterns_for_role, request_context, validate_assignment_conditions,
+    validate_permission_patterns,
 )
+from app.vm_classification import tenant_vm_classification_settings
 
 
 router = APIRouter(tags=['iam-rbac'])
@@ -262,15 +264,22 @@ def _hydrate_scope(db, scope: dict) -> dict:
     return scope
 
 
-def _scope_management_actions(scope: dict) -> tuple[str, ...]:
+def _scope_management_actions(scope: dict, operation: str = 'create') -> tuple[str, ...]:
+    iam_actions = {
+        'create': ('iam.assign', 'iam.binding.create'),
+        'update': ('iam.binding.update',),
+        'delete': ('iam.binding.delete',),
+    }.get(operation, ())
     if scope['scope_type'] == 'GLOBAL':
-        return ('rbac.assignments.manage', 'roles.assign')
+        return (*iam_actions, 'rbac.assignments.manage', 'roles.assign')
     if scope['scope_type'] == 'ORGANIZATION':
-        return ('rbac.assignments.manage', 'tenants.roles.assign', 'organizations.assign_roles')
-    return ('rbac.assignments.manage', 'projects.roles.assign')
+        return (*iam_actions, 'rbac.assignments.manage', 'tenants.roles.assign', 'organizations.assign_roles')
+    return (*iam_actions, 'rbac.assignments.manage', 'projects.roles.assign')
 
 
 def _require_any(db, actor, actions: Iterable[str], scope: dict, request: Request):
+    if is_system_administrator(db, actor):
+        return None
     decisions = []
     for action in actions:
         if action not in ALL_PERMISSIONS:
@@ -304,8 +313,11 @@ def _expanded_role_permissions(db, role: Role) -> set[str]:
     return result
 
 
-def _assert_delegatable(db, actor, role: Role, scope: dict, request: Request):
-    _require_any(db, actor, _scope_management_actions(scope), scope, request)
+def _assert_delegatable(
+    db, actor, role: Role, scope: dict, request: Request, *, operation: str = 'create'
+):
+    system_admin = is_system_administrator(db, actor)
+    _require_any(db, actor, _scope_management_actions(scope, operation), scope, request)
     profile = _profile(db, role)
     if profile is not None and not profile.enabled:
         raise HTTPException(409, {'error': 'role_disabled'})
@@ -314,6 +326,8 @@ def _assert_delegatable(db, actor, role: Role, scope: dict, request: Request):
             'error': 'role_scope_not_allowed',
             'scope_type': scope['scope_type'],
         })
+    if system_admin:
+        return
     missing = []
     for permission in sorted(_expanded_role_permissions(db, role)):
         decision = authorize(
@@ -383,7 +397,7 @@ def _assert_no_role_conflict(db, subject_type: str, subject_id: str, role_id: in
         raise HTTPException(409, {'error': 'separation_of_duties_conflict'})
 
 
-def _new_assignment(db, actor, data: AssignmentCreate, scope: dict) -> RoleAssignment:
+def _new_assignment(db, actor, data: AssignmentCreate, scope: dict, role: Role) -> RoleAssignment:
     row = RoleAssignment(
         subject_type=data.subject_type,
         subject_id=data.subject_id,
@@ -427,6 +441,209 @@ def _assignments_for_user(db, user_id: int) -> list[RoleAssignment]:
     ))
 
 
+def _iam_catalog_scope() -> dict:
+    return {'scope_type': 'GLOBAL'}
+
+
+def _subject_user_public(row: User) -> dict:
+    display_name = ' '.join(
+        part for part in (row.first_name, row.last_name) if part
+    ).strip() or row.username
+    return {
+        'id': row.id,
+        'username': row.username,
+        'email': row.email,
+        'first_name': row.first_name,
+        'last_name': row.last_name,
+        'display_name': display_name,
+        'is_active': row.is_active,
+        'is_locked': row.is_locked,
+        'is_service_account': row.is_service_account,
+    }
+
+
+@router.get('/iam/subjects')
+def iam_subjects(
+    request: Request,
+    type: str = Query('USER'),
+    limit: int = Query(200, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    actor=Depends(authenticate),
+    db=Depends(get_db, scope='function'),
+):
+    kind = str(type or 'USER').upper()
+    if kind not in {'USER', 'GROUP', 'SERVICE_ACCOUNT', 'API_TOKEN'}:
+        raise HTTPException(422, {'error': 'unsupported_subject_type', 'subject_type': kind})
+
+    legacy_permission = 'groups.read' if kind == 'GROUP' else (
+        'tokens.read' if kind == 'API_TOKEN' else 'users.read'
+    )
+    _require_any(
+        db, actor, ('iam.subject.read', legacy_permission),
+        _iam_catalog_scope(), request,
+    )
+
+    if kind in {'USER', 'SERVICE_ACCOUNT'}:
+        service_account = kind == 'SERVICE_ACCOUNT'
+        filters = (
+            User.is_active.is_(True),
+            User.is_service_account.is_(service_account),
+        )
+        total = db.scalar(select(func.count()).select_from(User).where(*filters)) or 0
+        rows = db.scalars(
+            select(User).where(*filters)
+            .order_by(User.username, User.id).offset(offset).limit(limit)
+        ).all()
+        return {
+            'items': [_subject_user_public(row) for row in rows],
+            'total': int(total), 'limit': limit, 'offset': offset,
+        }
+
+    if kind == 'GROUP':
+        filters = (Group.enabled.is_(True),)
+        total = db.scalar(select(func.count()).select_from(Group).where(*filters)) or 0
+        rows = db.scalars(
+            select(Group).where(*filters)
+            .order_by(Group.name, Group.id).offset(offset).limit(limit)
+        ).all()
+        return {
+            'items': [_group_public(db, row) for row in rows],
+            'total': int(total), 'limit': limit, 'offset': offset,
+        }
+
+    filters = (
+        Token.kind == 'api',
+        Token.revoked_at.is_(None),
+    )
+    total = db.scalar(select(func.count()).select_from(Token).where(*filters)) or 0
+    rows = db.scalars(
+        select(Token).where(*filters)
+        .order_by(Token.name, Token.id).offset(offset).limit(limit)
+    ).all()
+    return {
+        'items': [{
+            'id': row.id,
+            'name': row.name,
+            'token_prefix': row.token_prefix,
+            'user_id': row.user_id,
+        } for row in rows],
+        'total': int(total), 'limit': limit, 'offset': offset,
+    }
+
+
+@router.get('/iam/organizations')
+@router.get('/organizations')
+def iam_organizations(
+    request: Request,
+    limit: int = Query(200, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    actor=Depends(authenticate),
+    db=Depends(get_db, scope='function'),
+):
+    _require_any(
+        db, actor, ('organizations.read', 'tenants.read', 'iam.assign'),
+        _iam_catalog_scope(), request,
+    )
+    filters = (Tenant.deleted_at.is_(None), Tenant.status != 'disabled')
+    total = db.scalar(select(func.count()).select_from(Tenant).where(*filters)) or 0
+    rows = db.scalars(
+        select(Tenant).where(*filters)
+        .order_by(Tenant.name, Tenant.id).offset(offset).limit(limit)
+    ).all()
+    return {
+        'items': [{
+            'id': row.id,
+            'name': row.name,
+            'slug': row.slug,
+            'status': row.status,
+        } for row in rows],
+        'total': int(total), 'limit': limit, 'offset': offset,
+    }
+
+
+@router.get('/iam/projects')
+def iam_projects(
+    request: Request,
+    organization_id: str | None = None,
+    limit: int = Query(200, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    actor=Depends(authenticate),
+    db=Depends(get_db, scope='function'),
+):
+    _require_any(
+        db, actor, ('projects.read', 'iam.assign'),
+        _iam_catalog_scope(), request,
+    )
+    filters = [Project.deleted_at.is_(None), Project.status != 'disabled']
+    if organization_id:
+        filters.append(Project.tenant_id == organization_id)
+    total = db.scalar(select(func.count()).select_from(Project).where(*filters)) or 0
+    rows = db.scalars(
+        select(Project).where(*filters)
+        .order_by(Project.tenant_id, Project.name, Project.id)
+        .offset(offset).limit(limit)
+    ).all()
+    return {
+        'items': [{
+            'id': row.id,
+            'tenant_id': row.tenant_id,
+            'organization_id': row.tenant_id,
+            'name': row.name,
+            'slug': row.slug,
+            'status': row.status,
+        } for row in rows],
+        'total': int(total), 'limit': limit, 'offset': offset,
+    }
+
+
+def _classification_scope(db, organization_id: str, project_id: str) -> tuple[dict, dict]:
+    scope = _hydrate_scope(db, normalize_scope({
+        'scope_type': 'PROJECT',
+        'scope_id': project_id,
+        'tenant_id': organization_id,
+        'project_id': project_id,
+    }))
+    return scope, tenant_vm_classification_settings(db, organization_id)
+
+
+@router.get('/iam/apmids')
+def iam_apmids(
+    organization_id: str,
+    project_id: str,
+    request: Request,
+    actor=Depends(authenticate),
+    db=Depends(get_db, scope='function'),
+):
+    scope, classification = _classification_scope(db, organization_id, project_id)
+    _require_any(db, actor, ('projects.read', 'iam.assign'), scope, request)
+    values = list(classification.get('apmids') or [])
+    return {'items': [{'id': value, 'name': value} for value in values], 'total': len(values)}
+
+
+@router.get('/iam/environments')
+def iam_environments(
+    organization_id: str,
+    project_id: str,
+    request: Request,
+    apmid: str | None = None,
+    actor=Depends(authenticate),
+    db=Depends(get_db, scope='function'),
+):
+    scope, classification = _classification_scope(db, organization_id, project_id)
+    _require_any(db, actor, ('projects.read', 'iam.assign'), scope, request)
+    if apmid:
+        values = list((classification.get('apmid_environments') or {}).get(apmid, []))
+    else:
+        values = [
+            name for name, enabled in (classification.get('environments') or {}).items()
+            if enabled
+        ]
+    return {
+        'items': [{'id': value, 'name': str(value).upper()} for value in values],
+        'total': len(values),
+    }
+
+
 @router.get('/rbac/permissions', response_model=PermissionCatalog)
 def permission_catalog(
     actor=Depends(authenticate),
@@ -452,13 +669,18 @@ def permission_catalog(
 
 
 @router.get('/rbac/roles', response_model=RolePage)
+@router.get('/iam/roles', response_model=RolePage)
 def roles(
+    request: Request,
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
     actor=Depends(authenticate),
     db=Depends(get_db, scope='function'),
 ):
-    authorize_or_raise(db, actor, 'roles.read', scope={'scope_type': 'GLOBAL'})
+    _require_any(
+        db, actor, ('iam.roles.read', 'roles.read'),
+        _iam_catalog_scope(), request,
+    )
     total = db.scalar(select(func.count()).select_from(Role)) or 0
     rows = db.scalars(select(Role).order_by(Role.name).offset(offset).limit(limit)).all()
     return {
@@ -628,6 +850,7 @@ def role_impact(
 
 @router.get('/rbac/assignments', response_model=AssignmentPage)
 def assignments(
+    request: Request,
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
     subject_type: str | None = None,
@@ -639,7 +862,10 @@ def assignments(
     actor=Depends(authenticate),
     db=Depends(get_db, scope='function'),
 ):
-    authorize_or_raise(db, actor, 'rbac.assignments.read', scope={'scope_type': 'GLOBAL'})
+    _require_any(
+        db, actor, ('iam.binding.read', 'rbac.assignments.read'),
+        _iam_catalog_scope(), request,
+    )
     filters = []
     for column, value in (
         (RoleAssignment.subject_type, subject_type),
@@ -678,7 +904,7 @@ def create_assignment(
     scope = _hydrate_scope(db, _scope_dict(data))
     _assert_delegatable(db, actor, role, scope, request)
     _assert_no_role_conflict(db, data.subject_type, data.subject_id, data.role_id, scope)
-    row = _new_assignment(db, actor, data, scope)
+    row = _new_assignment(db, actor, data, scope, role)
     audit(db, request, 'role_assignment.created', 'iam_role_assignments', row.id)
     return _assignment_public(db, row)
 
@@ -698,7 +924,7 @@ def create_assignments_bulk(
         scope = _hydrate_scope(db, _scope_dict(item))
         _assert_delegatable(db, actor, role, scope, request)
         _assert_no_role_conflict(db, item.subject_type, item.subject_id, item.role_id, scope)
-        rows.append(_new_assignment(db, actor, item, scope))
+        rows.append(_new_assignment(db, actor, item, scope, role))
     audit(db, request, 'role_assignment.bulk_created', 'iam_role_assignments', str(len(rows)))
     return {'items': [_assignment_public(db, row) for row in rows], 'created': len(rows)}
 
@@ -723,7 +949,7 @@ def update_assignment(
         'apmid': row.apmid,
         'environment': row.environment,
     }))
-    _assert_delegatable(db, actor, role, scope, request)
+    _assert_delegatable(db, actor, role, scope, request, operation='update')
     values = data.model_dump(exclude_unset=True)
     if 'conditions' in values:
         validate_assignment_conditions(values['conditions'])
@@ -763,7 +989,7 @@ def delete_assignment(
         'apmid': row.apmid,
         'environment': row.environment,
     }))
-    _assert_delegatable(db, actor, role, scope, request)
+    _assert_delegatable(db, actor, role, scope, request, operation='delete')
     was_global = row.scope_type == 'GLOBAL'
     db.delete(row)
     db.flush()
