@@ -140,121 +140,7 @@ function vmBase(item) {
   return `/providers/${item.provider_id}/vms/${encodeURIComponent(item.node)}/${item.vm_id}`;
 }
 
-function vmUsesGovernedDay2(item) {
-  const scope = globalThis.CPProjectContext?.current?.();
-  return Boolean(
-    scope?.tenant_id
-    && scope?.project_id
-    && item?.deployment_id
-    && ['terraform', 'proxmox'].includes(String(item?.management_mode || ''))
-  );
-}
-
-function vmResourceBase(item) {
-  return `/resources/${encodeURIComponent(item.id)}`;
-}
-
-function vmConfirmationName(item) {
-  return String(item?.name || ('vm-' + item?.vm_id));
-}
-
-function normalizeGovernedVmStatus(item, payload) {
-  const live = payload?.live || {};
-  const config = live.configuration || {};
-  const memoryMb = Number(live.memory_mb ?? config.memory);
-  return {
-    vmid: live.vm_id ?? item.vm_id,
-    name: live.name || item.name || '',
-    status: live.power_state || item.live?.status || item.lifecycle_status || 'unknown',
-    qmpstatus: null,
-    cpu: null,
-    cpus: live.cpu_cores ?? config.cores ?? null,
-    mem: null,
-    maxmem: Number.isFinite(memoryMb) && memoryMb > 0 ? memoryMb * 1024 * 1024 : null,
-    disk: null,
-    maxdisk: null,
-    uptime: null,
-    pid: null,
-    lock: null,
-    template: null,
-    tags: Array.isArray(live.tags) ? live.tags.join(';') : String(config.tags || ''),
-    primary_ip: live.primary_ip || item.primary_ip || null,
-    node: live.node || item.node || '',
-  };
-}
-
-async function vmStatus(item) {
-  if (!vmUsesGovernedDay2(item)) return api(`${vmBase(item)}/status`);
-  const stateResult = await api(`${vmResourceBase(item)}/day2-state`);
-  return normalizeGovernedVmStatus(item, stateResult);
-}
-
-async function vmActionCatalog(item) {
-  if (!vmUsesGovernedDay2(item)) return null;
-  return api(`${vmResourceBase(item)}/actions`);
-}
-
-function governedAction(catalog, actionId) {
-  return (catalog?.actions || []).find(action => action.id === actionId) || null;
-}
-
-function vmActionSupported(item, catalog, actionId) {
-  return !vmUsesGovernedDay2(item) || governedAction(catalog, actionId)?.supported === true;
-}
-
-async function executeGovernedDay2(item, actionId, parameters = {}, reason = '') {
-  return api(`${vmResourceBase(item)}/actions/${encodeURIComponent(actionId)}`, {
-    method: 'POST',
-    idempotent: true,
-    body: { parameters, reason },
-  });
-}
-
-function day2ActionSubmitted(label, result) {
-  const suffix = result?.job_id ? ' · job ' + short(result.job_id, 18) : '';
-  toast(label + ' zostało zlecone' + suffix + '.');
-}
-
-async function vmSnapshotInfo(item, actionCatalog = null) {
-  if (!vmUsesGovernedDay2(item)) return api(`${vmBase(item)}/snapshots`);
-  const [snapshotResult, catalog] = await Promise.all([
-    api(`${vmResourceBase(item)}/snapshots`),
-    actionCatalog ? Promise.resolve(actionCatalog) : vmActionCatalog(item),
-  ]);
-  return {
-    items: (snapshotResult.items || []).map(snapshot => ({
-      ...snapshot,
-      snaptime: snapshot.created,
-      vmstate: snapshot.include_memory,
-    })),
-    capability: catalog?.capabilities?.snapshot_capability || {},
-  };
-}
-
-const VM_POWER_DAY2_ACTIONS = Object.freeze({
-  start: 'power_on',
-  stop: 'power_off',
-  shutdown: 'shutdown',
-  reboot: 'reboot',
-  reset: 'reset',
-  suspend: 'suspend',
-  resume: 'resume',
-});
-
-async function vmPowerRequest(item, action, reason = 'Sterowanie zasilaniem VM z widoku Moje zasoby') {
-  if (!vmUsesGovernedDay2(item)) {
-    return {
-      mode: 'provider',
-      result: await api(`${vmBase(item)}/power`, { method: 'POST', idempotent: true, body: { action } }),
-    };
-  }
-  const actionId = VM_POWER_DAY2_ACTIONS[action];
-  if (!actionId) throw new Error('Nieobsługiwana akcja zasilania VM.');
-  return {
-    mode: 'day2',
-    result: await executeGovernedDay2(item, actionId, {}, reason),
-  };
-}
+const vmGovernance = globalThis.InventoryGovernance;
 
 async function offerMissingVmCleanup(item, returnView = 'inventory') {
   let refreshed;
@@ -345,7 +231,7 @@ function recreateVm(item) {
 function vmDetailActions(item, status = {}, snapshotCapability = null, actionCatalog = null) {
   const base = vmBase(item);
   const runtime = vmRuntimeState(status, item);
-  const governed = vmUsesGovernedDay2(item);
+  const governed = vmGovernance.applies(item);
   const supports = actionId => vmActionSupported(item, actionCatalog, actionId);
   const groups = {
     power: [],
@@ -579,7 +465,7 @@ function vmHardwareContent(item, status, actionCatalog = null) {
   ].filter(([, value]) => value !== undefined && value !== null && value !== '');
   return node('section', { class: 'panel' },
     node('div', { class: 'panel-header' }, node('h2', { text: 'Hardware i telemetria' }),
-      allowed('vms.update') && vmActionSupported(item, actionCatalog, 'resize_compute')
+      allowed('vms.update') && vmGovernance.supported(item, actionCatalog, 'resize_compute')
         ? button('Edytuj CPU / RAM', () => navigate('/resources/vm/' + encodeURIComponent(item.id) + '/edit/compute'))
         : ''),
     table([
@@ -591,8 +477,8 @@ function vmHardwareContent(item, status, actionCatalog = null) {
 async function vmSnapshotsContent(item, actionCatalog = null) {
   if (!allowed('snapshots.read')) return node('div', { class: 'empty', text: 'Brak uprawnienia snapshots.read.' });
   const base = vmBase(item);
-  const governed = vmUsesGovernedDay2(item);
-  const snapshotResult = await vmSnapshotInfo(item, actionCatalog);
+  const governed = vmGovernance.applies(item);
+  const snapshotResult = await vmGovernance.snapshotInfo(item, vmBase(item), actionCatalog);
   const snapshots = snapshotResult.items || [];
   const capability = snapshotResult.capability || {};
   const snapshotSupported = capability.supported !== false;
@@ -623,11 +509,7 @@ async function vmSnapshotsContent(item, actionCatalog = null) {
         `VM zostanie przywrócona do snapshotu ${snap.name}.`,
         async () => {
           if (governed) {
-            const operation = await executeGovernedDay2(item, 'restore_snapshot', {
-              name: snap.name,
-              confirmation: vmConfirmationName(item),
-            }, 'Przywrócenie snapshotu z widoku Moje zasoby');
-            day2ActionSubmitted('Przywracanie snapshotu', operation);
+            await vmGovernance.restoreSnapshot(item, snap.name);
           } else {
             const operation = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}/rollback`, { method: 'POST', idempotent: true });
             await showProxmoxTask(item, operation, 'Przywracanie snapshotu');
@@ -640,11 +522,7 @@ async function vmSnapshotsContent(item, actionCatalog = null) {
         snap.name,
         async () => {
           if (governed) {
-            const operation = await executeGovernedDay2(item, 'delete_snapshot', {
-              name: snap.name,
-              confirmation: vmConfirmationName(item),
-            }, 'Usunięcie snapshotu z widoku Moje zasoby');
-            day2ActionSubmitted('Usuwanie snapshotu', operation);
+            await vmGovernance.deleteSnapshot(item, snap.name);
           } else {
             const operation = await api(`${base}/snapshots/${encodeURIComponent(snap.name)}`, { method: 'DELETE', idempotent: true });
             await showProxmoxTask(item, operation, 'Usuwanie snapshotu');
@@ -804,7 +682,7 @@ async function vmMonitorContent(item) {
   const load = async () => {
     content.replaceChildren(node('div', { class: 'loading compact' }, node('div', { class: 'spinner' })));
     try {
-      if (vmUsesGovernedDay2(item)) {
+      if (vmGovernance.applies(item)) {
         throw new Error('Monitoring RRD nie jest dostępny przez zarządzany workflow projektu.');
       }
       const data = await api(`${vmBase(item)}/monitor?timeframe=${encodeURIComponent(timeframe.value)}`);
@@ -905,12 +783,12 @@ async function showVmDetailsPage(item, initialTab = 'overview', parentView = nul
   const routedDetails = state.view === 'routed-form'
     && matchRoutedForm()?.route?.id === 'inventory-vm-details';
   try {
-    const governed = vmUsesGovernedDay2(item);
+    const governed = vmGovernance.applies(item);
     const actionCatalogPromise = governed
-      ? vmActionCatalog(item).catch(() => null)
+      ? vmGovernance.catalog(item).catch(() => null)
       : Promise.resolve(null);
     const [status, actionCatalog, snapshotInfo, availabilityVisible] = await Promise.all([
-      vmStatus(item),
+      vmGovernance.status(item, vmBase(item)),
       actionCatalogPromise,
       !governed && allowed('snapshots.read')
         ? api(`${vmBase(item)}/snapshots`).catch(() => null)
@@ -1035,9 +913,9 @@ async function vmPower(item, action) {
     suspend: 'Wstrzymywanie VM', resume: 'Wznawianie VM', reset: 'Twardy reset VM', stop: 'Zatrzymywanie VM',
   };
   try {
-    const request = await vmPowerRequest(item, action);
+    const request = await vmGovernance.powerRequest(item, vmBase(item), action);
     if (request.mode === 'day2') {
-      day2ActionSubmitted(labels[action] || 'Operacja zasilania', request.result);
+      vmGovernance.submitted(labels[action] || 'Operacja zasilania', request.result);
       return;
     }
     await showProxmoxTask(item, request.result, labels[action] || 'Operacja zasilania');
@@ -1068,7 +946,7 @@ function deleteVm(item) {
 
 async function createVmSnapshot(item) {
   if (allowed('snapshots.read')) {
-    const snapshotResult = await vmSnapshotInfo(item);
+    const snapshotResult = await vmGovernance.snapshotInfo(item, vmBase(item));
     const capability = snapshotResult.capability || {};
     if (capability.supported === false) {
       const message = capability.message || 'Snapshot nie jest obsługiwany przez tę VM.';
@@ -1084,13 +962,8 @@ async function createVmSnapshot(item) {
     field('Opis', 'description', { wide: true }),
     checkboxField('Dołącz stan RAM', 'include_ram'));
   openModal({ title: 'Nowy snapshot', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-    if (vmUsesGovernedDay2(item)) {
-      const result = await executeGovernedDay2(item, 'create_snapshot', {
-        name: data.get('snapname'),
-        description: data.get('description'),
-        include_memory: data.has('include_ram'),
-      }, 'Utworzenie snapshotu z widoku Moje zasoby');
-      day2ActionSubmitted('Tworzenie snapshotu', result);
+    if (vmGovernance.applies(item)) {
+      await vmGovernance.createSnapshot(item, data);
     } else {
       const result = await api(`${vmBase(item)}/snapshots`, { method: 'POST', idempotent: true, body: {
         snapname: data.get('snapname'), description: data.get('description'), include_ram: data.has('include_ram'),
@@ -1182,9 +1055,7 @@ function restoreVmFromBackup(item, backup) {
 
 async function showVmConsole(item) {
   try {
-    const consolePath = vmUsesGovernedDay2(item)
-      ? `${vmResourceBase(item)}/console`
-      : `${vmBase(item)}/console`;
+    const consolePath = vmGovernance.consolePath(item, vmBase(item));
     const result = await api(consolePath, { method: 'POST' });
     const rfbModule = result.local_rfb_module || result.rfb_module;
     const modulePathValid = result.local_rfb_module
@@ -1206,8 +1077,8 @@ async function showVmConsole(item) {
     const consolePower = async (action, label, trigger) => {
       trigger.disabled = true;
       try {
-        const request = await vmPowerRequest(item, action, 'Sterowanie VM z konsoli noVNC');
-        if (request.mode === 'day2') day2ActionSubmitted(label, request.result);
+        const request = await vmGovernance.powerRequest(item, vmBase(item), action, 'Sterowanie VM z konsoli noVNC');
+        if (request.mode === 'day2') vmGovernance.submitted(label, request.result);
         else toast(`${label}: polecenie zostało wysłane.`);
       } catch (error) {
         toast(error.message, 'error');
@@ -1279,22 +1150,10 @@ async function showVmConsole(item) {
 
 async function configureVm(item) {
   try {
-    const governed = vmUsesGovernedDay2(item);
-    const status = await vmStatus(item);
+    const governed = vmGovernance.applies(item);
+    const status = await vmGovernance.status(item, vmBase(item));
     if (governed) {
-      const fields = node('div', { class: 'form-grid' },
-        field('Rdzenie CPU', 'cores', { type: 'number', min: 1, value: status.cpus ?? '' }),
-        field('RAM (MiB)', 'memory', { type: 'number', min: 512, value: status.maxmem ? Math.round(status.maxmem / 1024 / 1024) : '' }));
-      openModal({ title: 'CPU / RAM', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
-        const parameters = {};
-        if (data.get('cores') && Number(data.get('cores')) !== Number(status.cpus)) parameters.cpu_cores = Number(data.get('cores'));
-        const currentMemory = status.maxmem ? Math.round(status.maxmem / 1024 / 1024) : null;
-        if (data.get('memory') && Number(data.get('memory')) !== currentMemory) parameters.memory_mb = Number(data.get('memory'));
-        if (!Object.keys(parameters).length) throw new Error('Nie wykryto żadnej zmiany.');
-        const result = await executeGovernedDay2(item, 'resize_compute', parameters, 'Zmiana CPU / RAM z widoku Moje zasoby');
-        day2ActionSubmitted('Zmiana CPU / RAM', result);
-        return false;
-      }});
+      await vmGovernance.configureCompute(item, status);
       return;
     }
     const fields = node('div', { class: 'form-grid' },
@@ -1332,15 +1191,8 @@ function resizeVmDisk(item) {
   openModal({ title: 'Powiększ dysk', eyebrow: item.name || String(item.vm_id), body: fields, onSubmit: async data => {
     const disk = String(data.get('disk') || '');
     const growGib = Number(data.get('grow_gib'));
-    if (vmUsesGovernedDay2(item)) {
-      const disks = (await api(`${vmResourceBase(item)}/disks`)).items || [];
-      const current = disks.find(row => row.device === disk);
-      if (!current || !Number.isFinite(Number(current.size_gib))) throw new Error('Nie można ustalić bieżącego rozmiaru dysku.');
-      const result = await executeGovernedDay2(item, 'resize_disk', {
-        device: disk,
-        new_size_gib: Math.ceil(Number(current.size_gib) + growGib),
-      }, 'Powiększenie dysku z widoku Moje zasoby');
-      day2ActionSubmitted('Powiększanie dysku', result);
+    if (vmGovernance.applies(item)) {
+      await vmGovernance.resizeDisk(item, disk, growGib);
     } else {
       const result = await api(`${vmBase(item)}/disk`, { method: 'PUT', idempotent: true, body: { disk, grow_gib: growGib } });
       await showProxmoxTask(item, result, 'Powiększanie dysku');
@@ -1363,13 +1215,8 @@ async function migrateVm(item) {
       checkboxField('Migracja online', 'online'),
       checkboxField('Przenieś lokalne dyski', 'with_local_disks'));
     openModal({ title: 'Migracja VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom migrację', onSubmit: async data => {
-      if (vmUsesGovernedDay2(item)) {
-        const result = await executeGovernedDay2(item, 'migrate_vm', {
-          target_node: data.get('target'),
-          online: data.has('online'),
-          with_local_disks: data.has('with_local_disks'),
-        }, 'Migracja VM z widoku Moje zasoby');
-        day2ActionSubmitted('Migracja VM', result);
+      if (vmGovernance.applies(item)) {
+        await vmGovernance.migrate(item, data);
       } else {
         const result = await api(`${vmBase(item)}/migrate`, { method: 'POST', idempotent: true, body: {
           target: data.get('target'), online: data.has('online'), with_local_disks: data.has('with_local_disks'),
@@ -1383,7 +1230,7 @@ async function migrateVm(item) {
 
 async function cloneVm(item) {
   try {
-    const governed = vmUsesGovernedDay2(item);
+    const governed = vmGovernance.applies(item);
     const [nodes, pools] = await Promise.all([
       discoverVmOptions(item, 'nodes'),
       governed ? Promise.resolve([]) : discoverVmOptions(item, 'pools'),
@@ -1407,7 +1254,7 @@ async function cloneVm(item) {
       field('Nazwa nowej VM', 'name', { required: true, value: item.name ? item.name + '-clone' : '' }),
       targetField,
       storageHolder,
-      poolField,
+      ...(poolField ? [poolField] : []),
       checkboxField('Pełny klon', 'full', true));
 
     const targetControl = targetField.querySelector('select,input');
@@ -1428,15 +1275,7 @@ async function cloneVm(item) {
 
     openModal({ title: 'Klonuj VM', eyebrow: item.name || String(item.vm_id), body: fields, submitLabel: 'Uruchom klonowanie', onSubmit: async data => {
       if (governed) {
-        const parameters = {
-          new_vm_id: Number(data.get('new_vm_id')),
-          name: data.get('name'),
-          full: data.has('full'),
-        };
-        if (data.get('target')) parameters.target_node = data.get('target');
-        if (data.get('storage')) parameters.target_storage = data.get('storage');
-        const result = await executeGovernedDay2(item, 'clone_vm', parameters, 'Klonowanie VM z widoku Moje zasoby');
-        day2ActionSubmitted('Klonowanie VM', result);
+        await vmGovernance.clone(item, data);
       } else {
         const result = await api(`${vmBase(item)}/clone`, { method: 'POST', idempotent: true, body: {
           new_vm_id: Number(data.get('new_vm_id')),
