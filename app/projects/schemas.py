@@ -7,10 +7,13 @@ from app.tenancy.schemas import TenantFields, TenantOutput, TenantAuditOutput
 
 
 class ProjectFields(TenantFields):
-    default_environment: str = Field(default='dev', min_length=1, max_length=32, pattern=r'^[a-z][a-z0-9_-]*
+    default_environment: str = Field(
+        default='dev', min_length=1, max_length=32,
+        pattern=r'^[a-z][a-z0-9_-]*$',
+    )
+    allowed_apmids: list[str] | None = Field(default=None, max_length=500)
     blueprint_auto_approve_for_executors: bool | None = None
     blueprint_approval_timeout_hours: int | None = Field(default=None, ge=1, le=720)
-
 
     @field_validator('allowed_apmids')
     @classmethod
