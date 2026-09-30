@@ -582,7 +582,7 @@ def blueprints(request: Request, available: bool = False, source_header: Annotat
     elif source != 'backend':
         rows = [
             row for row in rows
-            if available_to(db, row, actor, source, roles_for(row), action='blueprints.read')
+            if available_to(db, row, actor, source, roles_for(row), action='blueprints.read', apmid=entity_apmid, environment=entity_environment)
             or (
                 has_manage_permission
                 and can_manage_blueprint(
@@ -900,8 +900,17 @@ def execute_blueprint(id: int, data: BlueprintExecuteInput, request: Request,
             f'Blueprint deletion is queued in job {pending_delete.id}; new executions are blocked',
         )
     source = portal_source(source_header)
-    effective_apmid = data.apmid or (row.deployment or {}).get('apmid')
-    effective_environment = data.environment or (row.deployment or {}).get('environment')
+    selected_scope = getattr(request.state, 'resource_scope', None)
+    effective_apmid = (
+        data.apmid
+        or (row.deployment or {}).get('apmid')
+        or getattr(selected_scope, 'apmid', None)
+    )
+    effective_environment = (
+        data.environment
+        or (row.deployment or {}).get('environment')
+        or getattr(selected_scope, 'environment', None)
+    )
     if not available_to(
         db, row, actor, source,
         action='blueprints.execute',
