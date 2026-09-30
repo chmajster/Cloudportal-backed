@@ -152,10 +152,14 @@ def _scope_from_ids(db, tenant_id, project_id, *, apmid=None, environment=None):
 def _scope(db, request, fallback=None, *, apmid=None, environment=None):
     scope = getattr(request.state, "resource_scope", None)
     if scope is not None:
-        return _scope_from_ids(
+        result = _scope_from_ids(
             db, scope.tenant_id, scope.project_id,
-            apmid=apmid, environment=environment,
+            apmid=apmid or getattr(scope, "apmid", None),
+            environment=environment or getattr(scope, "environment", None),
         )
+        result["entity"] = getattr(scope, "entity_key", None)
+        result["entity_role"] = getattr(scope, "entity_role", None)
+        return result
     if fallback is not None:
         return _scope_from_ids(
             db,
