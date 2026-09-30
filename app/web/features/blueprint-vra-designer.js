@@ -1113,6 +1113,12 @@
       body.append(textField('Allowed user IDs', (bp.allowed_user_ids || []).join(', '), value => mutate(() => {
         bp.allowed_user_ids = parsePositiveIds(value);
       })));
+      body.append(textField('Allowed entities', (bp.allowed_entities || []).join(', '), value => mutate(() => {
+        bp.allowed_entities = String(value || '')
+          .split(/[,\n]+/)
+          .map(item => item.trim())
+          .filter(Boolean);
+      }), { help: 'Format: entity.<APMID>.<env>.<role>, np. entity.LEO-131.prod.read-only' }));
       body.append(textField('Manager role IDs', (bp.manager_role_ids || []).join(', '), value => mutate(() => {
         bp.manager_role_ids = parsePositiveIds(value);
       })));
