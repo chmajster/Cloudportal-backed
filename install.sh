@@ -901,7 +901,8 @@ docker_probe_ip() {
 }
 
 docker_select_bind_ip() {
-  local previous=${1:-} choice='' default_ip='' hint_ip='' i
+  local previous=${1:-} choice='' default_ip='' hint_ip='' i char=''
+  local timeout_seconds=5 started_at=0 remaining=0
   local -a detected_ips=()
 
   if ((bind_ip_explicit)); then
@@ -971,8 +972,46 @@ docker_select_bind_ip() {
   printf '  [0] 0.0.0.0  (wszystkie interfejsy)\n' >/dev/tty
 
   while :; do
-    printf 'Wybierz numer lub wpisz IPv4 [%s]: ' "$default_ip" >/dev/tty
-    IFS= read -r choice </dev/tty || return 1
+    choice=''
+    char=''
+    started_at=$SECONDS
+    remaining=$timeout_seconds
+
+    printf 'Wybierz numer lub wpisz IPv4 [%s] — automatyczne zachowanie za %d s: ' "$default_ip" "$remaining" >/dev/tty
+
+    # Odczyt znak po znaku pozwala jednocześnie odświeżać licznik i nie gubić
+    # częściowo wpisanego numeru/adresu IPv4. Enter zatwierdza bieżący wybór.
+    while ((remaining > 0)); do
+      char=''
+      if IFS= read -r -s -n 1 -t 1 char </dev/tty; then
+        if [[ -z "$char" ]]; then
+          printf '\n' >/dev/tty
+          break
+        fi
+
+        case "$char" in
+          $'\177'|$'\b')
+            [[ -z "$choice" ]] || choice=${choice%?}
+            ;;
+          *)
+            choice+=$char
+            ;;
+        esac
+      fi
+
+      remaining=$((timeout_seconds - (SECONDS - started_at)))
+      ((remaining < 0)) && remaining=0
+      printf '\r\033[2KWybierz numer lub wpisz IPv4 [%s] — automatyczne zachowanie za %d s: %s' \
+        "$default_ip" "$remaining" "$choice" >/dev/tty
+    done
+
+    if ((remaining <= 0)); then
+      printf '\r\033[2KBrak wyboru — zachowuję obecny adres publikacji Docker: %s\n' "$default_ip" >/dev/tty
+      bind_ip=$default_ip
+      ui_info "Brak wyboru przez ${timeout_seconds} s; zachowuję adres publikacji Docker: $bind_ip"
+      return 0
+    fi
+
     if [[ -z "$choice" ]]; then
       bind_ip=$default_ip
     elif [[ "$choice" == 0 ]]; then
@@ -2671,6 +2710,10 @@ EOF
 
   mv -f "$candidate_env" "$docker_env"
   ln -sfn "$release" "$docker_root/current"
+  if ((docker_tls_changed)); then
+    rm -f "$docker_tls/cloudportal-source.json"
+    rm -f /etc/letsencrypt/renewal-hooks/deploy/cloudportal-backed
+  fi
   ui_ok 'Kandydat został aktywowany jako bieżący release Docker.'
 
   docker_activate_updater "$release"
@@ -4618,6 +4661,10 @@ else
       exit 1
     }
   fi
+fi
+if ((tls_certificate_changed)); then
+  rm -f "$config/tls/cloudportal-source.json"
+  rm -f /etc/letsencrypt/renewal-hooks/deploy/cloudportal-backed
 fi
 if [[ "$os_family" == rhel ]] && command -v selinuxenabled >/dev/null && selinuxenabled; then
   restorecon -R "$config/tls"

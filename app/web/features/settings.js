@@ -444,7 +444,7 @@ async function platformSettingsView() {
 }
 
 async function settingsView() {
-  const [config, ssoConfig, health, updateSettings, blueprintSettings, executionSettings, executionCapabilities, platformSettings] = await Promise.all([
+  const [config, ssoConfig, health, updateSettings, blueprintSettings, executionSettings, executionCapabilities, platformSettings, tlsStatus] = await Promise.all([
     api('/settings/ldap'),
     api('/settings/sso'),
     api('/health', { auth: false, allow: [503] }),
@@ -453,6 +453,7 @@ async function settingsView() {
     api('/settings/execution'),
     api('/settings/execution/capabilities'),
     api('/settings/platforms'),
+    api('/settings/tls').catch(() => null),
   ]);
 
   const user = state.identity?.user || {};
@@ -642,6 +643,27 @@ async function settingsView() {
       button('Zarządzaj platformami', () => navigate('/admin/settings/platforms'), 'primary'))
   );
 
+  const tls = settingsCard(
+    'shield',
+    'SSL / TLS',
+    'Certyfikat HTTPS panelu i API, w tym wykrywanie certyfikatów Let’s Encrypt z hosta.',
+    tlsStatus
+      ? node('div', { class: 'settings-values' },
+          settingsValue('Publiczny host', tlsStatus.hostname || '—', 'mono'),
+          settingsValue('Port HTTPS', String(tlsStatus.port || '—')),
+          settingsValue('Źródło certyfikatu',
+            tlsStatus.source === 'letsencrypt' ? 'Let’s Encrypt'
+              : tlsStatus.source === 'managed-self-signed' ? 'Self-signed'
+                : tlsStatus.source === 'custom' ? 'Własny certyfikat' : (tlsStatus.source || 'Nieznane')),
+          settingsValue('Ważność', tlsStatus.certificate?.not_after || '—'),
+          settingsValue('Dopasowanie hosta', tlsStatus.certificate?.matches_hostname === true ? 'OK' : 'Wymaga uwagi'))
+      : node('p', { class: 'muted', text: 'Nie udało się odczytać konfiguracji TLS.' }),
+    allowed('settings.update')
+      ? node('div', { class: 'settings-card-actions' },
+          button('Konfiguruj SSL / TLS', () => navigate('/admin/settings/tls'), 'primary'))
+      : null
+  );
+
   const security = settingsCard(
     'shield',
     'Bezpieczeństwo',
@@ -731,7 +753,7 @@ async function settingsView() {
 
   dom.content.replaceChildren(
     heading('Ustawienia panelu, konta, systemu, aktualizacji i integracji katalogowych.'),
-    node('div', { class: 'settings-grid' + (settingsLayout === 'list' ? ' settings-list' : '') }, appearance, account, system, updates, platforms, blueprints, security, sso),
+    node('div', { class: 'settings-grid' + (settingsLayout === 'list' ? ' settings-list' : '') }, appearance, account, system, updates, platforms, blueprints, tls, security, sso),
     ldap
   );
 }

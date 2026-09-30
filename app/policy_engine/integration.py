@@ -225,6 +225,375 @@ def _write_aliases(db, rendered, effective_resource, effective_scope=None):
         rendered["template"] = effective_resource["template"]
 
 
+def _merge_policy_results(primary, secondary):
+    """Merge two persisted evaluations for one logical request."""
+    result = copy.deepcopy(primary)
+    for key in ("matched_policy_ids", "warnings", "violations", "approvals", "obligations", "trace", "conflicts"):
+        values = list(result.get(key) or [])
+        for item in list(secondary.get(key) or []):
+            if item not in values:
+                values.append(copy.deepcopy(item))
+        result[key] = values
+    if primary.get("decision") == "deny" or secondary.get("decision") == "deny":
+        result["decision"] = "deny"
+    elif primary.get("decision") == "approval_required" or secondary.get("decision") == "approval_required":
+        result["decision"] = "approval_required"
+    else:
+        result["decision"] = "allow"
+    if secondary.get("decision_id"):
+        result.setdefault("related_decision_ids", []).append(secondary["decision_id"])
+    return result
+
+
+def _deployment_policy_resource(deployment, *, resource_type="terraform"):
+    if deployment is None:
+        return {}, None, None
+    variables = dict(getattr(deployment, "variables", {}) or {})
+    workflow = dict(getattr(deployment, "workflow", {}) or {})
+    blueprint = dict(workflow.get("blueprint") or {})
+    blueprint_variables = dict(blueprint.get("variables") or {})
+    tags = _tags(variables)
+    tagged_apmid, tagged_environment = _classification_from_tags(tags)
+    apmid = variables.get("apmid") or blueprint_variables.get("apmid") or tagged_apmid
+    environment = variables.get("environment") or blueprint_variables.get("environment") or tagged_environment
+    resource = {
+        "id": str(getattr(deployment, "id", "") or ""),
+        "type": resource_type,
+        "deployment_id": str(getattr(deployment, "id", "") or ""),
+        "name": str(getattr(deployment, "name", "") or ""),
+        "provider_id": getattr(deployment, "provider_id", None),
+        "provider_type": getattr(deployment, "provider", None),
+        "template": getattr(deployment, "template", None),
+        "apmid": apmid,
+        "environment": environment,
+        "cpu": _number_from(variables, ("cores", "cpu", "vcpu", "cpu_cores")),
+        "memory_mb": _number_from(variables, ("memory", "memory_mb", "ram_mb")),
+        "disk_gb": _number_from(variables, ("disk_size_gb", "disk_gb", "disk_size")),
+        "storage": variables.get("storage") or variables.get("datastore") or variables.get("datastore_id"),
+        "network": variables.get("network") or variables.get("bridge") or variables.get("network_id"),
+        "node": variables.get("node") or variables.get("host") or variables.get("target_node"),
+        "cluster": variables.get("cluster") or variables.get("cluster_id"),
+        "tags": tags,
+        "variables": copy.deepcopy(variables),
+    }
+    return resource, apmid, environment
+
+
+def enforce_job_operation(db, request, actor, permissions, operation, *, deployment=None, parameters=None):
+    """Authorize direct Terraform/Ansible/provider jobs before they are queued."""
+    resource_type = "ansible" if str(operation) == "ansible.execute" else "terraform"
+    resource, apmid, environment = _deployment_policy_resource(
+        deployment, resource_type=resource_type
+    )
+    parameters = copy.deepcopy(dict(parameters or {}))
+    if resource_type == "ansible":
+        resource.update({
+            "playbook": parameters.get("playbook"),
+            "credential_id": parameters.get("credentials_id"),
+        })
+        apmid = parameters.get("apmid") or apmid
+        environment = parameters.get("environment") or environment
+    scope_context = _scope(
+        db, request, deployment,
+        apmid=apmid, environment=environment,
+    )
+    resource.setdefault("type", resource_type)
+    resource.setdefault("organization", scope_context.get("organization"))
+    resource.setdefault("project", scope_context.get("project"))
+    resource.setdefault("scope_key", scope_context.get("key"))
+    context = {
+        "actor": _actor(actor, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": str(operation),
+            "source": getattr(request.state, "source", "API"),
+            "phase": "pre_request",
+            "parameters": parameters,
+        },
+        "resource": resource,
+    }
+    result = evaluate_context(db, context, persist=True, durable_denies=True)
+    _deny(result)
+    credential_id = (
+        parameters.get("credentials_id")
+        if resource_type == "ansible"
+        else getattr(deployment, "credentials_id", None)
+    )
+    if credential_id:
+        credential_result = enforce_credential_use(
+            db, request, actor, permissions, credential_id,
+            deployment=deployment, purpose=str(operation),
+        )
+        result = _merge_policy_results(result, credential_result)
+    return result
+
+
+def enforce_credential_use(db, request, actor, permissions, credential_id, *, deployment=None, purpose=None):
+    resource, apmid, environment = _deployment_policy_resource(
+        deployment, resource_type="credentials"
+    )
+    resource.update({
+        "id": str(credential_id),
+        "type": "credentials",
+        "credential_id": credential_id,
+        "purpose": purpose,
+    })
+    scope_context = _scope(db, request, deployment, apmid=apmid, environment=environment)
+    resource["organization"] = scope_context.get("organization")
+    resource["project"] = scope_context.get("project")
+    resource["scope_key"] = scope_context.get("key")
+    context = {
+        "actor": _actor(actor, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "credentials.use",
+            "source": getattr(request.state, "source", "API"),
+            "phase": "pre_request",
+            "purpose": purpose,
+        },
+        "resource": resource,
+    }
+    result = evaluate_context(db, context, persist=True, durable_denies=True)
+    _deny(result)
+    return result
+
+
+def evaluate_scheduled_operation(db, schedule, deployment, user, permissions):
+    """Evaluate schedule.execute and the scheduled infrastructure operation."""
+    resource, apmid, environment = _deployment_policy_resource(
+        deployment, resource_type="schedule"
+    )
+    scope_context = _scope_from_ids(
+        db, getattr(schedule, "tenant_id", ""), getattr(schedule, "project_id", ""),
+        apmid=apmid, environment=environment,
+    )
+    schedule_context = {
+        "actor": _user_actor(user, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "schedule.execute",
+            "source": "Scheduler",
+            "phase": "scheduled",
+            "scheduled_operation": str(getattr(schedule, "operation", "") or ""),
+        },
+        "resource": {
+            **resource,
+            "id": str(getattr(schedule, "id", "") or ""),
+            "type": "schedule",
+            "schedule_id": str(getattr(schedule, "id", "") or ""),
+        },
+    }
+    result = evaluate_context(db, schedule_context, persist=True)
+
+    operation = str(getattr(schedule, "operation", "") or "")
+    op_resource, _, _ = _deployment_policy_resource(
+        deployment, resource_type="terraform"
+    )
+    op_resource.update({
+        "organization": scope_context.get("organization"),
+        "project": scope_context.get("project"),
+        "scope_key": scope_context.get("key"),
+    })
+    operation_context = {
+        "actor": _user_actor(user, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": operation,
+            "source": "Scheduler",
+            "phase": "scheduled",
+        },
+        "resource": op_resource,
+    }
+    operation_result = evaluate_context(db, operation_context, persist=True)
+    result = _merge_policy_results(result, operation_result)
+
+    credential_id = getattr(deployment, "credentials_id", None)
+    if credential_id:
+        credential_context = {
+            "actor": _user_actor(user, permissions, db, scope_context),
+            "scope": scope_context,
+            "request": {
+                "action": "credentials.use",
+                "source": "Scheduler",
+                "phase": "scheduled",
+                "purpose": operation,
+            },
+            "resource": {
+                **op_resource,
+                "id": str(credential_id),
+                "type": "credentials",
+                "credential_id": credential_id,
+            },
+        }
+        result = _merge_policy_results(
+            result, evaluate_context(db, credential_context, persist=True)
+        )
+    return result
+
+
+def evaluate_webhook_delivery(db, endpoint, delivery, user, permissions):
+    """Authorize an outbound webhook immediately before network delivery."""
+    payload = dict(getattr(delivery, "payload", {}) or {})
+    scope_data = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+    tenant_id = str(scope_data.get("tenant_id") or "")
+    project_id = str(scope_data.get("project_id") or "")
+    scope_context = _scope_from_ids(db, tenant_id, project_id)
+    context = {
+        "actor": _user_actor(user, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "webhook.execute",
+            "source": "WebhookWorker",
+            "phase": "pre_request",
+            "event": str(getattr(delivery, "event", "") or ""),
+        },
+        "resource": {
+            "id": str(getattr(endpoint, "id", "") or ""),
+            "type": "webhook",
+            "name": str(getattr(endpoint, "name", "") or ""),
+            "event": str(getattr(delivery, "event", "") or ""),
+            "organization": scope_context.get("organization"),
+            "project": scope_context.get("project"),
+            "scope_key": scope_context.get("key"),
+        },
+    }
+    return evaluate_context(db, context, persist=True)
+
+
+def revalidate_job_operation(db, job, user, permissions, deployment=None):
+    """Re-evaluate a queued direct job immediately before worker execution."""
+    operation = str(getattr(job, "operation", "") or "")
+    if operation.startswith("day2."):
+        return None
+    if operation not in {
+        "terraform.plan", "terraform.apply", "terraform.destroy", "terraform.import",
+        "proxmox.provision", "proxmox.destroy", "ansible.execute",
+    }:
+        return None
+
+    payload = dict(getattr(job, "payload", {}) or {})
+    parameters = dict(payload.get("ansible") or {}) if operation == "ansible.execute" else {}
+    resource_type = "ansible" if operation == "ansible.execute" else "terraform"
+    resource, apmid, environment = _deployment_policy_resource(
+        deployment, resource_type=resource_type
+    )
+    if operation == "ansible.execute":
+        resource.update({
+            "playbook": parameters.get("playbook"),
+            "credential_id": parameters.get("credentials_id"),
+        })
+        apmid = parameters.get("apmid") or apmid
+        environment = parameters.get("environment") or environment
+
+    scope_context = _scope_from_ids(
+        db,
+        getattr(job, "tenant_id", ""),
+        getattr(job, "project_id", ""),
+        apmid=apmid, environment=environment,
+    )
+    resource.setdefault("organization", scope_context.get("organization"))
+    resource.setdefault("project", scope_context.get("project"))
+    resource.setdefault("scope_key", scope_context.get("key"))
+    context = {
+        "actor": _user_actor(user, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": operation,
+            "source": getattr(job, "source", "Worker"),
+            "phase": "worker_revalidate",
+            "parameters": copy.deepcopy(parameters),
+        },
+        "resource": resource,
+    }
+    result = evaluate_context(db, context, persist=True)
+
+    credential_id = (
+        parameters.get("credentials_id")
+        if operation == "ansible.execute"
+        else getattr(deployment, "credentials_id", None)
+    )
+    if credential_id:
+        credential_context = {
+            "actor": _user_actor(user, permissions, db, scope_context),
+            "scope": scope_context,
+            "request": {
+                "action": "credentials.use",
+                "source": getattr(job, "source", "Worker"),
+                "phase": "worker_revalidate",
+                "purpose": operation,
+            },
+            "resource": {
+                **resource,
+                "id": str(credential_id),
+                "type": "credentials",
+                "credential_id": credential_id,
+            },
+        }
+        credential_result = evaluate_context(db, credential_context, persist=True)
+        result = _merge_policy_results(result, credential_result)
+
+    blueprint = dict(payload.get("blueprint") or {})
+    if blueprint and operation in {"terraform.apply", "proxmox.provision"} and deployment is not None:
+        blueprint_result = revalidate_blueprint_job(db, job, user, permissions, deployment)
+        if blueprint_result:
+            result = _merge_policy_results(result, blueprint_result)
+            if blueprint_result.get("input_policy_drift"):
+                result["input_policy_drift"] = copy.deepcopy(
+                    blueprint_result["input_policy_drift"]
+                )
+    return result
+
+def enforce_vm_create(db, request, actor, permissions, rendered):
+    """Apply vm.create policy to a non-Blueprint deployment request."""
+    rendered = copy.deepcopy(dict(rendered or {}))
+    variables = dict(rendered.get("variables") or {})
+    tags = _tags(variables)
+    tagged_apmid, tagged_environment = _classification_from_tags(tags)
+    apmid = variables.get("apmid") or tagged_apmid
+    environment = variables.get("environment") or tagged_environment
+    scope_context = _scope(db, request, apmid=apmid, environment=environment)
+    context = {
+        "actor": _actor(actor, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "vm.create",
+            "source": getattr(request.state, "source", "API"),
+            "phase": "pre_provision",
+            "payload": copy.deepcopy(rendered),
+        },
+        "resource": {
+            "type": "vm",
+            "apmid": apmid,
+            "environment": environment,
+            "organization": scope_context.get("organization"),
+            "project": scope_context.get("project"),
+            "scope_key": scope_context.get("key"),
+            "provider_id": rendered.get("provider_id"),
+            "template": rendered.get("template"),
+            "cpu": _number_from(variables, ("cores", "cpu", "vcpu", "cpu_cores")),
+            "memory_mb": _number_from(variables, ("memory", "memory_mb", "ram_mb")),
+            "disk_gb": _number_from(variables, ("disk_size_gb", "disk_gb", "disk_size")),
+            "storage": variables.get("storage") or variables.get("datastore") or variables.get("datastore_id"),
+            "network": variables.get("network") or variables.get("bridge") or variables.get("network_id"),
+            "node": variables.get("node") or variables.get("host") or variables.get("target_node"),
+            "cluster": variables.get("cluster") or variables.get("cluster_id"),
+            "tags": tags,
+            "variables": copy.deepcopy(variables),
+        },
+    }
+    result = evaluate_context(db, context, persist=True, durable_denies=True)
+    _deny(result)
+    effective = result.get("effective_context") or context
+    payload = (effective.get("request") or {}).get("payload")
+    if isinstance(payload, dict):
+        rendered = copy.deepcopy(payload)
+    _write_aliases(
+        db, rendered, effective.get("resource") or {},
+        effective.get("scope") or {},
+    )
+    return rendered, result
+
+
 def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rendered, *, apmid=None, environment=None):
     rendered = copy.deepcopy(rendered)
     variables = dict(rendered.get("variables") or {})
@@ -236,6 +605,35 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
         db, request, blueprint,
         apmid=apmid_value, environment=environment_value,
     )
+    blueprint_context = {
+        "actor": _actor(actor, permissions, db, scope_context),
+        "scope": scope_context,
+        "request": {
+            "action": "blueprint.execute",
+            "source": getattr(request.state, "source", "API"),
+            "phase": "pre_request",
+        },
+        "blueprint": {
+            "id": getattr(blueprint, "id", None),
+            "slug": getattr(blueprint, "slug", ""),
+            "version": getattr(blueprint, "version", None),
+            "tags": list((getattr(blueprint, "visibility", {}) or {}).get("tags") or []),
+        },
+        "resource": {
+            "id": str(getattr(blueprint, "id", "") or ""),
+            "type": "blueprint",
+            "apmid": apmid_value,
+            "environment": environment_value,
+            "organization": scope_context.get("organization"),
+            "project": scope_context.get("project"),
+            "scope_key": scope_context.get("key"),
+        },
+    }
+    blueprint_result = evaluate_context(
+        db, blueprint_context, persist=True, durable_denies=True
+    )
+    _deny(blueprint_result)
+
     context = {
         "actor": _actor(actor, permissions, db, scope_context),
         "scope": scope_context,
@@ -264,12 +662,17 @@ def enforce_blueprint_execution(db, request, actor, permissions, blueprint, rend
             "cpu": _number_from(variables, ("cores", "cpu", "vcpu", "cpu_cores")),
             "memory_mb": _number_from(variables, ("memory", "memory_mb", "ram_mb")),
             "disk_gb": _number_from(variables, ("disk_size_gb", "disk_gb", "disk_size")),
+            "storage": variables.get("storage") or variables.get("datastore") or variables.get("datastore_id"),
+            "network": variables.get("network") or variables.get("bridge") or variables.get("network_id"),
+            "node": variables.get("node") or variables.get("host") or variables.get("target_node"),
+            "cluster": variables.get("cluster") or variables.get("cluster_id"),
             "tags": classification_tags,
             "variables": copy.deepcopy(variables),
         },
     }
     result = evaluate_context(db, context, persist=True, durable_denies=True)
     _deny(result)
+    result = _merge_policy_results(result, blueprint_result)
 
     effective = result.get("effective_context") or context
     payload = ((effective.get("request") or {}).get("payload"))
@@ -291,6 +694,61 @@ def _resource_metadata(db, target):
     if isinstance(tags, str):
         tags = [item for item in tags.replace(",", ";").split(";") if item]
     return row, metadata, list(tags) if isinstance(tags, list) else []
+
+
+def _day2_requested_resource(action_id, params):
+    """Project requested Day-2 values onto canonical resource fields.
+
+    Policy constraints are defined against resource.*. Provider request schemas
+    use action-specific names, so this adapter prevents limits from silently
+    ignoring a resize, disk or network value because the canonical field would
+    otherwise be missing from the evaluation context.
+    """
+    action = str(action_id or "")
+    values = dict(params or {})
+    requested = {}
+    if action == "resize_compute":
+        if values.get("cpu_cores") is not None:
+            requested["cpu"] = values["cpu_cores"]
+        if values.get("memory_mb") is not None:
+            requested["memory_mb"] = values["memory_mb"]
+    elif action == "add_disk":
+        requested["disk_gb"] = values.get("size_gib")
+        requested["storage"] = values.get("storage")
+    elif action == "resize_disk":
+        requested["disk_gb"] = values.get("new_size_gib")
+    elif action in {"add_nic", "edit_nic"}:
+        requested["network"] = values.get("bridge")
+        requested["vlan"] = values.get("vlan")
+    elif action == "migrate_vm":
+        requested["node"] = values.get("target_node")
+    elif action == "move_storage":
+        requested["storage"] = values.get("target_storage")
+    elif action == "clone_vm":
+        requested["node"] = values.get("target_node")
+        requested["storage"] = values.get("target_storage")
+    return {key: value for key, value in requested.items() if value is not None}
+
+
+def _apply_day2_effective_values(action_id, params, resource):
+    """Write policy-selected canonical values back to the provider parameters."""
+    action = str(action_id or "")
+    result = copy.deepcopy(dict(params or {}))
+    resource = dict(resource or {})
+    mapping = {
+        "resize_compute": {"cpu": "cpu_cores", "memory_mb": "memory_mb"},
+        "add_disk": {"disk_gb": "size_gib", "storage": "storage"},
+        "resize_disk": {"disk_gb": "new_size_gib"},
+        "add_nic": {"network": "bridge", "vlan": "vlan"},
+        "edit_nic": {"network": "bridge", "vlan": "vlan"},
+        "migrate_vm": {"node": "target_node"},
+        "move_storage": {"storage": "target_storage"},
+        "clone_vm": {"node": "target_node", "storage": "target_storage"},
+    }.get(action, {})
+    for canonical, parameter in mapping.items():
+        if resource.get(canonical) is not None:
+            result[parameter] = resource[canonical]
+    return result
 
 
 def enforce_day2(db, request, actor, permissions, target, action_id, params):
@@ -327,6 +785,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
             "scope_key": scope_context.get("key") or metadata.get("resource_scope_key"),
             "tags": tags,
             "metadata": metadata,
+            **_day2_requested_resource(action_id, params),
         },
     }
     result = evaluate_context(db, context, persist=True, durable_denies=True)
@@ -335,6 +794,7 @@ def enforce_day2(db, request, actor, permissions, target, action_id, params):
     effective_params = ((effective.get("request") or {}).get("parameters"))
     if isinstance(effective_params, dict):
         params = copy.deepcopy(effective_params)
+    params = _apply_day2_effective_values(action_id, params, effective.get("resource") or {})
     return params, result
 
 
@@ -449,6 +909,10 @@ def revalidate_day2_job(db, job, action_request, user, permissions, target):
             "scope_key": scope_context.get("key") or metadata.get("resource_scope_key"),
             "tags": tags,
             "metadata": metadata,
+            **_day2_requested_resource(
+                getattr(action_request, "action", ""),
+                getattr(action_request, "parameters", {}) or {},
+            ),
         },
     }
     return evaluate_context(db, context, persist=True)

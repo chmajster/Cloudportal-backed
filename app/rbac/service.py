@@ -15,6 +15,7 @@ PERMISSIONS = {
         'users': 'read create update delete assign_roles impersonate',
         'roles': 'read create update delete assign delegate',
         'groups': 'read create update delete manage_members map_identity',
+        'iam': 'assign subject.read roles.read binding.read binding.create binding.update binding.delete',
         'service_accounts': 'read create update delete tokens.manage',
         'rbac': 'assignments.read assignments.manage access_review.read impact.read',
         'authorization': 'check explain simulate',
@@ -63,7 +64,7 @@ PERMISSIONS = {
         'extensions': 'read manage',
         'metrics': 'read',
         'quotas': 'read manage tenant.manage override',
-        'policies': 'read manage simulate audit exception.manage',
+        'policies': 'read create update delete enable test simulate exceptions compliance manage audit exception.manage',
         'tokens': 'read create revoke manage_scopes',
         'settings': 'read update',
         'updates': 'read execute update',
@@ -114,9 +115,11 @@ def seed(db):
     }
     viewer = {
         p for p in ALL_PERMISSIONS
-        if p.endswith('.read') or '.read.' in p or p in {
-            'projects.select', 'projects.use', 'credentials.read_metadata',
-        }
+        if not p.startswith('iam.') and (
+            p.endswith('.read') or '.read.' in p or p in {
+                'projects.select', 'projects.use', 'credentials.read_metadata',
+            }
+        )
     }
     developer = {
         'projects.read', 'projects.use', 'projects.select',
@@ -136,7 +139,7 @@ def seed(db):
             if p.split('.')[0] not in {
                 'users', 'roles', 'groups', 'service_accounts', 'tokens', 'settings',
                 'updates', 'tenants', 'organizations', 'projects', 'governance',
-                'rbac', 'authorization', 'break_glass', 'instance_backups',
+                'iam', 'rbac', 'authorization', 'break_glass', 'instance_backups',
             } and p != 'quotas.tenant.manage'
         } | {'updates.read'}),
         'Operator': {
@@ -173,9 +176,13 @@ def seed(db):
         },
         'Security Administrator': {
             'users.read', 'roles.read', 'groups.read', 'groups.map_identity',
+            'iam.assign', 'iam.subject.read', 'iam.roles.read', 'iam.binding.read',
+            'iam.binding.create', 'iam.binding.update', 'iam.binding.delete',
             'rbac.assignments.read', 'rbac.assignments.manage', 'rbac.access_review.read',
             'authorization.check', 'authorization.explain', 'authorization.simulate',
-            'audit.read', 'policies.read', 'policies.manage', 'policies.simulate', 'policies.audit',
+            'audit.read', 'policies.read', 'policies.create', 'policies.update', 'policies.delete',
+            'policies.enable', 'policies.test', 'policies.simulate', 'policies.exceptions',
+            'policies.compliance', 'policies.manage', 'policies.audit', 'policies.exception.manage',
             'tokens.read', 'tokens.revoke', 'break_glass.read', 'break_glass.manage',
         },
         'Approval Manager': {

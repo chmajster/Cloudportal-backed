@@ -32,7 +32,7 @@ from app.providers.proxmox import create_api_token, resolve_proxmox_endpoint, te
 from app.projects.models import Project
 from app.tenancy.models import Tenant
 from app.security.core import audit, decrypt_secret
-from app.resource_scope.http import require
+from app.resource_scope.http import require, require_any
 from app.terraform.state import delete_plan
 
 router = APIRouter(tags=['infrastructure'])
@@ -686,10 +686,35 @@ def new_job(db, request, actor, operation, deployment=None, payload=None, *, ret
         raise HTTPException(409, 'Deployment allocations were released; execute the Blueprint again')
     if deployment and operation == 'terraform.apply' and ((deployment.workflow or {}).get('adoption') or {}).get('plan_only'):
         raise HTTPException(409, 'Adopted deployment is plan-only; terraform.apply is disabled')
+    from app.policy_engine.integration import enforce_job_operation
+    policy_parameters = {}
+    if isinstance(payload, dict) and isinstance(payload.get('ansible'), dict):
+        policy_parameters = dict(payload['ansible'])
+    policy_result = enforce_job_operation(
+        db, request, actor, request.state.permissions, operation,
+        deployment=deployment, parameters=policy_parameters,
+    )
+
     job_payload = snapshot_ansible_payload(
         db,
         payload or (deployment.workflow if deployment and provisioning_operation else {}),
     )
+    prior_policy = dict((payload or {}).get('_policy') or {}) if isinstance(payload, dict) else {}
+    job_payload['_policy'] = {
+        'decision_id': policy_result.get('decision_id') or prior_policy.get('decision_id'),
+        'related_decision_ids': list(prior_policy.get('related_decision_ids') or [])
+            + list(policy_result.get('related_decision_ids') or []),
+        'matched_policy_ids': list(dict.fromkeys(
+            list(prior_policy.get('matched_policy_ids') or [])
+            + list(policy_result.get('matched_policy_ids') or [])
+        )),
+        'approvals': list(prior_policy.get('approvals') or [])
+            + list(policy_result.get('approvals') or []),
+        'obligations': list(prior_policy.get('obligations') or [])
+            + list(policy_result.get('obligations') or []),
+        'warnings': list(prior_policy.get('warnings') or [])
+            + list(policy_result.get('warnings') or []),
+    }
     if deployment:
         job_payload['previous_status'] = deployment.status
     job = Job(id=str(uuid.uuid4()), operation=operation, deployment_id=deployment.id if deployment else None,
@@ -716,36 +741,78 @@ def create_deployment(data: DeploymentInput, request: Request, actor=Depends(req
             'Direct Proxmox provisioning must be launched from a Blueprint so the provider workflow is immutable and auditable',
         )
     check_job_permissions(db, request, actor, 'terraform.apply')
-    p = find(db, Provider, data.provider_id)
+
+    from app.policy_engine.integration import enforce_vm_create
+    rendered, vm_policy_result = enforce_vm_create(
+        db, request, actor, request.state.permissions, data.model_dump(mode='python')
+    )
+    effective = data.model_copy(deep=True)
+    effective.provider_id = int(rendered.get('provider_id', effective.provider_id))
+    effective.template = str(rendered.get('template') or effective.template)
+    effective.credentials_id = int(rendered.get('credentials_id', effective.credentials_id))
+    effective.variables = dict(rendered.get('variables') or effective.variables)
+
+    p = find(db, Provider, effective.provider_id)
     require_platform_enabled(db, p.type)
     ensure_credential_usable(find(db, Credential, p.credentials_id))
-    require_catalog_item_enabled(db, 'templates', data.template)
-    template_meta, _ = template_definition(data.template)
+    require_catalog_item_enabled(db, 'templates', effective.template)
+    template_meta, _ = template_definition(effective.template)
     if p.type != template_meta['provider']:
-        raise HTTPException(422, 'Selected infrastructure provider does not match the Terraform template')
-    variables = validate_template_variables(data.template, data.variables)
-    if p.credentials_id != data.credentials_id:
+        raise HTTPException(422, 'Policy-selected infrastructure provider does not match the Terraform template')
+    variables = validate_template_variables(effective.template, effective.variables)
+    if p.credentials_id != effective.credentials_id:
         raise HTTPException(422, 'Credential does not belong to the selected provider')
-    # Share the same row locks with credential mutation/deletion to preserve references.
-    for credential_id in sorted({data.credentials_id} | ({data.ansible.credentials_id} if data.ansible else set())):
+    for credential_id in sorted(
+        {effective.credentials_id}
+        | ({effective.ansible.credentials_id} if effective.ansible else set())
+    ):
         locked_credential(db, credential_id)
-    if data.ansible:
+    if effective.ansible:
         if p.type != 'proxmox':
             raise HTTPException(422, 'Ansible post-provisioning currently requires the Proxmox guest-agent workflow')
         if 'ansible.execute' not in request.state.permissions:
             raise HTTPException(403, 'ansible.execute required')
-        validate_ansible(db, data.ansible)
+        validate_ansible(db, effective.ansible)
+
     def create():
-        d = Deployment(name=data.name, provider_id=p.id, provider=p.type, template=data.template, credentials_id=data.credentials_id,
-                       variables=variables.model_dump(mode='json'), workflow={'ansible': data.ansible.model_dump() if data.ansible else None}, created_by=actor.user_id, executor=data.executor)
+        d = Deployment(
+            name=effective.name,
+            provider_id=p.id,
+            provider=p.type,
+            template=effective.template,
+            credentials_id=effective.credentials_id,
+            variables=variables.model_dump(mode='json'),
+            workflow={
+                'ansible': effective.ansible.model_dump() if effective.ansible else None
+            },
+            created_by=actor.user_id,
+            executor=effective.executor,
+        )
         db.add(d)
         db.flush()
         d.state_location = f'database://terraform-states/{d.id}'
-        job = new_job(db, request, actor, 'terraform.apply', d, {'ansible': data.ansible.model_dump() if data.ansible else None})
+        pre_policy = {
+            'decision_id': vm_policy_result.get('decision_id'),
+            'matched_policy_ids': vm_policy_result.get('matched_policy_ids') or [],
+            'approvals': vm_policy_result.get('approvals') or [],
+            'obligations': vm_policy_result.get('obligations') or [],
+            'warnings': vm_policy_result.get('warnings') or [],
+        }
+        job = new_job(
+            db,
+            request,
+            actor,
+            'terraform.apply',
+            d,
+            {
+                'ansible': effective.ansible.model_dump() if effective.ansible else None,
+                '_policy': pre_policy,
+            },
+        )
         audit(db, request, 'deployment.created', 'deployments', d.id)
         return {**deployment_public(d), 'job': job_public(job)}
-    return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
+    return idempotent(db, request, actor, data.model_dump(), create, required=True)
 
 @router.get('/deployments', response_model=Items[DeploymentOutput])
 def deployments(limit: Limit = 100, offset: Offset = 0, actor=Depends(require('deployments.read')), db=Depends(get_db, scope='function')):
@@ -814,7 +881,7 @@ def job(id: str, actor=Depends(require('jobs.read')), db=Depends(get_db, scope='
 
 
 @router.post('/jobs/{id}/approve', response_model=JobOutput)
-def approve_job(id: str, request: Request, actor=Depends(require('blueprints.approve')),
+def approve_job(id: str, request: Request, actor=Depends(require_any('approvals.approve', 'blueprints.approve')),
                 db=Depends(get_db, scope='function')):
     job = db.scalar(select(Job).where(Job.id == id).with_for_update())
     if job is None:
@@ -822,8 +889,9 @@ def approve_job(id: str, request: Request, actor=Depends(require('blueprints.app
     if job.status != 'waiting_approval':
         raise HTTPException(409, 'Job is not waiting for approval')
     blueprint = (job.payload or {}).get('blueprint') or {}
-    if not blueprint.get('requires_approval'):
-        raise HTTPException(409, 'Job does not require Blueprint approval')
+    policy_approval = dict((job.payload or {}).get('_policy_approval') or {})
+    if not blueprint.get('requires_approval') and not policy_approval.get('stages'):
+        raise HTTPException(409, 'Job does not require approval')
 
     payload = dict(job.payload or {})
     workflow_approval = dict(payload.get('_workflow_approval') or {})

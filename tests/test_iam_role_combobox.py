@@ -11,7 +11,7 @@ def test_iam_role_field_uses_existing_searchable_select_contract():
     styles = Path('app/web/styles/features/identity.css').read_text()
 
     assert "assignable: 'true'" in iam
-    assert "api('/rbac/roles?' + query.toString())" in iam
+    assert "iamAll('/iam/roles?' + query.toString())" in iam
     assert "scope_type: kind" in iam
     assert "while (offset < total)" in iam
     assert "searchableSelectField('Rola', 'role_id'" in iam
@@ -27,8 +27,8 @@ def test_iam_role_field_uses_existing_searchable_select_contract():
     assert "availableRoleIds.has(roleId)" in iam
     assert "role_id: roleId" in iam
     assert "role.searchableSelect.setChoices(roles.map(roleChoice), preferred)" in iam
-    assert "await loadAssignableRoles(assignment?.role_id || '')" in iam
-    assert "button('Edytuj', () => accessAssignmentForm(null, item)" in iam
+    assert "await loadAssignableRoles();" in iam
+    assert "button('Edytuj', () => editAssignmentForm(item).catch" in iam
     assert "method: 'PATCH'" in iam
 
     assert "role: 'combobox'" in shared
