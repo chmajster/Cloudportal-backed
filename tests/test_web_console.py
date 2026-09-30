@@ -1087,9 +1087,10 @@ def test_web_console_and_assets_are_served_with_security_headers(client):
     assert "const vmGovernance = globalThis.InventoryGovernance;" in script
     assert "scope?.tenant_id" in script
     assert "scope?.project_id" in script
-    assert "`/resources/${encodeURIComponent(item.id)}/day2-state`" in script
-    assert "`/resources/${encodeURIComponent(item.id)}/actions`" in script
-    assert "`/resources/${encodeURIComponent(item.id)}/console`" in script
+    assert "`/resources/${encodeURIComponent(item.id)}`" in script
+    assert "`${resourceBase(item)}/day2-state`" in script
+    assert "`${resourceBase(item)}/actions`" in script
+    assert "`${resourceBase(item)}/console`" in script
     assert "vmGovernance.powerRequest(item, vmBase(item), action)" in script
     assert "vmGovernance.snapshotInfo(item, vmBase(item), actionCatalog)" in script
     assert "!governed ? ['monitor', 'Monitor'] : null" in script
