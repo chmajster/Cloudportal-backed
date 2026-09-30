@@ -105,6 +105,7 @@ async function blueprintsView() {
   const remembered = window.CloudportalBlueprintScope || null;
   const projectContext = await api('/project-context').catch(() => ({ selected: null }));
   const contextProjectId = String(projectContext?.selected?.id || '');
+  const contextEntityKey = String(projectContext?.entity_key || '');
   const selected = scopes.find(scope => String(scope.project_id) === contextProjectId)
     || scopes.find(scope =>
       remembered
@@ -113,13 +114,16 @@ async function blueprintsView() {
     )
     || scopes[0];
 
+  const selectedEntityKey = String(selected.project_id) === contextProjectId ? contextEntityKey : '';
   window.CloudportalBlueprintScope = {
     tenant_id: String(selected.tenant_id),
     project_id: String(selected.project_id),
+    entity_key: selectedEntityKey || null,
   };
   const scopeHeaders = {
     'X-Tenant-ID': String(selected.tenant_id),
     'X-Project-ID': String(selected.project_id),
+    'X-Entity': selectedEntityKey,
   };
   const scopeAllows = permission =>
     allowed(permission) || (selected.permissions || []).includes(permission);
@@ -257,6 +261,7 @@ async function executeBlueprint(item, scope = null) {
   const scopeHeaders = scope ? {
     'X-Tenant-ID': String(scope.tenant_id),
     'X-Project-ID': String(scope.project_id),
+    'X-Entity': String(scope.entity_key || ''),
   } : {};
   const scopeAllows = permission =>
     allowed(permission) || (scope?.permissions || []).includes(permission);
