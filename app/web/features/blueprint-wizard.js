@@ -67,6 +67,8 @@
         users: users.filter(value => value.is_active !== false),
         blueprints: [],
         managerRoles: [],
+        entities: [],
+        entityRoles: [],
         vmClassification,
       };
 
@@ -379,6 +381,16 @@
           state.visibilityApi = root.querySelector('[name="visibility_api"]')?.checked ?? state.visibilityApi;
           state.allowedRoleIds = ids('allowed_role_ids', state.allowedRoleIds, data.roles);
           state.allowedUserIds = ids('allowed_user_ids', state.allowedUserIds, data.users);
+          const entityCards = root.querySelector('[data-simple-access-name="allowed_entities"]');
+          if (entityCards) {
+            const visibleEntities = new Set((data.entities || []).map(row => String(row.key)));
+            const hiddenExisting = (state.allowedEntities || [])
+              .map(String)
+              .filter(value => !visibleEntities.has(value));
+            const selectedVisible = [...entityCards.querySelectorAll('input[name="allowed_entities"]:checked')]
+              .map(input => String(input.value));
+            state.allowedEntities = [...new Set([...hiddenExisting, ...selectedVisible])];
+          }
           state.managerRoleIds = ids('manager_role_ids', state.managerRoleIds, data.managerRoles);
           state.requiresApproval = root.querySelector('[name="requires_approval"]')?.checked ?? state.requiresApproval;
           window.BlueprintApprovalPolicyUI.captureState(root, state);
@@ -1044,7 +1056,12 @@
               node('span', { class: 'eyebrow', text: 'Dostęp do Blueprintu' }),
               node('h4', { text: 'Kto może używać i zarządzać tym Blueprintem?' }),
               node('p', { class: 'muted', text: 'Jeśli nie ustawisz ograniczeń, dostęp wynika z RBAC organizacji/projektu. Dodawaj wyjątki tylko wtedy, gdy są potrzebne.' })),
-            badge(state.allowedRoleIds.length || state.allowedUserIds.length ? 'Ograniczony' : 'Dziedziczony', state.allowedRoleIds.length || state.allowedUserIds.length ? 'warning' : 'ok')));
+            badge(
+              state.allowedRoleIds.length || state.allowedUserIds.length || state.allowedEntities.length
+                ? 'Ograniczony' : 'Dziedziczony',
+              state.allowedRoleIds.length || state.allowedUserIds.length || state.allowedEntities.length
+                ? 'warning' : 'ok'
+            )));
 
         const visibility = node('section', { class: 'blueprint-wizard-access-section' },
           node('div', { class: 'blueprint-wizard-section-heading' },
@@ -1069,6 +1086,26 @@
             ...window.BlueprintApprovalPolicyUI.wizardFields(state)));
 
         content.append(visibility, launch);
+
+        const entityRows = [...(data.entities || [])];
+        const knownEntityKeys = new Set(entityRows.map(row => String(row.key)));
+        for (const key of state.allowedEntities || []) {
+          if (!knownEntityKeys.has(String(key))) {
+            entityRows.push({
+              key: String(key),
+              apmid: '—',
+              environment: '—',
+              role_label: 'Zapisane',
+              description: 'Entity zapisane w Blueprintcie, którego nie ma obecnie w katalogu klasyfikacji.',
+            });
+          }
+        }
+        content.append(node('section', { class: 'blueprint-wizard-access-section blueprint-wizard-entity-section' },
+          node('div', { class: 'blueprint-wizard-section-heading' },
+            node('strong', { text: 'Policy Engine Entity' }),
+            node('span', { class: 'muted', text: 'Zakres APMID + Environment + poziom dostępu. ACL jest dodatkowym ograniczeniem i nie nadaje uprawnień RBAC.' })),
+          parts.ui.entityPicker(entityRows, state.allowedEntities)
+        ));
 
         if (allowed('roles.read') || data.roles.length) {
           content.append(node('section', { class: 'blueprint-wizard-access-section' },
@@ -1132,6 +1169,7 @@
         const steps = state.advancedWorkflow ? state.workflow : currentAutoWorkflow();
         const roleNames = state.allowedRoleIds.map(id => data.roles.find(value => Number(value.id) === Number(id))?.name).filter(Boolean);
         const userNames = state.allowedUserIds.map(id => data.users.find(value => Number(value.id) === Number(id))?.username).filter(Boolean);
+        const entityNames = (state.allowedEntities || []).map(String);
 
         const sections = [
           ['Blueprint', [
@@ -1189,6 +1227,7 @@
           ]],
           ['AWX', parts.awx.summaryRows(state, data)],
           ['Dostęp', [
+            ['Entity', entityNames.join(', ') || 'Bez ograniczenia Entity'],
             ['Role', roleNames.join(', ') || 'Bez ograniczenia'],
             ['Użytkownicy', userNames.join(', ') || 'Bez ograniczenia'],
             ['Approval', state.requiresApproval ? 'Wymagany' : 'Nie'],
