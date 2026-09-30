@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from sqlalchemy import select
+
+from app.access.models import OrganizationAPMID
 from app.models import Setting
 
 SETTING_KEY = 'vm_classification'
@@ -68,12 +71,20 @@ def save_vm_classification_settings(db, data):
 
 def tenant_vm_classification_settings(db, tenant_id):
     global_settings = vm_classification_settings(db)
-    row = db.get(Setting, tenant_setting_key(tenant_id))
-    raw = dict(row.value) if row and isinstance(row.value, dict) else {}
-    if row is None:
-        apmids = list(global_settings['apmids'])
+    relational = list(db.scalars(
+        select(OrganizationAPMID).where(
+            OrganizationAPMID.organization_id == str(tenant_id),
+            OrganizationAPMID.enabled.is_(True),
+        ).order_by(OrganizationAPMID.is_system.desc(), OrganizationAPMID.code)
+    ))
+    if relational:
+        apmids = [row.code for row in relational]
     else:
-        requested = normalize_apmids(raw.get('apmids'))
+        # Compatibility-only read for installations between code deploy and the
+        # Alembic backfill. New writes never update this legacy setting.
+        legacy = db.get(Setting, tenant_setting_key(tenant_id))
+        raw = dict(legacy.value) if legacy and isinstance(legacy.value, dict) else {}
+        requested = normalize_apmids(raw.get('apmids')) if legacy is not None else list(global_settings['apmids'])
         apmids = [
             *DEFAULT_APMIDS,
             *(value for value in requested if value not in DEFAULT_APMIDS),
@@ -112,20 +123,27 @@ def vm_classification_for_tenant(db, tenant_id):
 
 
 def save_tenant_apmids(db, tenant_id, apmids):
-    requested = normalize_apmids(apmids)
-    value = {
-        'apmids': [
-            *DEFAULT_APMIDS,
-            *(item for item in requested if item not in DEFAULT_APMIDS),
-        ],
-    }
-    key = tenant_setting_key(tenant_id)
-    row = db.get(Setting, key)
-    if row is None:
-        row = Setting(key=key, value=value)
-        db.add(row)
-    else:
-        row.value = value
+    from app.access.groups import ensure_apmid_groups
+    from app.access.service import delete_apmid, ensure_apmid
+    from app.tenancy.models import Tenant
+
+    organization = db.get(Tenant, str(tenant_id))
+    if organization is None:
+        raise ValueError('Organization not found')
+    requested = [
+        *DEFAULT_APMIDS,
+        *(item for item in normalize_apmids(apmids) if item not in DEFAULT_APMIDS),
+    ]
+    existing = list(db.scalars(select(OrganizationAPMID).where(
+        OrganizationAPMID.organization_id == str(tenant_id)
+    )))
+    existing_by_code = {row.code: row for row in existing}
+    for code in requested:
+        ensure_apmid(db, organization, code, is_system=(code in DEFAULT_APMIDS))
+        ensure_apmid_groups(db, organization, code)
+    for code, row in existing_by_code.items():
+        if code not in requested and not row.is_system:
+            delete_apmid(db, organization, code)
     db.flush()
     return tenant_vm_classification_settings(db, tenant_id)
 

@@ -233,8 +233,8 @@ def test_iam_web_assignment_form_uses_global_catalogs_and_explicit_errors():
     assert "'/iam/projects?organization_id='" in source
     assert "'/iam/apmids?organization_id='" in source
     assert "'/iam/environments?organization_id='" in source
-    assert "searchableSelectField('Subject'" in source
-    assert "searchableSelectField('Organization'" in source
+    assert "searchableSelectField('Subject'" in source or "searchableSelectField('Kto?'" in source
+    assert "searchableSelectField('Organizacja'" in source
     assert "Ładowanie użytkowników..." in source
     assert "Ładowanie organizacji..." in source
     assert "Brak użytkowników" in source
@@ -242,6 +242,9 @@ def test_iam_web_assignment_form_uses_global_catalogs_and_explicit_errors():
     assert "Nie udało się pobrać " in source
     assert "Brak permission: " in source
     assert "Conditions JSON musi być obiektem JSON." in source
+    assert "Dostęp i uprawnienia" in source
+    assert "node('summary', { text: 'Zaawansowane' })" in source
+    assert "Projekt opcjonalny" in source
     assert "submit.disabled = !(" in source
     assert "method: 'PATCH'" in source
     assert "button('Edytuj'" in source

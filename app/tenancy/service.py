@@ -8,6 +8,8 @@ from datetime import timezone
 
 from sqlalchemy import and_, delete, exists, func, or_, select
 
+from app.access.legacy import sync_organization_user_bindings
+from app.access.service import ensure_organization_access
 from app.projects.models import Project
 from app.models import Audit, Permission, Role, RolePermission, User, now
 from app.tenancy.authorization import (assert_version, authorize, fail, identity, live_grants,
@@ -69,6 +71,7 @@ def tenant_create(db, principal, data):
     tenant = Tenant(**values, created_by=actor.user_id)
     db.add(tenant)
     db.flush()
+    ensure_organization_access(db, tenant, created_by=actor.user_id)
     return tenant_output(tenant)
 
 
@@ -240,6 +243,9 @@ def _replace_roles(db, access, member, role_ids):
         db.add_all(TenantRoleGrant(assignment_id=assignment.id, permission_id=permission_id)
                    for permission_id in sorted(grouped[role_id]))
     db.flush()
+    sync_organization_user_bindings(
+        db, member.tenant_id, member.user_id, created_by=access.identity.user_id,
+    )
 
 
 def _ensure_manager_remains(db, access):
@@ -302,6 +308,9 @@ def member_update(db, principal, tenant_id, user_id, data):
     member.status = data.status
     member.version += 1
     db.flush()
+    sync_organization_user_bindings(
+        db, member.tenant_id, member.user_id, created_by=access.identity.user_id,
+    )
     _ensure_manager_remains(db, access)
     return _member_output(db, member)
 
@@ -323,8 +332,12 @@ def member_delete(db, principal, tenant_id, user_id, expected_version):
     member = _member(db, access.tenant.id, user_id)
     assert_version(member, expected_version)
     _protect_member(db, access, user_id)
+    member_tenant_id, member_user_id = member.tenant_id, member.user_id
     db.delete(member)
     db.flush()
+    sync_organization_user_bindings(
+        db, member_tenant_id, member_user_id, created_by=access.identity.user_id,
+    )
     _ensure_manager_remains(db, access)
     return {'deleted': True}
 

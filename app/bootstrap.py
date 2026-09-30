@@ -8,6 +8,9 @@ from app.config import settings
 from app.database import session, engine
 from app.models import Role, Setting, User
 from app.rbac.service import ALL_PERMISSIONS, seed
+from app.access.groups import ensure_global_groups
+from app.access.legacy import sync_global_user_bindings
+from app.access.service import ensure_all_managed_access
 from app.security.core import encryption_key, issue_token, password_hasher
 
 
@@ -37,6 +40,8 @@ def sync_existing_rbac():
         if not inspect(engine()).has_table('settings') or not db.get(Setting, 'bootstrapped'):
             return False
         seed(db)
+        if inspect(engine()).has_table('organization_apmids'):
+            ensure_all_managed_access(db)
         db.commit()
         return True
 
@@ -59,6 +64,9 @@ def bootstrap(db):
                 roles=[db.scalar(select(Role).where(Role.name == 'Administrator'))])
     db.add(user)
     db.flush()
+    sync_global_user_bindings(db, user.id, created_by=user.id)
+    if inspect(engine()).has_table('organization_apmids'):
+        ensure_global_groups(db, created_by=user.id)
     _, token = issue_token(db, user, 'Initial Administrator Token', ALL_PERMISSIONS)
     db.add(Setting(key='bootstrapped', value={'version': 1}))
     db.commit()

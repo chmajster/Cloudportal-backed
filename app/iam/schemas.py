@@ -79,6 +79,7 @@ class AssignmentOutput(IAMModel):
     scope_type: ScopeType
     scope_id: str | None
     tenant_id: str | None
+    organization_id: str | None = None
     project_id: str | None
     apmid: str | None
     environment: str | None
@@ -91,6 +92,7 @@ class AssignmentOutput(IAMModel):
     enabled: bool
     source: str
     source_ref: str | None
+    source_group: str | None = None
     status: Literal['ACTIVE', 'SCHEDULED', 'EXPIRED', 'DISABLED']
     created_by: int | None
     created_at: datetime
@@ -136,6 +138,8 @@ class GroupOutput(IAMModel):
     description: str
     external_source: str | None
     external_id: str | None
+    system_key: str | None = None
+    managed_type: str | None = None
     enabled: bool
     member_count: int
     created_at: datetime

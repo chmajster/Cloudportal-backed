@@ -43,6 +43,11 @@
 - Autoryzacja backendu jest źródłem prawdy. UI może ukrywać akcję, ale **nie może być jedyną kontrolą**.
 - Ten sam model uprawnień musi obowiązywać w kreatorze UI, endpointach create/update/delete/execute, worker reauthorization i operacjach retry/recovery.
 - Efektywne role obejmują role globalne oraz aktywne przypisania tenant/project. Nie wolno sprawdzać tylko globalnych ról.
+- **#345 unified access:** enterprise evaluator ma jedno kanoniczne źródło grantów: `RoleAssignment`. Legacy `UserRole`, `TenantRoleAssignment` i `ProjectRoleAssignment` mogą istnieć jako compatibility storage, ale ich zapisy muszą być write-through synchronizowane do `RoleAssignment`; evaluator nie może ponownie dodawać ich jako drugiej ścieżki ALLOW.
+- Publiczny model to **Organizacja → Projekt → Zasób**. `tenant_id` pozostaje kompatybilnością wewnętrzną; nowe publiczne Access API używa `organization_id`.
+- Scope APMID/ENV musi być związany z Organizacją. Ten sam kod APMID w dwóch Organizacjach nie może spowodować cross-organization match.
+- Relacyjny `OrganizationAPMID` jest źródłem prawdy. `vm_classification:<tenant_id>` jest tylko fallbackiem migracyjnym; `LEO` jest systemowy, aktywny i nieusuwalny.
+- Managed groups używają stabilnego `system_key`, nie nazwy wyświetlanej, i otrzymują zwykły `RoleAssignment`. Nie wolno automatycznie dodawać użytkownika do uprzywilejowanej grupy.
 - Cofnięcie membershipu tenant/project ma natychmiast odbierać wynikające z niego uprawnienia.
 - Payload API nie może wstrzykiwać principal IDs niewidocznych w wybranym scope. Backend musi ponownie walidować role/użytkowników wybrane w UI.
 - W formularzach IAM pole roli przechowuje wyłącznie istniejące `role_id`; tekst comboboxa służy tylko do wyszukiwania. Zmiana roli istniejącego RoleAssignment musi ponownie przejść delegation boundary, kontrolę scope i separation-of-duties oraz odświeżyć `permission_ceiling` z nowej roli.

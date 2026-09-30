@@ -38,7 +38,9 @@ class Group(Timestamp, Base):
     __table_args__ = (
         UniqueConstraint('name', name='uq_iam_groups_name'),
         UniqueConstraint('external_source', 'external_id', name='uq_iam_groups_external'),
+        UniqueConstraint('system_key', name='uq_iam_groups_system_key'),
         Index('ix_iam_groups_external_source', 'external_source', 'enabled'),
+        Index('ix_iam_groups_managed_type', 'managed_type', 'enabled'),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -46,6 +48,8 @@ class Group(Timestamp, Base):
     description: Mapped[str] = mapped_column(Text, default='')
     external_source: Mapped[str | None] = mapped_column(String(32))
     external_id: Mapped[str | None] = mapped_column(String(1024))
+    system_key: Mapped[str | None] = mapped_column(String(255), index=True)
+    managed_type: Mapped[str | None] = mapped_column(String(64))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'))
 

@@ -7,21 +7,21 @@ let selectedUserId = null;
 const TABS = [
   ['assignments', 'Przypisania'],
   ['groups', 'Grupy'],
-  ['simulator', 'RBAC Simulator'],
-  ['review', 'Access Review'],
+  ['simulator', 'Zaawansowane · Simulator'],
+  ['review', 'Zaawansowane · Access Review'],
 ];
 
 const SCOPE_TYPES = [
-  ['GLOBAL', 'System'],
-  ['ORGANIZATION', 'Organization'],
-  ['PROJECT', 'Project'],
+  ['GLOBAL', 'Cała platforma'],
+  ['ORGANIZATION', 'Cała Organizacja'],
+  ['PROJECT', 'Cały Projekt'],
   ['APMID', 'APMID'],
-  ['ENVIRONMENT', 'Environment'],
-  ['RESOURCE_POOL', 'Resource Pool'],
-  ['BLUEPRINT', 'Blueprint'],
-  ['DEPLOYMENT', 'Deployment'],
-  ['RESOURCE', 'Resource'],
-  ['MACHINE', 'Machine'],
+  ['ENVIRONMENT', 'ENV'],
+  ['RESOURCE_POOL', 'Konkretny Resource Pool'],
+  ['BLUEPRINT', 'Konkretny Blueprint'],
+  ['DEPLOYMENT', 'Konkretny Deployment'],
+  ['RESOURCE', 'Konkretny Zasób'],
+  ['MACHINE', 'Konkretna VM / Machine'],
 ];
 
 async function iamApi(path, options = {}, canRefresh = true) {
@@ -170,8 +170,8 @@ async function accessAssignmentForm(forcedUserId = null) {
   let loadSubjects = async () => {};
 
   openModal({
-    title: forcedUserId ? 'Przypisz dostęp użytkownikowi' : 'Nowy RoleAssignment',
-    eyebrow: 'Enterprise IAM',
+    title: forcedUserId ? 'Przypisz dostęp użytkownikowi' : 'Przypisz dostęp',
+    eyebrow: 'Dostęp i uprawnienia',
     body: formHost,
     wide: true,
     submitLabel: 'Przypisz dostęp',
@@ -183,8 +183,8 @@ async function accessAssignmentForm(forcedUserId = null) {
       const requiredByScope = {
         ORGANIZATION: ['tenant_id'],
         PROJECT: ['tenant_id', 'project_id'],
-        APMID: ['tenant_id', 'project_id', 'apmid'],
-        ENVIRONMENT: ['tenant_id', 'project_id', 'apmid', 'environment'],
+        APMID: ['tenant_id', 'apmid'],
+        ENVIRONMENT: ['tenant_id', 'apmid', 'environment'],
         RESOURCE_POOL: ['tenant_id', 'project_id', 'scope_id'],
         BLUEPRINT: ['tenant_id', 'project_id', 'scope_id'],
         DEPLOYMENT: ['tenant_id', 'project_id', 'scope_id'],
@@ -264,11 +264,11 @@ async function accessAssignmentForm(forcedUserId = null) {
   }
 
   const organizations = organizationsResult.items || [];
-  const subjectType = selectField('Subject type', 'subject_type', [
-    { value: 'USER', label: 'User' },
-    { value: 'GROUP', label: 'Group' },
-    { value: 'SERVICE_ACCOUNT', label: 'Service Account' },
-    { value: 'API_TOKEN', label: 'API Token' },
+  const subjectType = selectField('Kto?', 'subject_type', [
+    { value: 'USER', label: 'Użytkownik' },
+    { value: 'GROUP', label: 'Grupa' },
+    { value: 'SERVICE_ACCOUNT', label: 'Konto serwisowe' },
+    { value: 'API_TOKEN', label: 'Token API · zaawansowane' },
   ], 'USER', { required: true });
 
   const subjectHost = node('div', { class: 'wide' });
@@ -284,15 +284,15 @@ async function accessAssignmentForm(forcedUserId = null) {
   role.classList.add('iam-role-searchable-select');
   role.searchableSelect.setState('loading', 'Ładowanie ról…');
 
-  const effect = selectField('Effect', 'effect', [
+  const effect = selectField('Efekt', 'effect', [
     { value: 'ALLOW', label: 'ALLOW' },
     { value: 'DENY', label: 'DENY' },
   ], 'ALLOW', { required: true });
-  const scopeType = selectField('Scope', 'scope_type',
+  const scopeType = selectField('Zakres', 'scope_type',
     SCOPE_TYPES.map(([scopeValue, label]) => ({ value: scopeValue, label })),
-    'GLOBAL', { required: true });
+    'ORGANIZATION', { required: true });
 
-  const organization = searchableSelectField('Organization', 'tenant_id', organizations.map(item => ({
+  const organization = searchableSelectField('Organizacja', 'tenant_id', organizations.map(item => ({
     value: item.id,
     label: item.name + (item.slug ? ' · ' + item.slug : ''),
   })), '', {
@@ -306,10 +306,10 @@ async function accessAssignmentForm(forcedUserId = null) {
   });
   organization.append(organizationStatus);
 
-  const project = searchableSelectField('Project', 'project_id', [], '', {
+  const project = searchableSelectField('Projekt', 'project_id', [], '', {
     wide: true,
     selectFirst: false,
-    placeholder: 'Najpierw wybierz Organization',
+    placeholder: 'Najpierw wybierz Organizację',
   });
   const projectStatus = node('span', { class: 'field-help', text: '' });
   project.append(projectStatus);
@@ -317,7 +317,7 @@ async function accessAssignmentForm(forcedUserId = null) {
   const apmid = searchableSelectField('APMID', 'apmid', [], '', {
     wide: true,
     selectFirst: false,
-    placeholder: 'Najpierw wybierz Project',
+    placeholder: 'Najpierw wybierz Organizację',
   });
   const apmidStatus = node('span', { class: 'field-help', text: '' });
   apmid.append(apmidStatus);
@@ -330,21 +330,27 @@ async function accessAssignmentForm(forcedUserId = null) {
   const environmentStatus = node('span', { class: 'field-help', text: '' });
   environment.append(environmentStatus);
 
-  const scopeId = field('Resource / scope ID', 'scope_id', { maxlength: 160, wide: true });
+  const scopeId = field('Konkretny zasób', 'scope_id', { maxlength: 160, wide: true });
   const conditions = field('Conditions JSON', 'conditions', {
     tag: 'textarea',
     value: '{}',
     wide: true,
     help: 'Bez eval(). Obsługiwany jest bezpieczny condition tree Policy Engine.',
   });
-  const validFrom = field('Valid from', 'valid_from', { type: 'datetime-local' });
-  const validUntil = field('Valid until', 'valid_until', { type: 'datetime-local' });
-  const inherit = checkboxField('Dziedzicz do scope potomnych', 'inherit', true);
+  const validFrom = field('Ważny od', 'valid_from', { type: 'datetime-local' });
+  const validUntil = field('Ważny do', 'valid_until', { type: 'datetime-local' });
+  const inherit = checkboxField('Dziedzicz do zakresów podrzędnych', 'inherit', true);
   const approval = checkboxField('Wymagaj approval przed operacją', 'approval_required', false);
+  const summary = node('div', { class: 'wide panel' },
+    node('strong', { text: 'Podsumowanie' }),
+    node('div', { class: 'muted', text: 'Wybierz podmiot, zakres i rolę.' }));
+  const advanced = node('details', { class: 'wide panel' },
+    node('summary', { text: 'Zaawansowane' }),
+    node('div', { class: 'form-grid' }, effect, approval, conditions));
 
   formHost.replaceChildren(
-    subjectType, subjectHost, role, effect, scopeType, organization, project, apmid,
-    environment, scopeId, validFrom, validUntil, inherit, approval, conditions);
+    subjectType, subjectHost, organization, project, scopeType, apmid, environment,
+    scopeId, role, inherit, validFrom, validUntil, summary, advanced);
 
   const subjectTypeSelect = subjectType.querySelector('select');
   const scopeSelect = scopeType.querySelector('select');
@@ -402,7 +408,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     apmid.searchableSelect.setChoices([], '');
     environment.searchableSelect.setChoices([], '');
     if (!organizationId) {
-      projectStatus.textContent = 'Najpierw wybierz Organization';
+      projectStatus.textContent = 'Najpierw wybierz Organizację';
       updateSubmitState();
       return;
     }
@@ -434,14 +440,14 @@ async function accessAssignmentForm(forcedUserId = null) {
     const generation = ++classificationGeneration;
     apmid.searchableSelect.setChoices([], '');
     environment.searchableSelect.setChoices([], '');
-    if (!organizationId || !projectId) {
-      apmidStatus.textContent = 'Najpierw wybierz Project';
+    if (!organizationId) {
+      apmidStatus.textContent = 'Najpierw wybierz Organizację';
       environmentStatus.textContent = '';
       updateSubmitState();
       return;
     }
     const path = '/iam/apmids?organization_id=' + encodeURIComponent(organizationId)
-      + '&project_id=' + encodeURIComponent(projectId);
+      + (projectId ? '&project_id=' + encodeURIComponent(projectId) : '');
     apmidStatus.textContent = 'Ładowanie APMID...';
     updateSubmitState();
     try {
@@ -466,13 +472,13 @@ async function accessAssignmentForm(forcedUserId = null) {
     const apmidValue = apmid.searchableSelect.value();
     const generation = ++environmentGeneration;
     environment.searchableSelect.setChoices([], '');
-    if (!organizationId || !projectId || !apmidValue) {
+    if (!organizationId || !apmidValue) {
       environmentStatus.textContent = 'Najpierw wybierz APMID';
       updateSubmitState();
       return;
     }
     const path = '/iam/environments?organization_id=' + encodeURIComponent(organizationId)
-      + '&project_id=' + encodeURIComponent(projectId)
+      + (projectId ? '&project_id=' + encodeURIComponent(projectId) : '')
       + '&apmid=' + encodeURIComponent(apmidValue);
     environmentStatus.textContent = 'Ładowanie ENV...';
     updateSubmitState();
@@ -501,7 +507,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     const resourceKinds = ['RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'];
 
     if (kind !== 'GLOBAL' && !organizationId) return null;
-    if (!['GLOBAL', 'ORGANIZATION'].includes(kind) && !projectId) return null;
+    if (['RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'].includes(kind) && !projectId) return null;
     if (kind === 'APMID' && !apmidValue) return null;
     if (kind === 'ENVIRONMENT' && (!apmidValue || !environmentValue)) return null;
     if (resourceKinds.includes(kind) && !resourceScopeId) return null;
@@ -555,6 +561,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     const kind = scopeSelect.value;
     const needsOrganization = kind !== 'GLOBAL';
     const needsProject = !['GLOBAL', 'ORGANIZATION'].includes(kind);
+    const projectRequired = ['PROJECT', 'RESOURCE_POOL', 'BLUEPRINT', 'DEPLOYMENT', 'RESOURCE', 'MACHINE'].includes(kind);
     setIamFieldVisible(organization, needsOrganization);
     setIamFieldVisible(project, needsProject);
     setIamFieldVisible(apmid, ['APMID', 'ENVIRONMENT'].includes(kind));
@@ -563,6 +570,7 @@ async function accessAssignmentForm(forcedUserId = null) {
     if (needsProject && organization.searchableSelect.value() && !project.searchableSelect.value()) {
       loadProjects(organization.searchableSelect.value()).catch(error => toast(error.message, 'error'));
     }
+    projectStatus.textContent = needsProject && !projectRequired ? 'Projekt opcjonalny' : projectStatus.textContent;
     updateSubmitState();
   }
 
@@ -587,8 +595,8 @@ async function accessAssignmentForm(forcedUserId = null) {
       GLOBAL: [],
       ORGANIZATION: ['tenant_id'],
       PROJECT: ['tenant_id', 'project_id'],
-      APMID: ['tenant_id', 'project_id', 'apmid'],
-      ENVIRONMENT: ['tenant_id', 'project_id', 'apmid', 'environment'],
+      APMID: ['tenant_id', 'apmid'],
+      ENVIRONMENT: ['tenant_id', 'apmid', 'environment'],
       RESOURCE_POOL: ['tenant_id', 'project_id', 'scope_id'],
       BLUEPRINT: ['tenant_id', 'project_id', 'scope_id'],
       DEPLOYMENT: ['tenant_id', 'project_id', 'scope_id'],
@@ -598,6 +606,26 @@ async function accessAssignmentForm(forcedUserId = null) {
     const hasRequiredScope = (requirements[kind] || []).every(name => Boolean(value(name)));
     const selectedRoleId = Number(value('role_id'));
     const validRole = Number.isInteger(selectedRoleId) && availableRoleIds.has(selectedRoleId);
+    const subjectControl = form.elements.subject_id;
+    const roleControl = form.elements.role_id;
+    const subjectText = subjectControl?.selectedOptions?.[0]?.textContent
+      || subjectControl?.closest?.('.searchable-select')?.querySelector?.('input')?.value
+      || (forcedUserId ? 'Użytkownik #' + forcedUserId : '—');
+    const roleText = roleControl?.selectedOptions?.[0]?.textContent
+      || roleControl?.closest?.('.searchable-select')?.querySelector?.('input')?.value
+      || '—';
+    const scopeParts = [];
+    if (value('tenant_id')) scopeParts.push('Organizacja ' + value('tenant_id'));
+    if (value('project_id')) scopeParts.push('Projekt ' + value('project_id'));
+    if (value('apmid')) scopeParts.push('APMID ' + value('apmid'));
+    if (value('environment')) scopeParts.push('ENV ' + value('environment'));
+    if (value('scope_id') && !['ORGANIZATION', 'PROJECT'].includes(kind)) scopeParts.push(value('scope_id'));
+    const summaryLine = summary.querySelector('.muted');
+    if (summaryLine) {
+      summaryLine.textContent = subjectText + ' → ' + roleText + ' → '
+        + (scopeParts.join(' → ') || 'Cała platforma')
+        + ' · Dziedziczenie: ' + (form.elements.inherit?.checked ? 'TAK' : 'NIE');
+    }
     submit.disabled = !(
       ready
       && Boolean(forcedUserId || value('subject_id'))
@@ -618,6 +646,7 @@ async function accessAssignmentForm(forcedUserId = null) {
   });
   organization.searchableSelect.onChange(organizationId => {
     loadProjects(organizationId).catch(error => toast(error.message, 'error'));
+    loadClassification().catch(error => toast(error.message, 'error'));
     loadAssignableRoles().catch(error => toast(error.message, 'error'));
     updateSubmitState();
   });
@@ -1004,7 +1033,7 @@ async function enterpriseIamView() {
   if (allowed('roles.read')) actions.push(button('Role i permission catalog', () => navigate('roles')));
 
   dom.content.replaceChildren(
-    heading('Enterprise IAM: scope-aware RBAC, explicit DENY, ABAC, temporal access i diagnostyka.', actions),
+    heading('Dostęp i uprawnienia: Kto + co może robić + gdzie.', actions),
     tabBar(),
     body);
 }
@@ -1023,7 +1052,7 @@ registerRoutedForm({
 
 registerView({
   id: 'iam-access',
-  label: 'IAM / Dostępy',
+  label: 'Dostęp i uprawnienia',
   icon: 'A',
   permission: 'rbac.assignments.read',
   order: 21,
