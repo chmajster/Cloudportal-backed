@@ -122,6 +122,16 @@ function iamDiagnostic(label, path, error) {
   });
 }
 
+async function iamLoadCatalog(label, path) {
+  try {
+    return await iamAll(path);
+  } catch (error) {
+    error.iamLabel = label;
+    error.iamPath = path;
+    throw error;
+  }
+}
+
 function subjectChoiceLabel(item, kind) {
   if (kind === 'GROUP') return item.name || String(item.id);
   if (kind === 'API_TOKEN') {
@@ -232,19 +242,13 @@ async function accessAssignmentForm(forcedUserId = null) {
   let organizationsResult;
   try {
     [initialSubjects, rolesResult, organizationsResult] = await Promise.all([
-      iamAll(initialSubjectPath),
-      iamAll(rolesPath),
-      iamAll(organizationsPath),
+      iamLoadCatalog('użytkowników', initialSubjectPath),
+      iamLoadCatalog('ról', rolesPath),
+      iamLoadCatalog('organizacji', organizationsPath),
     ]);
   } catch (error) {
-    let label = 'danych IAM';
-    let path = '/iam/subjects?type=USER';
-    if (error?.data?.detail?.required_permission === 'roles.read'
-        || error?.data?.detail?.required_permission === 'iam.roles.read') {
-      label = 'ról'; path = rolesPath;
-    } else if (String(error?.message || '').toLowerCase().includes('organization')) {
-      label = 'organizacji'; path = organizationsPath;
-    }
+    const label = error?.iamLabel || 'danych IAM';
+    const path = error?.iamPath || initialSubjectPath;
     formHost.replaceChildren(iamDiagnostic(label, path, error));
     toast(iamLoadErrorMessage(label, path, error), 'error');
     return;
