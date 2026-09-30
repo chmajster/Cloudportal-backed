@@ -42,7 +42,38 @@ def require_any(*permissions):
         decisions = []
         granted_permission = None
         granted_decision = None
-        for permission in required:
+        from app.policy_engine.entities import entity_role_allows_permission
+        permitted_required = tuple(
+            permission for permission in required
+            if not getattr(scope, 'entity_role', None)
+            or entity_role_allows_permission(scope.entity_role, permission)
+        )
+        if not permitted_required:
+            from app.security.core import audit
+            audit(
+                db,
+                request,
+                'authorization.denied',
+                required[0],
+                result='denied',
+                scope=scope_from_resource_scope(scope),
+                details={
+                    'required_permissions_any': list(required),
+                    'entity': getattr(scope, 'entity_key', None),
+                    'entity_role': getattr(scope, 'entity_role', None),
+                    'reason': 'Selected Entity role does not permit this operation',
+                },
+            )
+            db.commit()
+            raise HTTPException(403, {
+                'error': 'entity_role_denied',
+                'entity': getattr(scope, 'entity_key', None),
+                'entity_role': getattr(scope, 'entity_role', None),
+                'required_permissions_any': list(required),
+                'reason': 'Selected Entity role does not permit this operation',
+                'request_id': request.state.request_id,
+            })
+        for permission in permitted_required:
             decision = authorize(
                 db,
                 actor,
@@ -99,11 +130,27 @@ def require_any(*permissions):
             )
         except HTTPException:
             legacy_effective = frozenset()
-        request.state.permissions = (
+        effective_permissions = (
             (set(current_identity.global_permissions) - RESOURCE_PERMISSIONS)
             | set(legacy_effective)
             | {granted_permission}
         )
+        if getattr(scope, 'entity_role', None):
+            from app.policy_engine.entities import filter_permissions_for_entity_role
+            effective_permissions = filter_permissions_for_entity_role(
+                scope.entity_role, effective_permissions
+            )
+            # The permission that passed IAM must also survive the Entity ceiling.
+            if granted_permission not in effective_permissions:
+                raise HTTPException(403, {
+                    'error': 'entity_role_denied',
+                    'entity': scope.entity_key,
+                    'entity_role': scope.entity_role,
+                    'required_permission': granted_permission,
+                    'request_id': request.state.request_id,
+                })
+        request.state.permissions = effective_permissions
+        request.state.entity = getattr(scope, 'entity_key', None)
         if granted_decision.break_glass:
             request.state.break_glass_id = next(
                 (item.get('id') for item in granted_decision.assignments
