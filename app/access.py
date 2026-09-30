@@ -98,6 +98,19 @@ def _ensure_vm_entity(db, request, row):
         raise HTTPException(404, 'Resource not found')
 
 
+def _ensure_job_entity(db, request, job):
+    scope = _entity_scope(request)
+    if scope is None or job is None:
+        return
+    if not job.deployment_id:
+        raise HTTPException(404, 'Job not found')
+    deployment = db.get(Deployment, job.deployment_id)
+    if deployment is None or not _matches_entity(
+        scope, *_deployment_classification(deployment)
+    ):
+        raise HTTPException(404, 'Job not found')
+
+
 def ensure_request_scope(request, row):
     scope = getattr(request.state, 'resource_scope', None)
     if row is not None and scope is not None and (row.tenant_id, row.project_id) != (scope.tenant_id, scope.project_id):
@@ -172,8 +185,10 @@ def ensure_deployment_access(request, actor, deployment):
     raise HTTPException(404, 'Deployment not found')
 
 
-def ensure_job_access(request, actor, job):
+def ensure_job_access(request, actor, job, db=None):
     ensure_request_scope(request, job)
+    if db is not None:
+        _ensure_job_entity(db, request, job)
     if job is None:
         raise HTTPException(404, 'Job not found')
     if 'jobs.read_all' in request_permissions(request) or job.created_by == actor.user_id:
