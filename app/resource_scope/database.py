@@ -5,7 +5,7 @@ Unbound maintenance sessions must use explicit resource identities, never user i
 Core/SQL text is forbidden in a bound session; ORM bulk writes receive the same
 criteria as reads. Direct engine access is not a substitute for this API.
 """
-from sqlalchemy import and_, event, exists, inspect, select, update
+from sqlalchemy import and_, event, exists, inspect, or_, select, update
 from sqlalchemy.orm import Session, with_loader_criteria
 from app import models as m
 from app.projects.models import Project, ProjectMembership
