@@ -16,5 +16,6 @@ class UserProjectContext(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)
     tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
     project_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    entity_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     __mapper_args__ = {'version_id_col': version}
