@@ -111,7 +111,7 @@
     }
 
     if (state.awxMappedScopeError) {
-      errors.awx_scope = 'Nie można zmapować Tenant/Project CloudPortal do AWX: ' + state.awxMappedScopeError;
+      errors.awx_scope = 'Nie można zmapować organizacji i projektu CloudPortal do AWX: ' + state.awxMappedScopeError;
       return errors;
     }
     const mapped = state.awxMappedScope;
@@ -129,7 +129,7 @@
     if (inventoryId && !inventory) {
       errors.awx_inventory_id = 'Wybrane inventory AWX nie jest już dostępne.';
     } else if (inventory && organizationId && String(inventory.organization || '') !== organizationId) {
-      errors.awx_inventory_id = 'Wybrane inventory AWX nie należy do Organization mapowanej z Tenanta CloudPortal.';
+      errors.awx_inventory_id = 'Wybrane inventory AWX nie należy do organizacji AWX mapowanej z organizacji CloudPortal.';
     }
 
     const jobTemplate = templates.find(row => String(row.id) === jobTemplateId);
@@ -235,20 +235,20 @@
           ? node('div', { class: 'blueprint-wizard-info wide' },
               node('strong', { text: 'Scope AWX z CloudPortal' }),
               node('span', { text:
-                'Tenant „' + (mapped.tenant?.name || '—') + '” → Organization „'
+                'Organizacja CloudPortal „' + (mapped.tenant?.name || '—') + '” → organizacja AWX „'
                 + (mapped.organization?.name || '—') + '” (#' + (mapped.organization?.id || '—') + ') · '
                 + 'Project „' + (mapped.project?.name || '—') + '” → AWX Project „'
                 + (mapped.awx_project?.name || '—') + '” (#' + (mapped.awx_project?.id || '—') + ')' }))
           : node('div', { class: 'blueprint-wizard-info wide' },
               node('strong', { text: 'Scope AWX jest dziedziczony z CloudPortal' }),
-              node('span', { text: 'Tenant CloudPortal = Organization AWX, Project CloudPortal = Project AWX. Mapowanie zostanie sprawdzone po połączeniu z AWX.' })));
+              node('span', { text: 'Organizacja CloudPortal = Organizacja AWX, Projekt CloudPortal = Projekt AWX. Mapowanie zostanie sprawdzone po połączeniu z AWX.' })));
 
     const inventory = selectField('Inventory AWX', 'awx_inventory_id', [
       { value: '', label: 'Automatycznie — pattern „' + (state.awxInventoryName || '<Projekt>-<APMID>-<ENV>') + '”' },
       ...filteredInventories.map(row => ({ value: row.id, label: row.name })),
     ], state.awxInventoryId, {
       wide: true,
-      help: 'Lista zawiera tylko inventory z Organization AWX mapowanej z Tenanta CloudPortal.',
+      help: 'Lista zawiera tylko inventory z organizacji AWX mapowanej z organizacji CloudPortal.',
     });
     inventory.querySelector('select').addEventListener('change', event => {
       state.awxInventoryId = event.currentTarget.value;
@@ -374,7 +374,7 @@
     const credential = (data.credentials || []).find(row => String(row.id) === String(state.awxCredentialId));
     return [
       ['AWX', credential?.name || (state.awxCredentialId ? '#' + state.awxCredentialId : '—')],
-      ['Tenant → Organization AWX', mapped.organization?.name || (state.awxMappedScopeError ? 'Błąd mapowania' : 'Automatycznie')],
+      ['Organizacja CloudPortal → organizacja AWX', mapped.organization?.name || (state.awxMappedScopeError ? 'Błąd mapowania' : 'Automatycznie')],
       ['Project → Project AWX', mapped.awx_project?.name || (state.awxMappedScopeError ? 'Błąd mapowania' : 'Automatycznie')],
       ['Inventory AWX', state.awxInventoryId
         ? nameFor(discovery.inventories, state.awxInventoryId)

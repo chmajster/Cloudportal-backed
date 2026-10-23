@@ -64,7 +64,7 @@ def save_secret(db, c, value):
             raise HTTPException(422, 'AWS requires access_key_id and secret_access_key')
     elif c.type == 'azure':
         if not all(value.get(key) for key in ('tenant_id', 'client_id', 'client_secret', 'subscription_id')):
-            raise HTTPException(422, 'Azure requires tenant_id, client_id, client_secret and subscription_id')
+            raise HTTPException(422, 'Azure requires an organization ID, client ID, client secret and subscription ID')
     elif c.type == 'openstack':
         if not value.get('password') or not value.get('project_name'):
             raise HTTPException(422, 'OpenStack requires password and project_name')

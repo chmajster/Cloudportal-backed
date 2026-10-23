@@ -84,7 +84,7 @@ async function catalogView() {
     allowed('blueprints.read') ? api('/blueprints?limit=200') : Promise.resolve({ items: [] }),
     allowed('roles.read') ? api('/roles?limit=200') : Promise.resolve({ items: [] }),
   ]);
-  const rolesById = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
+  const rolesById = new Map(roleResult.items.map(role => [Number(role.id), window.roleDisplayName(role.name)]));
 
   const proxmoxModuleEnabled = templates.items.some(item => item.id === 'proxmox-vm' && item.enabled !== false);
   const canCreateTemplate = proxmoxModuleEnabled

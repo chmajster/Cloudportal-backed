@@ -36,7 +36,7 @@ def test_global_context_switcher_drives_default_http_scope_and_blueprints():
     blueprint_source = Path('app/web/features/blueprints.js').read_text()
 
     assert "global-context-trigger" in context_source
-    assert "'Organizacja / Tenant'" in context_source
+    assert "'Organizacja'" in context_source
     assert "'Projekt'" in context_source
     assert "document.addEventListener('cloudportal:app-shown'" in context_source
     assert "'X-Tenant-ID': String(currentScope.tenant_id)" in context_source

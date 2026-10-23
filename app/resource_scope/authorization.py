@@ -58,10 +58,10 @@ def requested_scope(request):
 
     if values == [None, None]:
         if raw_entity:
-            fail(422, 'SCOPE_PAIR_REQUIRED', 'Entity requires tenant_id and project_id')
+            fail(422, 'SCOPE_PAIR_REQUIRED', 'Entity requires an organization and project context')
         return DEFAULT_SCOPE
     if any(value is None for value in values):
-        fail(422, 'SCOPE_PAIR_REQUIRED', 'Supply both tenant_id and project_id')
+        fail(422, 'SCOPE_PAIR_REQUIRED', 'Supply both organization and project context')
 
     try:
         tenant_id, project_id = (str(UUID(value)) for value in values)

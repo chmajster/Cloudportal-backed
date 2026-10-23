@@ -285,10 +285,10 @@ class AwxClient:
         raise last_error or AwxError('AWX did not issue an OAuth token')
 
     def ensure_organization(self, *, name: str) -> dict:
-        """Return the AWX Organization mapped from a CloudPortal Tenant, creating it if needed."""
+        """Return the AWX organization mapped from a CloudPortal organization, creating it if needed."""
         normalized = str(name or '').strip()
         if not normalized:
-            raise AwxError('CloudPortal Tenant has no name for AWX organization mapping')
+            raise AwxError('CloudPortal organization has no name for AWX organization mapping')
         matches = self.list_resource('organizations', params={'name': normalized})
         exact = next(
             (row for row in matches if str(row.get('name') or '').strip().casefold() == normalized.casefold()),
@@ -306,7 +306,7 @@ class AwxClient:
             return exact
         data = self.request('POST', 'organizations/', json={
             'name': normalized,
-            'description': 'Managed automatically from CloudPortal Tenant',
+            'description': 'Managed automatically from CloudPortal organization',
         }).json()
         if not isinstance(data, dict) or not data.get('id'):
             raise AwxError('AWX organization creation did not return an organization')

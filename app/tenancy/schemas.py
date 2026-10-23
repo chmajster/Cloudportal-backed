@@ -192,7 +192,7 @@ class TenantMembershipSelection(BaseModel):
     @classmethod
     def unique_tenant_ids(cls, value):
         if len(value) != len(set(value)):
-            raise ValueError('Tenant IDs must be distinct')
+            raise ValueError('Organization IDs must be distinct')
         return value
 
 

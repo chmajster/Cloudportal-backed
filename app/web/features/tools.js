@@ -1110,7 +1110,7 @@ async function toolsView() {
     const tenants = await loadVisibleTenants();
     if (tenants.length) cards.push(apmidTool(tenants));
   } catch (error) {
-    // Tenant visibility is scope-driven. Users without a visible organization
+    // Organization visibility is scope-driven. Users without a visible organization
     // simply do not get the organization-scoped APMID tool.
   }
 

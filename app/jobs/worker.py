@@ -873,7 +873,7 @@ def resolve_awx_scope(context, client, config, *, require_project=True):
         tenant = db.get(Tenant, str(context.deployment.tenant_id))
         project = db.get(Project, str(context.deployment.project_id))
         if tenant is None or tenant.deleted_at is not None:
-            raise AwxError('CloudPortal Tenant is unavailable for AWX organization mapping')
+            raise AwxError('CloudPortal organization is unavailable for AWX organization mapping')
         if project is None or project.deleted_at is not None:
             raise AwxError('CloudPortal Project is unavailable for AWX project mapping')
         tenant_name = str(tenant.name or '').strip()

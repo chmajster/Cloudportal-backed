@@ -217,7 +217,11 @@
         const validEntities = new Set(data.entities.map(value => String(value.key)));
         state.allowedEntities = (state.allowedEntities || []).filter(value => validEntities.has(String(value)));
       }
-      if (!data.providers.length) throw new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
+      if (!data.providers.length) {
+        const error = new Error('Wybrany projekt nie ma dostępnej platformy infrastruktury.');
+        error.code = 'PROJECT_INFRASTRUCTURE_MISSING';
+        throw error;
+      }
       if (!data.templates.length) throw new Error('Katalog nie zawiera szablonów Terraform/OpenTofu.');
 
       resetDependentState();
@@ -227,11 +231,13 @@
 
     async function changeScope() {
       state.errors = {};
+      state.infrastructureMissing = false;
       try {
         await loadResources(true);
       } catch (error) {
         state.providerId = '';
         state.errors = { project_id: error.message };
+        state.infrastructureMissing = error.code === 'PROJECT_INFRASTRUCTURE_MISSING';
       }
       render();
     }

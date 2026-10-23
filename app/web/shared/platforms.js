@@ -118,7 +118,7 @@ const CREDENTIAL_TYPE_CONFIG = {
     description: 'Service Principal / App Registration używany także przez Terraform.',
     endpoint: null, username: null, tls: false, defaultAuth: 'service_principal',
     authModes: { service_principal: { label: 'Service Principal', fields: [
-      { key: 'tenant_id', label: 'Tenant ID', required: true },
+      { key: 'tenant_id', label: 'ID organizacji Azure', required: true },
       { key: 'client_id', label: 'Client ID', required: true },
       { key: 'client_secret', label: 'Client Secret', type: 'password', required: true, autocomplete: 'new-password' },
       { key: 'subscription_id', label: 'Subscription ID', required: true },

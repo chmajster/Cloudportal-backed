@@ -157,7 +157,7 @@ function countRows(counts) {
     ['credentials', 'Credentiale'],
     ['providers', 'Providerzy'],
     ['projects', 'Projekty'],
-    ['tenants', 'Tenanty'],
+    ['tenants', 'Organizacje'],
     ['blueprints', 'Blueprinty'],
     ['deployments', 'Deploymenty'],
     ['terraform_state', 'Terraform State'],

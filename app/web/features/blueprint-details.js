@@ -176,7 +176,7 @@
         : Promise.resolve({ items: [] }),
     ]);
 
-    const roleNames = new Map((rolesResult.items || []).map(role => [Number(role.id), role.name]));
+    const roleNames = new Map((rolesResult.items || []).map(role => [Number(role.id), window.roleDisplayName(role.name)]));
     const avatar = (avatarResult.items || []).find(value => String(value.id) === String(item.avatar_id || '')) || null;
     const provider = (providersResult.items || []).find(value => Number(value.id) === Number(item.deployment?.provider_id)) || null;
     const hostnameScheme = (hostnameResult.items || []).find(value => Number(value.id) === Number(item.deployment?.hostname_scheme_id)) || null;

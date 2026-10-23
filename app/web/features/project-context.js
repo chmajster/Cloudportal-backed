@@ -27,7 +27,7 @@
 
   function entityLabel(value) {
     const parsed = entityParts(value);
-    if (!parsed) return 'Brak Entity';
+    if (!parsed) return 'Bez filtra Entity';
     return parsed.apmid + ' · ' + parsed.environment.toUpperCase() + ' · ' + parsed.role;
   }
 
@@ -41,7 +41,7 @@
     const selected = current?.selected || null;
     setTopbarValue('#current-context-organization', selected ? (current.tenant_name || selected.tenant_id || '—') : 'Default');
     setTopbarValue('#current-context-project', selected?.name || 'Default');
-    setTopbarValue('#current-context-environment', current?.entity_key ? entityLabel(current.entity_key) : 'Brak Entity');
+    setTopbarValue('#current-context-environment', current?.entity_key ? entityLabel(current.entity_key) : 'Bez filtra Entity');
   }
   async function refreshTopbarContext() {
     try {
@@ -204,8 +204,9 @@
     const description = revoked
       ? 'Wyczyść zapisany wybór i ustaw ponownie organizację oraz projekt.'
       : selected
-        ? `Tenant: ${selected.tenant_id} · Entity: ${current.entity_key ? entityLabel(current.entity_key) : 'brak'}`
-        : 'Wybierz organizację, projekt i Entity, aby ustawić główny zakres pracy w panelu.';
+        ? `Organizacja: ${current.tenant_name || selected.tenant_id} · Projekt: ${selected.name}`
+          + (current.entity_key ? ` · Entity: ${entityLabel(current.entity_key)}` : '')
+        : 'Wybierz organizację i projekt, aby ustawić główny zakres pracy w panelu. Entity jest opcjonalne.';
 
     const clearPanel = async () => {
       const query = revoked ? '' : `?expected_version=${current.version}`;
@@ -276,7 +277,7 @@
 
       const selectedTenantId = String(currentScope?.tenant_id || tenants[0].id);
       const organization = searchableSelectField(
-        'Organizacja / Tenant',
+        'Organizacja',
         'tenant_id',
         tenants.map(item => ({
           value: String(item.id),
@@ -286,7 +287,7 @@
         {
           required: true,
           wide: true,
-          placeholder: 'Wpisz nazwę organizacji lub tenant…',
+          placeholder: 'Wpisz nazwę organizacji…',
           help: 'Wpisuj kolejne znaki, aby zawężać listę dostępnych organizacji.',
         }
       );
@@ -303,15 +304,16 @@
         }
       );
       const entity = searchableSelectField(
-        'Entity',
+        'Entity (opcjonalnie)',
         'entity_key',
         [],
         '',
         {
-          required: true,
+          required: false,
+          selectFirst: false,
           wide: true,
-          placeholder: 'Wpisz APMID, ENV albo rolę Entity…',
-          help: 'Główny kontekst aplikacji: entity.<APMID>.<env>.<role>. Rola działa jako sufit uprawnień, nie jako nowe uprawnienie.',
+          placeholder: 'Możesz pozostawić puste',
+          help: 'Pozostaw puste, aby używać zakresu całego projektu. Entity opcjonalnie zawęża zasoby według APMID i środowiska; rola ogranicza uprawnienia, ale ich nie nadaje.',
         }
       );
       const organizationSelect = organization.searchableSelect;
@@ -329,10 +331,13 @@
           { scope: false }
         );
         const rows = Array.isArray(result?.items) ? result.items : [];
-        entitySelect.setChoices(rows.map(item => ({
-          value: String(item.key),
-          label: String(item.key) + ' · ' + String(item.role_label || item.role || ''),
-        })), preferred);
+        entitySelect.setChoices([
+          { value: '', label: 'Bez filtra Entity' },
+          ...rows.map(item => ({
+            value: String(item.key),
+            label: String(item.key) + ' · ' + String(item.role_label || item.role || ''),
+          })),
+        ], preferred);
       }
 
       setProjectOptions(projectSelect, organizationSelect.value(), currentScope?.id || '');
@@ -352,7 +357,7 @@
       const summary = node('div', { class: 'global-context-summary' },
         node('strong', { text: 'Globalny zakres pracy' }),
         node('p', { class: 'muted', text:
-          'Wybór Entity jest zapisywany na koncie użytkownika. Backend weryfikuje RBAC i Policy Engine dla każdej operacji; rola Entity wyłącznie ogranicza uprawnienia.' }));
+          'Organizacja i projekt wyznaczają zakres pracy. Entity jest opcjonalne i dodatkowo zawęża zasoby oraz uprawnienia; backend nadal weryfikuje RBAC i Policy Engine dla każdej operacji.' }));
 
       openModal({
         title: 'Zmień kontekst pracy',
@@ -366,8 +371,7 @@
           const selectedProject = directory.projects.find(item =>
             String(item.id) === projectId && String(item.tenant_id) === tenantId);
           if (!selectedProject) throw new Error('Wybrany projekt nie należy do wskazanej organizacji lub nie jest już dostępny.');
-          if (!entityKey) throw new Error('Wybierz Entity. Aplikacja używa Entity jako głównego kontekstu dostępu.');
-          await choose({ ...selectedProject, tenant_id: tenantId, entity_key: entityKey }, validAlways, { notify: false });
+          await choose({ ...selectedProject, tenant_id: tenantId, entity_key: entityKey || null }, validAlways, { notify: false });
           toast('Zmieniono globalny kontekst pracy.');
           await reloadActiveView();
           return false;
@@ -384,8 +388,9 @@
     const primary = revokedSelection
       ? 'Kontekst wymaga zmiany'
       : snapshot
-        ? snapshot.tenant_name + ' · ' + snapshot.project_name + ' · ' + entityLabel(snapshot.entity_key)
-        : 'Wybierz organizację, projekt i Entity';
+        ? snapshot.tenant_name + ' · ' + snapshot.project_name
+          + (snapshot.entity_key ? ' · ' + entityLabel(snapshot.entity_key) : '')
+        : 'Wybierz organizację i projekt';
     shellHost.replaceChildren(node('button', {
       type: 'button',
       class: 'global-context-trigger' + (revokedSelection ? ' warning' : ''),

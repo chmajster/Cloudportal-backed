@@ -1272,6 +1272,14 @@
         bodyRoot.replaceChildren(renderStepBody());
         renderFooter();
         parts.ui.errorText(bodyRoot, state.errors);
+        if (state.infrastructureMissing && allowed('providers.create') && allowed('credentials.read')) {
+          const summary = bodyRoot.querySelector('[data-wizard-error-summary]');
+          summary?.append(
+            node('p', { class: 'muted', text: 'Dodaj platformę dla tego kontekstu projektu, a potem wróć do kreatora.' }),
+            node('div', { class: 'row-actions' },
+              button('Dodaj platformę infrastruktury', () => navigate('/providers/new'), 'primary')),
+          );
+        }
         const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         bodyRoot.scrollTo?.({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
       }
@@ -1328,6 +1336,7 @@
       } catch (error) {
         state.providerId = '';
         state.errors = { project_id: error.message };
+        state.infrastructureMissing = error.code === 'PROJECT_INFRASTRUCTURE_MISSING';
       }
       render();
     } catch (error) {

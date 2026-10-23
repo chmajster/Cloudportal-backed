@@ -15,7 +15,7 @@
   function scopedRoleOption(role, checked) {
     const permissions = (role.permissions || []).slice().sort();
     return node('div', { class: 'tenancy-role-option' },
-      checkboxField(`${role.name} (#${role.id})`, 'role_' + role.id, checked),
+      checkboxField(`${window.roleDisplayName(role.name)} (#${role.id})`, 'role_' + role.id, checked),
       node('div', { class: 'field-help', text: permissions.length
         ? 'Uprawnienia: ' + permissions.join(', ')
         : 'Brak delegowalnych uprawnień w tym zakresie.' }));
@@ -30,7 +30,7 @@
 
   function foundationNotice() {
     return node('p', { class: 'tenancy-notice', role: 'note', text:
-      'Etap fundamentu governance: uprawnienia poniżej dotyczą zarządzania tenantami. Istniejące VM, deploymenty i credentials nie są jeszcze izolowane przez ten moduł.' });
+      'Etap fundamentu governance: uprawnienia poniżej dotyczą zarządzania organizacjami. Istniejące VM, deploymenty i credentials nie są jeszcze izolowane przez ten moduł.' });
   }
 
   function tenantUpdateValues(item, name = item.name) {
@@ -83,7 +83,7 @@
     ]);
     if (current.is_system) throw new Error('Organizacja systemowa jest chroniona przed usunięciem.');
     if (!scope.global_administration || !scope.permissions.includes('tenants.delete')) {
-      throw new Error('Usunięcie organizacji wymaga globalnego uprawnienia tenants.delete.');
+      throw new Error('Usunięcie organizacji wymaga uprawnienia administracyjnego na poziomie platformy.');
     }
     const body = node('div', { class: 'stack' },
       node('p', { text: 'Usunięcie organizacji jest możliwe dopiero po usunięciu jej projektów i członkostw. Historia audytu oraz techniczna tożsamość pozostaną zachowane.' }),
@@ -117,8 +117,8 @@
       listStatus = event.target.value; listOffset = 0; tenantsView().catch(error => toast(error.message, 'error'));
     });
     const actions = allowed('tenants.admin') && allowed('tenants.create')
-      ? [action('Nowy tenant', () => navigate('/tenants/new'), 'primary')] : [];
-    dom.content.replaceChildren(heading('Tenanci i delegowane uprawnienia. Listę i dostęp do obiektów filtruje backend.', actions),
+      ? [action('Nowa organizacja', () => navigate('/tenants/new'), 'primary')] : [];
+    dom.content.replaceChildren(heading('Organizacje i delegowane uprawnienia. Listę i dostęp do obiektów filtruje backend.', actions),
       foundationNotice(), filter,
       table([
         { label: 'Nazwa', value: item => node('strong', { text: item.name }) },
@@ -146,7 +146,7 @@
     const actions = [];
     if (permits('tenants.update') && editable) {
       if (!item.is_system) actions.push(action('Zmień nazwę', () => renameTenant(item)));
-      actions.push(action('Edytuj', () => navigate('/tenants/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'tenant'))));
+      actions.push(action('Edytuj', () => navigate('/tenants/edit/' + encodeURIComponent(item.id) + '/' + encodeURIComponent(item.slug || item.name || 'organizacja'))));
     }
     if (permits('tenants.members.read')) actions.push(action('Członkowie', () => navigate('/tenants/' + encodeURIComponent(item.id) + '/members')));
     if (permits('projects.read')) actions.push(action('Projekty', () => document.dispatchEvent(new CustomEvent('cloudportal:tenant-projects', { detail: { tenantId: item.id } }))));
@@ -154,15 +154,15 @@
     if (!item.is_system && scope.global_administration && permits('tenants.delete')) {
       actions.push(action('Usuń organizację', () => deleteTenant(item), 'danger'));
     }
-    openModal({ title: item.name, eyebrow: 'Tenant / szczegóły', wide: true,
+    openModal({ title: item.name, eyebrow: 'Organizacja / szczegóły', wide: true,
       body: node('div', { class: 'stack' }, foundationNotice(),
         node('div', { class: 'action-group' }, actions),
         node('p', { text: item.description || 'Brak opisu.' }),
         node('dl', { class: 'tenancy-overview' },
-          node('dt', { text: 'Tenant ID' }), node('dd', { class: 'mono', text: item.id }),
+          node('dt', { text: 'ID organizacji' }), node('dd', { class: 'mono', text: item.id }),
           node('dt', { text: 'Status' }), node('dd', { text: labels[item.status] }),
           node('dt', { text: 'Wersja' }), node('dd', { text: item.version }),
-          node('dt', { text: 'Typ dostępu' }), node('dd', { text: scope.global_administration ? 'Jawne uprawnienia globalne' : 'Delegacja w tym tenancie' })),
+          node('dt', { text: 'Typ dostępu' }), node('dd', { text: scope.global_administration ? 'Jawne uprawnienia globalne' : 'Delegacja w tej organizacji' })),
         node('h3', { text: 'Efektywne uprawnienia w tym scope' }),
         node('pre', { class: 'tenancy-json', text: scope.permissions.join('\n') }),
         node('h3', { text: 'Etykiety / metadata' }),
@@ -190,7 +190,7 @@
     if (item?.is_system) {
       for (const name of ['name', 'slug', 'status']) body.querySelector(`[name="${name}"]`).disabled = true;
     }
-    openModal({ title: item ? 'Edytuj tenant' : 'Nowy tenant', eyebrow: 'Administracja tenantami', body,
+    openModal({ title: item ? 'Edytuj organizację' : 'Nowa organizacja', eyebrow: 'Administracja organizacjami', body,
       onSubmit: async data => {
         const values = {
           name: item?.is_system ? item.name : data.get('name'),
@@ -201,7 +201,7 @@
         };
         if (item) values.expected_version = item.version;
         await api(item ? `/tenants/${item.id}` : '/tenants', { method: item ? 'PUT' : 'POST', idempotent: !item, body: values });
-        toast('Tenant zapisany.'); await navigate('tenants'); return false;
+        toast('Organizacja zapisana.'); await navigate('tenants'); return false;
       },
     });
   }
@@ -215,7 +215,7 @@
     const editable = item.status === 'active' || scope.global_administration;
     const manager = editable && permits('tenants.members.manage');
     const assigner = editable && permits('tenants.roles.assign');
-    const actions = [action('Szczegóły tenanta', () => navigate('/tenants/' + encodeURIComponent(id)))];
+    const actions = [action('Szczegóły organizacji', () => navigate('/tenants/' + encodeURIComponent(id)))];
     if (manager && allowed('users.read')) actions.push(action('Dodaj członka', () => navigate('/tenants/' + encodeURIComponent(id) + '/members/new'), 'primary'));
     openModal({ title: `${item.name} — członkowie`, wide: true, body: node('div', { class: 'stack' },
       node('div', { class: 'action-group' }, actions),
@@ -235,7 +235,7 @@
             } }); await membersView(id, null, offset);
           }));
           rowActions.push(action('Usuń członkostwo', () => openModal({ title: `Usuń członkostwo: ${row.username}`,
-            danger: true, submitLabel: 'Usuń członkostwo', body: node('p', { text: 'Usuwa dostęp w tym tenancie, nie konto użytkownika. Backend chroni ostatniego menedżera.' }),
+            danger: true, submitLabel: 'Usuń członkostwo', body: node('p', { text: 'Usuwa dostęp w tej organizacji, nie konto użytkownika. Backend chroni ostatniego menedżera.' }),
             onSubmit: async () => {
               await api(`/tenants/${id}/members/${row.user_id}?expected_version=${row.version}`, { method: 'DELETE' });
               await navigate('/tenants/' + encodeURIComponent(id) + '/members'); return false;
@@ -250,7 +250,7 @@
   async function memberForm(id, assigner, member = null) {
     const current = ++generation;
     const choices = node('div', { class: 'tenancy-role-options' });
-    const picker = node('fieldset', {}, node('legend', { text: 'Role w tym tenancie' }), choices);
+    const picker = node('fieldset', {}, node('legend', { text: 'Role w tej organizacji' }), choices);
     let offset = 0;
     const selected = new Set((member?.role_ids || []).map(String));
     const renderedRoles = new Set();
@@ -327,8 +327,8 @@
     const current = ++generation;
     const page = await api(`/tenants/${id}/audit?limit=${pageSize}&offset=${offset}`);
     if (current !== generation || !viewIs('tenants')) return;
-    openModal({ title: 'Historia tenanta', eyebrow: 'Istniejący audit / wybrany scope', wide: true,
-      body: node('div', { class: 'stack' }, action('Szczegóły tenanta', () => navigate('/tenants/' + encodeURIComponent(id))),
+    openModal({ title: 'Historia organizacji', eyebrow: 'Istniejący audit / wybrany scope', wide: true,
+      body: node('div', { class: 'stack' }, action('Szczegóły organizacji', () => navigate('/tenants/' + encodeURIComponent(id))),
         table([
           { label: 'Czas', value: row => formatDate(row.timestamp) },
           { label: 'Operacja', value: row => row.action },
@@ -346,28 +346,28 @@
     pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$/,
     parent: 'tenants',
     permission: null,
-    label: 'Tenanci',
+    label: 'Organizacje',
   }, match => tenantDetails(match.params.id));
   registerRoutedForm({
     id: 'tenants-members',
     pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members$/,
     parent: 'tenants',
     permission: null,
-    label: 'Tenanci',
+    label: 'Organizacje',
   }, match => membersView(match.params.id));
   registerRoutedForm({
     id: 'tenants-audit',
     pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/audit$/,
     parent: 'tenants',
     permission: null,
-    label: 'Tenanci',
+    label: 'Organizacje',
   }, match => auditView(match.params.id));
   registerRoutedForm({
     id: 'tenants-member-create',
     pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/new$/,
     parent: 'tenants',
     permission: null,
-    label: 'Tenanci',
+    label: 'Organizacje',
   }, async match => {
     const id = match.params.id;
     const scope = await api('/tenants/' + id + '/permissions');
@@ -379,7 +379,7 @@
     pattern: /^\/tenants\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\/members\/(?<userId>\d+)\/roles$/,
     parent: 'tenants',
     permission: null,
-    label: 'Tenanci',
+    label: 'Organizacje',
   }, async match => {
     const id = match.params.id;
     const [scope, page] = await Promise.all([
@@ -388,7 +388,7 @@
     ]);
     if (!scope.permissions.includes('tenants.roles.assign')) throw new Error('Brak uprawnienia do przypisywania ról.');
     const member = page.items.find(row => Number(row.user_id) === Number(match.params.userId));
-    if (!member) throw new Error('Nie znaleziono członka tenanta.');
+    if (!member) throw new Error('Nie znaleziono członka organizacji.');
     await memberForm(id, true, member);
   });
 
@@ -397,9 +397,9 @@
     pattern: /^\/tenants\/new$/,
     parent: 'tenants',
     permission: null,
-    label: 'Tenanci',
+    label: 'Organizacje',
   }, async () => {
-    if (!allowed('tenants.admin') || !allowed('tenants.create')) throw new Error('Brak uprawnienia do tworzenia tenantów.');
+    if (!allowed('tenants.admin') || !allowed('tenants.create')) throw new Error('Brak uprawnienia do tworzenia organizacji.');
     tenantForm();
   });
   registerRoutedForm({
@@ -407,18 +407,18 @@
     pattern: /^\/tenants\/edit\/(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})(?:\/[^/]+)?$/,
     parent: 'tenants',
     permission: null,
-    label: 'Tenanci',
+    label: 'Organizacje',
   }, async match => {
     const [item, scope] = await Promise.all([
       api('/tenants/' + match.params.id),
       api('/tenants/' + match.params.id + '/permissions'),
     ]);
     const editable = item.status === 'active' || scope.global_administration;
-    if (!editable || !scope.permissions.includes('tenants.update')) throw new Error('Brak uprawnienia do edycji tego tenanta.');
+    if (!editable || !scope.permissions.includes('tenants.update')) throw new Error('Brak uprawnienia do edycji tej organizacji.');
     tenantForm(item, scope);
   });
 
-  // Global identity permissions intentionally do not include tenant grants.
+  // Global identity permissions intentionally do not include organization grants.
   // An authenticated account can open the view; backend SQL decides what is visible.
-  registerView({ id: 'tenants', label: 'Tenanci', icon: 'T', permission: null, order: 165 }, tenantsView);
+  registerView({ id: 'tenants', label: 'Organizacje', icon: 'T', permission: null, order: 165 }, tenantsView);
 })();

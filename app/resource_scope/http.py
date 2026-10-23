@@ -12,9 +12,9 @@ from app.resource_scope.database import bind_scope
 
 def resolve_http_scope(
     request: Request,
-    tenant_header: Annotated[str | None, Header(alias='X-Tenant-ID', description='Selected tenant UUID; pair with X-Project-ID')] = None,
+    tenant_header: Annotated[str | None, Header(alias='X-Tenant-ID', description='Selected organization UUID; pair with X-Project-ID')] = None,
     project_header: Annotated[str | None, Header(alias='X-Project-ID', description='Selected project UUID; verified by the backend')] = None,
-    tenant_id: Annotated[str | None, Query(description='Alternative to X-Tenant-ID; values must agree')] = None,
+    tenant_id: Annotated[str | None, Query(description='Alternative compatibility parameter; values must agree with the organization header')] = None,
     project_id: Annotated[str | None, Query(description='Alternative to X-Project-ID; values must agree')] = None,
 ):
     # Read the raw multi-value input to reject repeated/contradicting fields.

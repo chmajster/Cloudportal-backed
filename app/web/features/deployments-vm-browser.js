@@ -871,7 +871,7 @@ function createVmBrowser({
     })), myResourcesVmUi.filters.environment),
     selectFilter('Właściciel', 'vm_filter_owner', ownerChoices, myResourcesVmUi.filters.owner),
     selectFilter('Projekt', 'vm_filter_project', uniqueVmChoices(entries, 'projectId', 'project'), myResourcesVmUi.filters.project),
-    selectFilter('Tenant', 'vm_filter_tenant', uniqueVmChoices(entries, 'tenantId', 'tenant'), myResourcesVmUi.filters.tenant),
+    selectFilter('Organizacja', 'vm_filter_tenant', uniqueVmChoices(entries, 'tenantId', 'tenant'), myResourcesVmUi.filters.tenant),
     selectFilter('Status', 'vm_filter_status', uniqueVmChoices(entries, 'status').map(row => ({
       ...row,
       label: statusLabel(row.value),

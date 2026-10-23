@@ -347,7 +347,7 @@ def discover_awx_credential(id: int, request: Request,
 @router.post('/credentials/{id}/awx/scope')
 def sync_awx_scope(id: int, request: Request,
                    actor=Depends(require('credentials.test')), db=Depends(get_db, scope='function')):
-    """Materialize Tenant->Organization and resolve Project->AWX Project for the bound CloudPortal scope."""
+    """Materialize the CloudPortal organization as an AWX organization and resolve its project."""
     credential = find(db, Credential, id)
     if credential.type != 'awx':
         raise HTTPException(422, 'Credential is not an AWX credential')
@@ -357,7 +357,7 @@ def sync_awx_scope(id: int, request: Request,
     tenant = db.get(Tenant, scope.tenant_id)
     project = db.get(Project, scope.project_id)
     if tenant is None or tenant.deleted_at is not None:
-        raise HTTPException(404, 'CloudPortal Tenant is unavailable')
+        raise HTTPException(404, 'CloudPortal organization is unavailable')
     if project is None or project.deleted_at is not None:
         raise HTTPException(404, 'CloudPortal Project is unavailable')
     try:

@@ -257,7 +257,7 @@ def validate_blueprint_role_scope(db, data, request: Request, actor, blueprint_i
 
     The UI role picker is not an authorization boundary. Existing role references
     may be preserved by a Blueprint manager who can update the resource but cannot
-    delegate roles. New references must be assignable in the selected tenant/project.
+    delegate roles. New references must be assignable in the selected organization/project.
     """
     requested_allowed = {int(value) for value in data.allowed_role_ids}
     requested_manager = {int(value) for value in data.manager_role_ids}

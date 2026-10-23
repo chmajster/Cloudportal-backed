@@ -134,7 +134,7 @@ async function blueprintsView() {
     api('/blueprint-avatars').catch(() => ({ items: [] })),
   ]);
   const blueprints = blueprintResult.items;
-  const roleNames = new Map(roleResult.items.map(role => [Number(role.id), role.name]));
+  const roleNames = new Map(roleResult.items.map(role => [Number(role.id), window.roleDisplayName(role.name)]));
   const avatarById = new Map((avatarResult.items || []).map(item => [String(item.id), item]));
   const canDesignBlueprint = scopeAllows('providers.read')
     && scopeAllows('credentials.read')
@@ -166,7 +166,7 @@ async function blueprintsView() {
     String(selected.tenant_id) + '|' + String(selected.project_id),
     {
       wide: true,
-      help: 'Zmiana tego pola aktualizuje również globalny kontekst pracy w górnym pasku. Operacje są wykonywane wyłącznie w wybranym tenant/projekcie.',
+      help: 'Zmiana tego pola aktualizuje również globalny kontekst pracy w górnym pasku. Operacje są wykonywane wyłącznie w wybranej organizacji i projekcie.',
     }
   );
   scopeSelect.querySelector('select').addEventListener('change', async event => {

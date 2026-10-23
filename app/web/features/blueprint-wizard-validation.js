@@ -208,7 +208,7 @@ function validateWorkflow(state, editingItem) {
 function validateStep(index, state, data, editingItem) {
   const errors = {};
   if (index === 0) {
-    if (!state.tenantId || !state.projectId) errors.project_id = 'Wybierz Tenant i Projekt dla Blueprintu.';
+    if (!state.tenantId || !state.projectId) errors.project_id = 'Wybierz organizację i projekt dla Blueprintu.';
     if (!state.name) errors.name = 'Podaj nazwę Blueprintu.';
     if (state.avatarId && !(data.avatars || []).some(item => String(item.id) === String(state.avatarId))) {
       errors.avatar_id = 'Wybrany avatar Blueprintu nie jest już dostępny.';

@@ -43,7 +43,7 @@ def _project(db, reference):
         raise RuntimeError('Recovery requires an active, non-deleted project')
     tenant = db.get(Tenant, row.tenant_id)
     if tenant is None or tenant.deleted_at is not None or tenant.status != 'active':
-        raise RuntimeError('Recovery requires an active tenant for the selected project')
+        raise RuntimeError('Recovery requires an active organization for the selected project')
     return tenant, row
 
 
@@ -221,9 +221,9 @@ def main():
     print('User ID: ' + str(result['user_id']))
     print('Username: ' + result['username'])
     print('Email: ' + result['email'])
-    print('Tenant: ' + result['tenant'] + ' (' + result['tenant_id'] + ')')
+    print('Organization: ' + result['tenant'] + ' (' + result['tenant_id'] + ')')
     print('Project: ' + result['project'] + ' (' + result['project_id'] + ')')
-    print('Roles: Administrator, Tenant Administrator, Project Administrator')
+    print('Roles: Administrator, organization-scoped administrator, Project Administrator')
     print('Previous sessions/API tokens for an existing account were revoked.')
     print('====================================================')
 

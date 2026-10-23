@@ -51,15 +51,15 @@ function roleModuleNames(role) {
 function roleCard(role) {
   const modules = roleModuleNames(role);
   const actions = [
-    button('Uprawnienia', () => showPermissionSummary(role.name, role.permissions)),
+    button('Uprawnienia', () => showPermissionSummary(window.roleDisplayName(role.name), role.permissions)),
   ];
   if (allowed('roles.update')) {
-    actions.push(button('Edytuj', () => navigate('/access/roles/edit/' + encodeURIComponent(role.id) + '/' + encodeURIComponent(role.name || 'role')), 'primary'));
+    actions.push(button('Edytuj', () => navigate('/access/roles/edit/' + encodeURIComponent(role.id) + '/' + encodeURIComponent(window.roleDisplayName(role.name || 'role'))), 'primary'));
   }
   if (allowed('roles.delete')) {
     actions.push(button('Usuń', () => confirmAction(
       'Usuń rolę',
-      `Rola ${role.name} zostanie trwale usunięta. Najpierw usuń wszystkie jej przypisania.`,
+      `Rola ${window.roleDisplayName(role.name)} zostanie trwale usunięta. Najpierw usuń wszystkie jej przypisania.`,
       async () => {
         await api(`/rbac/roles/${role.id}`, { method: 'DELETE' });
         toast('Rola usunięta.');
@@ -71,7 +71,7 @@ function roleCard(role) {
     node('div', { class: 'rbac-role-card-head' },
       node('div', {},
         node('span', { class: 'rbac-kicker', text: 'Rola RBAC' }),
-        node('h3', { text: role.name })),
+        node('h3', { text: window.roleDisplayName(role.name) })),
       badge(`${role.permissions.length} uprawnień`, role.permissions.length ? 'info' : 'warning')),
     node('p', { class: 'muted rbac-role-modules', text: modules.length ? modules.slice(0, 5).join(' · ') : 'Brak przypisanych modułów' }),
     modules.length > 5 ? node('small', { class: 'muted', text: `+${modules.length - 5} kolejnych modułów` }) : null,
@@ -85,7 +85,7 @@ function rbacOverviewPanel(roles, users, permissions) {
       node('div', {},
         node('span', { class: 'rbac-kicker', text: 'Model dostępu' }),
         node('h2', { text: 'Kto → rola → zakres → polityka' }),
-        node('p', { class: 'muted', text: 'Rola definiuje co wolno. Przypisanie wskazuje komu nadajesz rolę. Tenant, projekt i Policy Engine ograniczają gdzie i w jakich warunkach dostęp obowiązuje.' })),
+        node('p', { class: 'muted', text: 'Rola definiuje co wolno. Przypisanie wskazuje komu nadajesz rolę. Organizacja, projekt i Policy Engine ograniczają gdzie i w jakich warunkach dostęp obowiązuje.' })),
       node('div', { class: 'rbac-flow', 'aria-label': 'Model RBAC' },
         node('span', { text: 'Użytkownik / grupa' }),
         node('strong', { text: '→' }),
@@ -179,7 +179,7 @@ async function rbacScopeMembershipEditor(user, refresh) {
         node('div', {},
           node('span', { class: 'rbac-kicker', text: 'Zakres dostępu' }),
           node('h3', { text: 'Organizacje i projekty' }),
-          node('p', { class: 'muted', text: 'Do centralnego zarządzania członkostwami wymagane są globalne uprawnienia administracyjne tenantów lub projektów.' }))));
+          node('p', { class: 'muted', text: 'Do centralnego zarządzania członkostwami wymagane są globalne uprawnienia administracyjne organizacji lub projektów.' }))));
   }
 
   const [tenants, tenantMembershipPage, projects, projectMembershipPage] = await Promise.all([
@@ -245,7 +245,7 @@ async function rbacScopeMembershipEditor(user, refresh) {
     },
       node('div', { class: 'rbac-scope-membership-head' },
         node('div', {},
-          node('span', { class: 'rbac-kicker', text: 'Organization / Tenant' }),
+          node('span', { class: 'rbac-kicker', text: 'Organizacja' }),
           node('h3', { text: 'Organizacje użytkownika' }),
           node('p', { class: 'muted', text: 'Użytkownik może należeć do wielu organizacji jednocześnie. Odznaczenie organizacji usuwa również jego członkostwa projektowe w tej organizacji.' })),
         tenantManageable ? node('button', { type: 'submit', class: 'button primary' }, 'Zapisz organizacje') : badge('Tylko odczyt', 'info')),
@@ -334,7 +334,7 @@ async function rbacAssignmentsPanel(roles, users) {
       node('div', {},
         node('span', { class: 'rbac-kicker', text: 'Przypisanie' }),
         node('h2', { text: 'Wybierz użytkownika' }),
-        node('p', { class: 'muted', text: 'Role globalne są niezależne od członkostwa w tenantach i projektach.' }))),
+        node('p', { class: 'muted', text: 'Role globalne są niezależne od członkostwa w organizacjach i projektach.' }))),
     node('div', { class: 'rbac-empty-selection', text: 'Wybierz konto z tabeli poniżej, aby zobaczyć i zmienić jego role.' }));
 
   async function renderUser(user) {
@@ -360,7 +360,7 @@ async function rbacAssignmentsPanel(roles, users) {
       ...roles.map(role => node('label', { class: `rbac-role-option ${assignedIds.has(Number(role.id)) ? 'selected' : ''}` },
         node('input', { type: 'checkbox', name: 'role_id', value: role.id, checked: assignedIds.has(Number(role.id)), disabled: !allowed('roles.assign') }),
         node('span', { class: 'rbac-role-option-copy' },
-          node('strong', { text: role.name }),
+          node('strong', { text: window.roleDisplayName(role.name) }),
           node('small', { class: 'muted', text: `${role.permissions.length} uprawnień · ${roleModuleNames(role).slice(0, 3).join(', ') || 'brak modułów'}` })))));
     roleOptions.querySelectorAll('input').forEach(input => input.addEventListener('change', () => {
       input.closest('.rbac-role-option')?.classList.toggle('selected', input.checked);
@@ -474,15 +474,15 @@ async function rbacAccessAnalysisPanel(roles, users, permissions) {
             ? node('div', { class: 'rbac-reason-list' },
                 node('strong', { text: 'Źródło dostępu' }),
                 ...granting.map(role => node('div', { class: 'rbac-reason' },
-                  node('span', { text: role.name }),
+                  node('span', { text: window.roleDisplayName(role.name) }),
                   node('code', { class: 'mono', text: permission }))))
             : node('p', { text: 'Żadna z globalnie przypisanych ról nie zawiera tego uprawnienia.' }),
-          node('p', { class: 'muted rbac-analysis-note', text: 'To wynik globalnego RBAC. Ostateczna decyzja dla konkretnego zasobu może zostać dodatkowo ograniczona przez tenant/projekt, scope zasobu oraz Policy Engine.' })),
+          node('p', { class: 'muted rbac-analysis-note', text: 'To wynik globalnego RBAC. Ostateczna decyzja dla konkretnego zasobu może zostać dodatkowo ograniczona przez organizację/projekt, scope zasobu oraz Policy Engine.' })),
         node('section', { class: 'panel' },
           node('div', { class: 'rbac-section-heading' },
             node('div', {},
               node('span', { class: 'rbac-kicker', text: 'Przypisane role' }),
-              node('h3', { text: assignedRoles.length ? assignedRoles.map(role => role.name).join(', ') : 'Brak ról' }))),
+              node('h3', { text: assignedRoles.length ? assignedRoles.map(role => window.roleDisplayName(role.name)).join(', ') : 'Brak ról' }))),
           permissionSummary([...new Set(assignedRoles.flatMap(role => role.permissions || []))].sort())));
     },
   },
@@ -497,7 +497,7 @@ async function rbacAccessAnalysisPanel(roles, users, permissions) {
 function rbacGovernancePanel() {
   const cards = [
     {
-      title: 'Organizacje / tenanty',
+      title: 'Organizacje',
       text: 'Członkostwo i delegowane role w obrębie organizacji.',
       action: () => navigate('tenants'),
       enabled: true,
@@ -528,7 +528,7 @@ function rbacGovernancePanel() {
         button('Otwórz', card.action, 'primary', !card.enabled)))),
     node('section', { class: 'panel rbac-roadmap-note' },
       node('strong', { text: 'Docelowy model scope' }),
-      node('p', { class: 'muted', text: 'Organization → Project → APMID → Environment → Resource. Ten widok jest przygotowany pod zunifikowany Scope Builder, ale obecne źródła prawdy pozostają w modułach Tenants, Projects i Policy Engine.' })));
+      node('p', { class: 'muted', text: 'Organizacja → Projekt → APMID → Środowisko → Zasób. Ten widok jest przygotowany pod zunifikowany Scope Builder, a bieżące ustawienia obejmują organizacje, projekty i Policy Engine.' })));
 }
 
 async function usersView() {
@@ -668,6 +668,8 @@ async function rolesView() {
 
 async function roleForm(role = null) {
   try {
+    const originalRoleName = role?.name || '';
+    const displayedRoleName = window.roleDisplayName(originalRoleName);
     const permissionResult = await api('/rbac/permissions');
     const permissions = (permissionResult.items || []).map(item => typeof item === 'string' ? item : item.name);
     const picker = permissionPicker(permissions, role?.permissions || [], 'permission');
@@ -726,7 +728,7 @@ async function roleForm(role = null) {
     ].map(value => ({ value, label: value }));
     const fields = node('div', { class: 'form-grid rbac-role-form' },
       formSection('Rola', 'Nazwa opisuje odpowiedzialność. Role systemowe są chronione przed usunięciem.',
-        field('Nazwa roli', 'name', { required: true, value: role?.name || '', wide: true, placeholder: 'np. VM Operator' }),
+        field('Nazwa roli', 'name', { required: true, value: displayedRoleName, wide: true, placeholder: 'np. VM Operator' }),
         field('Opis', 'description', { tag: 'textarea', value: role?.description || '', maxlength: 4000, wide: true })),
       formSection('Dozwolone scope', 'Ogranicza typy scope, na których tę rolę można delegować.',
         multiCheckboxField('Scope types', 'scope_type', scopeChoices, role?.scope_types || ['GLOBAL'])),
@@ -747,7 +749,7 @@ async function roleForm(role = null) {
         picker));
 
     openModal({
-      title: role ? `Edytuj rolę: ${role.name}` : 'Nowa rola',
+      title: role ? `Edytuj rolę: ${window.roleDisplayName(role.name)}` : 'Nowa rola',
       eyebrow: 'Role i dostęp',
       body: fields,
       submitLabel: role ? 'Zapisz rolę' : 'Utwórz rolę',
@@ -756,7 +758,7 @@ async function roleForm(role = null) {
         const scope_types = [...form.querySelectorAll('[name="scope_type"]:checked')].map(input => input.value);
         if (!scope_types.length) throw new Error('Wybierz co najmniej jeden typ scope.');
         const payload = {
-          name: form.elements.name.value,
+          name: role && form.elements.name.value === displayedRoleName ? originalRoleName : form.elements.name.value,
           description: form.elements.description.value,
           permissions: [...form.querySelectorAll('[name="permission"]:checked')].map(input => input.value),
           permission_patterns: String(form.elements.permission_patterns.value || '')
@@ -847,7 +849,7 @@ async function createToken() {
 
 async function accountView() {
   const user = state.identity.user;
-  const roles = state.identity.roles.map(role => role.name).join(', ') || 'Brak przypisanych ról';
+  const roles = state.identity.roles.map(role => window.roleDisplayName(role.name)).join(', ') || 'Brak przypisanych ról';
   const initials = String(user.username || 'U').slice(0, 2).toUpperCase();
 
   const accountValue = (label, value, options = {}) => node('div', { class: 'account-meta-item' },

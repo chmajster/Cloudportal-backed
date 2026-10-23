@@ -727,7 +727,7 @@ async function editAssignmentForm(item) {
   });
   const body = node('div', { class: 'form-grid' },
     node('div', { class: 'wide panel' },
-      node('strong', { text: item.role_name || 'RoleAssignment' }),
+      node('strong', { text: window.roleDisplayName(item.role_name || 'RoleAssignment') }),
       node('div', { class: 'muted mono', text: assignmentScope(item) })),
     role, effect, validFrom, validUntil, inherit, approval, enabled, conditions);
 
@@ -843,7 +843,7 @@ async function assignmentsPanel() {
       assignments.length ? table([
         { label: 'Subject', value: item => subjectLabel(item, users, groups) },
         { label: 'Scope', value: item => node('code', { class: 'mono', text: assignmentScope(item) }) },
-        { label: 'Rola', value: item => node('strong', { text: item.role_name }) },
+        { label: 'Rola', value: item => node('strong', { text: window.roleDisplayName(item.role_name) }) },
         { label: 'Effect', value: effectBadge },
         { label: 'Dziedziczenie', value: item => item.inherit ? 'Tak' : 'Nie' },
         { label: 'Ważność', value: item => item.valid_until ? formatDate(item.valid_until) : 'bezterminowo' },
@@ -982,7 +982,7 @@ async function simulatorPanel() {
     selectField('User', 'user_id', users.map(item => ({ value: item.id, label: item.username + ' · ' + item.email })), '', { required: true, placeholder: 'Wybierz użytkownika' }),
     selectField('Action', 'action', permissions.map(value => ({ value, label: value })), '', { required: true, placeholder: 'Wybierz permission' }),
     selectField('Scope', 'scope_type', SCOPE_TYPES.map(([value, label]) => ({ value, label })), 'GLOBAL', { required: true }),
-    selectField('Organization', 'tenant_id', tenants.map(item => ({ value: item.id, label: item.name })), '', { placeholder: '—' }),
+    selectField('Organizacja', 'tenant_id', tenants.map(item => ({ value: item.id, label: item.name })), '', { placeholder: '—' }),
     selectField('Project', 'project_id', projects.map(item => ({ value: item.id, label: item.name })), '', { placeholder: '—' }),
     field('APMID', 'apmid', { maxlength: 63 }),
     field('ENV', 'environment', { maxlength: 32 }),
@@ -1004,7 +1004,7 @@ async function reviewPanel() {
           node('p', { class: 'muted', text: 'Zestawienie użytkowników, ról, źródeł i expirations. Expired assignments pozostają dostępne dla audytu.' }))),
       table([
         { label: 'User', value: item => node('div', {}, node('strong', { text: item.username }), node('div', { class: 'muted', text: item.email })) },
-        { label: 'Organization', value: item => item.organization_id || '—' },
+        { label: 'Organizacja', value: item => item.organization_id || '—' },
         { label: 'Project', value: item => item.project_id || '—' },
         { label: 'Role', value: item => item.roles.join(', ') || '—' },
         { label: 'Source', value: item => item.source.join(', ') || '—' },

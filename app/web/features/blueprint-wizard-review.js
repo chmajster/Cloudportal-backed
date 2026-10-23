@@ -11,7 +11,10 @@
       data.playbooks.find(value => value.id === run.playbook)?.name || run.playbook
     );
     const steps = state.advancedWorkflow ? state.workflow : currentAutoWorkflow();
-    const roleNames = state.allowedRoleIds.map(id => data.roles.find(value => Number(value.id) === Number(id))?.name).filter(Boolean);
+    const roleNames = state.allowedRoleIds.map(id => {
+      const name = data.roles.find(value => Number(value.id) === Number(id))?.name;
+      return name ? window.roleDisplayName(name) : '';
+    }).filter(Boolean);
     const userNames = state.allowedUserIds.map(id => data.users.find(value => Number(value.id) === Number(id))?.username).filter(Boolean);
     const entityNames = (state.allowedEntities || []).map(String);
   

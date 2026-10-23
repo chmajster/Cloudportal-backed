@@ -373,7 +373,7 @@
     state.awxEnabled = Boolean(deployment.awx || workflowTypes.has('register_awx'));
     state.promptAwxOnExecute = Boolean(deployment.prompt_awx_on_execute);
     state.awxCredentialId = awx.credential_id == null ? '' : String(awx.credential_id);
-    // Organization/Project are derived from the immutable CloudPortal Tenant/Project scope.
+    // Organization/Project are derived from the immutable CloudPortal organization/project scope.
     // Manual AWX scope overrides are intentionally not part of the Blueprint model.
     state.awxOrganizationId = '';
     state.awxProjectId = '';

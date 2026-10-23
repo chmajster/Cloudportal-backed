@@ -1055,7 +1055,7 @@ function showApp() {
   dom.loginView.hidden = true;
   dom.appView.hidden = false;
   dom.currentUser.textContent = identityDisplayName(state.identity.user);
-  dom.currentRoles.textContent = state.identity.roles.map(role => role.name).join(', ') || 'Brak roli';
+  dom.currentRoles.textContent = state.identity.roles.map(role => window.roleDisplayName(role.name)).join(', ') || 'Brak roli';
   hydrateShellIcons();
   renderSidebarProfile();
   emitUiEvent('app-shown', { identity: state.identity });

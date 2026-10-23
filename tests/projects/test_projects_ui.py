@@ -52,13 +52,13 @@ def test_project_member_picker_is_searchable_and_loads_all_tenant_members():
     shared = Path('app/web/shared/searchable-select.js').read_text()
     core = Path('app/web/core.js').read_text()
 
-    assert "searchableSelectField('Członek tenanta'" in source
-    assert "placeholder: 'Wpisz login członka tenanta…'" in source
+    assert "searchableSelectField('Członek organizacji'" in source
+    assert "placeholder: 'Wpisz login członka organizacji…'" in source
     assert "eligible-members?limit=200&offset=" in source
     assert "while (offset < total)" in source
     assert "userPicker.setChoices(users.map(user => ({" in source
-    assert "Wybierz członka tenanta z listy." in source
-    assert "Kolejni członkowie tenanta" not in source
+    assert "Wybierz członka organizacji z listy." in source
+    assert "Kolejni członkowie organizacji" not in source
     assert "function searchableSelectField" in shared
     assert "window.searchableSelectField = searchableSelectField" in shared
     assert "function searchableSelectField" not in core

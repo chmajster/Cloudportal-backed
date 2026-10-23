@@ -28,7 +28,7 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
   );
   const scopeInfo = node('div', { class: 'blueprint-wizard-info wide' },
     node('strong', { text: 'Scope AWX jest dziedziczony z CloudPortal' }),
-    node('span', { text: 'Tenant CloudPortal = Organization AWX, Project CloudPortal = Project AWX. Tych wartości nie wybiera się ręcznie w Blueprintcie.' })
+    node('span', { text: 'Organizacja CloudPortal = Organizacja AWX, Projekt CloudPortal = Projekt AWX. Tych wartości nie wybiera się ręcznie w Blueprintcie.' })
   );
   const inventoryField = selectField(
     'Inventory AWX', 'awx_inventory_id', [], selection.inventory,
@@ -139,7 +139,7 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
         label: row.name,
       }), 'inventory'),
       selection.inventory,
-      'Automatycznie — użyj lub utwórz inventory w Organization mapowanej z Tenanta'
+      'Automatycznie — użyj lub utwórz inventory w organizacji AWX mapowanej z organizacji CloudPortal'
     );
     window.BlueprintFormUtils.setSelectChoices(
       jobTemplateSelect,
@@ -170,7 +170,7 @@ async function create(deployment = {}, credentials = [], workflow = [], onChange
     if (!selection.credential) {
       if (toggleControl.checked) {
         setStatus(awxCredentials.length
-          ? 'Wybierz połączenie AWX, aby pobrać inventory i Job Template. Organization/Project wynikają ze scope CloudPortal.'
+          ? 'Wybierz połączenie AWX, aby pobrać inventory i Job Template. Organizacja i projekt wynikają ze scope CloudPortal.'
           : 'Brak Credentiala typu AWX. Dodaj połączenie AWX w sekcji Dane dostępowe.', true);
       }
       return;

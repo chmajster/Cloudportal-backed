@@ -538,7 +538,7 @@ async function settingsView() {
     node('div', { class: 'settings-values' },
       settingsValue('Użytkownik', user.username || '—'),
       settingsValue('E-mail', user.email || '—'),
-      settingsValue('Role', roles.map(role => role.name).join(', ') || 'Brak'),
+      settingsValue('Role', roles.map(role => window.roleDisplayName(role.name)).join(', ') || 'Brak'),
       settingsValue('Uprawnienia', String(permissions.length))),
     node('div', { class: 'settings-card-actions' },
       button('Otwórz Moje konto', () => navigate('account'), 'primary'))

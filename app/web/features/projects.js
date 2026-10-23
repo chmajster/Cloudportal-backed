@@ -12,7 +12,7 @@
   function scopedRoleOption(role, checked) {
     const permissions = (role.permissions || []).slice().sort();
     return node('div', { class: 'projects-role-option' },
-      checkboxField(`${role.name} (#${role.id})`, 'role_' + role.id, checked),
+      checkboxField(`${window.roleDisplayName(role.name)} (#${role.id})`, 'role_' + role.id, checked),
       node('div', { class: 'field-help', text: permissions.length
         ? 'Uprawnienia: ' + permissions.join(', ')
         : 'Brak delegowalnych uprawnień w tym projekcie.' }));
@@ -145,7 +145,7 @@
     });
 
     const actions = scopes.total ? [action('Nowy projekt', () => navigate('/projects/new'), 'primary')] : [];
-    if (tenantFilter) actions.push(action('Wszystkie dostępne tenanty', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
+    if (tenantFilter) actions.push(action('Wszystkie dostępne organizacje', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
 
     const rangeStart = page.total ? page.offset + 1 : 0;
     const rangeEnd = Math.min(page.offset + page.items.length, page.total);
@@ -153,12 +153,12 @@
       node('div', { class: 'projects-toolbar-copy' },
         node('strong', { text: 'Dostępne projekty' }),
         node('span', { class: 'muted', text: `Pobrano z API: ${rangeStart}–${rangeEnd} z ${page.total}` }),
-        tenantFilter ? node('span', { class: 'projects-scope-chip', text: 'Tenant: ' + tenantFilter }) : null),
+        tenantFilter ? node('span', { class: 'projects-scope-chip', text: 'Organizacja: ' + tenantFilter }) : null),
       filter);
 
     const emptyActions = [];
     if (listStatus) emptyActions.push(action('Wyczyść filtr statusu', () => { listStatus = ''; listOffset = 0; return projectsView(); }));
-    if (tenantFilter) emptyActions.push(action('Pokaż wszystkie tenanty', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
+    if (tenantFilter) emptyActions.push(action('Pokaż wszystkie organizacje', () => { tenantFilter = ''; listOffset = 0; return projectsView(); }));
     if (!listStatus && !tenantFilter && scopes.total) emptyActions.push(action('Utwórz projekt', () => navigate('/projects/new'), 'primary'));
 
     const projectList = page.items.length
@@ -166,7 +166,7 @@
         { label: 'Projekt', value: row => node('div', { class: 'projects-project-name' },
           node('strong', { text: row.name }),
           node('span', { class: 'mono muted', text: row.slug })) },
-        { label: 'Tenant', class: 'mono', value: row => row.tenant_id },
+        { label: 'Organizacja', class: 'mono', value: row => row.tenant_id },
         { label: 'Środowisko', value: row => node('span', { class: 'badge info', text: row.default_environment }) },
         { label: 'Status', value: row => projectStatusBadge(row.status) },
         { label: 'Typ', value: row => projectSystemBadge(row) },
@@ -185,7 +185,7 @@
         emptyActions);
 
     dom.content.replaceChildren(
-      heading('Zarządzaj projektami, członkostwami i dostępem w obrębie tenantów.', actions),
+      heading('Zarządzaj projektami, członkostwami i dostępem w obrębie organizacji.', actions),
       node('div', { class: 'projects-page-stack' },
         notice(),
         selection,
@@ -215,7 +215,7 @@
       body: node('div', { class: 'stack' }, notice(), node('div', { class: 'action-group' }, actions),
         node('p', { text: item.description || 'Brak opisu.' }),
         node('dl', { class: 'projects-overview' },
-          node('dt', { text: 'Tenant' }), node('dd', { class: 'mono', text: item.tenant_id }),
+          node('dt', { text: 'Organizacja' }), node('dd', { class: 'mono', text: item.tenant_id }),
           node('dt', { text: 'Project' }), node('dd', { class: 'mono', text: item.id }),
           node('dt', { text: 'Status' }), node('dd', { text: labels[item.status] }),
           node('dt', { text: 'Środowisko' }), node('dd', { text: item.default_environment }),
@@ -224,7 +224,7 @@
           node('dt', { text: 'Wersja' }), node('dd', { text: item.version })),
         node('h3', { text: 'Efektywne uprawnienia projektowe' }),
         node('pre', { class: 'projects-json', text: scope.permissions.join('\n') }),
-        node('h3', { text: 'Uprawnienia dziedziczone z tenanta' }),
+        node('h3', { text: 'Uprawnienia dziedziczone z organizacji' }),
         node('pre', { class: 'projects-json', text: scope.inherited_permissions.join('\n') || 'Brak' }),
         node('h3', { text: 'Etykiety / metadata' }),
         node('pre', { class: 'projects-json', text: JSON.stringify({ labels: item.labels, metadata: item.metadata }, null, 2) })),
@@ -233,7 +233,7 @@
 
   async function projectForm(item = null, scope = null) {
     const current = ++generation;
-    const tenantSelect = selectField('Tenant', 'tenant_id', item ? [{ value: item.tenant_id, label: item.tenant_id }] : [], item?.tenant_id || '');
+    const tenantSelect = selectField('Organizacja', 'tenant_id', item ? [{ value: item.tenant_id, label: item.tenant_id }] : [], item?.tenant_id || '');
     const select = tenantSelect.querySelector('select'); select.required = true;
     let offset = 0, more;
     async function loadScopes() {
@@ -242,7 +242,7 @@
       page.items.forEach(t => select.append(node('option', { value: t.tenant_id, text: `${t.name} / ${t.slug}` })));
       offset += page.items.length; more.disabled = offset >= page.total;
     }
-    more = action('Pokaż kolejne tenanty', loadScopes);
+    more = action('Pokaż kolejne organizacje', loadScopes);
     if (item) select.disabled = true; else await loadScopes();
     if (current !== generation || !viewIs('projects')) return;
     const canDisable = scope?.global_administration || scope?.inherited_permissions.includes('projects.admin');
@@ -295,7 +295,7 @@
             await members(id, offset);
           }));
           actions.push(action('Usuń', () => openModal({ title: `Usuń członkostwo: ${row.username}`, danger: true,
-            body: node('p', { text: 'Usuwa wyłącznie członkostwo w projekcie. Konto użytkownika i członkostwo tenanta pozostają.' }),
+            body: node('p', { text: 'Usuwa wyłącznie członkostwo w projekcie. Konto użytkownika i członkostwo w organizacji pozostają.' }),
             onSubmit: async () => {
               await api(`/projects/${id}/members/${row.user_id}?expected_version=${row.version}`, { method: 'DELETE' });
               await navigate('/projects/' + encodeURIComponent(id) + '/members'); return false;
@@ -315,17 +315,17 @@
         checkboxField(`Obecna rola #${roleId}`, 'role_' + roleId, true),
         node('div', { class: 'field-help', text: 'Rola przypisana wcześniej; backend ponownie sprawdzi jej bieżący zakres.' })));
     }
-    const userField = searchableSelectField('Członek tenanta', 'user_id', [], '', {
+    const userField = searchableSelectField('Członek organizacji', 'user_id', [], '', {
       required: true,
       wide: true,
-      placeholder: 'Wpisz login członka tenanta…',
-      help: 'Wpisuj kolejne znaki, aby zawężać listę aktywnych członków tenanta.',
+      placeholder: 'Wpisz login członka organizacji…',
+      help: 'Wpisuj kolejne znaki, aby zawężać listę aktywnych członków organizacji.',
     });
     const userPicker = userField.searchableSelect;
     const noUsers = node('p', {
       class: 'form-error',
       hidden: true,
-      text: 'Brak aktywnych członków tenanta dostępnych do dodania do projektu.',
+      text: 'Brak aktywnych członków organizacji dostępnych do dodania do projektu.',
     });
     let roleOffset = 0, moreRoles;
     async function loadRoles() {
@@ -375,7 +375,7 @@
         });
         const selectedUserId = member ? member.user_id : Number(data.get('user_id'));
         if (!member && (!Number.isInteger(selectedUserId) || selectedUserId <= 0)) {
-          throw new Error('Wybierz członka tenanta z listy.');
+          throw new Error('Wybierz członka organizacji z listy.');
         }
         const values = member ? { role_ids: [...roleIds], expected_version: member.version } : { user_id: selectedUserId, role_ids: [...roleIds] };
         await api(member ? `/projects/${id}/members/${member.user_id}/roles` : `/projects/${id}/members`, { method: member ? 'PUT' : 'POST', idempotent: !member, body: values });
