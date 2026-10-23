@@ -46,6 +46,7 @@
 - **#345 unified access:** enterprise evaluator ma jedno kanoniczne źródło grantów: `RoleAssignment`. Legacy `UserRole`, `TenantRoleAssignment` i `ProjectRoleAssignment` mogą istnieć jako compatibility storage, ale ich zapisy muszą być write-through synchronizowane do `RoleAssignment`; evaluator nie może ponownie dodawać ich jako drugiej ścieżki ALLOW.
 - Moduły z autoryzacją zasobów muszą należeć do pakietu `app.access`. Nie zostawiaj równolegle `app/access.py` obok `app/access/`: Python importuje pakiet zamiast pliku i może wyłączyć istniejące helpery scope, blokując start API. Zachowuj używane eksporty na poziomie `app.access` i testuj import aplikacji.
 - Publiczny model to **Organizacja → Projekt → Zasób**. `tenant_id` pozostaje kompatybilnością wewnętrzną; nowe publiczne Access API używa `organization_id`.
+- `app/projects/schemas.py` musi mieć jeden kanoniczny zestaw deklaracji. Duplikowany ogon schematów z osieroconym nawiasem blokuje import backendu; sprawdzaj składnię modułu po zmianie kontraktów projektu.
 - Scope APMID/ENV musi być związany z Organizacją. Ten sam kod APMID w dwóch Organizacjach nie może spowodować cross-organization match.
 - Relacyjny `OrganizationAPMID` jest źródłem prawdy. `vm_classification:<tenant_id>` jest tylko fallbackiem migracyjnym; `LEO` jest systemowy, aktywny i nieusuwalny.
 - Managed groups używają stabilnego `system_key`, nie nazwy wyświetlanej, i otrzymują zwykły `RoleAssignment`. Nie wolno automatycznie dodawać użytkownika do uprzywilejowanej grupy.
@@ -154,6 +155,8 @@
 
 ## 1.11. Installer: systemd, Docker, Kubernetes
 
+- Docker candidate startup failure must print `migrate` and `api` logs plus `compose ps -a` before rollback; a fresh-install rollback removes candidate containers and their diagnostics.
+- Bash scripts must be checked out with LF endings; CRLF in a shebang makes Linux/WSL fail with `env: $'bash\r': No such file or directory`. `.gitattributes` enforces this.
 - Instalator ma być idempotentny, zachowywać dane i sekrety przy reinstall/update.
 - Lock instalatora nie może „wyciekać” ani blokować kolejnego uruchomienia bez żywego właściciela.
 - Przejęcie konkurencyjnej instalacji musi być jawne i bezpieczne.

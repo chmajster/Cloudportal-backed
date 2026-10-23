@@ -129,9 +129,13 @@ def test_docker_updater_is_unix_socket_only_and_does_not_require_host_8766():
     assert 'CP_UPDATER_PORT=8766' not in block
     assert 'Unix-socket-only' in block
 
-def test_docker_candidate_failure_logs_migrate_and_rebuilds_previous_release():
+def test_docker_candidate_failure_logs_services_and_rebuilds_previous_release():
     assert "ui_info 'Log usługi migrate:'" in INSTALLER
     assert 'docker_compose_for "$release" "$candidate_env" logs --tail=120 migrate' in INSTALLER
+    assert "ui_info 'Log usługi API:'" in INSTALLER
+    assert 'docker_compose_for "$release" "$candidate_env" logs --tail=160 api' in INSTALLER
+    assert "ui_info 'Stan kontenerów kandydata:'" in INSTALLER
+    assert 'docker_compose_for "$release" "$candidate_env" ps -a' in INSTALLER
     assert 'docker_prepare_candidate_rollback_backup()' in INSTALLER
     assert 'pg_dump -U cloudportal -d cloudportal -Fc > "$rollback_dump"' in INSTALLER
     assert 'docker_restore_candidate_rollback_database()' in INSTALLER

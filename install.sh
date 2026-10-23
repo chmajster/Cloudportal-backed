@@ -2652,6 +2652,10 @@ EOF
     ui_fail 'Nie udało się uruchomić kandydata Docker.'
     ui_info 'Log usługi migrate:'
     docker_compose_for "$release" "$candidate_env" logs --tail=120 migrate || true
+    ui_info 'Log usługi API:'
+    docker_compose_for "$release" "$candidate_env" logs --tail=160 api || true
+    ui_info 'Stan kontenerów kandydata:'
+    docker_compose_for "$release" "$candidate_env" ps -a || true
     if docker_rollback_candidate "$release" "$candidate_env" "$previous_release" "$previous_docker_workers" "$docker_tls_changed" "$tls_backup_dir" "$had_previous_tls" "$rollback_db_dump"; then
       if [[ -n "$previous_release" ]]; then
         ui_fail 'Kandydat Docker został odrzucony; poprzedni release i baza danych zostały przywrócone.'
