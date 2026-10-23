@@ -8,7 +8,7 @@ This is a delivery plan, not a claim that multi-tenancy or the complete governan
 
 - `AGENTS.md` and `docs/architecture/modularity.md` require domain-owned services, thin HTTP routers, automatically discovered `feature_*.py` module registrations and frontend features. Do not manually register routes in `app/main.py` or feature scripts in `index.html`.
 - `app/models.py` currently defines global UserRole and RolePermission assignments. `app/security/core.py` computes global permissions and intersects API token scopes. Scoped grants must not be flattened into these global permissions.
-- `app/access.py` currently authorizes deployments, jobs and inventory by ownership or global read/manage-all permissions. It is not a tenant isolation boundary. Adding tenant CRUD alone must never be advertised as isolation of these existing APIs.
+- `app/access/resource_authorization.py` authorizes deployments, jobs and inventory by ownership or global read/manage-all permissions. It is not a tenant isolation boundary. Adding tenant CRUD alone must never be advertised as isolation of these existing APIs.
 - `app/api/administration.py` already prevents granting permissions outside the actor's effective set. Scoped grants need the same anti-escalation rule in the target scope.
 - `app/api/common.py` uses database-side offset/limit pagination, with a maximum limit of 200. Preserve this convention.
 - Existing CI runs PostgreSQL/Redis integration tests, module-boundary checks and syntax checks for every browser JavaScript file. New tests must augment, not replace, these checks.

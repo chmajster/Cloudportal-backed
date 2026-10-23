@@ -237,7 +237,7 @@ potwierdzeniu providera. Ukończenie migracji/scope nie spełnia tego kryterium.
 Zmodyfikowane istniejące pliki (w tym testy i dokumentacja):
 
 ```text
-app/access.py
+app/access.py (historical path; now `app/access/resource_authorization.py`)
 app/api/automation.py
 app/api/common.py
 app/api/infrastructure.py
